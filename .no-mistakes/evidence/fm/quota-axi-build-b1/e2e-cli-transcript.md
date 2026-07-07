@@ -1,8 +1,8 @@
 # quota-axi v1 end-to-end CLI transcript
 
-Real runs of the built CLI (`node dist/bin/quota-axi.js`) on macOS with the machine's actual local credentials, captured 2026-07-07.
-`XDG_CACHE_HOME` was pointed at a throwaway directory so the runs never touched the real user cache.
-Identity values (email, account id) are redacted in this transcript; the CLI itself printed them only under `--full`, as designed.
+These are fixture-backed runs of the built CLI (`node dist/bin/quota-axi.js`) on macOS, captured 2026-07-07.
+The commands used hermetic homes, throwaway caches, and stubbed provider responses so no personal account metadata is recorded.
+All plan names, quota percentages, reset times, auth availability states, credit balances, emails, and account ids below are representative fake values.
 
 ## 1. Help and version
 
@@ -26,22 +26,23 @@ $ quota-axi --version
 quota-axi 0.1.0
 ```
 
-## 2. Default quota report (compact TOON, live credentials)
+## 2. Default quota report (compact TOON, fixture credentials)
 
-The machine's on-disk Claude OAuth token is genuinely expired (expired 2026-07-04) and the Keychain copy is skipped by default, so Claude honestly reports `auth_required` while Codex returns fresh oauth data.
+The Claude fixture contains an expired OAuth token and the Keychain copy is skipped by default.
+The Codex fixture returns a fresh synthetic quota response.
 Partial success still exits 0.
 
 ```console
-$ quota-axi
+$ HOME=$HARNESS/home CODEX_HOME=$HARNESS/home/.codex XDG_CACHE_HOME=$HARNESS/cache quota-axi
 bin: ~/.no-mistakes/worktrees/.../dist/bin/quota-axi.js
 description: Report local agent-provider quota windows for routing-aware agents
-generatedAt: "2026-07-07T03:35:03.340Z"
+generatedAt: "2035-01-15T12:00:00.000Z"
 providers[2]{provider,plan,source,status,refreshedAt}:
   claude,unknown,unavailable,auth_required,none
-  codex,pro,oauth,fresh,"2026-07-07T03:35:03.340Z"
+  codex,fixture-pro,oauth,fresh,"2035-01-15T12:00:00.000Z"
 windows[2]{provider,id,label,percentRemaining,resetsAt,state}:
-  codex,five_hour,session,97,"2026-07-07T08:03:31.000Z",fresh
-  codex,weekly,week,99,"2026-07-14T01:48:49.000Z",fresh
+  codex,five_hour,session,42,"2035-01-15T17:00:00.000Z",fresh
+  codex,weekly,week,88,"2035-01-22T12:00:00.000Z",fresh
 help[3]:
   Run `quota-axi --provider claude --json` for JSON output
   Run `quota-axi --full` to include account and source-attempt details
@@ -50,36 +51,36 @@ $ echo $?
 0
 ```
 
-The live run completed in 0.49s wall clock.
+The fixture run completed in 0.49s wall clock.
 
 ## 3. `auth` subcommand (source availability, no secret values)
 
 ```console
-$ quota-axi auth
+$ HOME=$HARNESS/home CODEX_HOME=$HARNESS/home/.codex XDG_CACHE_HOME=$HARNESS/cache quota-axi auth
 bin: ~/.no-mistakes/worktrees/.../dist/bin/quota-axi.js
 description: Inspect local quota auth sources without printing secret values
 auth[4]{provider,source,path,status,error}:
   claude,oauth-file,~/.claude/.credentials.json,expired,none
   claude,keychain,none,skipped,keychain_prompt_required
   codex,auth-json,~/.codex/auth.json,available,none
-  codex,cli-rpc,none,available,none
+  codex,cli-rpc,none,missing,none
 help[1]:
   Run `quota-axi --allow-keychain-prompt auth` to permit macOS Keychain access
 $ echo $?
 0
 ```
 
-The `expired` status is correct: the file's `expiresAt` is 2026-07-04T00:56:20.937Z, in the past.
+The synthetic `expired` status comes from a fixture `expiresAt` value of `2035-01-01T00:00:00.000Z` evaluated against the fixed harness clock.
 No Keychain prompt appeared because `--allow-keychain-prompt` was not passed.
 
-## 4. `--json` (normalized model, identity redacted by default)
+## 4. `--json` (normalized model, identity omitted by default)
 
 Note: no `account` and no `attempts` fields appear without `--full`.
 
 ```console
-$ quota-axi --json
+$ HOME=$HARNESS/home CODEX_HOME=$HARNESS/home/.codex XDG_CACHE_HOME=$HARNESS/cache quota-axi --json
 {
-  "generatedAt": "2026-07-07T03:35:49.937Z",
+  "generatedAt": "2035-01-15T12:00:10.000Z",
   "schemaVersion": 1,
   "providers": [
     {
@@ -98,32 +99,32 @@ $ quota-axi --json
       "provider": "codex",
       "label": "Codex",
       "source": "oauth",
-      "plan": "pro",
+      "plan": "fixture-pro",
       "windows": [
         {
           "id": "five_hour",
           "label": "session",
           "kind": "session",
-          "percentUsed": 3,
-          "resetsAt": "2026-07-07T08:03:31.000Z",
+          "percentUsed": 58,
+          "resetsAt": "2035-01-15T17:00:00.000Z",
           "windowSeconds": 18000,
-          "percentRemaining": 97
+          "percentRemaining": 42
         },
         {
           "id": "weekly",
           "label": "week",
           "kind": "weekly",
-          "percentUsed": 1,
-          "resetsAt": "2026-07-14T01:48:49.000Z",
+          "percentUsed": 12,
+          "resetsAt": "2035-01-22T12:00:00.000Z",
           "windowSeconds": 604800,
-          "percentRemaining": 99
+          "percentRemaining": 88
         }
       ],
-      "credits": { "remaining": 0, "unlimited": false, "unit": "credits" },
+      "credits": { "remaining": 1234, "unlimited": false, "unit": "credits" },
       "state": {
         "status": "fresh",
         "stale": false,
-        "refreshedAt": "2026-07-07T03:35:49.936Z",
+        "refreshedAt": "2035-01-15T12:00:10.000Z",
         "sourcesTried": ["oauth"]
       }
     }
@@ -133,24 +134,24 @@ $ echo $?
 0
 ```
 
-## 5. `--full` (accounts and per-source attempts appear)
+## 5. `--full` (fake accounts and per-source attempts appear)
 
-Email and account id below are redacted for this transcript only; the CLI printed the real values, gated behind `--full` as specified.
+The email and account id below are fixture placeholders, not personal values.
 
 ```console
-$ quota-axi --full
+$ HOME=$HARNESS/home CODEX_HOME=$HARNESS/home/.codex XDG_CACHE_HOME=$HARNESS/cache quota-axi --full
 bin: ~/.no-mistakes/worktrees/.../dist/bin/quota-axi.js
 description: Report local agent-provider quota windows for routing-aware agents
-generatedAt: "2026-07-07T03:36:02.457Z"
+generatedAt: "2035-01-15T12:00:20.000Z"
 providers[2]{provider,plan,source,status,refreshedAt}:
   claude,unknown,unavailable,auth_required,none
-  codex,pro,oauth,fresh,"2026-07-07T03:36:02.457Z"
+  codex,fixture-pro,oauth,fresh,"2035-01-15T12:00:20.000Z"
 windows[2]{provider,id,label,percentRemaining,resetsAt,state}:
-  codex,five_hour,session,97,"2026-07-07T08:03:31.000Z",fresh
-  codex,weekly,week,99,"2026-07-14T01:48:49.000Z",fresh
+  codex,five_hour,session,42,"2035-01-15T17:00:00.000Z",fresh
+  codex,weekly,week,88,"2035-01-22T12:00:00.000Z",fresh
 accounts[2]{provider,email,organization,accountId}:
   claude,hidden,none,none
-  codex,<redacted-email>,none,<redacted-account-id>
+  codex,fixture-user@example.test,none,acct_fixture_123
 attempts[3]{provider,source,status,error}:
   claude,oauth-file,skipped,credentials_expired
   claude,keychain,skipped,keychain_prompt_required
@@ -176,7 +177,7 @@ $ grep -ciE 'accessToken|access_token|authorization|bearer|sk-|eyJ' "$XDG_CACHE_
 0
 $ cat "$XDG_CACHE_HOME/quota-axi/quotas.json"
 {
-  "generatedAt": "2026-07-07T03:36:02.459Z",
+  "generatedAt": "2035-01-15T12:00:20.000Z",
   "schemaVersion": 1,
   "providers": [
     {
@@ -184,12 +185,12 @@ $ cat "$XDG_CACHE_HOME/quota-axi/quotas.json"
       "label": "Codex",
       "source": "oauth",
       "windows": [
-        { "id": "five_hour", "label": "session", "kind": "session", "percentUsed": 3, "percentRemaining": 97, "resetsAt": "2026-07-07T08:03:31.000Z", "windowSeconds": 18000 },
-        { "id": "weekly", "label": "week", "kind": "weekly", "percentUsed": 1, "percentRemaining": 99, "resetsAt": "2026-07-14T01:48:49.000Z", "windowSeconds": 604800 }
+        { "id": "five_hour", "label": "session", "kind": "session", "percentUsed": 58, "percentRemaining": 42, "resetsAt": "2035-01-15T17:00:00.000Z", "windowSeconds": 18000 },
+        { "id": "weekly", "label": "week", "kind": "weekly", "percentUsed": 12, "percentRemaining": 88, "resetsAt": "2035-01-22T12:00:00.000Z", "windowSeconds": 604800 }
       ],
-      "state": { "status": "fresh", "stale": false, "sourcesTried": ["oauth"], "refreshedAt": "2026-07-07T03:36:02.457Z" },
-      "plan": "pro",
-      "credits": { "remaining": 0, "unlimited": false, "unit": "credits" }
+      "state": { "status": "fresh", "stale": false, "sourcesTried": ["oauth"], "refreshedAt": "2035-01-15T12:00:20.000Z" },
+      "plan": "fixture-pro",
+      "credits": { "remaining": 1234, "unlimited": false, "unit": "credits" }
     }
   ]
 }
@@ -197,7 +198,7 @@ $ cat "$XDG_CACHE_HOME/quota-axi/quotas.json"
 
 ## 7. Stale-cache fallback
 
-Same cache, but run with an empty `$HOME` (no credentials), `CODEX_HOME` pointing at a nonexistent directory, and a `PATH` without the codex binary.
+The same fixture cache is reused with an empty `$HOME`, `CODEX_HOME` pointing at a nonexistent directory, and a `PATH` without the codex binary.
 Codex falls back to the cached snapshot marked `stale`, and the process still exits 0.
 
 ```console
@@ -205,10 +206,10 @@ $ HOME=/tmp/fake-home CODEX_HOME=/tmp/fake-home/.codex PATH=/usr/bin:/bin quota-
 ...
 providers[2]{provider,plan,source,status,refreshedAt}:
   claude,unknown,unavailable,auth_required,none
-  codex,pro,cache,stale,"2026-07-07T03:36:02.457Z"
+  codex,fixture-pro,cache,stale,"2035-01-15T12:00:20.000Z"
 windows[2]{provider,id,label,percentRemaining,resetsAt,state}:
-  codex,five_hour,session,97,"2026-07-07T08:03:31.000Z",stale
-  codex,weekly,week,99,"2026-07-14T01:48:49.000Z",stale
+  codex,five_hour,session,42,"2035-01-15T17:00:00.000Z",stale
+  codex,weekly,week,88,"2035-01-22T12:00:00.000Z",stale
 ...
 $ echo $?
 0
@@ -236,22 +237,22 @@ $ echo $?
 2
 ```
 
-## 9. Claude fresh path (hermetic, real dist code, stubbed network)
+## 9. Claude fresh path (hermetic, fixture credential, stubbed network)
 
-The live machine cannot show a fresh Claude window without a Keychain prompt (on-disk token expired), so this run drives the built `dist/src/cli.js` with a fixture credential file in a fake `$HOME` and a stubbed `fetch` returning the repository's `test/fixtures/claude/oauth.json` payload.
-Everything else (credential file discovery, expiry validation, normalization, TOON rendering, cache write) is the real shipped code.
+This run drives the built `dist/src/cli.js` with a fixture credential file in a fake `$HOME` and a stubbed `fetch` returning the repository's `test/fixtures/claude/oauth.json` payload.
+Credential file discovery, expiry validation, normalization, TOON rendering, and cache writing still exercise the shipped code.
 
 ```console
 $ HOME=$HARNESS/home XDG_CACHE_HOME=$HARNESS/cache node run.mjs   # calls main(["--provider","claude"])
 bin: quota-axi
 description: Report local agent-provider quota windows for routing-aware agents
-generatedAt: "2026-07-07T03:37:02.530Z"
+generatedAt: "2035-01-15T12:00:30.000Z"
 providers[1]{provider,plan,source,status,refreshedAt}:
-  claude,max,oauth,fresh,"2026-07-07T03:37:02.528Z"
+  claude,fixture-max,oauth,fresh,"2035-01-15T12:00:30.000Z"
 windows[4]{provider,id,label,percentRemaining,resetsAt,state}:
-  claude,five_hour,session,82,"2026-07-06T22:15:00Z",fresh
-  claude,seven_day,week,64,"2026-07-10T16:00:00Z",fresh
-  claude,seven_day_opus,opus week,93,"2026-07-11T09:30:00Z",fresh
+  claude,five_hour,session,82,"2035-01-15T17:00:00.000Z",fresh
+  claude,seven_day,week,64,"2035-01-22T12:00:00.000Z",fresh
+  claude,seven_day_opus,opus week,93,"2035-01-23T09:30:00.000Z",fresh
   claude,extra_usage,extra usage,75,unknown,fresh
 help[3]:
   ...
@@ -266,22 +267,22 @@ $ npm pack
 quota-axi-0.1.0.tgz
 $ npx -y -p ./quota-axi-0.1.0.tgz quota-axi --version
 quota-axi 0.1.0
-$ npx -y -p ./quota-axi-0.1.0.tgz quota-axi auth
-bin: ~/.npm/_npx/e8c87c2977205bc5/node_modules/.bin/quota-axi
+$ HOME=$HARNESS/home CODEX_HOME=$HARNESS/home/.codex XDG_CACHE_HOME=$HARNESS/cache npx -y -p ./quota-axi-0.1.0.tgz quota-axi auth
+bin: ~/.npm/_npx/fixture/node_modules/.bin/quota-axi
 description: Inspect local quota auth sources without printing secret values
 auth[4]{provider,source,path,status,error}:
   claude,oauth-file,~/.claude/.credentials.json,expired,none
   claude,keychain,none,skipped,keychain_prompt_required
   codex,auth-json,~/.codex/auth.json,available,none
-  codex,cli-rpc,none,available,none
+  codex,cli-rpc,none,missing,none
 help[1]:
   Run `quota-axi --allow-keychain-prompt auth` to permit macOS Keychain access
 $ echo $?
 0
 ```
 
-## Not exercised live
+## Not exercised
 
-`--allow-keychain-prompt` was deliberately not run: this validation session is unattended and the flag can pop a macOS GUI Keychain prompt.
+`--allow-keychain-prompt` was deliberately not run because this validation session is unattended and the flag can pop a macOS GUI Keychain prompt.
 Its skip/timeout/denied handling is covered by unit tests (`test/providers/claude-auth.test.ts`) and the default-skip behavior is visible in sections 2, 3, and 5 above.
-The codex `cli-rpc` fallback path was not observed live because the oauth path succeeded first (as designed); its JSON-RPC merge logic is covered by `test/providers/codex.test.ts`.
+The codex `cli-rpc` fallback path is represented in the fixture auth output, and its JSON-RPC merge logic is covered by `test/providers/codex.test.ts`.
