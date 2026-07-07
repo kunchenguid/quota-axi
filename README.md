@@ -82,6 +82,11 @@ pnpm run build
 pnpm run dev
 ```
 
+## Agent Skill
+
+The npm package includes `skills/quota-axi/SKILL.md`, an installable skill for agent runtimes that support local skills.
+The skill is generated from `src/skill.ts`; update it with `pnpm run build:skill` and verify it with `pnpm run build:skill -- --check`.
+
 ## How It Works
 
 ```
@@ -170,11 +175,18 @@ Failed providers, stale providers, account identity, and source attempts are not
 ## Development
 
 ```sh
-pnpm install       # Install dependencies
-pnpm run build    # Compile TypeScript to dist/
-pnpm test         # Run fixture parser and CLI tests
-pnpm run dev      # Run the CLI with tsx
+pnpm install                    # Install dependencies
+pnpm run build                  # Compile TypeScript to dist/
+pnpm run lint                   # Run ESLint
+pnpm run format:check           # Check Prettier formatting
+pnpm test                       # Run fixture parser and CLI tests
+pnpm run build:skill -- --check # Verify the generated skill is current
+pnpm run dev                    # Run the CLI with tsx
 ```
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the no-mistakes PR workflow, generated-file rules, and release-please conventions.
 
 ## Attribution
 

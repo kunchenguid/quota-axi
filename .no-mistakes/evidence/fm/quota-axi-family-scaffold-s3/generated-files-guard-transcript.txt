@@ -1,0 +1,10 @@
+Generated-file guard behavior evidence
+
+Bootstrap PR check with base commit 9f5dc949c50ab8ac0a441be777e1c3693ee0b612 and target e683b34f674b81dee7fed108ad394b49dd9a1db2
+Files touching release-please generated paths in this PR:
+.release-please-manifest.json
+CHANGELOG.md
+Bootstrap creation allowed: no violation because the files did not exist on the base branch.
+
+Future hand-edit simulation with current HEAD as the base and CHANGELOG.md in the PR diff
+Future hand-edit rejected as expected: CHANGELOG.md

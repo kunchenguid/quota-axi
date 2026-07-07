@@ -1,0 +1,18 @@
+Release workflow evidence
+
+Command: search for NPM_TOKEN or NODE_AUTH_TOKEN in release-please workflow
+No NPM_TOKEN or NODE_AUTH_TOKEN references found.
+
+Command: search for OIDC, release-please action, and provenance publish lines
+10:  id-token: write
+16:      - uses: googleapis/release-please-action@v4
+40:      - run: npm publish --access public --provenance
+
+Command: parse release-please config and manifest
+{
+  "packageName": "quota-axi",
+  "releaseType": "node",
+  "manifest": {
+    ".": "0.1.0"
+  }
+}

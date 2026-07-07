@@ -1,0 +1,58 @@
+release baseline revalidation
+=============================
+
+$ sed -n '1,60p' release-please-config.json
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "bootstrap-sha": "9f5dc949c50ab8ac0a441be777e1c3693ee0b612",
+  "bump-minor-pre-major": true,
+  "bump-patch-for-minor-pre-major": true,
+  "packages": {
+    ".": {
+      "release-type": "node",
+      "package-name": "quota-axi"
+    }
+  }
+}
+
+$ npm view quota-axi@0.1.0 version gitHead dist.tarball --json
+{
+  "version": "0.1.0",
+  "gitHead": "9f5dc949c50ab8ac0a441be777e1c3693ee0b612",
+  "dist.tarball": "https://registry.npmjs.org/quota-axi/-/quota-axi-0.1.0.tgz"
+}
+
+$ curl -fsSL https://api.github.com/repos/kunchenguid/quota-axi/git/ref/tags/quota-axi-v0.1.0
+{
+  "ref": "refs/tags/quota-axi-v0.1.0",
+  "node_id": "REF_kwDOTPtBkbpyZWZzL3RhZ3MvcXVvdGEtYXhpLXYwLjEuMA",
+  "url": "https://api.github.com/repos/kunchenguid/quota-axi/git/refs/tags/quota-axi-v0.1.0",
+  "object": {
+    "sha": "9f5dc949c50ab8ac0a441be777e1c3693ee0b612",
+    "type": "commit",
+    "url": "https://api.github.com/repos/kunchenguid/quota-axi/git/commits/9f5dc949c50ab8ac0a441be777e1c3693ee0b612"
+  }
+}
+
+$ git ls-remote --tags origin quota-axi-v0.1.0
+9f5dc949c50ab8ac0a441be777e1c3693ee0b612	refs/tags/quota-axi-v0.1.0
+
+$ git rev-list --reverse --oneline 9f5dc949c50ab8ac0a441be777e1c3693ee0b612..1f81636af7714093417c2e31699a7a31686d757c
+a1b713f ci: mirror gh-axi's release/lint/enforcement scaffolding for quota-axi
+e683b34 no-mistakes(review): Anchor release-please baseline tag
+b6c3c8e no-mistakes(document): Sync scaffold docs
+1f81636 fix: point release-please bootstrap-sha and baseline tag at the real published 0.1.0 commit
+
+$ git diff --unified=3 b6c3c8ef3af01d13e469520023aebe13a40cc559..1f81636af7714093417c2e31699a7a31686d757c -- release-please-config.json
+diff --git a/release-please-config.json b/release-please-config.json
+index 8533a5d..08859d3 100644
+--- a/release-please-config.json
++++ b/release-please-config.json
+@@ -1,6 +1,6 @@
+ {
+   "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+-  "bootstrap-sha": "a1b713f4aa8e2f98fbbe84e8a160ff8ae5ba097a",
++  "bootstrap-sha": "9f5dc949c50ab8ac0a441be777e1c3693ee0b612",
+   "bump-minor-pre-major": true,
+   "bump-patch-for-minor-pre-major": true,
+   "packages": {

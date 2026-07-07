@@ -27,8 +27,23 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 ```sh
 pnpm install
 pnpm run build
+pnpm run lint
+pnpm run format:check
 pnpm test
+pnpm run build:skill -- --check
 ```
+
+## Release process
+
+Releases are cut by release-please from conventional commit messages on `main`; merging the bot's release PR triggers `npm publish` via `.github/workflows/release-please.yml`, using npm's OIDC trusted-publisher flow (`id-token: write` + `--provenance`), not an `NPM_TOKEN` secret.
+`.release-please-manifest.json` is primed at `0.1.0`, the version already published to npm by hand before release-please was wired up; release-please owns every version after that.
+`release-please-config.json` intentionally sets `bootstrap-sha` to `9f5dc949c50ab8ac0a441be777e1c3693ee0b612`, the commit that produced the already-published npm `0.1.0`; do not retarget it to later scaffolding commits unless the published baseline itself is being corrected.
+Do not hand-edit `CHANGELOG.md` or `.release-please-manifest.json` (a guard workflow blocks PRs that touch them), and regenerate `skills/quota-axi/SKILL.md` with `pnpm run build:skill` instead of editing it directly (`pnpm run build:skill -- --check` in CI fails if it drifts from `src/skill.ts`).
+
+## Lockfile formatting
+
+The committed `pnpm-lock.yaml` is Prettier-formatted, which is not pnpm's native output format.
+After changing dependencies, run `pnpm exec prettier --write pnpm-lock.yaml` so the diff collapses to the real change instead of a wholesale reformat; CI's `pnpm install --frozen-lockfile` parses the YAML structurally and accepts this formatting.
 
 ## Maintaining this file
 

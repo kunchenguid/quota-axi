@@ -22,6 +22,7 @@
   },
   "files": [
     "dist",
+    "skills/quota-axi",
     "LICENSE",
     "README.md"
   ],
@@ -35,9 +36,13 @@
   },
   "scripts": {
     "build": "tsc",
+    "build:skill": "tsx scripts/build-skill.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "dev": "tsx bin/quota-axi.ts",
+    "lint": "eslint bin src test scripts",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
     "prepublishOnly": "npm run build"
   },
   "license": "MIT",
@@ -48,10 +53,14 @@
     "@toon-format/toon": "2.1.0"
   },
   "devDependencies": {
+    "@eslint/js": "10.0.1",
     "@types/node": "22.0.0",
+    "eslint": "10.1.0",
+    "globals": "17.7.0",
     "prettier": "3.8.1",
     "tsx": "4.0.0",
     "typescript": "6.0.3",
+    "typescript-eslint": "8.58.0",
     "vitest": "3.0.0"
   }
 }
