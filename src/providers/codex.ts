@@ -94,7 +94,7 @@ export async function fetchQuota(_options: ProviderOptions): Promise<ProviderQuo
   } catch (error) {
     const message = errorMessage(error);
     attempts[attempts.length - 1] = { source: "cli-rpc", status: "failed", error: message };
-    finalError = finalError === "credentials_missing" ? message : finalError;
+    finalError = finalError === "Codex quota unavailable" ? message : finalError;
   }
 
   const cached = readCachedProvider("codex");
