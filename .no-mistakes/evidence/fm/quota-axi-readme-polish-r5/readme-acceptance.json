@@ -9,9 +9,7 @@
       "pass": true,
       "details": "Changed files: README.md",
       "evidence": {
-        "changedFiles": [
-          "README.md"
-        ]
+        "changedFiles": ["README.md"]
       }
     },
     {
@@ -60,10 +58,7 @@
       "evidence": {
         "toonLines": "```sh\n$ npx -y quota-axi\nbin: ~/.npm/_npx/.../quota-axi\ndescription: Report local agent-provider quota windows for routing-aware agents\ngeneratedAt: \"2026-03-15T16:42:00.000Z\"\nproviders[2]{provider,plan,source,status,refreshedAt}:\n  claude,pro,oauth,fresh,\"2026-03-15T16:41:55.000Z\"\n  codex,plus,cli-rpc,fresh,\"2026-03-15T16:41:58.000Z\"\nwindows[7]{provider,id,label,percentRemaining,resetsAt,state}:\n  claude,five_hour,session,82,\"2026-03-15T21:15:00.000Z\",fresh\n  claude,seven_day,week,64,\"2026-03-19T15:00:00.000Z\",fresh\n  claude,seven_day_opus,opus week,93,\"2026-03-20T09:30:00.000Z\",fresh\n  claude,\"model:fable\",Fable week,71,\"2026-03-20T09:30:00.000Z\",fresh\n  codex,five_hour,session,58,\"2026-03-15T20:45:00.000Z\",fresh\n  codex,weekly,week,47,\"2026-03-19T09:00:00.000Z\",fresh\n  codex,\"model:gpt-5.1-codex:5h\",GPT-5.1-Codex session,100,\"2026-03-16T01:41:58.000Z\",fresh\nhelp[3]:\n  Run `quota-axi --provider claude --json` for JSON output\n  Run `quota-axi --full` to include account and source-attempt details\n  Run `quota-axi auth` to inspect local auth source availability without printing secrets\n```\n\n`--json` emits the same normalized model as structured JSON instead of TOON:\n",
         "parsedJsonProvider": "claude",
-        "parsedJsonWindowIds": [
-          "five_hour",
-          "model:fable"
-        ]
+        "parsedJsonWindowIds": ["five_hour", "model:fable"]
       }
     },
     {

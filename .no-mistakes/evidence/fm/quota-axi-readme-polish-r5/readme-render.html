@@ -1,54 +1,188 @@
 <!doctype html>
 <html lang="en">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>quota-axi README render</title>
-<style>
-:root { color-scheme: light; --fg: #1f2328; --muted: #59636e; --border: #d1d9e0; --bg: #ffffff; --subtle: #f6f8fa; --accent: #0969da; }
-* { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--fg); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; line-height: 1.5; }
-a { color: var(--accent); text-decoration: none; }
-a:hover { text-decoration: underline; }
-.markdown-body { max-width: 920px; margin: 0 auto; padding: 40px 32px 72px; }
-h1, h2, h3 { margin: 24px 0 16px; font-weight: 600; line-height: 1.25; }
-h1 { font-size: 2em; }
-h2 { padding-bottom: .3em; border-bottom: 1px solid var(--border); font-size: 1.5em; }
-h3 { font-size: 1.25em; }
-p, ul, ol, pre, table { margin: 0 0 16px; }
-ul { padding-left: 2em; }
-li + li { margin-top: .25em; }
-code { padding: .2em .4em; border-radius: 6px; background: var(--subtle); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 85%; }
-pre { overflow: auto; padding: 16px; border-radius: 6px; background: var(--subtle); border: 1px solid #eaeef2; }
-pre code { padding: 0; background: transparent; font-size: 85%; }
-table { width: 100%; border-collapse: collapse; display: block; overflow-x: auto; }
-th, td { padding: 6px 13px; border: 1px solid var(--border); }
-th { font-weight: 600; background: var(--subtle); }
-img { max-width: 100%; vertical-align: middle; }
-p[align="center"] { text-align: center; }
-@media (max-width: 640px) { .markdown-body { padding: 28px 18px 56px; } }
-</style>
-</head>
-<body>
-<article class="markdown-body">
-<h1 align="center">quota-axi</h1><h3 align="center">Your agent needs to be aware of your quota</h3><p align="center">
-  <a href="https://www.npmjs.com/package/quota-axi"><img alt="npm" src="https://img.shields.io/npm/v/quota-axi?style=flat-square" /></a>
-  <a href="https://github.com/kunchenguid/quota-axi/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/kunchenguid/quota-axi/ci.yml?style=flat-square&label=ci" /></a>
-  <a href="https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-blue?style=flat-square"><img alt="Platform" src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-blue?style=flat-square" /></a>
-  <a href="https://x.com/kunchenguid"><img alt="X" src="https://img.shields.io/badge/X-@kunchenguid-black?style=flat-square" /></a>
-  <a href="https://discord.gg/Wsy2NpnZDu"><img alt="Discord" src="https://img.shields.io/discord/1439901831038763092?style=flat-square&label=discord" /></a>
-</p><p>Quota CLI for agents - designed with <a href="https://axi.md">AXI</a> (Agent eXperience Interface).</p>
-<p>Agents need quota state before they choose where work can safely run.
-Vendor dashboards are not shaped for shell automation, and local CLIs expose different windows, resets, and auth files.</p>
-<p>quota-axi reports local Claude and Codex quota windows in one <a href="https://axi.md">AXI</a>-shaped call.
-It is data only: it never routes, recommends, proxies, intercepts, logs in, imports browser cookies, or mutates provider state.</p>
-<ul>
-<li><strong>Official sources</strong> - quota-axi reads local Claude and Codex auth files and calls the same first-party usage endpoints the vendor CLIs use, with a read-only Codex app-server probe as fallback.</li>
-<li><strong>Local first</strong> - everything runs on the machine that holds the credentials; the only network calls are to Anthropic&#39;s and OpenAI&#39;s own usage endpoints, never a third-party relay.</li>
-<li><strong>Token efficient</strong> - default stdout is compact TOON so agents spend fewer tokens parsing quota state, with <code>--json</code> available when a caller needs the normalized model.</li>
-</ul>
-<h2>Quick Start</h2>
-<pre><code class="language-sh">$ npx -y quota-axi
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>quota-axi README render</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --fg: #1f2328;
+        --muted: #59636e;
+        --border: #d1d9e0;
+        --bg: #ffffff;
+        --subtle: #f6f8fa;
+        --accent: #0969da;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--fg);
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        line-height: 1.5;
+      }
+      a {
+        color: var(--accent);
+        text-decoration: none;
+      }
+      a:hover {
+        text-decoration: underline;
+      }
+      .markdown-body {
+        max-width: 920px;
+        margin: 0 auto;
+        padding: 40px 32px 72px;
+      }
+      h1,
+      h2,
+      h3 {
+        margin: 24px 0 16px;
+        font-weight: 600;
+        line-height: 1.25;
+      }
+      h1 {
+        font-size: 2em;
+      }
+      h2 {
+        padding-bottom: 0.3em;
+        border-bottom: 1px solid var(--border);
+        font-size: 1.5em;
+      }
+      h3 {
+        font-size: 1.25em;
+      }
+      p,
+      ul,
+      ol,
+      pre,
+      table {
+        margin: 0 0 16px;
+      }
+      ul {
+        padding-left: 2em;
+      }
+      li + li {
+        margin-top: 0.25em;
+      }
+      code {
+        padding: 0.2em 0.4em;
+        border-radius: 6px;
+        background: var(--subtle);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 85%;
+      }
+      pre {
+        overflow: auto;
+        padding: 16px;
+        border-radius: 6px;
+        background: var(--subtle);
+        border: 1px solid #eaeef2;
+      }
+      pre code {
+        padding: 0;
+        background: transparent;
+        font-size: 85%;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        display: block;
+        overflow-x: auto;
+      }
+      th,
+      td {
+        padding: 6px 13px;
+        border: 1px solid var(--border);
+      }
+      th {
+        font-weight: 600;
+        background: var(--subtle);
+      }
+      img {
+        max-width: 100%;
+        vertical-align: middle;
+      }
+      p[align="center"] {
+        text-align: center;
+      }
+      @media (max-width: 640px) {
+        .markdown-body {
+          padding: 28px 18px 56px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <article class="markdown-body">
+      <h1 align="center">quota-axi</h1>
+      <h3 align="center">Your agent needs to be aware of your quota</h3>
+      <p align="center">
+        <a href="https://www.npmjs.com/package/quota-axi"
+          ><img
+            alt="npm"
+            src="https://img.shields.io/npm/v/quota-axi?style=flat-square"
+        /></a>
+        <a
+          href="https://github.com/kunchenguid/quota-axi/actions/workflows/ci.yml"
+          ><img
+            alt="CI"
+            src="https://img.shields.io/github/actions/workflow/status/kunchenguid/quota-axi/ci.yml?style=flat-square&label=ci"
+        /></a>
+        <a
+          href="https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-blue?style=flat-square"
+          ><img
+            alt="Platform"
+            src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-blue?style=flat-square"
+        /></a>
+        <a href="https://x.com/kunchenguid"
+          ><img
+            alt="X"
+            src="https://img.shields.io/badge/X-@kunchenguid-black?style=flat-square"
+        /></a>
+        <a href="https://discord.gg/Wsy2NpnZDu"
+          ><img
+            alt="Discord"
+            src="https://img.shields.io/discord/1439901831038763092?style=flat-square&label=discord"
+        /></a>
+      </p>
+      <p>
+        Quota CLI for agents - designed with
+        <a href="https://axi.md">AXI</a> (Agent eXperience Interface).
+      </p>
+      <p>
+        Agents need quota state before they choose where work can safely run.
+        Vendor dashboards are not shaped for shell automation, and local CLIs
+        expose different windows, resets, and auth files.
+      </p>
+      <p>
+        quota-axi reports local Claude and Codex quota windows in one
+        <a href="https://axi.md">AXI</a>-shaped call. It is data only: it never
+        routes, recommends, proxies, intercepts, logs in, imports browser
+        cookies, or mutates provider state.
+      </p>
+      <ul>
+        <li>
+          <strong>Official sources</strong> - quota-axi reads local Claude and
+          Codex auth files and calls the same first-party usage endpoints the
+          vendor CLIs use, with a read-only Codex app-server probe as fallback.
+        </li>
+        <li>
+          <strong>Local first</strong> - everything runs on the machine that
+          holds the credentials; the only network calls are to Anthropic&#39;s
+          and OpenAI&#39;s own usage endpoints, never a third-party relay.
+        </li>
+        <li>
+          <strong>Token efficient</strong> - default stdout is compact TOON so
+          agents spend fewer tokens parsing quota state, with
+          <code>--json</code> available when a caller needs the normalized
+          model.
+        </li>
+      </ul>
+      <h2>Quick Start</h2>
+      <pre><code class="language-sh">$ npx -y quota-axi
 bin: ~/.npm/_npx/.../quota-axi
 description: Report local agent-provider quota windows for routing-aware agents
 generatedAt: &quot;2026-03-15T16:42:00.000Z&quot;
@@ -68,8 +202,11 @@ help[3]:
   Run `quota-axi --full` to include account and source-attempt details
   Run `quota-axi auth` to inspect local auth source availability without printing secrets
 </code></pre>
-<p><code>--json</code> emits the same normalized model as structured JSON instead of TOON:</p>
-<pre><code class="language-sh">$ quota-axi --provider claude --json
+      <p>
+        <code>--json</code> emits the same normalized model as structured JSON
+        instead of TOON:
+      </p>
+      <pre><code class="language-sh">$ quota-axi --provider claude --json
 {
   &quot;generatedAt&quot;: &quot;2026-03-15T16:42:03.000Z&quot;,
   &quot;schemaVersion&quot;: 1,
@@ -107,7 +244,7 @@ help[3]:
   ]
 }
 </code></pre>
-<pre><code class="language-sh">$ quota-axi auth
+      <pre><code class="language-sh">$ quota-axi auth
 bin: ~/.npm/_npx/.../quota-axi
 description: Inspect local quota auth sources without printing secret values
 auth[4]{provider,source,path,status,error}:
@@ -118,32 +255,48 @@ auth[4]{provider,source,path,status,error}:
 help[1]:
   Run `quota-axi --allow-keychain-prompt auth` to permit macOS Keychain access
 </code></pre>
-<h2>Install</h2>
-<p>quota-axi requires Node.js 20 or newer.</p>
-<p><strong>Agent skill (recommended)</strong></p>
-<p>Install the skill in the <a href="https://agentskills.io">Agent Skills</a> format with <a href="https://github.com/vercel-labs/skills"><code>npx skills</code></a>:</p>
-<pre><code class="language-sh">npx skills add kunchenguid/quota-axi --skill quota-axi -g
+      <h2>Install</h2>
+      <p>quota-axi requires Node.js 20 or newer.</p>
+      <p><strong>Agent skill (recommended)</strong></p>
+      <p>
+        Install the skill in the
+        <a href="https://agentskills.io">Agent Skills</a> format with
+        <a href="https://github.com/vercel-labs/skills"
+          ><code>npx skills</code></a
+        >:
+      </p>
+      <pre><code class="language-sh">npx skills add kunchenguid/quota-axi --skill quota-axi -g
 </code></pre>
-<p>The skill teaches your agent to run quota-axi through <code>npx -y quota-axi</code> on demand, so nothing needs to be installed ahead of time.
-<code>-g</code> installs the skill for all projects (e.g. <code>~/.claude/skills/</code>); drop it to install for the current project only (<code>.claude/skills/</code>).</p>
-<p><strong>Direct use</strong></p>
-<pre><code class="language-sh">npx -y quota-axi
+      <p>
+        The skill teaches your agent to run quota-axi through
+        <code>npx -y quota-axi</code> on demand, so nothing needs to be
+        installed ahead of time. <code>-g</code> installs the skill for all
+        projects (e.g. <code>~/.claude/skills/</code>); drop it to install for
+        the current project only (<code>.claude/skills/</code>).
+      </p>
+      <p><strong>Direct use</strong></p>
+      <pre><code class="language-sh">npx -y quota-axi
 </code></pre>
-<p><strong>npm</strong></p>
-<pre><code class="language-sh">npm install -g quota-axi
+      <p><strong>npm</strong></p>
+      <pre><code class="language-sh">npm install -g quota-axi
 </code></pre>
-<p><strong>From source</strong></p>
-<pre><code class="language-sh">git clone https://github.com/kunchenguid/quota-axi.git
+      <p><strong>From source</strong></p>
+      <pre><code class="language-sh">git clone https://github.com/kunchenguid/quota-axi.git
 cd quota-axi
 pnpm install
 pnpm run build
 pnpm run dev
 </code></pre>
-<h2>Agent Skill</h2>
-<p>The npm package includes <code>skills/quota-axi/SKILL.md</code>, the same installable skill recommended above.
-It is generated from <code>src/skill.ts</code>; update it with <code>pnpm run build:skill</code> and verify it with <code>pnpm run build:skill -- --check</code>.</p>
-<h2>How It Works</h2>
-<pre><code>┌────────────┐
+      <h2>Agent Skill</h2>
+      <p>
+        The npm package includes <code>skills/quota-axi/SKILL.md</code>, the
+        same installable skill recommended above. It is generated from
+        <code>src/skill.ts</code>; update it with
+        <code>pnpm run build:skill</code> and verify it with
+        <code>pnpm run build:skill -- --check</code>.
+      </p>
+      <h2>How It Works</h2>
+      <pre><code>┌────────────┐
 │ quota-axi  │
 └─────┬──────┘
       ▼
@@ -165,95 +318,158 @@ It is generated from <code>src/skill.ts</code>; update it with <code>pnpm run bu
 │ stale cache   │ ◀───  │ TOON or JSON │
 └───────────────┘       └──────────────┘
 </code></pre>
-<ul>
-<li><strong>Live first</strong> - direct provider usage calls use 15 second request timeouts, Codex JSON-RPC reads use short per-call timeouts, and stale cache fallback is per provider.</li>
-<li><strong>No default Keychain prompt</strong> - macOS Claude Keychain reads are skipped unless <code>--allow-keychain-prompt</code> is passed.</li>
-<li><strong>Partial success is success</strong> - one provider can fail while another returns fresh or stale data, and the process still exits 0. Exit code 1 means every provider failed, and 2 means a usage error.</li>
-<li><strong>No token equivalence</strong> - quota-axi does not claim that one provider percentage equals another provider percentage.</li>
-</ul>
-<h2>CLI Reference</h2>
-<table>
-<thead>
-<tr>
-<th>Command</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody><tr>
-<td><code>quota-axi</code></td>
-<td>Report Claude and Codex quota windows</td>
-</tr>
-<tr>
-<td><code>auth</code></td>
-<td>Report local auth-source availability, no values</td>
-</tr>
-</tbody></table>
-<h3>Flags</h3>
-<table>
-<thead>
-<tr>
-<th>Flag</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody><tr>
-<td><code>--provider claude,codex</code></td>
-<td>Scope providers</td>
-</tr>
-<tr>
-<td><code>--json</code></td>
-<td>Emit normalized JSON instead of TOON for quota or auth</td>
-</tr>
-<tr>
-<td><code>--full</code></td>
-<td>Include quota account identity and source attempts</td>
-</tr>
-<tr>
-<td><code>--allow-keychain-prompt</code></td>
-<td>Permit macOS Claude Keychain access that could prompt</td>
-</tr>
-<tr>
-<td><code>-h</code>, <code>--help</code></td>
-<td>Print terse <a href="https://axi.md">AXI</a> help</td>
-</tr>
-<tr>
-<td><code>-v</code>, <code>-V</code>, <code>--version</code></td>
-<td>Print version</td>
-</tr>
-</tbody></table>
-<h2>Output Model</h2>
-<p><code>--json</code> emits <code>schemaVersion: 1</code>.
-Quota reports contain <code>providers</code>, each with <code>provider</code>, <code>label</code>, <code>source</code>, <code>windows</code>, <code>state</code>, optional <code>plan</code>, and optional <code>credits</code>.
-With <code>--full</code>, providers can also include <code>account</code> identity and per-source <code>attempts</code>.
-Provider <code>state</code> includes <code>status</code>, <code>stale</code>, <code>sourcesTried</code>, optional <code>refreshedAt</code>, optional <code>error</code>, and optional <code>retryAfter</code>.
-Quota windows include <code>id</code>, <code>label</code>, <code>kind</code>, optional percentages, optional reset fields, optional <code>windowSeconds</code>, and optional credit-spend fields.
-Account identity and per-source <code>attempts</code> are omitted unless <code>--full</code> is passed.
-Provider statuses are <code>fresh</code>, <code>stale</code>, <code>unavailable</code>, <code>auth_required</code>, <code>rate_limited</code>, or <code>error</code>.
-Provider sources are <code>oauth</code>, <code>cli-rpc</code>, <code>api</code>, <code>web</code>, <code>cache</code>, or <code>unavailable</code>; v1 emits <code>oauth</code>, <code>cli-rpc</code>, <code>cache</code>, and <code>unavailable</code>.
-Window kinds are <code>session</code>, <code>weekly</code>, <code>monthly</code>, <code>model</code>, <code>credits</code>, or <code>unknown</code>.
-Source attempts use <code>success</code>, <code>failed</code>, or <code>skipped</code>.
-Claude can report <code>five_hour</code>, <code>seven_day</code>, optional <code>seven_day_opus</code>, and optional <code>extra_usage</code> windows.
-When the account&#39;s usage response includes a scoped <code>limits</code> list, quota-axi surfaces every active window it describes instead, including model-scoped ones (e.g. Fable) as a <code>model:&lt;slug&gt;</code> window.
-Codex can report <code>five_hour</code> and <code>weekly</code> windows plus optional credit balance data, plus any additional model- or feature-scoped rate limits the account has as <code>model:&lt;id&gt;:5h</code> / <code>model:&lt;id&gt;:7d</code> windows, and an optional code-review rate limit as <code>code_review_five_hour</code> / <code>code_review_weekly</code>.
-<code>auth --json</code> emits <code>generatedAt</code>, <code>schemaVersion: 1</code>, and <code>auth</code>, where each provider report has <code>provider</code> and <code>sources</code>.
-Auth source entries include <code>source</code>, optional <code>path</code>, <code>status</code>, and optional <code>error</code>.
-Auth source statuses are <code>available</code>, <code>missing</code>, <code>invalid</code>, <code>expired</code>, or <code>skipped</code>.
-Auth source names are <code>oauth-file</code>, <code>keychain</code>, <code>auth-json</code>, and <code>cli-rpc</code>.</p>
-<h2>Security Posture</h2>
-<p>quota-axi reads <code>~/.claude/.credentials.json</code> for Claude.
-On macOS, it reads <code>Claude Code-credentials</code> from Keychain only with <code>--allow-keychain-prompt</code>; when enabled, the Keychain credential is tried before file credentials.
-For Codex, it reads <code>$CODEX_HOME/auth.json</code> or <code>~/.codex/auth.json</code> before the read-only CLI fallback.
-Codex <code>auth.json</code> support is OAuth-token only; API key values such as <code>OPENAI_API_KEY</code> are treated as invalid for quota usage calls and are not sent to ChatGPT usage endpoints.
-It may run <code>codex -s read-only -a untrusted app-server</code> for Codex JSON-RPC fallback.
-It never launches the Claude CLI, so it cannot accidentally spend the quota it measures.</p>
-<p>Direct HTTP requests go only to Anthropic and OpenAI first-party usage endpoints with the user&#39;s local credentials.
-It sends credential values only to the first-party provider request they authenticate.
-It never prints, logs, or caches credential values.
-The cache lives at <code>~/.cache/quota-axi/quotas.json</code> (or under <code>$XDG_CACHE_HOME/quota-axi/</code> when <code>XDG_CACHE_HOME</code> is set), uses <code>0600</code> file permissions, and stores normalized non-secret snapshots only.
-Only fresh provider snapshots with windows are cached.
-Failed providers, stale providers, account identity, and source attempts are not cached.</p>
-<h2>Development</h2>
-<pre><code class="language-sh">pnpm install                    # Install dependencies
+      <ul>
+        <li>
+          <strong>Live first</strong> - direct provider usage calls use 15
+          second request timeouts, Codex JSON-RPC reads use short per-call
+          timeouts, and stale cache fallback is per provider.
+        </li>
+        <li>
+          <strong>No default Keychain prompt</strong> - macOS Claude Keychain
+          reads are skipped unless <code>--allow-keychain-prompt</code> is
+          passed.
+        </li>
+        <li>
+          <strong>Partial success is success</strong> - one provider can fail
+          while another returns fresh or stale data, and the process still exits
+          0. Exit code 1 means every provider failed, and 2 means a usage error.
+        </li>
+        <li>
+          <strong>No token equivalence</strong> - quota-axi does not claim that
+          one provider percentage equals another provider percentage.
+        </li>
+      </ul>
+      <h2>CLI Reference</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Command</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>quota-axi</code></td>
+            <td>Report Claude and Codex quota windows</td>
+          </tr>
+          <tr>
+            <td><code>auth</code></td>
+            <td>Report local auth-source availability, no values</td>
+          </tr>
+        </tbody>
+      </table>
+      <h3>Flags</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Flag</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>--provider claude,codex</code></td>
+            <td>Scope providers</td>
+          </tr>
+          <tr>
+            <td><code>--json</code></td>
+            <td>Emit normalized JSON instead of TOON for quota or auth</td>
+          </tr>
+          <tr>
+            <td><code>--full</code></td>
+            <td>Include quota account identity and source attempts</td>
+          </tr>
+          <tr>
+            <td><code>--allow-keychain-prompt</code></td>
+            <td>Permit macOS Claude Keychain access that could prompt</td>
+          </tr>
+          <tr>
+            <td><code>-h</code>, <code>--help</code></td>
+            <td>Print terse <a href="https://axi.md">AXI</a> help</td>
+          </tr>
+          <tr>
+            <td><code>-v</code>, <code>-V</code>, <code>--version</code></td>
+            <td>Print version</td>
+          </tr>
+        </tbody>
+      </table>
+      <h2>Output Model</h2>
+      <p>
+        <code>--json</code> emits <code>schemaVersion: 1</code>. Quota reports
+        contain <code>providers</code>, each with <code>provider</code>,
+        <code>label</code>, <code>source</code>, <code>windows</code>,
+        <code>state</code>, optional <code>plan</code>, and optional
+        <code>credits</code>. With <code>--full</code>, providers can also
+        include <code>account</code> identity and per-source
+        <code>attempts</code>. Provider <code>state</code> includes
+        <code>status</code>, <code>stale</code>, <code>sourcesTried</code>,
+        optional <code>refreshedAt</code>, optional <code>error</code>, and
+        optional <code>retryAfter</code>. Quota windows include <code>id</code>,
+        <code>label</code>, <code>kind</code>, optional percentages, optional
+        reset fields, optional <code>windowSeconds</code>, and optional
+        credit-spend fields. Account identity and per-source
+        <code>attempts</code> are omitted unless <code>--full</code> is passed.
+        Provider statuses are <code>fresh</code>, <code>stale</code>,
+        <code>unavailable</code>, <code>auth_required</code>,
+        <code>rate_limited</code>, or <code>error</code>. Provider sources are
+        <code>oauth</code>, <code>cli-rpc</code>, <code>api</code>,
+        <code>web</code>, <code>cache</code>, or <code>unavailable</code>; v1
+        emits <code>oauth</code>, <code>cli-rpc</code>, <code>cache</code>, and
+        <code>unavailable</code>. Window kinds are <code>session</code>,
+        <code>weekly</code>, <code>monthly</code>, <code>model</code>,
+        <code>credits</code>, or <code>unknown</code>. Source attempts use
+        <code>success</code>, <code>failed</code>, or <code>skipped</code>.
+        Claude can report <code>five_hour</code>, <code>seven_day</code>,
+        optional <code>seven_day_opus</code>, and optional
+        <code>extra_usage</code> windows. When the account&#39;s usage response
+        includes a scoped <code>limits</code> list, quota-axi surfaces every
+        active window it describes instead, including model-scoped ones (e.g.
+        Fable) as a <code>model:&lt;slug&gt;</code> window. Codex can report
+        <code>five_hour</code> and <code>weekly</code> windows plus optional
+        credit balance data, plus any additional model- or feature-scoped rate
+        limits the account has as <code>model:&lt;id&gt;:5h</code> /
+        <code>model:&lt;id&gt;:7d</code> windows, and an optional code-review
+        rate limit as <code>code_review_five_hour</code> /
+        <code>code_review_weekly</code>. <code>auth --json</code> emits
+        <code>generatedAt</code>, <code>schemaVersion: 1</code>, and
+        <code>auth</code>, where each provider report has
+        <code>provider</code> and <code>sources</code>. Auth source entries
+        include <code>source</code>, optional <code>path</code>,
+        <code>status</code>, and optional <code>error</code>. Auth source
+        statuses are <code>available</code>, <code>missing</code>,
+        <code>invalid</code>, <code>expired</code>, or <code>skipped</code>.
+        Auth source names are <code>oauth-file</code>, <code>keychain</code>,
+        <code>auth-json</code>, and <code>cli-rpc</code>.
+      </p>
+      <h2>Security Posture</h2>
+      <p>
+        quota-axi reads <code>~/.claude/.credentials.json</code> for Claude. On
+        macOS, it reads <code>Claude Code-credentials</code> from Keychain only
+        with <code>--allow-keychain-prompt</code>; when enabled, the Keychain
+        credential is tried before file credentials. For Codex, it reads
+        <code>$CODEX_HOME/auth.json</code> or
+        <code>~/.codex/auth.json</code> before the read-only CLI fallback. Codex
+        <code>auth.json</code> support is OAuth-token only; API key values such
+        as <code>OPENAI_API_KEY</code> are treated as invalid for quota usage
+        calls and are not sent to ChatGPT usage endpoints. It may run
+        <code>codex -s read-only -a untrusted app-server</code> for Codex
+        JSON-RPC fallback. It never launches the Claude CLI, so it cannot
+        accidentally spend the quota it measures.
+      </p>
+      <p>
+        Direct HTTP requests go only to Anthropic and OpenAI first-party usage
+        endpoints with the user&#39;s local credentials. It sends credential
+        values only to the first-party provider request they authenticate. It
+        never prints, logs, or caches credential values. The cache lives at
+        <code>~/.cache/quota-axi/quotas.json</code> (or under
+        <code>$XDG_CACHE_HOME/quota-axi/</code> when
+        <code>XDG_CACHE_HOME</code> is set), uses <code>0600</code> file
+        permissions, and stores normalized non-secret snapshots only. Only fresh
+        provider snapshots with windows are cached. Failed providers, stale
+        providers, account identity, and source attempts are not cached.
+      </p>
+      <h2>Development</h2>
+      <pre><code class="language-sh">pnpm install                    # Install dependencies
 pnpm run build                  # Compile TypeScript to dist/
 pnpm run lint                   # Run ESLint
 pnpm run format:check           # Check Prettier formatting
@@ -261,11 +477,13 @@ pnpm test                       # Run fixture parser and CLI tests
 pnpm run build:skill -- --check # Verify the generated skill is current
 pnpm run dev                    # Run the CLI with tsx
 </code></pre>
-<h2>Contributing</h2>
-<p>See <a href="CONTRIBUTING.md">CONTRIBUTING.md</a> for the no-mistakes PR workflow, generated-file rules, and release-please conventions.</p>
-<h2>License</h2>
-<p>MIT</p>
-
-</article>
-</body>
+      <h2>Contributing</h2>
+      <p>
+        See <a href="CONTRIBUTING.md">CONTRIBUTING.md</a> for the no-mistakes PR
+        workflow, generated-file rules, and release-please conventions.
+      </p>
+      <h2>License</h2>
+      <p>MIT</p>
+    </article>
+  </body>
 </html>
