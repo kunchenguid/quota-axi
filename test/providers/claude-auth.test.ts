@@ -6,15 +6,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const originalHome = process.env.HOME;
 const originalUserProfile = process.env.USERPROFILE;
 const originalXdgCacheHome = process.env.XDG_CACHE_HOME;
+const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
 let tempDir: string | undefined;
 
 beforeEach(() => {
   vi.resetModules();
+  usePlatform("linux");
 });
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.doUnmock("../../src/lib/process.js");
   vi.useRealTimers();
+  if (originalPlatform)
+    Object.defineProperty(process, "platform", originalPlatform);
   if (originalHome === undefined) delete process.env.HOME;
   else process.env.HOME = originalHome;
   if (originalUserProfile === undefined) delete process.env.USERPROFILE;
@@ -31,6 +36,13 @@ function useTempHome(): string {
   process.env.USERPROFILE = tempDir;
   process.env.XDG_CACHE_HOME = join(tempDir, "cache");
   return tempDir;
+}
+
+function usePlatform(platform: NodeJS.Platform): void {
+  Object.defineProperty(process, "platform", {
+    configurable: true,
+    value: platform,
+  });
 }
 
 describe("Claude credential-state reporting", () => {
@@ -140,6 +152,72 @@ describe("Claude credential-state reporting", () => {
       status: "skipped",
       error: "credentials_missing",
     });
+  });
+
+  it("marks a skipped keychain prompt only after confirming the keychain item exists", async () => {
+    usePlatform("darwin");
+    useTempHome();
+    const execFileText = vi.fn(async () => "");
+    vi.doMock("../../src/lib/process.js", () => ({ execFileText }));
+
+    const { fetchQuota, inspectAuth } =
+      await import("../../src/providers/claude.js");
+    const auth = await inspectAuth({ allowKeychainPrompt: false });
+    const result = await fetchQuota({ allowKeychainPrompt: false });
+
+    expect(execFileText).toHaveBeenCalledWith(
+      "security",
+      ["find-generic-password", "-s", "Claude Code-credentials"],
+      expect.any(Number),
+    );
+    expect(execFileText).not.toHaveBeenCalledWith(
+      "security",
+      expect.arrayContaining(["-w"]),
+      expect.any(Number),
+    );
+    expect(auth.sources).toContainEqual({
+      source: "keychain",
+      status: "skipped",
+      error: "keychain_prompt_required",
+      credentialPresent: true,
+    });
+    expect(result.attempts).toContainEqual({
+      source: "keychain",
+      status: "skipped",
+      error: "keychain_prompt_required",
+      credentialPresent: true,
+    });
+  });
+
+  it("does not mark keychain prompt required when the keychain item is missing", async () => {
+    usePlatform("darwin");
+    useTempHome();
+    const missing = Object.assign(new Error("not found"), { code: 44 });
+    const execFileText = vi.fn(async () => {
+      throw missing;
+    });
+    vi.doMock("../../src/lib/process.js", () => ({ execFileText }));
+
+    const { fetchQuota, inspectAuth } =
+      await import("../../src/providers/claude.js");
+    const auth = await inspectAuth({ allowKeychainPrompt: false });
+    const result = await fetchQuota({ allowKeychainPrompt: false });
+
+    expect(auth.sources).toContainEqual({
+      source: "keychain",
+      status: "missing",
+    });
+    expect(result.attempts).toContainEqual({
+      source: "keychain",
+      status: "skipped",
+      error: "credentials_missing",
+    });
+    expect(result.attempts).not.toContainEqual(
+      expect.objectContaining({
+        source: "keychain",
+        error: "keychain_prompt_required",
+      }),
+    );
   });
 
   it("surfaces malformed file credentials as invalid auth", async () => {

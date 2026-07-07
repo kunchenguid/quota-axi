@@ -27,6 +27,7 @@ const OAUTH_BETA = "oauth-2025-04-20";
 const CLAUDE_CODE_USER_AGENT = "claude-code/2.1.202";
 const API_TIMEOUT_MS = 15_000;
 const KEYCHAIN_PROMPT_TIMEOUT_MS = 60_000;
+const KEYCHAIN_PRESENCE_TIMEOUT_MS = 5_000;
 const KEYCHAIN_ITEM_NOT_FOUND_EXIT_CODE = 44;
 const CREDENTIAL_FILE = join(homedir(), ".claude", ".credentials.json");
 const KEYCHAIN_SERVICE = "Claude Code-credentials";
@@ -51,6 +52,7 @@ type CredentialState =
   | AvailableCredentialState
   | UnavailableCredentialState
   | SkippedCredentialState;
+type KeychainItemPresence = "present" | "missing" | "unknown";
 
 type RawUsageWindow = {
   utilization?: unknown;
@@ -109,11 +111,13 @@ export async function fetchQuota(
   for (const state of credentialStates) {
     if (state.status === "available") continue;
     if (state.status === "skipped") {
-      attempts.push({
+      const attempt: SourceAttempt = {
         source: state.source.source,
         status: "skipped",
         error: state.source.error,
-      });
+      };
+      if (state.source.credentialPresent) attempt.credentialPresent = true;
+      attempts.push(attempt);
       if (finalError === "Claude quota unavailable")
         finalError = state.source.error ?? finalError;
       continue;
@@ -311,20 +315,55 @@ async function readCredentialStates(
 
   if (process.platform === "darwin") {
     if (!options.allowKeychainPrompt) {
-      states.push({
-        status: "skipped",
-        source: {
-          source: "keychain",
-          status: "skipped",
-          error: "keychain_prompt_required",
-        },
-      });
+      states.push(await readSkippedKeychainCredentialState());
     } else {
       states.push(await readKeychainCredentialState());
     }
   }
 
   return states;
+}
+
+async function readSkippedKeychainCredentialState(): Promise<CredentialState> {
+  const presence = await readKeychainItemPresence();
+  if (presence === "present") {
+    return {
+      status: "skipped",
+      source: {
+        source: "keychain",
+        status: "skipped",
+        error: "keychain_prompt_required",
+        credentialPresent: true,
+      },
+    };
+  }
+  if (presence === "missing") {
+    return {
+      status: "missing",
+      source: { source: "keychain", status: "missing" },
+    };
+  }
+  return {
+    status: "skipped",
+    source: {
+      source: "keychain",
+      status: "skipped",
+      error: "keychain_presence_check_failed",
+    },
+  };
+}
+
+async function readKeychainItemPresence(): Promise<KeychainItemPresence> {
+  try {
+    await execFileText(
+      "security",
+      ["find-generic-password", "-s", KEYCHAIN_SERVICE],
+      KEYCHAIN_PRESENCE_TIMEOUT_MS,
+    );
+    return "present";
+  } catch (error) {
+    return isKeychainItemNotFound(error) ? "missing" : "unknown";
+  }
 }
 
 async function readKeychainCredentialState(): Promise<CredentialState> {
@@ -355,6 +394,13 @@ async function readKeychainCredentialState(): Promise<CredentialState> {
   }
 }
 
+function isKeychainItemNotFound(error: unknown): boolean {
+  return (
+    (error as { code?: number | string | null }).code ===
+    KEYCHAIN_ITEM_NOT_FOUND_EXIT_CODE
+  );
+}
+
 function keychainFailureState(error: unknown): CredentialState {
   const failure = error as {
     killed?: boolean;
@@ -371,7 +417,7 @@ function keychainFailureState(error: unknown): CredentialState {
       },
     };
   }
-  if (failure.code === KEYCHAIN_ITEM_NOT_FOUND_EXIT_CODE) {
+  if (isKeychainItemNotFound(error)) {
     return {
       status: "missing",
       source: { source: "keychain", status: "missing" },

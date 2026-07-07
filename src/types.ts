@@ -35,6 +35,7 @@ export type SourceAttempt = {
   source: string;
   status: "success" | "failed" | "skipped";
   error?: string;
+  credentialPresent?: boolean;
 };
 
 export type ProviderQuota = {
@@ -89,6 +90,7 @@ export type AuthSourceReport = {
   path?: string;
   status: "available" | "missing" | "invalid" | "expired" | "skipped";
   error?: string;
+  credentialPresent?: boolean;
 };
 
 export type AuthProviderReport = {

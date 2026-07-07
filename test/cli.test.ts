@@ -229,6 +229,45 @@ describe("CLI quota rendering", () => {
         .reason,
     ).toBeUndefined();
   });
+
+  it("does not surface keychain access advice without confirmed keychain item presence", async () => {
+    useTempCache();
+    PROVIDERS.claude = providerWithQuota({
+      ...staleClaudeQuota(),
+      attempts: [
+        {
+          source: "oauth-file",
+          status: "skipped",
+          error: "credentials_expired",
+        },
+        {
+          source: "keychain",
+          status: "skipped",
+          error: "keychain_prompt_required",
+        },
+      ],
+    });
+    PROVIDERS.codex = providerWithQuota(freshCodexQuota());
+    const chunks: string[] = [];
+
+    await main({
+      argv: ["--json"],
+      binPath: "quota-axi",
+      stdout: {
+        write(chunk) {
+          chunks.push(String(chunk));
+          return true;
+        },
+      },
+    });
+
+    const output = JSON.parse(chunks.join("")) as QuotaAxiResponse;
+    expect(output.help).toBeUndefined();
+    expect(
+      output.providers.find((provider) => provider.provider === "claude")?.state
+        .reason,
+    ).toBeUndefined();
+  });
 });
 
 describe("response redaction", () => {
@@ -325,6 +364,7 @@ function staleClaudeQuota(): ProviderQuota {
         source: "keychain",
         status: "skipped",
         error: "keychain_prompt_required",
+        credentialPresent: true,
       },
     ],
   };

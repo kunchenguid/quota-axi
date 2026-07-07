@@ -71,7 +71,8 @@ function isPromptBlockedKeychainAttempt(attempt: SourceAttempt): boolean {
   return (
     attempt.source === "keychain" &&
     attempt.status === "skipped" &&
-    attempt.error === "keychain_prompt_required"
+    attempt.error === "keychain_prompt_required" &&
+    attempt.credentialPresent === true
   );
 }
 
