@@ -24,6 +24,10 @@ It is data only: it never routes, recommends, proxies, intercepts, logs in, impo
 
 ## Quick Start
 
+**macOS + Claude note:** Claude Code keeps its live token in the macOS Keychain.
+quota-axi will not read that token unless the user grants permission, so Claude quota reads can stay stale until the user grants access after on-disk credentials expire.
+Run `quota-axi --allow-keychain-prompt` once and approve Keychain access with "Always Allow" so future non-interactive quota reads can refresh live Claude data.
+
 ```sh
 $ npx -y quota-axi
 bin: ~/.npm/_npx/.../quota-axi
@@ -52,7 +56,7 @@ help[3]:
 $ quota-axi --provider claude --json
 {
   "generatedAt": "2026-03-15T16:42:03.000Z",
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "providers": [
     {
       "provider": "claude",
@@ -194,10 +198,11 @@ It is generated from `src/skill.ts`; update it with `pnpm run build:skill` and v
 
 ## Output Model
 
-`--json` emits `schemaVersion: 1`.
+`--json` emits `schemaVersion: 2`.
 Quota reports contain `providers`, each with `provider`, `label`, `source`, `windows`, `state`, optional `plan`, and optional `credits`.
 With `--full`, providers can also include `account` identity and per-source `attempts`.
-Provider `state` includes `status`, `stale`, `sourcesTried`, optional `refreshedAt`, optional `error`, and optional `retryAfter`.
+Provider `state` includes `status`, `stale`, `sourcesTried`, optional `refreshedAt`, optional `error`, optional `retryAfter`, optional `reason`, and optional `remedyCommand`.
+When stale or unavailable quota is likely fixable by a one-time macOS Keychain grant, `state.reason` is `keychain_access_required`, `state.remedyCommand` is `quota-axi --allow-keychain-prompt`, and JSON includes an agent-directed `help` entry.
 Quota windows include `id`, `label`, `kind`, optional percentages, optional reset fields, optional `windowSeconds`, and optional credit-spend fields.
 Account identity and per-source `attempts` are omitted unless `--full` is passed.
 Provider statuses are `fresh`, `stale`, `unavailable`, `auth_required`, `rate_limited`, or `error`.

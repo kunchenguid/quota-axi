@@ -1,4 +1,5 @@
 import { encode } from "@toon-format/toon";
+import { quotaHelpLines } from "./advice.js";
 import { collapseHome } from "./lib/fs.js";
 import type {
   AuthProviderReport,
@@ -43,6 +44,14 @@ export function renderQuotaToon(
     encode({ providers }),
     encode({ windows }),
   ];
+  const advice = response.providers
+    .filter((provider) => provider.state.reason && provider.state.remedyCommand)
+    .map((provider) => ({
+      provider: provider.provider,
+      reason: provider.state.reason,
+      remedyCommand: provider.state.remedyCommand,
+    }));
+  if (advice.length > 0) blocks.push(encode({ advice }));
 
   if (full) {
     const accounts = response.providers.map((provider) => ({
@@ -58,13 +67,7 @@ export function renderQuotaToon(
     blocks.push(encode({ attempts }));
   }
 
-  blocks.push(
-    renderHelp([
-      "Run `quota-axi --provider claude --json` for JSON output",
-      "Run `quota-axi --full` to include account and source-attempt details",
-      "Run `quota-axi auth` to inspect local auth source availability without printing secrets",
-    ]),
-  );
+  blocks.push(renderHelp(quotaHelpLines(response)));
   return blocks.filter(Boolean).join("\n");
 }
 

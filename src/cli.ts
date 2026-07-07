@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { annotateQuotaAdvice } from "./advice.js";
 import { writeCachedProviders } from "./cache.js";
 import { nowIso } from "./lib/time.js";
 import { PROVIDERS, parseProviders } from "./providers/index.js";
@@ -166,11 +167,10 @@ async function fetchQuota(
   const results = await Promise.all(
     providers.map((provider) => PROVIDERS[provider].fetchQuota(options)),
   );
-  return {
+  return annotateQuotaAdvice({
     generatedAt: nowIso(),
-    schemaVersion: 1,
     providers: results,
-  };
+  });
 }
 
 async function inspectAuth(
