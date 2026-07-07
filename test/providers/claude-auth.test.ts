@@ -66,4 +66,20 @@ describe("Claude credential-state reporting", () => {
       error: "credentials_missing",
     });
   });
+
+  it("surfaces malformed file credentials as invalid auth", async () => {
+    const home = useTempHome();
+    mkdirSync(join(home, ".claude"), { recursive: true });
+    writeFileSync(join(home, ".claude", ".credentials.json"), "{not-json");
+
+    const { inspectAuth } = await import("../../src/providers/claude.js");
+    const result = await inspectAuth({ allowKeychainPrompt: false });
+
+    expect(result.sources[0]).toMatchObject({
+      source: "oauth-file",
+      path: join(home, ".claude", ".credentials.json"),
+      status: "invalid",
+      error: "json_parse_error",
+    });
+  });
 });

@@ -2,11 +2,12 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
 import { readCachedProvider } from "../cache.js";
-import { readJsonFile } from "../lib/fs.js";
+import { readJsonFileResult, type JsonFileReadResult } from "../lib/fs.js";
 import { commandExists, terminateChild } from "../lib/process.js";
-import { clampPercent, nowIso, parseEpochOrIso } from "../lib/time.js";
+import { clampPercent, nowIso, parseEpochOrIso, retryAfterToIso } from "../lib/time.js";
 import type {
   AuthProviderReport,
+  AuthSourceReport,
   ProviderAdapter,
   ProviderOptions,
   ProviderQuota,
@@ -28,6 +29,14 @@ type CodexCredentials = {
   accountId?: string;
 };
 
+type AvailableCredentialState = {
+  status: "available";
+  credentials: CodexCredentials;
+  source: AuthSourceReport;
+};
+type UnavailableCredentialState = { status: "missing" | "invalid" | "expired"; source: AuthSourceReport };
+type CredentialState = AvailableCredentialState | UnavailableCredentialState;
+
 type RawWindow = {
   used_percent?: unknown;
   usedPercent?: unknown;
@@ -48,12 +57,13 @@ export const codexAdapter: ProviderAdapter = {
 export async function fetchQuota(_options: ProviderOptions): Promise<ProviderQuota> {
   const attempts: SourceAttempt[] = [];
   let finalError = "Codex quota unavailable";
+  let retryAfter: string | undefined;
 
-  const credentials = readCredentials();
-  if (credentials) {
+  const credentialState = readCredentialState();
+  if (credentialState.status === "available") {
     attempts.push({ source: "oauth", status: "failed" });
     try {
-      const quota = await fetchOauthUsage(credentials);
+      const quota = await fetchOauthUsage(credentialState.credentials);
       attempts[attempts.length - 1] = { source: "oauth", status: "success" };
       return successProvider({
         provider: "codex",
@@ -70,9 +80,11 @@ export async function fetchQuota(_options: ProviderOptions): Promise<ProviderQuo
     } catch (error) {
       finalError = errorMessage(error);
       attempts[attempts.length - 1] = { source: "oauth", status: "failed", error: finalError };
+      if (error instanceof RateLimitError) retryAfter = error.retryAfter;
     }
   } else {
-    attempts.push({ source: "oauth", status: "skipped", error: "credentials_missing" });
+    attempts.push({ source: "oauth", status: "skipped", error: `credentials_${credentialState.status}` });
+    if (credentialState.status !== "missing") finalError = "Codex sign-in required";
   }
 
   attempts.push({ source: "cli-rpc", status: "failed" });
@@ -105,8 +117,9 @@ export async function fetchQuota(_options: ProviderOptions): Promise<ProviderQuo
   return failedProvider({
     provider: "codex",
     label: "Codex",
-    status: statusFromError(finalError),
+    status: retryAfter ? "rate_limited" : statusFromError(finalError),
     error: finalError,
+    retryAfter,
     sourcesTried: sourceNames(attempts),
     attempts,
   });
@@ -114,16 +127,11 @@ export async function fetchQuota(_options: ProviderOptions): Promise<ProviderQuo
 
 export async function inspectAuth(_options: ProviderOptions): Promise<AuthProviderReport> {
   const authFile = codexAuthFile();
-  const raw = readJsonFile(authFile);
-  const credentials = extractCredentials(raw);
+  const credentialState = readCredentialState(authFile);
   return {
     provider: "codex",
     sources: [
-      {
-        source: "auth-json",
-        path: authFile,
-        status: credentials ? "available" : raw === undefined ? "missing" : "invalid",
-      },
+      credentialState.source,
       {
         source: "cli-rpc",
         status: (await commandExists("codex")) ? "available" : "missing",
@@ -180,29 +188,38 @@ function codexAuthFile(): string {
   return process.env.CODEX_HOME ? join(process.env.CODEX_HOME, "auth.json") : join(homedir(), ".codex", "auth.json");
 }
 
-function readCredentials(): CodexCredentials | undefined {
-  return extractCredentials(readJsonFile(codexAuthFile()));
+function readCredentialState(authFile = codexAuthFile()): CredentialState {
+  return extractCredentialState(readJsonFileResult(authFile), authFile);
 }
 
-function extractCredentials(raw: unknown): CodexCredentials | undefined {
-  const data = objectValue(raw);
-  if (!data) return undefined;
-  const apiKey = stringValue(data.OPENAI_API_KEY);
-  if (apiKey) return { accessToken: apiKey };
-
+function extractCredentialState(raw: JsonFileReadResult, path: string): CredentialState {
+  if (raw.status === "missing") return { status: "missing", source: { source: "auth-json", path, status: "missing" } };
+  if (raw.status === "invalid")
+    return { status: "invalid", source: { source: "auth-json", path, status: "invalid", error: raw.error } };
+  const data = objectValue(raw.value);
+  if (!data) return { status: "invalid", source: { source: "auth-json", path, status: "invalid" } };
   const tokens = objectValue(data.tokens);
-  if (!tokens) return undefined;
+  if (!tokens) return { status: "invalid", source: { source: "auth-json", path, status: "invalid" } };
   const accessToken = stringValue(tokens.access_token) ?? stringValue(tokens.accessToken);
-  if (!accessToken) return undefined;
+  if (!accessToken) return { status: "invalid", source: { source: "auth-json", path, status: "invalid" } };
 
   const idToken = stringValue(tokens.id_token) ?? stringValue(tokens.idToken);
-  const decoded = decodeJwtPayload(idToken) ?? decodeJwtPayload(accessToken);
+  const idPayload = decodeJwtPayload(idToken);
+  const accessPayload = decodeJwtPayload(accessToken);
+  if (isExpiredJwtPayload(idPayload) || isExpiredJwtPayload(accessPayload)) {
+    return { status: "expired", source: { source: "auth-json", path, status: "expired" } };
+  }
+  const decoded = idPayload ?? accessPayload;
   const accountId =
     stringValue(tokens.account_id) ??
     stringValue(tokens.accountId) ??
     stringValue(decoded?.["https://api.openai.com/auth/account_id"]) ??
     stringValue(decoded?.account_id);
-  return { accessToken, accountId };
+  return {
+    status: "available",
+    credentials: { accessToken, accountId },
+    source: { source: "auth-json", path, status: "available" },
+  };
 }
 
 async function fetchOauthUsage(credentials: CodexCredentials): Promise<{
@@ -228,10 +245,12 @@ async function fetchOauthUsage(credentials: CodexCredentials): Promise<{
         rejected = true;
         continue;
       }
+      if (response.status === 429) throw new RateLimitError(retryAfterToIso(response.headers.get("retry-after")));
       if (!response.ok) continue;
       const quota = normalizeCodexUsage(await response.json());
       if (quota) return quota;
     } catch (error) {
+      if (error instanceof RateLimitError) throw error;
       lastError = error;
     } finally {
       clearTimeout(timer);
@@ -395,6 +414,11 @@ function decodeJwtPayload(token: string | undefined): Record<string, unknown> | 
   }
 }
 
+function isExpiredJwtPayload(payload: Record<string, unknown> | undefined): boolean {
+  const exp = numberValue(payload?.exp);
+  return exp !== undefined && exp <= Math.floor(Date.now() / 1000);
+}
+
 function objectValue(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
 }
@@ -415,4 +439,10 @@ function numberValue(value: unknown): number | undefined {
 function errorMessage(error: unknown): string {
   if (error instanceof Error && error.name === "AbortError") return "Codex quota request timed out";
   return error instanceof Error ? error.message : "Codex quota unavailable";
+}
+
+class RateLimitError extends Error {
+  constructor(readonly retryAfter: string | undefined) {
+    super("Codex quota endpoint rate limited");
+  }
 }

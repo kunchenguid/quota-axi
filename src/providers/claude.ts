@@ -1,8 +1,7 @@
-import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { readCachedProvider } from "../cache.js";
-import { readJsonFile } from "../lib/fs.js";
+import { readJsonFileResult, type JsonFileReadResult } from "../lib/fs.js";
 import { execFileText } from "../lib/process.js";
 import { clampPercent, nowIso, retryAfterToIso } from "../lib/time.js";
 import type {
@@ -159,7 +158,7 @@ export function normalizeClaudeApiUsage(raw: unknown, plan?: string): { plan?: s
 async function readCredentialStates(options: ProviderOptions): Promise<CredentialState[]> {
   const states: CredentialState[] = [];
 
-  const fileState = extractCredentialState(readJsonFile(CREDENTIAL_FILE), "oauth-file", CREDENTIAL_FILE);
+  const fileState = extractCredentialState(readJsonFileResult(CREDENTIAL_FILE), "oauth-file", CREDENTIAL_FILE);
   states.push(fileState);
 
   if (process.platform === "darwin") {
@@ -192,9 +191,9 @@ async function readKeychainCredentialState(): Promise<CredentialState> {
     return keychainFailureState(error);
   }
   try {
-    return extractCredentialState(JSON.parse(blob), "keychain");
+    return extractCredentialState({ status: "success", value: JSON.parse(blob) }, "keychain");
   } catch {
-    return { status: "invalid", source: { source: "keychain", status: "invalid" } };
+    return { status: "invalid", source: { source: "keychain", status: "invalid", error: "json_parse_error" } };
   }
 }
 
@@ -215,14 +214,16 @@ function keychainFailureState(error: unknown): CredentialState {
   };
 }
 
-function extractCredentialState(raw: unknown, source: ClaudeCredentials["source"], path?: string): CredentialState {
-  if (!existsSync(path ?? "")) {
-    if (source === "oauth-file") {
-      return { status: "missing", source: { source, path, status: "missing" } };
-    }
-  }
-  if (!raw || typeof raw !== "object") return { status: "missing", source: { source, path, status: "missing" } };
-  const data = raw as Record<string, unknown>;
+function extractCredentialState(
+  raw: JsonFileReadResult,
+  source: ClaudeCredentials["source"],
+  path?: string,
+): CredentialState {
+  if (raw.status === "missing") return { status: "missing", source: { source, path, status: "missing" } };
+  if (raw.status === "invalid")
+    return { status: "invalid", source: { source, path, status: "invalid", error: raw.error } };
+  const data = objectValue(raw.value);
+  if (!data) return { status: "invalid", source: { source, path, status: "invalid" } };
   const oauth =
     data.claudeAiOauth && typeof data.claudeAiOauth === "object"
       ? (data.claudeAiOauth as Record<string, unknown>)
@@ -299,6 +300,10 @@ function normalizeExtraUsage(raw: unknown): QuotaWindow | undefined {
     spentUsd,
     limitUsd,
   });
+}
+
+function objectValue(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
 }
 
 function stringValue(value: unknown): string | undefined {
