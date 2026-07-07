@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { spawn } from "node:child_process";
 import { readCachedProvider } from "../cache.js";
 import { readJsonFile } from "../lib/fs.js";
-import { commandExists } from "../lib/process.js";
+import { commandExists, terminateChild } from "../lib/process.js";
 import { clampPercent, nowIso, parseEpochOrIso } from "../lib/time.js";
 import type {
   AuthProviderReport,
@@ -333,7 +333,7 @@ async function probeCodexCli(): Promise<{
     if (!quota) throw new Error("Codex quota unavailable");
     return quota;
   } finally {
-    child.kill("SIGTERM");
+    terminateChild(child);
   }
 }
 

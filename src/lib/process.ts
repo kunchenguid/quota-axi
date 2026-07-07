@@ -1,4 +1,4 @@
-import { execFile, spawn } from "node:child_process";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { constants } from "node:fs";
 import { access, stat } from "node:fs/promises";
 import * as path from "node:path";
@@ -75,6 +75,17 @@ async function isExecutableFile(file: string): Promise<boolean> {
   }
 }
 
+export function terminateChild(child: ChildProcess): void {
+  child.stdin?.destroy();
+  child.stdout?.destroy();
+  child.stderr?.destroy();
+  child.kill("SIGTERM");
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  const forceKill = setTimeout(() => child.kill("SIGKILL"), 2000);
+  forceKill.unref();
+  child.once("exit", () => clearTimeout(forceKill));
+}
+
 export type SessionStdin = {
   write: (chunk: string) => void;
   writeAfter: (delayMs: number, chunk: string) => void;
@@ -100,7 +111,7 @@ export function spawnTextSession(
       settled = true;
       clearTimeout(timer);
       for (const pending of pendingTimers) clearTimeout(pending);
-      child.kill("SIGTERM");
+      terminateChild(child);
       if (error) reject(error);
       else resolve(buffer);
     };
@@ -123,7 +134,7 @@ export function spawnTextSession(
     });
     child.stdin.on("error", () => {});
     child.on("error", () => finish(new Error("command unavailable")));
-    child.on("exit", () => finish());
+    child.on("close", () => finish());
     input({
       write,
       writeAfter: (delayMs, chunk) => {
