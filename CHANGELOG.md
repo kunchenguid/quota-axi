@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.3](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.2...quota-axi-v0.1.3) (2026-07-08)
+
+
+### Bug Fixes
+
+* reuse granted Claude Keychain access on plain calls ([#7](https://github.com/kunchenguid/quota-axi/issues/7)) ([029f85f](https://github.com/kunchenguid/quota-axi/commit/029f85fa1c450eaccbc64302a9c723f512081f4b))
+
 ## [0.1.2](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.1...quota-axi-v0.1.2) (2026-07-07)
 
 
