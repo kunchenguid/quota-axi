@@ -302,13 +302,20 @@ async function readCredentialState(): Promise<CredentialState> {
       source: { source: "state-vscdb", path: STATE_DB, status: "available" },
     };
   } catch (error) {
+    const sqliteError = sqliteErrorMessage(error);
+    if (sqliteError === "credentials_missing") {
+      return {
+        status: "missing",
+        source: { source: "state-vscdb", path: STATE_DB, status: "missing" },
+      };
+    }
     return {
       status: "invalid",
       source: {
         source: "state-vscdb",
         path: STATE_DB,
         status: "invalid",
-        error: sqliteErrorMessage(error),
+        error: sqliteError,
       },
     };
   }

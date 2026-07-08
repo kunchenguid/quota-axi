@@ -243,9 +243,20 @@ function extractCredentialState(
 }
 
 function copilotAppsFile(): string {
-  return process.env.GITHUB_COPILOT_APPS_JSON
-    ? process.env.GITHUB_COPILOT_APPS_JSON
-    : join(homedir(), ".config", "github-copilot", "apps.json");
+  if (process.env.GITHUB_COPILOT_APPS_JSON)
+    return process.env.GITHUB_COPILOT_APPS_JSON;
+  if (process.platform === "win32") {
+    return join(
+      process.env.LOCALAPPDATA || join(homedir(), "AppData", "Local"),
+      "github-copilot",
+      "apps.json",
+    );
+  }
+  return join(
+    process.env.XDG_CONFIG_HOME || join(homedir(), ".config"),
+    "github-copilot",
+    "apps.json",
+  );
 }
 
 function rejectUnusableUsageResponse(response: Response): void {

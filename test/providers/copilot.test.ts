@@ -1,14 +1,18 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   fetchQuota,
+  inspectAuth,
   normalizeCopilotUser,
 } from "../../src/providers/copilot.js";
 
 const originalAppsJson = process.env.GITHUB_COPILOT_APPS_JSON;
 const originalXdgCacheHome = process.env.XDG_CACHE_HOME;
+const originalXdgConfigHome = process.env.XDG_CONFIG_HOME;
+const originalHome = process.env.HOME;
+const originalLocalAppData = process.env.LOCALAPPDATA;
 let tempDir: string | undefined;
 
 beforeEach(() => {
@@ -24,12 +28,36 @@ afterEach(() => {
   else process.env.GITHUB_COPILOT_APPS_JSON = originalAppsJson;
   if (originalXdgCacheHome === undefined) delete process.env.XDG_CACHE_HOME;
   else process.env.XDG_CACHE_HOME = originalXdgCacheHome;
+  if (originalXdgConfigHome === undefined) delete process.env.XDG_CONFIG_HOME;
+  else process.env.XDG_CONFIG_HOME = originalXdgConfigHome;
+  if (originalHome === undefined) delete process.env.HOME;
+  else process.env.HOME = originalHome;
+  if (originalLocalAppData === undefined) delete process.env.LOCALAPPDATA;
+  else process.env.LOCALAPPDATA = originalLocalAppData;
   if (tempDir) rmSync(tempDir, { recursive: true, force: true });
   tempDir = undefined;
 });
 
 function writeAppsJson(value: unknown): void {
   writeFileSync(process.env.GITHUB_COPILOT_APPS_JSON!, JSON.stringify(value));
+}
+
+function writeJson(path: string, value: unknown): void {
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, JSON.stringify(value));
+}
+
+async function withPlatform<T>(
+  platform: NodeJS.Platform,
+  callback: () => Promise<T>,
+): Promise<T> {
+  const descriptor = Object.getOwnPropertyDescriptor(process, "platform");
+  Object.defineProperty(process, "platform", { value: platform });
+  try {
+    return await callback();
+  } finally {
+    if (descriptor) Object.defineProperty(process, "platform", descriptor);
+  }
 }
 
 describe("GitHub Copilot quota parsing", () => {
@@ -115,5 +143,50 @@ describe("GitHub Copilot quota parsing", () => {
     expect(result.state.error).toBe(
       "GitHub Copilot quota endpoint rate limited",
     );
+  });
+
+  it("resolves Copilot auth under XDG config home", async () => {
+    const xdgConfigHome = join(tempDir!, "xdg-config");
+    const authFile = join(xdgConfigHome, "github-copilot", "apps.json");
+    delete process.env.GITHUB_COPILOT_APPS_JSON;
+    process.env.XDG_CONFIG_HOME = xdgConfigHome;
+    process.env.HOME = join(tempDir!, "home");
+    writeJson(authFile, {
+      fixture: {
+        oauth_token: "valid-token",
+      },
+    });
+
+    const result = await inspectAuth({ allowKeychainPrompt: false });
+
+    expect(result.sources).toContainEqual({
+      source: "apps-json",
+      path: authFile,
+      status: "available",
+    });
+  });
+
+  it("resolves Copilot auth under Windows local app data", async () => {
+    const localAppData = join(tempDir!, "local-app-data");
+    const authFile = join(localAppData, "github-copilot", "apps.json");
+    delete process.env.GITHUB_COPILOT_APPS_JSON;
+    delete process.env.XDG_CONFIG_HOME;
+    process.env.LOCALAPPDATA = localAppData;
+    process.env.HOME = join(tempDir!, "home");
+    writeJson(authFile, {
+      fixture: {
+        oauth_token: "valid-token",
+      },
+    });
+
+    await withPlatform("win32", async () => {
+      const result = await inspectAuth({ allowKeychainPrompt: false });
+
+      expect(result.sources).toContainEqual({
+        source: "apps-json",
+        path: authFile,
+        status: "available",
+      });
+    });
   });
 });

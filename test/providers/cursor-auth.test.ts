@@ -82,4 +82,22 @@ describe("Cursor credential-state reporting", () => {
       error: "sqlite_read_error",
     });
   });
+
+  it("reports a missing state database as missing auth", async () => {
+    vi.doMock("../../src/lib/process.js", () => ({
+      commandExists: vi.fn(async () => true),
+      execFileText: vi.fn(async () => {
+        throw new Error("unable to open database file");
+      }),
+    }));
+
+    const { inspectAuth } = await import("../../src/providers/cursor.js");
+    const result = await inspectAuth({ allowKeychainPrompt: false });
+
+    expect(result.sources).toContainEqual({
+      source: "state-vscdb",
+      path: process.env.CURSOR_STATE_DB,
+      status: "missing",
+    });
+  });
 });
