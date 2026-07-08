@@ -256,6 +256,7 @@ function extractCredentialState(
       status: "invalid",
       source: { source: "auth-json", path, status: "invalid" },
     };
+  let expired = false;
   for (const value of Object.values(data)) {
     const item = objectValue(value);
     const key = stringValue(item?.key);
@@ -263,10 +264,8 @@ function extractCredentialState(
     const expiresAt =
       stringValue(item?.expires_at) ?? stringValue(item?.expiresAt);
     if (isExpired(expiresAt)) {
-      return {
-        status: "expired",
-        source: { source: "auth-json", path, status: "expired" },
-      };
+      expired = true;
+      continue;
     }
     return {
       status: "available",
@@ -277,6 +276,12 @@ function extractCredentialState(
         expiresAt,
       },
       source: { source: "auth-json", path, status: "available" },
+    };
+  }
+  if (expired) {
+    return {
+      status: "expired",
+      source: { source: "auth-json", path, status: "expired" },
     };
   }
   return {

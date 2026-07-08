@@ -51,7 +51,7 @@ export async function fetchQuota(
   _options: ProviderOptions,
 ): Promise<ProviderQuota> {
   const attempts: SourceAttempt[] = [];
-  let finalError = "Cursor quota unavailable";
+  let finalError: string;
   let retryAfter: string | undefined;
 
   const credentialState = await readCredentialState();
@@ -87,8 +87,7 @@ export async function fetchQuota(
       status: "skipped",
       error: `credentials_${credentialState.status}`,
     });
-    if (credentialState.status !== "missing")
-      finalError = "Cursor sign-in required";
+    finalError = "Cursor sign-in required";
   }
 
   const cached = readCachedProvider("cursor");

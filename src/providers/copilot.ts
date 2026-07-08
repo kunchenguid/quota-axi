@@ -127,12 +127,15 @@ export function normalizeCopilotUser(raw: unknown):
     objectValue(data.quota_snapshots),
     data.quota_reset_date_utc,
   );
+  const plan =
+    stringValue(data.copilot_plan) ??
+    stringValue(data.access_type_sku) ??
+    stringValue(data.sku);
+  const accountId = stringValue(data.login);
+  if (windows.length === 0 && !plan && !accountId) return undefined;
   return {
-    plan:
-      stringValue(data.copilot_plan) ??
-      stringValue(data.access_type_sku) ??
-      stringValue(data.sku),
-    account: { accountId: stringValue(data.login) },
+    plan,
+    account: accountId ? { accountId } : undefined,
     windows,
     refreshedAt: nowIso(),
   };

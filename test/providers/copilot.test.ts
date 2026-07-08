@@ -52,4 +52,8 @@ describe("GitHub Copilot quota parsing", () => {
       windows: [],
     });
   });
+
+  it("rejects empty Copilot payloads as unusable quota", () => {
+    expect(normalizeCopilotUser({})).toBeUndefined();
+  });
 });

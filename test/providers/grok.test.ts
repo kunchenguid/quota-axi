@@ -1,5 +1,32 @@
-import { describe, expect, it } from "vitest";
-import { normalizeGrokBilling } from "../../src/providers/grok.js";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { fetchQuota, normalizeGrokBilling } from "../../src/providers/grok.js";
+
+const originalGrokAuthJson = process.env.GROK_AUTH_JSON;
+const originalXdgCacheHome = process.env.XDG_CACHE_HOME;
+let tempDir: string | undefined;
+
+beforeEach(() => {
+  tempDir = mkdtempSync(join(tmpdir(), "quota-axi-grok-auth-"));
+  process.env.GROK_AUTH_JSON = join(tempDir, "auth.json");
+  process.env.XDG_CACHE_HOME = join(tempDir, "cache");
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  if (originalGrokAuthJson === undefined) delete process.env.GROK_AUTH_JSON;
+  else process.env.GROK_AUTH_JSON = originalGrokAuthJson;
+  if (originalXdgCacheHome === undefined) delete process.env.XDG_CACHE_HOME;
+  else process.env.XDG_CACHE_HOME = originalXdgCacheHome;
+  if (tempDir) rmSync(tempDir, { recursive: true, force: true });
+  tempDir = undefined;
+});
+
+function writeAuth(value: unknown): void {
+  writeFileSync(process.env.GROK_AUTH_JSON!, JSON.stringify(value));
+}
 
 describe("Grok quota parsing", () => {
   it("normalizes credit, on-demand, and product windows", () => {
@@ -65,5 +92,44 @@ describe("Grok quota parsing", () => {
 
   it("returns undefined when Grok exposes no numeric quota windows", () => {
     expect(normalizeGrokBilling({ config: {} })).toBeUndefined();
+  });
+
+  it("continues past expired entries to use later valid credentials", async () => {
+    writeAuth({
+      expired: {
+        key: "expired-key",
+        expires_at: "2020-01-01T00:00:00.000Z",
+      },
+      valid: {
+        key: "valid-key",
+        email: "person@example.invalid",
+        expires_at: "2035-01-01T00:00:00.000Z",
+      },
+    });
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            config: {
+              creditUsagePercent: 25,
+            },
+          }),
+          { status: 200 },
+        ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await fetchQuota({ allowKeychainPrompt: false });
+
+    expect(result.state.status).toBe("fresh");
+    expect(result.account?.email).toBe("person@example.invalid");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://cli-chat-proxy.grok.com/v1/billing?format=credits",
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          authorization: "Bearer valid-key",
+        }),
+      }),
+    );
   });
 });
