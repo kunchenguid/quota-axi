@@ -1,0 +1,42 @@
+{
+  "generatedAt": "2026-07-08T18:28:25.485Z",
+  "schemaVersion": 2,
+  "providers": [
+    {
+      "provider": "grok",
+      "label": "Grok",
+      "source": "api",
+      "plan": "X Premium+",
+      "account": {
+        "email": "person@example.invalid",
+        "organization": "team_fixture"
+      },
+      "windows": [
+        {
+          "id": "credits",
+          "label": "credits",
+          "kind": "credits",
+          "resetsAt": "2026-07-13T19:59:29.885Z"
+        }
+      ],
+      "credits": {
+        "remaining": 0,
+        "unit": "credits"
+      },
+      "attempts": [
+        {
+          "source": "api",
+          "status": "success"
+        }
+      ],
+      "state": {
+        "status": "fresh",
+        "stale": false,
+        "refreshedAt": "2026-07-08T18:28:25.485Z",
+        "sourcesTried": [
+          "api"
+        ]
+      }
+    }
+  ]
+}

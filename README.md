@@ -231,6 +231,7 @@ Codex can report `five_hour` and `weekly` windows plus optional credit balance d
 Cursor can report `included_usage`, `auto_usage`, `api_usage`, and optional `spend_limit` windows.
 GitHub Copilot can report quota snapshot windows such as `chat`, `completions`, and `premium_interactions`; when the first-party endpoint exposes entitlement but no numeric quota windows, quota-axi reports a fresh provider state with an empty `windows` list rather than inventing percentages.
 Grok can report `credits`, optional `on_demand`, and optional product-scoped `product:<slug>` windows.
+If Grok's billing response only exposes the current billing period and prepaid balance, quota-axi reports a fresh `credits` window with `resetsAt` and `credits.remaining` but no usage percentage.
 `auth --json` emits `generatedAt`, `schemaVersion: 1`, and `auth`, where each provider report has `provider` and `sources`.
 Auth source entries include `source`, optional `path`, `status`, and optional `error`.
 Auth source entries can include `credentialPresent` when a non-secret probe confirms a credential item exists.
@@ -252,6 +253,7 @@ If `sqlite3` is unavailable, Cursor auth is reported as skipped with `sqlite3_un
 For GitHub Copilot, it reads `$GITHUB_COPILOT_APPS_JSON` when set or the local Copilot apps auth file and calls GitHub's first-party Copilot user endpoint.
 It only sends tokens associated with public GitHub hosts to that public endpoint; host-specific GitHub Enterprise tokens are treated as unavailable there.
 For Grok, it reads `$GROK_AUTH_JSON`, inline `$GROK_AUTH`, `$GROK_AUTH_PATH`, or `$GROK_HOME/auth.json` / `~/.grok/auth.json`, selects session-scoped auth instead of API-key entries, and calls Grok's first-party billing endpoint.
+Session-scoped Grok auth includes web/session scopes and OIDC records scoped to `auth.x.ai` with `auth_mode` or `authMode` set to `oidc`, including scope keys with `::<client id>` suffixes.
 For Grok, it may read `$GROK_HOME/version.json` or package metadata near a local `grok` executable to send an `x-grok-client-version` header, but it does not launch the Grok CLI.
 It never launches the Claude CLI, so it cannot accidentally spend the quota it measures.
 

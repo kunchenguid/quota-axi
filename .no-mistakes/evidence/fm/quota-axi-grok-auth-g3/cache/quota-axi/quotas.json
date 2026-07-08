@@ -1,0 +1,32 @@
+{
+  "generatedAt": "2026-07-08T18:28:25.486Z",
+  "schemaVersion": 1,
+  "providers": [
+    {
+      "provider": "grok",
+      "label": "Grok",
+      "source": "api",
+      "windows": [
+        {
+          "id": "credits",
+          "label": "credits",
+          "kind": "credits",
+          "resetsAt": "2026-07-13T19:59:29.885Z"
+        }
+      ],
+      "state": {
+        "status": "fresh",
+        "stale": false,
+        "sourcesTried": [
+          "api"
+        ],
+        "refreshedAt": "2026-07-08T18:28:25.485Z"
+      },
+      "plan": "X Premium+",
+      "credits": {
+        "remaining": 0,
+        "unit": "credits"
+      }
+    }
+  ]
+}
