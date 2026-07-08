@@ -1,4 +1,12 @@
-export type ProviderId = "claude" | "codex";
+export type ProviderId = "claude" | "codex" | "cursor" | "copilot" | "grok";
+
+export const PROVIDER_IDS = [
+  "claude",
+  "codex",
+  "cursor",
+  "copilot",
+  "grok",
+] as const satisfies readonly ProviderId[];
 
 export type ProviderSource =
   | "oauth"

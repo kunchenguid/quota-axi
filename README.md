@@ -13,13 +13,13 @@
 Quota CLI for agents - designed with [AXI](https://axi.md) (Agent eXperience Interface).
 
 Agents need quota state before they choose where work can safely run.
-Vendor dashboards are not shaped for shell automation, and local CLIs expose different windows, resets, and auth files.
+Vendor dashboards are not shaped for shell automation, and local CLIs expose different windows, resets, and auth sources.
 
-quota-axi reports local Claude and Codex quota windows in one [AXI](https://axi.md)-shaped call.
+quota-axi reports local Claude, Codex, Cursor, GitHub Copilot, and Grok quota windows in one [AXI](https://axi.md)-shaped call.
 It is data only: it never routes, recommends, proxies, intercepts, logs in, imports browser cookies, or mutates provider state.
 
-- **Official sources** - quota-axi reads local Claude and Codex auth files and calls the same first-party usage endpoints the vendor CLIs use, with a read-only Codex app-server probe as fallback.
-- **Local first** - everything runs on the machine that holds the credentials; the only network calls are to Anthropic's and OpenAI's own usage endpoints, never a third-party relay.
+- **Official sources** - quota-axi reads local provider auth sources and calls the first-party quota, usage, billing, or entitlement endpoints used by the local agents, with a read-only Codex app-server probe as fallback.
+- **Local first** - everything runs on the machine that holds the credentials; the only network calls are to first-party provider endpoints, never a third-party relay.
 - **Token efficient** - default stdout is compact TOON so agents spend fewer tokens parsing quota state, with `--json` available when a caller needs the normalized model.
 
 ## Quick Start
@@ -34,10 +34,13 @@ $ npx -y quota-axi
 bin: ~/.npm/_npx/.../quota-axi
 description: Report local agent-provider quota windows for routing-aware agents
 generatedAt: "2026-03-15T16:42:00.000Z"
-providers[2]{provider,plan,source,status,refreshedAt}:
+providers[5]{provider,plan,source,status,refreshedAt}:
   claude,pro,oauth,fresh,"2026-03-15T16:41:55.000Z"
   codex,plus,cli-rpc,fresh,"2026-03-15T16:41:58.000Z"
-windows[7]{provider,id,label,percentRemaining,resetsAt,state}:
+  cursor,pro,api,fresh,"2026-03-15T16:41:59.000Z"
+  copilot,individual,api,fresh,"2026-03-15T16:42:00.000Z"
+  grok,supergrok,api,fresh,"2026-03-15T16:42:00.000Z"
+windows[13]{provider,id,label,percentRemaining,resetsAt,state}:
   claude,five_hour,session,82,"2026-03-15T21:15:00.000Z",fresh
   claude,seven_day,week,64,"2026-03-19T15:00:00.000Z",fresh
   claude,seven_day_opus,opus week,93,"2026-03-20T09:30:00.000Z",fresh
@@ -45,6 +48,12 @@ windows[7]{provider,id,label,percentRemaining,resetsAt,state}:
   codex,five_hour,session,58,"2026-03-15T20:45:00.000Z",fresh
   codex,weekly,week,47,"2026-03-19T09:00:00.000Z",fresh
   codex,"model:gpt-5.1-codex:5h",GPT-5.1-Codex session,100,"2026-03-16T01:41:58.000Z",fresh
+  cursor,included_usage,included usage,72,"2026-04-01T00:00:00.000Z",fresh
+  cursor,auto_usage,auto usage,91,"2026-04-01T00:00:00.000Z",fresh
+  cursor,api_usage,API usage,100,"2026-04-01T00:00:00.000Z",fresh
+  copilot,chat,chat,84,"2026-04-01T00:00:00.000Z",fresh
+  copilot,premium_interactions,premium interactions,53,"2026-04-01T00:00:00.000Z",fresh
+  grok,credits,credits,67,"2026-04-01T00:00:00.000Z",fresh
 help[3]:
   Run `quota-axi --provider claude --json` for JSON output
   Run `quota-axi --full` to include account and source-attempt details
@@ -97,11 +106,14 @@ $ quota-axi --provider claude --json
 $ quota-axi auth
 bin: ~/.npm/_npx/.../quota-axi
 description: Inspect local quota auth sources without printing secret values
-auth[4]{provider,source,path,status,error}:
+auth[7]{provider,source,path,status,error}:
   claude,oauth-file,~/.claude/.credentials.json,available,none
   claude,keychain,none,skipped,keychain_prompt_required
   codex,auth-json,~/.codex/auth.json,available,none
   codex,cli-rpc,none,available,none
+  cursor,state-vscdb,~/Library/Application Support/Cursor/User/globalStorage/state.vscdb,available,none
+  copilot,apps-json,~/.config/github-copilot/apps.json,available,none
+  grok,auth-json,~/.grok/auth.json,available,none
 help[1]:
   Run `quota-axi --allow-keychain-prompt auth` to permit macOS Keychain access
 ```
@@ -156,12 +168,13 @@ It is generated from `src/skill.ts`; update it with `pnpm run build:skill` and v
 └─────┬──────┘
       ▼
 ┌───────────────┐
-│ claude,codex  │
+│ provider      │
+│ adapters      │
 └─────┬─────────┘
       ▼
 ┌───────────────┐       ┌──────────────┐
 │ local auth    │ ───▶  │ first-party  │
-│ sources       │       │ usage APIs   │
+│ sources       │       │ provider APIs│
 └─────┬─────────┘       └──────┬───────┘
       ▼                        ▼
 ┌───────────────┐       ┌──────────────┐
@@ -174,7 +187,7 @@ It is generated from `src/skill.ts`; update it with `pnpm run build:skill` and v
 └───────────────┘       └──────────────┘
 ```
 
-- **Live first** - direct provider usage calls use 15 second request timeouts, Codex JSON-RPC reads use short per-call timeouts, and stale cache fallback is per provider.
+- **Live first** - direct provider HTTP calls use 15 second request timeouts, Codex JSON-RPC reads use short per-call timeouts, and stale cache fallback is per provider.
 - **No first-run Keychain prompt** - macOS Claude Keychain value reads are skipped on plain calls until `--allow-keychain-prompt` succeeds once, then future plain calls reuse that existing grant.
 - **Partial success is success** - one provider can fail while another returns fresh or stale data, and the process still exits 0. Exit code 1 means every provider failed, and 2 means a usage error.
 - **No token equivalence** - quota-axi does not claim that one provider percentage equals another provider percentage.
@@ -183,19 +196,19 @@ It is generated from `src/skill.ts`; update it with `pnpm run build:skill` and v
 
 | Command     | Description                                      |
 | ----------- | ------------------------------------------------ |
-| `quota-axi` | Report Claude and Codex quota windows            |
+| `quota-axi` | Report supported local quota windows             |
 | `auth`      | Report local auth-source availability, no values |
 
 ### Flags
 
-| Flag                      | Description                                            |
-| ------------------------- | ------------------------------------------------------ |
-| `--provider claude,codex` | Scope providers                                        |
-| `--json`                  | Emit normalized JSON instead of TOON for quota or auth |
-| `--full`                  | Include quota account identity and source attempts     |
-| `--allow-keychain-prompt` | Permit macOS Claude Keychain access that could prompt  |
-| `-h`, `--help`            | Print terse [AXI](https://axi.md) help                 |
-| `-v`, `-V`, `--version`   | Print version                                          |
+| Flag                                          | Description                                            |
+| --------------------------------------------- | ------------------------------------------------------ |
+| `--provider claude,codex,cursor,copilot,grok` | Scope providers                                        |
+| `--json`                                      | Emit normalized JSON instead of TOON for quota or auth |
+| `--full`                                      | Include quota account identity and source attempts     |
+| `--allow-keychain-prompt`                     | Permit macOS Claude Keychain access that could prompt  |
+| `-h`, `--help`                                | Print terse [AXI](https://axi.md) help                 |
+| `-v`, `-V`, `--version`                       | Print version                                          |
 
 ## Output Model
 
@@ -208,18 +221,21 @@ Default TOON output includes the same condition in an `advice` block with `provi
 Quota windows include `id`, `label`, `kind`, optional percentages, optional reset fields, optional `windowSeconds`, and optional credit-spend fields.
 Account identity and per-source `attempts` are omitted unless `--full` is passed.
 Provider statuses are `fresh`, `stale`, `unavailable`, `auth_required`, `rate_limited`, or `error`.
-Provider sources are `oauth`, `cli-rpc`, `api`, `web`, `cache`, or `unavailable`; current provider adapters emit `oauth`, `cli-rpc`, `cache`, and `unavailable`.
+Provider sources are `oauth`, `cli-rpc`, `api`, `web`, `cache`, or `unavailable`; current provider adapters emit `oauth`, `cli-rpc`, `api`, `cache`, and `unavailable`.
 Window kinds are `session`, `weekly`, `monthly`, `model`, `credits`, or `unknown`.
 Source attempts use `success`, `failed`, or `skipped`.
 Source attempts can include `credentialPresent` when a non-secret probe confirms a credential item exists.
 Claude can report `five_hour`, `seven_day`, optional `seven_day_opus`, and optional `extra_usage` windows.
 When the account's usage response includes a scoped `limits` list, quota-axi surfaces every active window it describes instead, including model-scoped ones (e.g. Fable) as a `model:<slug>` window.
 Codex can report `five_hour` and `weekly` windows plus optional credit balance data, plus any additional model- or feature-scoped rate limits the account has as `model:<id>:5h` / `model:<id>:7d` windows, and an optional code-review rate limit as `code_review_five_hour` / `code_review_weekly`.
+Cursor can report `included_usage`, `auto_usage`, `api_usage`, and optional `spend_limit` windows.
+GitHub Copilot can report quota snapshot windows such as `chat`, `completions`, and `premium_interactions`; when the first-party endpoint exposes entitlement but no numeric quota windows, quota-axi reports a fresh provider state with an empty `windows` list rather than inventing percentages.
+Grok can report `credits`, optional `on_demand`, and optional product-scoped `product:<slug>` windows.
 `auth --json` emits `generatedAt`, `schemaVersion: 1`, and `auth`, where each provider report has `provider` and `sources`.
 Auth source entries include `source`, optional `path`, `status`, and optional `error`.
 Auth source entries can include `credentialPresent` when a non-secret probe confirms a credential item exists.
 Auth source statuses are `available`, `missing`, `invalid`, `expired`, or `skipped`.
-Auth source names are `oauth-file`, `keychain`, `auth-json`, and `cli-rpc`.
+Auth source names are `oauth-file`, `keychain`, `auth-json`, `auth-env`, `apps-json`, `state-vscdb`, and `cli-rpc`.
 
 ## Security Posture
 
@@ -231,14 +247,21 @@ Without the flag or marker, quota-axi may perform a non-secret Keychain item pre
 For Codex, it reads `$CODEX_HOME/auth.json` or `~/.codex/auth.json` before the read-only CLI fallback.
 Codex `auth.json` support is OAuth-token only; API key values such as `OPENAI_API_KEY` are treated as invalid for quota usage calls and are not sent to ChatGPT usage endpoints.
 It may run `codex -s read-only -a untrusted app-server` for Codex JSON-RPC fallback.
+For Cursor, it reads `$CURSOR_STATE_DB` when set or the platform Cursor state database path, uses `sqlite3 -readonly` to read `cursorAuth` values, and calls Cursor's first-party dashboard usage endpoint.
+If `sqlite3` is unavailable, Cursor auth is reported as skipped with `sqlite3_unavailable`.
+For GitHub Copilot, it reads `$GITHUB_COPILOT_APPS_JSON` when set or the local Copilot apps auth file and calls GitHub's first-party Copilot user endpoint.
+It only sends tokens associated with public GitHub hosts to that public endpoint; host-specific GitHub Enterprise tokens are treated as unavailable there.
+For Grok, it reads `$GROK_AUTH_JSON`, inline `$GROK_AUTH`, `$GROK_AUTH_PATH`, or `$GROK_HOME/auth.json` / `~/.grok/auth.json`, selects session-scoped auth instead of API-key entries, and calls Grok's first-party billing endpoint.
+For Grok, it may read `$GROK_HOME/version.json` or package metadata near a local `grok` executable to send an `x-grok-client-version` header, but it does not launch the Grok CLI.
 It never launches the Claude CLI, so it cannot accidentally spend the quota it measures.
 
-Direct HTTP requests go only to Anthropic and OpenAI first-party usage endpoints with the user's local credentials.
+Direct HTTP requests go only to first-party provider usage, quota, billing, or entitlement endpoints with the user's local credentials.
 It sends credential values only to the first-party provider request they authenticate.
 It never prints, logs, or caches credential values.
 The quota cache lives at `~/.cache/quota-axi/quotas.json` (or under `$XDG_CACHE_HOME/quota-axi/` when `XDG_CACHE_HOME` is set), uses `0600` file permissions, and stores normalized non-secret snapshots only.
 The Claude Keychain access marker lives alongside it as `claude-keychain-access-granted`, uses `0600` file permissions, and contains no credential material.
 Only fresh provider snapshots with windows are cached.
+Fresh provider reports with no windows clear any cached snapshot for that provider, so entitlement-only reports do not leave stale quota windows behind.
 Failed providers, stale providers, account identity, and source attempts are not cached.
 
 ## Development

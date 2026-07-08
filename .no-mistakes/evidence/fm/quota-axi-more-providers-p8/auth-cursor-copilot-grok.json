@@ -1,0 +1,36 @@
+{
+  "generatedAt": "2026-07-08T17:01:28.128Z",
+  "schemaVersion": 1,
+  "auth": [
+    {
+      "provider": "cursor",
+      "sources": [
+        {
+          "source": "state-vscdb",
+          "path": "/var/folders/5x/4nqprlbx0518k3ybcb1sz6gr0000gn/T//quota-axi-e2e.SZuuP5/cursor-state.vscdb",
+          "status": "available"
+        }
+      ]
+    },
+    {
+      "provider": "copilot",
+      "sources": [
+        {
+          "source": "apps-json",
+          "path": "/var/folders/5x/4nqprlbx0518k3ybcb1sz6gr0000gn/T//quota-axi-e2e.SZuuP5/copilot-apps.json",
+          "status": "available"
+        }
+      ]
+    },
+    {
+      "provider": "grok",
+      "sources": [
+        {
+          "source": "auth-json",
+          "path": "/var/folders/5x/4nqprlbx0518k3ybcb1sz6gr0000gn/T//quota-axi-e2e.SZuuP5/grok-auth.json",
+          "status": "available"
+        }
+      ]
+    }
+  ]
+}

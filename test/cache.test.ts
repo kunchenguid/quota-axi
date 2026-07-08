@@ -62,6 +62,21 @@ describe("quota cache", () => {
         ?.windows[0].percentUsed,
     ).toBe(20);
   });
+
+  it("clears a stale snapshot after a fresh no-window report", () => {
+    useTempCache();
+    writeCachedProviders([quota("claude", 10), quota("copilot", 20)]);
+    writeCachedProviders([quotaWithoutWindows("copilot")]);
+
+    const payload = JSON.parse(readFileSync(cacheFilePath(), "utf8")) as {
+      providers: ProviderQuota[];
+    };
+
+    expect(payload.providers.map((provider) => provider.provider)).toEqual([
+      "claude",
+    ]);
+    expect(readCachedProvider("copilot")).toBeUndefined();
+  });
 });
 
 function useTempCache(): void {
@@ -72,7 +87,7 @@ function useTempCache(): void {
 function quota(provider: ProviderId, percentUsed: number): ProviderQuota {
   return {
     provider,
-    label: provider === "claude" ? "Claude" : "Codex",
+    label: providerLabel(provider),
     source: "oauth",
     windows: [
       { id: "five_hour", label: "session", kind: "session", percentUsed },
@@ -86,4 +101,19 @@ function quota(provider: ProviderId, percentUsed: number): ProviderQuota {
     account: { email: "person@example.invalid" },
     attempts: [{ source: "oauth", status: "success" }],
   };
+}
+
+function quotaWithoutWindows(provider: ProviderId): ProviderQuota {
+  return {
+    ...quota(provider, 0),
+    windows: [],
+  };
+}
+
+function providerLabel(provider: ProviderId): string {
+  if (provider === "claude") return "Claude";
+  if (provider === "codex") return "Codex";
+  if (provider === "cursor") return "Cursor";
+  if (provider === "copilot") return "GitHub Copilot";
+  return "Grok";
 }
