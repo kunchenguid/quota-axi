@@ -7,11 +7,8 @@ import type {
   ProviderStatus,
   QuotaWindow,
 } from "./types.js";
+import { PROVIDER_IDS } from "./types.js";
 
-const PROVIDER_IDS = [
-  "claude",
-  "codex",
-] as const satisfies readonly ProviderId[];
 const PROVIDER_SOURCES = [
   "oauth",
   "cli-rpc",

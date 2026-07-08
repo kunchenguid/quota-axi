@@ -1,11 +1,11 @@
 ---
 name: quota-axi
-description: "Report local Claude and Codex quota windows via the quota-axi CLI - remaining percentages, reset times, and provider status read from local auth files, with no routing, recommendation, or provider mutation. Use before deciding whether it is safe to keep spending a provider's quota, when the user asks about usage, rate limits, or remaining quota, or when comparing Claude and Codex headroom."
+description: "Report local Claude, Codex, Cursor, GitHub Copilot, and Grok quota windows via the quota-axi CLI - remaining percentages, reset times, and provider status read from local auth files, with no routing, recommendation, or provider mutation. Use before deciding whether it is safe to keep spending a provider's quota, when the user asks about usage, rate limits, or remaining quota, or when comparing local provider headroom."
 user-invocable: false
 author: Kun Chen (kunchenguid)
 metadata:
   hermes:
-    tags: [quota, rate-limits, claude, codex, cli]
+    tags: [quota, rate-limits, claude, codex, cursor, copilot, grok, cli]
     category: observability
 ---
 
@@ -16,20 +16,20 @@ Report local agent-provider quota windows for routing-aware agents.
 You do not need quota-axi installed globally - invoke it with `npx -y quota-axi`.
 
 quota-axi is data only: it never routes, recommends, proxies, intercepts, logs in, imports
-browser cookies, or mutates provider state. It reads local Claude and Codex auth files and
-calls first-party provider usage endpoints; it never launches the Claude CLI, so it cannot
-spend the quota it measures.
+browser cookies, or mutates provider state. It reads local provider auth files and calls
+first-party provider quota, usage, billing, or entitlement endpoints; it never launches the
+Claude CLI, so it cannot spend the quota it measures.
 
 ## When to use
 
 Use quota-axi whenever you need local quota headroom before deciding whether it is safe to
 keep working on a provider, when the user asks about usage, rate limits, or remaining quota,
-or when comparing Claude and Codex headroom side by side.
+or when comparing supported local provider headroom side by side.
 
 ## Workflow
 
-1. Run `npx -y quota-axi` for compact TOON output covering both providers' quota windows.
-2. Scope to one provider with `--provider claude` or `--provider codex`.
+1. Run `npx -y quota-axi` for compact TOON output covering supported providers' quota windows.
+2. Scope to one provider with `--provider claude` or to a subset with `--provider cursor,copilot,grok`.
 3. Pass `--json` for the normalized machine-readable model instead of TOON.
 4. Pass `--full` to include account identity and per-source attempt details.
 5. Run `npx -y quota-axi auth` to check local auth-source availability without printing
@@ -47,10 +47,11 @@ usage: quota-axi [auth] [flags]
 commands[2]:
   (none)=quota, auth
 flags[6]:
-  --provider <claude,codex>, --json, --full, --allow-keychain-prompt, --help, -v/--version
+  --provider <claude,codex,cursor,copilot,grok>, --json, --full, --allow-keychain-prompt, --help, -v/--version
 examples:
   quota-axi
   quota-axi --provider claude
+  quota-axi --provider cursor,copilot,grok
   quota-axi --json
   quota-axi --full
   quota-axi auth

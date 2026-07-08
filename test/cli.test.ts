@@ -13,12 +13,18 @@ import type {
 
 const originalClaudeProvider = PROVIDERS.claude;
 const originalCodexProvider = PROVIDERS.codex;
+const originalCursorProvider = PROVIDERS.cursor;
+const originalCopilotProvider = PROVIDERS.copilot;
+const originalGrokProvider = PROVIDERS.grok;
 const originalXdgCacheHome = process.env.XDG_CACHE_HOME;
 let tempDir: string | undefined;
 
 afterEach(() => {
   PROVIDERS.claude = originalClaudeProvider;
   PROVIDERS.codex = originalCodexProvider;
+  PROVIDERS.cursor = originalCursorProvider;
+  PROVIDERS.copilot = originalCopilotProvider;
+  PROVIDERS.grok = originalGrokProvider;
   if (originalXdgCacheHome === undefined) delete process.env.XDG_CACHE_HOME;
   else process.env.XDG_CACHE_HOME = originalXdgCacheHome;
   if (tempDir) rmSync(tempDir, { recursive: true, force: true });
@@ -27,19 +33,33 @@ afterEach(() => {
 });
 
 describe("CLI argument parsing", () => {
-  it("defaults to both v1 providers", () => {
-    expect(parseArgs([]).providers).toEqual(["claude", "codex"]);
+  it("defaults to all supported providers", () => {
+    expect(parseArgs([]).providers).toEqual([
+      "claude",
+      "codex",
+      "cursor",
+      "copilot",
+      "grok",
+    ]);
   });
 
   it("scopes comma-separated providers", () => {
     expect(parseArgs(["--provider", "claude"]).providers).toEqual(["claude"]);
-    expect(parseArgs(["--provider=claude,codex"]).providers).toEqual([
-      "claude",
-      "codex",
+    expect(parseArgs(["--provider=cursor,copilot,grok"]).providers).toEqual([
+      "cursor",
+      "copilot",
+      "grok",
     ]);
   });
 
-  it("rejects providers outside v1 scope", () => {
+  it("ignores a standalone argument separator", () => {
+    expect(parseArgs(["--", "--provider", "grok", "--json"])).toMatchObject({
+      providers: ["grok"],
+      json: true,
+    });
+  });
+
+  it("rejects unsupported providers", () => {
     expect(() => parseArgs(["--provider", "gemini"])).toThrow(
       "unsupported provider",
     );
@@ -103,7 +123,7 @@ describe("CLI quota rendering", () => {
     const chunks: string[] = [];
 
     await main({
-      argv: [],
+      argv: ["--provider", "claude,codex"],
       binPath: "quota-axi",
       stdout: {
         write(chunk) {
@@ -131,7 +151,7 @@ describe("CLI quota rendering", () => {
     const chunks: string[] = [];
 
     await main({
-      argv: ["--json"],
+      argv: ["--provider", "claude,codex", "--json"],
       binPath: "quota-axi",
       stdout: {
         write(chunk) {
@@ -177,7 +197,7 @@ describe("CLI quota rendering", () => {
     const chunks: string[] = [];
 
     await main({
-      argv: ["--json"],
+      argv: ["--provider", "claude,codex", "--json"],
       binPath: "quota-axi",
       stdout: {
         write(chunk) {
@@ -212,7 +232,7 @@ describe("CLI quota rendering", () => {
     const chunks: string[] = [];
 
     await main({
-      argv: ["--json"],
+      argv: ["--provider", "claude,codex", "--json"],
       binPath: "quota-axi",
       stdout: {
         write(chunk) {

@@ -26,10 +26,11 @@ export const TOP_HELP = `usage: quota-axi [auth] [flags]
 commands[2]:
   (none)=quota, auth
 flags[6]:
-  --provider <claude,codex>, --json, --full, --allow-keychain-prompt, --help, -v/--version
+  --provider <claude,codex,cursor,copilot,grok>, --json, --full, --allow-keychain-prompt, --help, -v/--version
 examples:
   quota-axi
   quota-axi --provider claude
+  quota-axi --provider cursor,copilot,grok
   quota-axi --json
   quota-axi --full
   quota-axi auth
@@ -112,6 +113,9 @@ export function parseArgs(argv: string[]): ParsedArgs {
 
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index];
+    if (arg === "--") {
+      continue;
+    }
     if (arg === "auth") {
       command = "auth";
       continue;

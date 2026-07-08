@@ -3,9 +3,12 @@
 This file is the project's committed home for project-intrinsic agent knowledge: build, test, release, architecture, and sharp-edge notes that should travel with the code.
 
 - quota-axi is data only.
-- It reports local Claude and Codex quota windows, and it must never route, recommend, proxy, intercept, log in, import browser cookies, or mutate provider state.
+- It reports local Claude, Codex, Cursor, GitHub Copilot, and Grok quota windows, and it must never route, recommend, proxy, intercept, log in, import browser cookies, or mutate provider state.
 - Claude quota windows can include `five_hour`, `seven_day`, `seven_day_opus`, and `extra_usage`. When the OAuth usage response includes a `limits` array, that array is the authoritative, self-describing source and is preferred over the fixed top-level fields: it surfaces every active limit, including ones scoped to a specific model (e.g. Fable) via `scope.model.display_name`, with a `model:<slug>` window id.
 - Codex quota windows can include `five_hour` and `weekly`, plus optional credit balance data. Codex responses can also carry extra limits scoped to a specific model or feature (HTTP: `additional_rate_limits`; app-server RPC: `rateLimitsByLimitId`), surfaced as `model:<id>:5h` / `model:<id>:7d` windows.
+- Cursor reads the local Cursor state database for `cursorAuth` values and can report `included_usage`, `auto_usage`, `api_usage`, and optional `spend_limit` windows from the first-party dashboard usage endpoint.
+- GitHub Copilot reads `~/.config/github-copilot/apps.json` and can report quota snapshot windows such as `chat`, `completions`, and `premium_interactions` from GitHub's first-party Copilot user endpoint. If the endpoint only exposes entitlement and no numeric quota windows, return a fresh provider report with `windows: []` rather than inventing percentages.
+- Grok reads `~/.grok/auth.json` and can report `credits`, optional `on_demand`, and optional `product:<slug>` windows from the first-party billing endpoint.
 - Provider adapter behavior (retry-after handling, snake/camel field tolerance, window parsing) is an original, clean-room implementation derived only from the vendors' own OAuth/HTTP behavior; quota-axi carries no vendored or attributed third-party adapter code.
 - Default stdout is compact TOON.
 - `--json` emits the normalized model, and `--full` is required before account identity or per-source attempts are shown.
