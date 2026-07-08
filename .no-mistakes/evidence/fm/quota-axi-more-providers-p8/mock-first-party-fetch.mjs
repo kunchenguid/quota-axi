@@ -82,9 +82,7 @@ function jsonResponse(body) {
 function headerValue(headers, name) {
   if (!headers) return undefined;
   if (headers instanceof Headers) return headers.get(name) ?? undefined;
-  const entries = Array.isArray(headers)
-    ? headers
-    : Object.entries(headers);
+  const entries = Array.isArray(headers) ? headers : Object.entries(headers);
   const match = entries.find(
     ([key]) => String(key).toLowerCase() === name.toLowerCase(),
   );

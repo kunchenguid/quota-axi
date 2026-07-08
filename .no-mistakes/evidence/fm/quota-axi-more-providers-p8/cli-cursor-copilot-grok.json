@@ -56,9 +56,7 @@
         "status": "fresh",
         "stale": false,
         "refreshedAt": "2026-07-08T17:01:28.027Z",
-        "sourcesTried": [
-          "api"
-        ]
+        "sourcesTried": ["api"]
       }
     },
     {
@@ -105,9 +103,7 @@
         "status": "fresh",
         "stale": false,
         "refreshedAt": "2026-07-08T17:01:28.013Z",
-        "sourcesTried": [
-          "api"
-        ]
+        "sourcesTried": ["api"]
       }
     },
     {
@@ -167,9 +163,7 @@
         "status": "fresh",
         "stale": false,
         "refreshedAt": "2026-07-08T17:01:28.014Z",
-        "sourcesTried": [
-          "api"
-        ]
+        "sourcesTried": ["api"]
       }
     }
   ]
