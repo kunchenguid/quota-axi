@@ -1,5 +1,36 @@
-import { describe, expect, it } from "vitest";
-import { normalizeCopilotUser } from "../../src/providers/copilot.js";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  fetchQuota,
+  normalizeCopilotUser,
+} from "../../src/providers/copilot.js";
+
+const originalAppsJson = process.env.GITHUB_COPILOT_APPS_JSON;
+const originalXdgCacheHome = process.env.XDG_CACHE_HOME;
+let tempDir: string | undefined;
+
+beforeEach(() => {
+  tempDir = mkdtempSync(join(tmpdir(), "quota-axi-copilot-"));
+  process.env.GITHUB_COPILOT_APPS_JSON = join(tempDir, "apps.json");
+  process.env.XDG_CACHE_HOME = join(tempDir, "cache");
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  if (originalAppsJson === undefined)
+    delete process.env.GITHUB_COPILOT_APPS_JSON;
+  else process.env.GITHUB_COPILOT_APPS_JSON = originalAppsJson;
+  if (originalXdgCacheHome === undefined) delete process.env.XDG_CACHE_HOME;
+  else process.env.XDG_CACHE_HOME = originalXdgCacheHome;
+  if (tempDir) rmSync(tempDir, { recursive: true, force: true });
+  tempDir = undefined;
+});
+
+function writeAppsJson(value: unknown): void {
+  writeFileSync(process.env.GITHUB_COPILOT_APPS_JSON!, JSON.stringify(value));
+}
 
 describe("GitHub Copilot quota parsing", () => {
   it("normalizes quota snapshots without inventing comparable percentages", () => {
@@ -55,5 +86,34 @@ describe("GitHub Copilot quota parsing", () => {
 
   it("rejects empty Copilot payloads as unusable quota", () => {
     expect(normalizeCopilotUser({})).toBeUndefined();
+  });
+
+  it("classifies GitHub 403 rate-limit responses before auth failures", async () => {
+    writeAppsJson({
+      fixture: {
+        oauth_token: "valid-token",
+      },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response("{}", {
+            status: 403,
+            headers: {
+              "x-ratelimit-remaining": "0",
+              "x-ratelimit-reset": "1785542400",
+            },
+          }),
+      ),
+    );
+
+    const result = await fetchQuota({ allowKeychainPrompt: false });
+
+    expect(result.state.status).toBe("rate_limited");
+    expect(result.state.retryAfter).toBe("2026-08-01T00:00:00.000Z");
+    expect(result.state.error).toBe(
+      "GitHub Copilot quota endpoint rate limited",
+    );
   });
 });

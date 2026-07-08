@@ -249,16 +249,35 @@ function copilotAppsFile(): string {
 }
 
 function rejectUnusableUsageResponse(response: Response): void {
+  if (response.status === 429 || response.status === 403) {
+    const rateLimit = rateLimitSignal(response);
+    if (response.status === 429 || rateLimit.limited) {
+      throw new RateLimitError(rateLimit.retryAfter);
+    }
+  }
   if (response.status === 401 || response.status === 403) {
     throw new Error("GitHub Copilot sign-in required");
   }
-  if (response.status === 429) {
-    throw new RateLimitError(
-      retryAfterToIso(response.headers.get("retry-after")),
-    );
-  }
   if (!response.ok)
     throw new Error(`GitHub Copilot quota unavailable (${response.status})`);
+}
+
+function rateLimitSignal(response: Response): {
+  limited: boolean;
+  retryAfter?: string;
+} {
+  const retryAfter = retryAfterToIso(response.headers.get("retry-after"));
+  if (retryAfter) return { limited: true, retryAfter };
+  const remaining = response.headers.get("x-ratelimit-remaining")?.trim();
+  if (remaining === "0") {
+    return {
+      limited: true,
+      retryAfter: parseEpochSecondsOrMillis(
+        response.headers.get("x-ratelimit-reset"),
+      ),
+    };
+  }
+  return { limited: false };
 }
 
 function parseEpochSecondsOrMillis(value: unknown): string | undefined {

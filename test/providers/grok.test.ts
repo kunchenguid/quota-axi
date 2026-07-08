@@ -6,11 +6,12 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fetchQuota, normalizeGrokBilling } from "../../src/providers/grok.js";
 
 const originalGrokAuthJson = process.env.GROK_AUTH_JSON;
+const originalGrokHome = process.env.GROK_HOME;
 const originalXdgCacheHome = process.env.XDG_CACHE_HOME;
 const originalPath = process.env.PATH;
 const originalPathExt = process.env.PATHEXT;
@@ -19,6 +20,7 @@ let tempDir: string | undefined;
 beforeEach(() => {
   tempDir = mkdtempSync(join(tmpdir(), "quota-axi-grok-auth-"));
   process.env.GROK_AUTH_JSON = join(tempDir, "auth.json");
+  process.env.GROK_HOME = join(tempDir, "grok-home");
   process.env.XDG_CACHE_HOME = join(tempDir, "cache");
   process.env.PATH = join(tempDir, "empty-bin");
   process.env.PATHEXT = ".CMD;.EXE";
@@ -28,6 +30,8 @@ afterEach(() => {
   vi.unstubAllGlobals();
   if (originalGrokAuthJson === undefined) delete process.env.GROK_AUTH_JSON;
   else process.env.GROK_AUTH_JSON = originalGrokAuthJson;
+  if (originalGrokHome === undefined) delete process.env.GROK_HOME;
+  else process.env.GROK_HOME = originalGrokHome;
   if (originalXdgCacheHome === undefined) delete process.env.XDG_CACHE_HOME;
   else process.env.XDG_CACHE_HOME = originalXdgCacheHome;
   if (originalPath === undefined) delete process.env.PATH;
@@ -38,8 +42,13 @@ afterEach(() => {
   tempDir = undefined;
 });
 
-function writeAuth(value: unknown): void {
-  writeFileSync(process.env.GROK_AUTH_JSON!, JSON.stringify(value));
+function writeJson(file: string, value: unknown): void {
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, JSON.stringify(value));
+}
+
+function writeAuth(value: unknown, file = process.env.GROK_AUTH_JSON!): void {
+  writeJson(file, value);
 }
 
 function writeLocalGrokPackage(version: string): void {
@@ -50,6 +59,21 @@ function writeLocalGrokPackage(version: string): void {
     join(packageDir, "package.json"),
     JSON.stringify({ name: "grok", version, bin: { grok: "bin/grok" } }),
   );
+  const command =
+    process.platform === "win32"
+      ? join(binDir, "grok.CMD")
+      : join(binDir, "grok");
+  writeFileSync(
+    command,
+    process.platform === "win32" ? "@echo off\r\n" : "#!/bin/sh\nexit 0\n",
+  );
+  chmodSync(command, 0o700);
+  process.env.PATH = binDir;
+}
+
+function writeVersionedGrokCommand(version: string): void {
+  const binDir = join(process.env.GROK_HOME!, "downloads", `grok-v${version}`);
+  mkdirSync(binDir, { recursive: true });
   const command =
     process.platform === "win32"
       ? join(binDir, "grok.CMD")
@@ -195,6 +219,113 @@ describe("Grok quota parsing", () => {
       expect.objectContaining({
         headers: expect.objectContaining({
           "x-grok-client-version": "9.9.9",
+        }),
+      }),
+    );
+  });
+
+  it("uses GROK_HOME version metadata in billing requests", async () => {
+    writeAuth({
+      current: {
+        key: "valid-key",
+        expires_at: "2035-01-01T00:00:00.000Z",
+      },
+    });
+    writeJson(join(process.env.GROK_HOME!, "version.json"), {
+      version: "8.7.6",
+    });
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            config: {
+              creditUsagePercent: 25,
+            },
+          }),
+          { status: 200 },
+        ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await fetchQuota({ allowKeychainPrompt: false });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://cli-chat-proxy.grok.com/v1/billing?format=credits",
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          "x-grok-client-version": "8.7.6",
+        }),
+      }),
+    );
+  });
+
+  it("uses versioned standalone Grok command paths", async () => {
+    writeAuth({
+      current: {
+        key: "valid-key",
+        expires_at: "2035-01-01T00:00:00.000Z",
+      },
+    });
+    writeVersionedGrokCommand("7.6.5");
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            config: {
+              creditUsagePercent: 25,
+            },
+          }),
+          { status: 200 },
+        ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await fetchQuota({ allowKeychainPrompt: false });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://cli-chat-proxy.grok.com/v1/billing?format=credits",
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          "x-grok-client-version": "7.6.5",
+        }),
+      }),
+    );
+  });
+
+  it("reads auth.json under GROK_HOME when no explicit auth path is set", async () => {
+    delete process.env.GROK_AUTH_JSON;
+    writeAuth(
+      {
+        current: {
+          key: "home-key",
+          email: "person@example.invalid",
+          expires_at: "2035-01-01T00:00:00.000Z",
+        },
+      },
+      join(process.env.GROK_HOME!, "auth.json"),
+    );
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            config: {
+              creditUsagePercent: 25,
+            },
+          }),
+          { status: 200 },
+        ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await fetchQuota({ allowKeychainPrompt: false });
+
+    expect(result.state.status).toBe("fresh");
+    expect(result.account?.email).toBe("person@example.invalid");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://cli-chat-proxy.grok.com/v1/billing?format=credits",
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          authorization: "Bearer home-key",
         }),
       }),
     );

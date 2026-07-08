@@ -231,9 +231,58 @@ async function fetchGrokBilling(credentials: GrokCredentials): Promise<{
 }
 
 async function readGrokClientVersion(): Promise<string | undefined> {
+  const homeVersion = readGrokHomeClientVersion();
+  if (homeVersion) return homeVersion;
   const executable = await findCommandPath("grok");
   if (!executable) return undefined;
-  return readPackageVersionNear(realpathBestEffort(executable));
+  const realpath = realpathBestEffort(executable);
+  return (
+    extractGrokVersionFromPath(realpath) ?? readPackageVersionNear(realpath)
+  );
+}
+
+function readGrokHomeClientVersion(): string | undefined {
+  const versionJson = readJsonFileResult(join(grokHomeDir(), "version.json"));
+  if (versionJson.status !== "success") return undefined;
+  return versionFromJson(versionJson.value);
+}
+
+function versionFromJson(value: unknown): string | undefined {
+  const direct = stringValue(value);
+  if (direct) return extractVersion(direct);
+  const data = objectValue(value);
+  if (!data) return undefined;
+  for (const key of [
+    "version",
+    "clientVersion",
+    "client_version",
+    "currentVersion",
+    "current_version",
+  ]) {
+    const version = extractVersion(stringValue(data[key]));
+    if (version) return version;
+  }
+  for (const item of Object.values(data)) {
+    const version = extractVersion(stringValue(item));
+    if (version) return version;
+  }
+  return undefined;
+}
+
+function extractVersion(value: string | undefined): string | undefined {
+  return value?.match(
+    /(?:^|[^0-9])v?(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)(?:$|[^0-9A-Za-z])/,
+  )?.[1];
+}
+
+function extractGrokVersionFromPath(file: string): string | undefined {
+  for (const part of file.split(/[\\/]+/)) {
+    if (/grok/i.test(part)) {
+      const version = extractVersion(part);
+      if (version) return version;
+    }
+  }
+  return undefined;
 }
 
 function readPackageVersionNear(file: string): string | undefined {
@@ -334,7 +383,11 @@ function extractCredentialState(
 function grokAuthFile(): string {
   return process.env.GROK_AUTH_JSON
     ? process.env.GROK_AUTH_JSON
-    : join(homedir(), ".grok", "auth.json");
+    : join(grokHomeDir(), "auth.json");
+}
+
+function grokHomeDir(): string {
+  return process.env.GROK_HOME || join(homedir(), ".grok");
 }
 
 function rejectUnusableUsageResponse(response: Response): void {
