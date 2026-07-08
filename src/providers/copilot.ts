@@ -183,17 +183,14 @@ function normalizeQuotaSnapshots(
     const item = objectValue(value);
     if (!item) continue;
     const remaining = numberValue(item.percent_remaining);
-    const percentUsed =
-      remaining === undefined ? undefined : clampPercent(100 - remaining);
+    if (remaining === undefined) continue;
+    const percentUsed = clampPercent(100 - remaining);
     windows.push({
       id,
       label: id.replace(/_/g, " "),
       kind: "monthly",
       percentUsed,
-      percentRemaining:
-        remaining === undefined
-          ? percentRemaining(percentUsed)
-          : clampPercent(remaining),
+      percentRemaining: percentRemaining(percentUsed),
       resetsAt:
         parseEpochSecondsOrMillis(item.quota_reset_at) ??
         parseEpochSecondsOrMillis(resetFallback),
@@ -282,7 +279,14 @@ function normalizeHost(value: string | undefined): string | undefined {
     ).hostname.toLowerCase();
     return host.includes(".") ? host : undefined;
   } catch {
-    return undefined;
+    const host = trimmed
+      .replace(/^[a-z][a-z\d+.-]*:\/\//i, "")
+      .split(/[/?#]/, 1)[0]
+      ?.split(":", 1)[0]
+      ?.toLowerCase();
+    return host && /^[a-z0-9.-]+$/.test(host) && host.includes(".")
+      ? host
+      : undefined;
   }
 }
 

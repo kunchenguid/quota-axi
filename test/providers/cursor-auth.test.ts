@@ -120,6 +120,48 @@ describe("Cursor credential-state reporting", () => {
     });
   });
 
+  it("parses JSON string values from Cursor state storage", async () => {
+    vi.doMock("../../src/lib/process.js", () => ({
+      commandExists: vi.fn(async () => true),
+      execFileText: vi.fn(async (_command: string, args: string[]) => {
+        const query = args.at(-1) ?? "";
+        if (query.includes("cursorAuth/accessToken")) return '"valid-token"';
+        if (query.includes("cursorAuth/cachedEmail"))
+          return '"person@example.invalid"';
+        if (query.includes("cursorAuth/stripeMembershipType")) return '"pro"';
+        return "";
+      }),
+    }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: unknown, init?: RequestInit) => {
+        expect(new Headers(init?.headers).get("authorization")).toBe(
+          "Bearer valid-token",
+        );
+        if (String(url).includes("GetPlanInfo")) {
+          return new Response(
+            JSON.stringify({ planInfo: { planName: "pro" } }),
+            { status: 200 },
+          );
+        }
+        return new Response(
+          JSON.stringify({
+            billingCycleEnd: "1783036800000",
+            planUsage: { totalPercentUsed: 10 },
+          }),
+          { status: 200 },
+        );
+      }),
+    );
+
+    const { fetchQuota } = await import("../../src/providers/cursor.js");
+    const result = await fetchQuota({ allowKeychainPrompt: false });
+
+    expect(result.state.status).toBe("fresh");
+    expect(result.account?.email).toBe("person@example.invalid");
+    expect(result.plan).toBe("pro");
+  });
+
   it("resolves the Linux state database under XDG config home", async () => {
     delete process.env.CURSOR_STATE_DB;
     const xdgConfigHome = join(tempDir!, "xdg-config");

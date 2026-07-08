@@ -112,6 +112,33 @@ describe("GitHub Copilot quota parsing", () => {
     });
   });
 
+  it("skips quota snapshots without numeric remaining percentages", () => {
+    const result = normalizeCopilotUser({
+      login: "fixture-user",
+      access_type_sku: "business",
+      quota_snapshots: {
+        chat: {
+          quota_reset_at: 1785542400,
+        },
+      },
+    });
+
+    expect(result).toMatchObject({
+      plan: "business",
+      account: { accountId: "fixture-user" },
+      windows: [],
+    });
+    expect(
+      normalizeCopilotUser({
+        quota_snapshots: {
+          chat: {
+            quota_reset_at: 1785542400,
+          },
+        },
+      }),
+    ).toBeUndefined();
+  });
+
   it("rejects empty Copilot payloads as unusable quota", () => {
     expect(normalizeCopilotUser({})).toBeUndefined();
   });
@@ -187,6 +214,35 @@ describe("GitHub Copilot quota parsing", () => {
 
     expect(result.state.status).toBe("auth_required");
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("selects public GitHub token from app-id keyed auth entries", async () => {
+    writeAppsJson({
+      "ghe.example.test:Iv1.enterprise": {
+        oauth_token: "enterprise-token",
+      },
+      "github.com:Iv1.public": {
+        oauth_token: "public-token",
+      },
+    });
+    const fetchMock = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      expect(new Headers(init?.headers).get("authorization")).toBe(
+        "Bearer public-token",
+      );
+      return new Response(
+        JSON.stringify({
+          login: "fixture-user",
+          access_type_sku: "individual",
+        }),
+        { status: 200 },
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await fetchQuota({ allowKeychainPrompt: false });
+
+    expect(result.state.status).toBe("fresh");
+    expect(fetchMock).toHaveBeenCalledOnce();
   });
 
   it("resolves Copilot auth under XDG config home", async () => {

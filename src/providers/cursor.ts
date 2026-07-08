@@ -332,7 +332,13 @@ async function readCursorStateValue(key: string): Promise<string | undefined> {
     SQLITE_TIMEOUT_MS,
   );
   const value = output.trim();
-  return value.length > 0 ? value : undefined;
+  if (value.length === 0) return undefined;
+  try {
+    const parsed = JSON.parse(value);
+    return typeof parsed === "string" && parsed.length > 0 ? parsed : undefined;
+  } catch {
+    return value;
+  }
 }
 
 function cursorStateDbPath(): string {
