@@ -1,0 +1,3 @@
+find-generic-password -s Claude Code-credentials
+find-generic-password -s Claude Code-credentials -w
+find-generic-password -s Claude Code-credentials -w

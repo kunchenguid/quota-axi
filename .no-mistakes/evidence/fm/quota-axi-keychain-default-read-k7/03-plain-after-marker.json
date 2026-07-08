@@ -1,0 +1,38 @@
+{
+  "generatedAt": "2026-07-08T01:25:14.480Z",
+  "schemaVersion": 2,
+  "providers": [
+    {
+      "provider": "claude",
+      "label": "Claude",
+      "source": "oauth",
+      "windows": [
+        {
+          "id": "five_hour",
+          "label": "session",
+          "kind": "session",
+          "percentUsed": 7,
+          "resetsAt": "2035-01-01T05:00:00.000Z",
+          "percentRemaining": 93
+        }
+      ],
+      "attempts": [
+        {
+          "source": "oauth-file",
+          "status": "skipped",
+          "error": "credentials_missing"
+        },
+        {
+          "source": "oauth",
+          "status": "success"
+        }
+      ],
+      "state": {
+        "status": "fresh",
+        "stale": false,
+        "refreshedAt": "2026-07-08T01:25:14.480Z",
+        "sourcesTried": ["oauth-file", "oauth"]
+      }
+    }
+  ]
+}

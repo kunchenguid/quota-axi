@@ -1,7 +1,13 @@
+import { chmodSync, existsSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { readCachedProvider } from "../cache.js";
-import { readJsonFileResult, type JsonFileReadResult } from "../lib/fs.js";
+import {
+  claudeKeychainAccessMarkerPath,
+  ensurePrivateParent,
+  readJsonFileResult,
+  type JsonFileReadResult,
+} from "../lib/fs.js";
 import { execFileText } from "../lib/process.js";
 import { clampPercent, nowIso, retryAfterToIso } from "../lib/time.js";
 import type {
@@ -314,10 +320,10 @@ async function readCredentialStates(
   states.push(fileState);
 
   if (process.platform === "darwin") {
-    if (!options.allowKeychainPrompt) {
-      states.push(await readSkippedKeychainCredentialState());
-    } else {
+    if (options.allowKeychainPrompt || hasKeychainAccessMarker()) {
       states.push(await readKeychainCredentialState());
+    } else {
+      states.push(await readSkippedKeychainCredentialState());
     }
   }
 
@@ -377,6 +383,7 @@ async function readKeychainCredentialState(): Promise<CredentialState> {
   } catch (error) {
     return keychainFailureState(error);
   }
+  writeKeychainAccessMarkerBestEffort();
   try {
     return extractCredentialState(
       { status: "success", value: JSON.parse(blob) },
@@ -391,6 +398,24 @@ async function readKeychainCredentialState(): Promise<CredentialState> {
         error: "json_parse_error",
       },
     };
+  }
+}
+
+function hasKeychainAccessMarker(): boolean {
+  return existsSync(claudeKeychainAccessMarkerPath());
+}
+
+function writeKeychainAccessMarkerBestEffort(): void {
+  try {
+    const file = claudeKeychainAccessMarkerPath();
+    ensurePrivateParent(file);
+    const temp = `${file}.${process.pid}.tmp`;
+    writeFileSync(temp, "granted\n", { mode: 0o600 });
+    chmodSync(temp, 0o600);
+    renameSync(temp, file);
+    chmodSync(file, 0o600);
+  } catch {
+    return;
   }
 }
 

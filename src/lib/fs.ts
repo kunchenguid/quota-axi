@@ -44,8 +44,16 @@ function samePath(left: string, right: string): boolean {
 }
 
 export function cacheFilePath(): string {
+  return join(cacheDirPath(), "quotas.json");
+}
+
+export function claudeKeychainAccessMarkerPath(): string {
+  return join(cacheDirPath(), "claude-keychain-access-granted");
+}
+
+function cacheDirPath(): string {
   const base = process.env.XDG_CACHE_HOME || join(homedir(), ".cache");
-  return join(base, "quota-axi", "quotas.json");
+  return join(base, "quota-axi");
 }
 
 export function ensurePrivateParent(file: string): void {

@@ -1,0 +1,36 @@
+{
+  "generatedAt": "2026-07-08T01:25:14.464Z",
+  "schemaVersion": 2,
+  "providers": [
+    {
+      "provider": "claude",
+      "label": "Claude",
+      "source": "unavailable",
+      "windows": [],
+      "state": {
+        "status": "auth_required",
+        "stale": false,
+        "error": "Claude sign-in required",
+        "sourcesTried": ["oauth-file", "keychain"],
+        "reason": "keychain_access_required",
+        "remedyCommand": "quota-axi --allow-keychain-prompt"
+      },
+      "attempts": [
+        {
+          "source": "oauth-file",
+          "status": "skipped",
+          "error": "credentials_missing"
+        },
+        {
+          "source": "keychain",
+          "status": "skipped",
+          "error": "keychain_prompt_required",
+          "credentialPresent": true
+        }
+      ]
+    }
+  ],
+  "help": [
+    "Tell your user: run `quota-axi --allow-keychain-prompt` once and approve Keychain access (\"Always Allow\") so quota-axi can read claude's live quota."
+  ]
+}

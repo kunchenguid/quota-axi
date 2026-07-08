@@ -26,7 +26,8 @@ It is data only: it never routes, recommends, proxies, intercepts, logs in, impo
 
 **macOS + Claude note:** Claude Code keeps its live token in the macOS Keychain.
 quota-axi will not read that token unless the user grants permission, so Claude quota reads can stay stale until the user grants access after on-disk credentials expire.
-Run `quota-axi --allow-keychain-prompt` once and approve Keychain access with "Always Allow" so future non-interactive quota reads can refresh live Claude data.
+Run `quota-axi --allow-keychain-prompt` once and approve Keychain access with "Always Allow".
+After a successful Keychain read, future non-interactive quota reads use that existing grant and refresh live Claude data without requiring the flag.
 
 ```sh
 $ npx -y quota-axi
@@ -174,7 +175,7 @@ It is generated from `src/skill.ts`; update it with `pnpm run build:skill` and v
 ```
 
 - **Live first** - direct provider usage calls use 15 second request timeouts, Codex JSON-RPC reads use short per-call timeouts, and stale cache fallback is per provider.
-- **No default Keychain prompt** - macOS Claude Keychain value reads are skipped unless `--allow-keychain-prompt` is passed.
+- **No first-run Keychain prompt** - macOS Claude Keychain value reads are skipped on plain calls until `--allow-keychain-prompt` succeeds once, then future plain calls reuse that existing grant.
 - **Partial success is success** - one provider can fail while another returns fresh or stale data, and the process still exits 0. Exit code 1 means every provider failed, and 2 means a usage error.
 - **No token equivalence** - quota-axi does not claim that one provider percentage equals another provider percentage.
 
@@ -223,8 +224,10 @@ Auth source names are `oauth-file`, `keychain`, `auth-json`, and `cli-rpc`.
 ## Security Posture
 
 quota-axi reads `~/.claude/.credentials.json` for Claude.
-On macOS, it reads the `Claude Code-credentials` Keychain value only with `--allow-keychain-prompt`; when enabled, the Keychain credential is tried before file credentials.
-Without that flag, quota-axi may perform a non-secret Keychain item presence check so it only suggests Keychain access when a Claude credential item exists.
+On macOS, it reads the `Claude Code-credentials` Keychain value with `--allow-keychain-prompt` or, after a non-secret access marker exists, on plain calls.
+quota-axi records that marker after any successful Keychain value read.
+When that marker exists, plain calls read the Keychain value again so an already-approved "Always Allow" grant keeps live Claude quota fresh.
+Without the flag or marker, quota-axi may perform a non-secret Keychain item presence check so it only suggests Keychain access when a Claude credential item exists.
 For Codex, it reads `$CODEX_HOME/auth.json` or `~/.codex/auth.json` before the read-only CLI fallback.
 Codex `auth.json` support is OAuth-token only; API key values such as `OPENAI_API_KEY` are treated as invalid for quota usage calls and are not sent to ChatGPT usage endpoints.
 It may run `codex -s read-only -a untrusted app-server` for Codex JSON-RPC fallback.
@@ -233,7 +236,8 @@ It never launches the Claude CLI, so it cannot accidentally spend the quota it m
 Direct HTTP requests go only to Anthropic and OpenAI first-party usage endpoints with the user's local credentials.
 It sends credential values only to the first-party provider request they authenticate.
 It never prints, logs, or caches credential values.
-The cache lives at `~/.cache/quota-axi/quotas.json` (or under `$XDG_CACHE_HOME/quota-axi/` when `XDG_CACHE_HOME` is set), uses `0600` file permissions, and stores normalized non-secret snapshots only.
+The quota cache lives at `~/.cache/quota-axi/quotas.json` (or under `$XDG_CACHE_HOME/quota-axi/` when `XDG_CACHE_HOME` is set), uses `0600` file permissions, and stores normalized non-secret snapshots only.
+The Claude Keychain access marker lives alongside it as `claude-keychain-access-granted`, uses `0600` file permissions, and contains no credential material.
 Only fresh provider snapshots with windows are cached.
 Failed providers, stale providers, account identity, and source attempts are not cached.
 

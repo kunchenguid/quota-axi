@@ -10,14 +10,15 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 - Default stdout is compact TOON.
 - `--json` emits the normalized model, and `--full` is required before account identity or per-source attempts are shown.
 - JSON provider reports include `provider`, `label`, `source`, `windows`, and `state`; `state.retryAfter` can appear for provider rate limits, and `state.reason: keychain_access_required` plus `state.remedyCommand` can appear when a stale or unavailable Claude result is blocked by a skipped macOS Keychain prompt.
-- macOS Claude Keychain value reads are skipped by default because they can prompt; quota-axi may still run a non-secret Keychain item presence check so it only suggests access when a credential item exists.
-- `--allow-keychain-prompt` is the only opt-in that permits reading the Claude Keychain value, and agents should relay the one-time "Always Allow" grant when `keychain_access_required` advice appears.
+- macOS Claude Keychain value reads are skipped on plain calls until a successful value read records the non-secret access marker under the quota-axi cache directory; after that, plain calls may reuse the existing grant and read live Claude quota.
+- `--allow-keychain-prompt` is the first-time opt-in that permits the Claude Keychain value read which can prompt, and agents should relay the one-time "Always Allow" grant when `keychain_access_required` advice appears.
 - Codex uses `$CODEX_HOME/auth.json` or `~/.codex/auth.json` OAuth before the CLI fallback.
 - Codex `auth.json` support is OAuth-token only; never treat `OPENAI_API_KEY` as valid quota auth or send API keys to ChatGPT quota endpoints.
 - Never launch the Claude CLI to probe quota, because that would spend the quota being measured.
 - The read-only Codex app-server JSON-RPC probe is the only CLI fallback.
 - The cache path is `~/.cache/quota-axi/quotas.json`, or under `$XDG_CACHE_HOME/quota-axi/` when `XDG_CACHE_HOME` is set.
-- Cache files must be `0600` and contain only normalized non-secret snapshots.
+- The Claude Keychain access marker is stored alongside the cache, is `0600`, and contains no credential material.
+- Quota cache files must be `0600` and contain only normalized non-secret snapshots.
 - Only fresh provider snapshots with windows are cached.
 - Failed providers, stale providers, account identity, and source attempts are not cached.
 - Do not cache raw provider responses or credential headers.

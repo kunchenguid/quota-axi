@@ -1,8 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+const originalXdgCacheHome = process.env.XDG_CACHE_HOME;
+
 afterEach(() => {
   vi.doUnmock("node:os");
   vi.resetModules();
+  if (originalXdgCacheHome === undefined) delete process.env.XDG_CACHE_HOME;
+  else process.env.XDG_CACHE_HOME = originalXdgCacheHome;
 });
 
 async function importFsWithHome(home: string) {
@@ -42,5 +46,18 @@ describe("collapseHome", () => {
     const { collapseHome } = await importFsWithHome("/Users/kun");
 
     expect(collapseHome("quota-axi")).toBe("quota-axi");
+  });
+});
+
+describe("cache paths", () => {
+  it("places the Claude keychain marker alongside the quota cache", async () => {
+    const { cacheFilePath, claudeKeychainAccessMarkerPath } =
+      await importFsWithHome("/Users/kun");
+    process.env.XDG_CACHE_HOME = "/tmp/quota-cache";
+
+    expect(cacheFilePath()).toBe("/tmp/quota-cache/quota-axi/quotas.json");
+    expect(claudeKeychainAccessMarkerPath()).toBe(
+      "/tmp/quota-cache/quota-axi/claude-keychain-access-granted",
+    );
   });
 });

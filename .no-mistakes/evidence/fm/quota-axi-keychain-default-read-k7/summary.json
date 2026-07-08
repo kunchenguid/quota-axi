@@ -1,0 +1,43 @@
+{
+  "cliFlow": [
+    {
+      "command": "quota-axi --provider claude --json --full",
+      "exitCode": 1,
+      "status": "auth_required",
+      "reason": "keychain_access_required",
+      "remedyCommand": "quota-axi --allow-keychain-prompt",
+      "keychainAttempt": {
+        "source": "keychain",
+        "status": "skipped",
+        "error": "keychain_prompt_required",
+        "credentialPresent": true
+      },
+      "markerExistsBeforeBootstrap": false
+    },
+    {
+      "command": "quota-axi --provider claude --json --full --allow-keychain-prompt",
+      "exitCode": 0,
+      "status": "fresh",
+      "reason": "none",
+      "markerMode": "0600",
+      "cachePercentUsed": 12
+    },
+    {
+      "command": "quota-axi --provider claude --json --full",
+      "exitCode": 0,
+      "status": "fresh",
+      "reason": "none",
+      "cachePercentUsed": 7
+    }
+  ],
+  "securityCalls": [
+    "find-generic-password -s Claude Code-credentials",
+    "find-generic-password -s Claude Code-credentials -w",
+    "find-generic-password -s Claude Code-credentials -w"
+  ],
+  "oauthFetches": 2,
+  "authorizationHeaderObservedAndRedacted": [true, true],
+  "tokenRenderedInCliOrCacheOutput": false,
+  "markerPath": "./.no-mistakes/evidence/fm/quota-axi-keychain-default-read-k7/runtime/cache/quota-axi/claude-keychain-access-granted",
+  "cachePath": "./.no-mistakes/evidence/fm/quota-axi-keychain-default-read-k7/runtime/cache/quota-axi/quotas.json"
+}
