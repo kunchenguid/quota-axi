@@ -145,6 +145,50 @@ describe("GitHub Copilot quota parsing", () => {
     );
   });
 
+  it("selects the public GitHub token when apps.json has multiple hosts", async () => {
+    writeAppsJson({
+      "ghe.example.test": {
+        oauth_token: "enterprise-token",
+      },
+      "github.com": {
+        oauth_token: "public-token",
+      },
+    });
+    const fetchMock = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      expect(new Headers(init?.headers).get("authorization")).toBe(
+        "Bearer public-token",
+      );
+      return new Response(
+        JSON.stringify({
+          login: "fixture-user",
+          access_type_sku: "individual",
+        }),
+        { status: 200 },
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await fetchQuota({ allowKeychainPrompt: false });
+
+    expect(result.state.status).toBe("fresh");
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("does not send host-specific enterprise tokens to the public endpoint", async () => {
+    writeAppsJson({
+      "ghe.example.test": {
+        oauth_token: "enterprise-token",
+      },
+    });
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await fetchQuota({ allowKeychainPrompt: false });
+
+    expect(result.state.status).toBe("auth_required");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("resolves Copilot auth under XDG config home", async () => {
     const xdgConfigHome = join(tempDir!, "xdg-config");
     const authFile = join(xdgConfigHome, "github-copilot", "apps.json");

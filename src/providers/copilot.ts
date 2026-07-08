@@ -26,6 +26,7 @@ import {
 } from "./common.js";
 
 const USER_URL = "https://api.github.com/copilot_internal/user";
+const USER_HOST = new URL(USER_URL).hostname;
 const API_TIMEOUT_MS = 15_000;
 
 type CopilotCredentials = {
@@ -40,6 +41,11 @@ type CredentialState =
       source: AuthSourceReport;
     }
   | { status: "missing" | "invalid"; source: AuthSourceReport };
+
+type CredentialCandidate = {
+  credentials: CopilotCredentials;
+  host?: string;
+};
 
 export const copilotAdapter: ProviderAdapter = {
   id: "copilot",
@@ -225,21 +231,66 @@ function extractCredentialState(
       status: "invalid",
       source: { source: "apps-json", path, status: "invalid" },
     };
-  for (const value of Object.values(data)) {
+  const candidates: CredentialCandidate[] = [];
+  for (const [key, value] of Object.entries(data)) {
     const item = objectValue(value);
     const oauthToken = stringValue(item?.oauth_token);
     if (oauthToken) {
-      return {
-        status: "available",
+      candidates.push({
         credentials: { oauthToken, login: stringValue(item?.user) },
-        source: { source: "apps-json", path, status: "available" },
-      };
+        host: credentialHost(key, item),
+      });
     }
+  }
+  const selected =
+    candidates.find(({ host }) => host && matchesUserEndpoint(host)) ??
+    (candidates.some(({ host }) => host) ? undefined : candidates[0]);
+  if (selected) {
+    return {
+      status: "available",
+      credentials: selected.credentials,
+      source: { source: "apps-json", path, status: "available" },
+    };
   }
   return {
     status: "invalid",
     source: { source: "apps-json", path, status: "invalid" },
   };
+}
+
+function credentialHost(
+  key: string,
+  item: Record<string, unknown> | undefined,
+): string | undefined {
+  return (
+    normalizeHost(stringValue(item?.host)) ??
+    normalizeHost(stringValue(item?.hostname)) ??
+    normalizeHost(stringValue(item?.github_host)) ??
+    normalizeHost(stringValue(item?.githubHost)) ??
+    normalizeHost(stringValue(item?.server_uri)) ??
+    normalizeHost(stringValue(item?.serverUri)) ??
+    normalizeHost(key)
+  );
+}
+
+function normalizeHost(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) return undefined;
+  try {
+    const host = new URL(
+      trimmed.includes("://") ? trimmed : `https://${trimmed}`,
+    ).hostname.toLowerCase();
+    return host.includes(".") ? host : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function matchesUserEndpoint(host: string): boolean {
+  return (
+    host === USER_HOST ||
+    (USER_HOST === "api.github.com" && host === "github.com")
+  );
 }
 
 function copilotAppsFile(): string {

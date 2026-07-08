@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const originalCursorStateDb = process.env.CURSOR_STATE_DB;
 const originalXdgCacheHome = process.env.XDG_CACHE_HOME;
+const originalXdgConfigHome = process.env.XDG_CONFIG_HOME;
+const originalHome = process.env.HOME;
 let tempDir: string | undefined;
 
 beforeEach(() => {
@@ -22,9 +24,26 @@ afterEach(() => {
   else process.env.CURSOR_STATE_DB = originalCursorStateDb;
   if (originalXdgCacheHome === undefined) delete process.env.XDG_CACHE_HOME;
   else process.env.XDG_CACHE_HOME = originalXdgCacheHome;
+  if (originalXdgConfigHome === undefined) delete process.env.XDG_CONFIG_HOME;
+  else process.env.XDG_CONFIG_HOME = originalXdgConfigHome;
+  if (originalHome === undefined) delete process.env.HOME;
+  else process.env.HOME = originalHome;
   if (tempDir) rmSync(tempDir, { recursive: true, force: true });
   tempDir = undefined;
 });
+
+async function withPlatform<T>(
+  platform: NodeJS.Platform,
+  callback: () => Promise<T>,
+): Promise<T> {
+  const descriptor = Object.getOwnPropertyDescriptor(process, "platform");
+  Object.defineProperty(process, "platform", { value: platform });
+  try {
+    return await callback();
+  } finally {
+    if (descriptor) Object.defineProperty(process, "platform", descriptor);
+  }
+}
 
 describe("Cursor credential-state reporting", () => {
   it("reports a missing access token as auth required", async () => {
@@ -98,6 +117,35 @@ describe("Cursor credential-state reporting", () => {
       source: "state-vscdb",
       path: process.env.CURSOR_STATE_DB,
       status: "missing",
+    });
+  });
+
+  it("resolves the Linux state database under XDG config home", async () => {
+    delete process.env.CURSOR_STATE_DB;
+    const xdgConfigHome = join(tempDir!, "xdg-config");
+    process.env.XDG_CONFIG_HOME = xdgConfigHome;
+    process.env.HOME = join(tempDir!, "home");
+    vi.doMock("../../src/lib/process.js", () => ({
+      commandExists: vi.fn(async () => false),
+      execFileText: vi.fn(),
+    }));
+
+    await withPlatform("linux", async () => {
+      const { inspectAuth } = await import("../../src/providers/cursor.js");
+      const result = await inspectAuth({ allowKeychainPrompt: false });
+
+      expect(result.sources).toContainEqual({
+        source: "state-vscdb",
+        path: join(
+          xdgConfigHome,
+          "Cursor",
+          "User",
+          "globalStorage",
+          "state.vscdb",
+        ),
+        status: "skipped",
+        error: "sqlite3_unavailable",
+      });
     });
   });
 });

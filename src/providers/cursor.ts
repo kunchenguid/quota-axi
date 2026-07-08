@@ -358,8 +358,7 @@ function cursorStateDbPath(): string {
     );
   }
   return join(
-    homedir(),
-    ".config",
+    process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config"),
     "Cursor",
     "User",
     "globalStorage",
