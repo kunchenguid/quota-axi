@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.4](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.3...quota-axi-v0.1.4) (2026-07-08)
+
+
+### Features
+
+* **providers:** add cursor copilot and grok quota reports ([#9](https://github.com/kunchenguid/quota-axi/issues/9)) ([1cf7fd5](https://github.com/kunchenguid/quota-axi/commit/1cf7fd5af7a376389f1943b12011e7d0c1200c55))
+
 ## [0.1.3](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.2...quota-axi-v0.1.3) (2026-07-08)
 
 
