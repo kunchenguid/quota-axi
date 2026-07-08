@@ -13,12 +13,12 @@
 Quota CLI for agents - designed with [AXI](https://axi.md) (Agent eXperience Interface).
 
 Agents need quota state before they choose where work can safely run.
-Vendor dashboards are not shaped for shell automation, and local CLIs expose different windows, resets, and auth files.
+Vendor dashboards are not shaped for shell automation, and local CLIs expose different windows, resets, and auth sources.
 
 quota-axi reports local Claude, Codex, Cursor, GitHub Copilot, and Grok quota windows in one [AXI](https://axi.md)-shaped call.
 It is data only: it never routes, recommends, proxies, intercepts, logs in, imports browser cookies, or mutates provider state.
 
-- **Official sources** - quota-axi reads local provider auth files and calls the first-party quota, usage, or entitlement endpoints used by the local agents, with a read-only Codex app-server probe as fallback.
+- **Official sources** - quota-axi reads local provider auth sources and calls the first-party quota, usage, billing, or entitlement endpoints used by the local agents, with a read-only Codex app-server probe as fallback.
 - **Local first** - everything runs on the machine that holds the credentials; the only network calls are to first-party provider endpoints, never a third-party relay.
 - **Token efficient** - default stdout is compact TOON so agents spend fewer tokens parsing quota state, with `--json` available when a caller needs the normalized model.
 
@@ -174,7 +174,7 @@ It is generated from `src/skill.ts`; update it with `pnpm run build:skill` and v
       ▼
 ┌───────────────┐       ┌──────────────┐
 │ local auth    │ ───▶  │ first-party  │
-│ sources       │       │ usage APIs   │
+│ sources       │       │ provider APIs│
 └─────┬─────────┘       └──────┬───────┘
       ▼                        ▼
 ┌───────────────┐       ┌──────────────┐
@@ -187,7 +187,7 @@ It is generated from `src/skill.ts`; update it with `pnpm run build:skill` and v
 └───────────────┘       └──────────────┘
 ```
 
-- **Live first** - direct provider usage calls use 15 second request timeouts, Codex JSON-RPC reads use short per-call timeouts, and stale cache fallback is per provider.
+- **Live first** - direct provider HTTP calls use 15 second request timeouts, Codex JSON-RPC reads use short per-call timeouts, and stale cache fallback is per provider.
 - **No first-run Keychain prompt** - macOS Claude Keychain value reads are skipped on plain calls until `--allow-keychain-prompt` succeeds once, then future plain calls reuse that existing grant.
 - **Partial success is success** - one provider can fail while another returns fresh or stale data, and the process still exits 0. Exit code 1 means every provider failed, and 2 means a usage error.
 - **No token equivalence** - quota-axi does not claim that one provider percentage equals another provider percentage.
@@ -235,7 +235,7 @@ Grok can report `credits`, optional `on_demand`, and optional product-scoped `pr
 Auth source entries include `source`, optional `path`, `status`, and optional `error`.
 Auth source entries can include `credentialPresent` when a non-secret probe confirms a credential item exists.
 Auth source statuses are `available`, `missing`, `invalid`, `expired`, or `skipped`.
-Auth source names are `oauth-file`, `keychain`, `auth-json`, `apps-json`, `state-vscdb`, and `cli-rpc`.
+Auth source names are `oauth-file`, `keychain`, `auth-json`, `auth-env`, `apps-json`, `state-vscdb`, and `cli-rpc`.
 
 ## Security Posture
 
@@ -247,9 +247,12 @@ Without the flag or marker, quota-axi may perform a non-secret Keychain item pre
 For Codex, it reads `$CODEX_HOME/auth.json` or `~/.codex/auth.json` before the read-only CLI fallback.
 Codex `auth.json` support is OAuth-token only; API key values such as `OPENAI_API_KEY` are treated as invalid for quota usage calls and are not sent to ChatGPT usage endpoints.
 It may run `codex -s read-only -a untrusted app-server` for Codex JSON-RPC fallback.
-For Cursor, it reads the local Cursor state database for `cursorAuth` values and calls Cursor's first-party dashboard usage endpoint.
-For GitHub Copilot, it reads the local Copilot apps auth file and calls GitHub's first-party Copilot user endpoint.
-For Grok, it reads the local Grok auth JSON and calls Grok's first-party billing endpoint.
+For Cursor, it reads `$CURSOR_STATE_DB` when set or the platform Cursor state database path, uses `sqlite3 -readonly` to read `cursorAuth` values, and calls Cursor's first-party dashboard usage endpoint.
+If `sqlite3` is unavailable, Cursor auth is reported as skipped with `sqlite3_unavailable`.
+For GitHub Copilot, it reads `$GITHUB_COPILOT_APPS_JSON` when set or the local Copilot apps auth file and calls GitHub's first-party Copilot user endpoint.
+It only sends tokens associated with public GitHub hosts to that public endpoint; host-specific GitHub Enterprise tokens are treated as unavailable there.
+For Grok, it reads `$GROK_AUTH_JSON`, inline `$GROK_AUTH`, `$GROK_AUTH_PATH`, or `$GROK_HOME/auth.json` / `~/.grok/auth.json`, selects session-scoped auth instead of API-key entries, and calls Grok's first-party billing endpoint.
+For Grok, it may read `$GROK_HOME/version.json` or package metadata near a local `grok` executable to send an `x-grok-client-version` header, but it does not launch the Grok CLI.
 It never launches the Claude CLI, so it cannot accidentally spend the quota it measures.
 
 Direct HTTP requests go only to first-party provider usage, quota, billing, or entitlement endpoints with the user's local credentials.
@@ -258,6 +261,7 @@ It never prints, logs, or caches credential values.
 The quota cache lives at `~/.cache/quota-axi/quotas.json` (or under `$XDG_CACHE_HOME/quota-axi/` when `XDG_CACHE_HOME` is set), uses `0600` file permissions, and stores normalized non-secret snapshots only.
 The Claude Keychain access marker lives alongside it as `claude-keychain-access-granted`, uses `0600` file permissions, and contains no credential material.
 Only fresh provider snapshots with windows are cached.
+Fresh provider reports with no windows clear any cached snapshot for that provider, so entitlement-only reports do not leave stale quota windows behind.
 Failed providers, stale providers, account identity, and source attempts are not cached.
 
 ## Development

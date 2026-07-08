@@ -1,6 +1,6 @@
 ---
 name: quota-axi
-description: "Report local Claude, Codex, Cursor, GitHub Copilot, and Grok quota windows via the quota-axi CLI - remaining percentages, reset times, and provider status read from local auth files, with no routing, recommendation, or provider mutation. Use before deciding whether it is safe to keep spending a provider's quota, when the user asks about usage, rate limits, or remaining quota, or when comparing local provider headroom."
+description: "Report local Claude, Codex, Cursor, GitHub Copilot, and Grok quota windows via the quota-axi CLI - remaining percentages, reset times, and provider status read from local auth sources, with no routing, recommendation, or provider mutation. Use before deciding whether it is safe to keep spending a provider's quota, when the user asks about usage, rate limits, or remaining quota, or when comparing local provider headroom."
 user-invocable: false
 author: Kun Chen (kunchenguid)
 metadata:
@@ -16,7 +16,7 @@ Report local agent-provider quota windows for routing-aware agents.
 You do not need quota-axi installed globally - invoke it with `npx -y quota-axi`.
 
 quota-axi is data only: it never routes, recommends, proxies, intercepts, logs in, imports
-browser cookies, or mutates provider state. It reads local provider auth files and calls
+browser cookies, or mutates provider state. It reads local provider auth sources and calls
 first-party provider quota, usage, billing, or entitlement endpoints; it never launches the
 Claude CLI, so it cannot spend the quota it measures.
 
@@ -67,4 +67,6 @@ examples:
   percentage equals another's.
 - The quota cache at `~/.cache/quota-axi/quotas.json` only ever holds normalized
   non-secret snapshots.
+  Fresh provider reports with no windows clear stale provider snapshots instead of caching
+  empty quota.
   The Claude Keychain access marker lives alongside it and contains no credential values.

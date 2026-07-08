@@ -1,0 +1,176 @@
+{
+  "generatedAt": "2026-07-08T17:01:28.027Z",
+  "schemaVersion": 2,
+  "providers": [
+    {
+      "provider": "cursor",
+      "label": "Cursor",
+      "source": "api",
+      "plan": "Cursor Pro",
+      "account": {
+        "email": "cursor-evidence@example.invalid"
+      },
+      "windows": [
+        {
+          "id": "included_usage",
+          "label": "included usage",
+          "kind": "monthly",
+          "percentUsed": 42,
+          "resetsAt": "2026-07-31T00:00:00.000Z",
+          "percentRemaining": 58
+        },
+        {
+          "id": "auto_usage",
+          "label": "auto usage",
+          "kind": "monthly",
+          "percentUsed": 15,
+          "resetsAt": "2026-07-31T00:00:00.000Z",
+          "percentRemaining": 85
+        },
+        {
+          "id": "api_usage",
+          "label": "API usage",
+          "kind": "monthly",
+          "percentUsed": 8,
+          "resetsAt": "2026-07-31T00:00:00.000Z",
+          "percentRemaining": 92
+        },
+        {
+          "id": "spend_limit",
+          "label": "spend limit",
+          "kind": "credits",
+          "percentUsed": 25,
+          "spentUsd": 12.5,
+          "limitUsd": 50,
+          "resetsAt": "2026-07-31T00:00:00.000Z",
+          "percentRemaining": 75
+        }
+      ],
+      "attempts": [
+        {
+          "source": "api",
+          "status": "success"
+        }
+      ],
+      "state": {
+        "status": "fresh",
+        "stale": false,
+        "refreshedAt": "2026-07-08T17:01:28.027Z",
+        "sourcesTried": [
+          "api"
+        ]
+      }
+    },
+    {
+      "provider": "copilot",
+      "label": "GitHub Copilot",
+      "source": "api",
+      "plan": "business",
+      "account": {
+        "accountId": "octo-evidence"
+      },
+      "windows": [
+        {
+          "id": "chat",
+          "label": "chat",
+          "kind": "monthly",
+          "percentUsed": 39,
+          "percentRemaining": 61,
+          "resetsAt": "2026-07-31T00:00:00.000Z"
+        },
+        {
+          "id": "completions",
+          "label": "completions",
+          "kind": "monthly",
+          "percentUsed": 16,
+          "percentRemaining": 84,
+          "resetsAt": "2026-07-31T00:00:00.000Z"
+        },
+        {
+          "id": "premium_interactions",
+          "label": "premium interactions",
+          "kind": "monthly",
+          "percentUsed": 75,
+          "percentRemaining": 25,
+          "resetsAt": "2026-07-31T00:00:00.000Z"
+        }
+      ],
+      "attempts": [
+        {
+          "source": "api",
+          "status": "success"
+        }
+      ],
+      "state": {
+        "status": "fresh",
+        "stale": false,
+        "refreshedAt": "2026-07-08T17:01:28.013Z",
+        "sourcesTried": [
+          "api"
+        ]
+      }
+    },
+    {
+      "provider": "grok",
+      "label": "Grok",
+      "source": "api",
+      "plan": "SuperGrok",
+      "account": {
+        "email": "grok-evidence@example.invalid",
+        "organization": "team-evidence"
+      },
+      "windows": [
+        {
+          "id": "credits",
+          "label": "credits",
+          "kind": "credits",
+          "percentUsed": 33,
+          "resetsAt": "2026-07-31T00:00:00.000Z",
+          "percentRemaining": 67
+        },
+        {
+          "id": "on_demand",
+          "label": "on-demand credits",
+          "kind": "credits",
+          "percentUsed": 13,
+          "percentRemaining": 87,
+          "resetsAt": "2026-07-31T00:00:00.000Z"
+        },
+        {
+          "id": "product:grok_4_heavy",
+          "label": "Grok 4 Heavy",
+          "kind": "credits",
+          "percentUsed": 50,
+          "resetsAt": "2026-07-31T00:00:00.000Z",
+          "percentRemaining": 50
+        },
+        {
+          "id": "product:voice_mode",
+          "label": "Voice Mode",
+          "kind": "credits",
+          "percentUsed": 10,
+          "resetsAt": "2026-07-31T00:00:00.000Z",
+          "percentRemaining": 90
+        }
+      ],
+      "credits": {
+        "remaining": 48,
+        "unit": "credits"
+      },
+      "attempts": [
+        {
+          "source": "api",
+          "status": "success"
+        }
+      ],
+      "state": {
+        "status": "fresh",
+        "stale": false,
+        "refreshedAt": "2026-07-08T17:01:28.014Z",
+        "sourcesTried": [
+          "api"
+        ]
+      }
+    }
+  ]
+}
