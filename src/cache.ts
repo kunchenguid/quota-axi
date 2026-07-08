@@ -41,15 +41,29 @@ export function readCachedProvider(
 }
 
 export function writeCachedProviders(providers: ProviderQuota[]): void {
+  const clearProviders = new Set(
+    providers
+      .filter(
+        (provider) =>
+          provider.state.status === "fresh" && provider.windows.length === 0,
+      )
+      .map((provider) => provider.provider),
+  );
   const cacheable = providers
     .map(toCacheProvider)
     .filter((provider): provider is ProviderQuota => Boolean(provider));
-  if (cacheable.length === 0) return;
 
   const file = cacheFilePath();
   const byProvider = new Map<ProviderId, ProviderQuota>();
-  for (const provider of readCacheProviders())
+  let clearedExisting = false;
+  for (const provider of readCacheProviders()) {
+    if (clearProviders.has(provider.provider)) {
+      clearedExisting = true;
+      continue;
+    }
     byProvider.set(provider.provider, provider);
+  }
+  if (cacheable.length === 0 && !clearedExisting) return;
   for (const provider of cacheable) byProvider.set(provider.provider, provider);
   const merged = PROVIDER_IDS.map((provider) =>
     byProvider.get(provider),

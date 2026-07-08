@@ -82,12 +82,13 @@ export async function fetchQuota(
       if (error instanceof RateLimitError) retryAfter = error.retryAfter;
     }
   } else {
+    const error = cursorCredentialError(credentialState);
     attempts.push({
       source: credentialState.source.source,
       status: "skipped",
-      error: `credentials_${credentialState.status}`,
+      error,
     });
-    finalError = "Cursor sign-in required";
+    finalError = cursorFinalError(credentialState, error);
   }
 
   const cached = readCachedProvider("cursor");
@@ -397,6 +398,21 @@ function sqliteErrorMessage(error: unknown): string {
   return /no such file|unable to open database/i.test(message)
     ? "credentials_missing"
     : "sqlite_read_error";
+}
+
+function cursorCredentialError(
+  state: Exclude<CredentialState, { status: "available" }>,
+): string {
+  return state.source.error ?? `credentials_${state.status}`;
+}
+
+function cursorFinalError(
+  state: Exclude<CredentialState, { status: "available" }>,
+  error: string,
+): string {
+  return state.status === "missing" || error === "credentials_missing"
+    ? "Cursor sign-in required"
+    : error;
 }
 
 function errorMessage(error: unknown): string {

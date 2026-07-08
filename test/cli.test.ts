@@ -271,7 +271,7 @@ describe("CLI quota rendering", () => {
     const chunks: string[] = [];
 
     await main({
-      argv: ["--json"],
+      argv: ["--provider", "claude,codex", "--json"],
       binPath: "quota-axi",
       stdout: {
         write(chunk) {

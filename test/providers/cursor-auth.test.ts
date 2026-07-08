@@ -44,4 +44,42 @@ describe("Cursor credential-state reporting", () => {
       error: "credentials_missing",
     });
   });
+
+  it("preserves skipped sqlite discovery failures", async () => {
+    vi.doMock("../../src/lib/process.js", () => ({
+      commandExists: vi.fn(async () => false),
+      execFileText: vi.fn(),
+    }));
+
+    const { fetchQuota } = await import("../../src/providers/cursor.js");
+    const result = await fetchQuota({ allowKeychainPrompt: false });
+
+    expect(result.state.status).toBe("error");
+    expect(result.state.error).toBe("sqlite3_unavailable");
+    expect(result.attempts).toContainEqual({
+      source: "state-vscdb",
+      status: "skipped",
+      error: "sqlite3_unavailable",
+    });
+  });
+
+  it("preserves sqlite read errors", async () => {
+    vi.doMock("../../src/lib/process.js", () => ({
+      commandExists: vi.fn(async () => true),
+      execFileText: vi.fn(async () => {
+        throw new Error("SQLITE_ERROR: database is locked");
+      }),
+    }));
+
+    const { fetchQuota } = await import("../../src/providers/cursor.js");
+    const result = await fetchQuota({ allowKeychainPrompt: false });
+
+    expect(result.state.status).toBe("error");
+    expect(result.state.error).toBe("sqlite_read_error");
+    expect(result.attempts).toContainEqual({
+      source: "state-vscdb",
+      status: "skipped",
+      error: "sqlite_read_error",
+    });
+  });
 });
