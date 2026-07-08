@@ -1,423 +1,656 @@
 <!doctype html>
 <html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>README Output Model and Security Posture Rendering</title>
-<style>
-:root {
-  color-scheme: light;
-  --fg: #1f2328;
-  --muted: #59636e;
-  --border: #d1d9e0;
-  --bg: #ffffff;
-  --subtle: #f6f8fa;
-  --accent: #0969da;
-  --ok: #1a7f37;
-}
-* { box-sizing: border-box; }
-body {
-  margin: 0;
-  background: var(--subtle);
-  color: var(--fg);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
-  font-size: 16px;
-  line-height: 1.5;
-}
-.page {
-  max-width: 1040px;
-  margin: 32px auto;
-  padding: 0 20px 40px;
-}
-.evidence-header {
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 16px 20px;
-  margin-bottom: 16px;
-}
-.evidence-header h1 {
-  margin: 0 0 8px;
-  font-size: 22px;
-  line-height: 1.25;
-}
-.evidence-header p {
-  margin: 0;
-  color: var(--muted);
-}
-.badges {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 12px;
-}
-.badge {
-  display: inline-flex;
-  align-items: center;
-  border: 1px solid #b7e1c0;
-  background: #dafbe1;
-  color: var(--ok);
-  border-radius: 999px;
-  padding: 4px 10px;
-  font-size: 13px;
-  font-weight: 600;
-}
-.markdown-body {
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 32px;
-  overflow: auto;
-}
-.markdown-body h2 {
-  margin: 28px 0 16px;
-  padding-bottom: 0.3em;
-  border-bottom: 1px solid var(--border);
-  font-size: 1.5em;
-}
-.markdown-body h2:first-child { margin-top: 0; }
-.markdown-body h3 {
-  margin: 24px 0 12px;
-  font-size: 1.25em;
-}
-.markdown-body p { margin: 0 0 16px; }
-.markdown-body ul { margin: 0 0 16px; padding-left: 2em; }
-.markdown-body li + li { margin-top: 0.25em; }
-.markdown-body table {
-  display: block;
-  width: 100%;
-  overflow-x: auto;
-  border-spacing: 0;
-  border-collapse: collapse;
-  margin: 0 0 16px;
-}
-.markdown-body th,
-.markdown-body td {
-  padding: 6px 13px;
-  border: 1px solid var(--border);
-  vertical-align: top;
-}
-.markdown-body tr:nth-child(2n) { background: var(--subtle); }
-.markdown-body th { font-weight: 600; background: var(--subtle); }
-.markdown-body code {
-  padding: 0.2em 0.4em;
-  background: rgba(175, 184, 193, 0.2);
-  border-radius: 6px;
-  font-family: ui-monospace, SFMono-Regular, SFMono, Menlo, Consolas, "Liberation Mono", monospace;
-  font-size: 85%;
-}
-@media (max-width: 760px) {
-  .page { margin: 16px auto; padding: 0 12px 24px; }
-  .markdown-body { padding: 20px; }
-}
-</style>
-</head>
-<body>
-<main class="page">
-  <section class="evidence-header" aria-label="Validation summary">
-    <h1>Rendered README target sections</h1>
-    <p>GFM rendering of <strong>Output Model</strong> and <strong>Security Posture</strong> at target commit <code>8c68b793f174</code>.</p>
-    <div class="badges">
-      <span class="badge">9 tables</span>
-      <span class="badge">10 subsections</span>
-      <span class="badge">16 bullets</span>
-      <span class="badge">146 original code spans preserved</span>
-    </div>
-  </section>
-  <article class="markdown-body">
-<h2>Output Model</h2>
-<p><code>--json</code> emits <code>schemaVersion: 2</code>.</p>
-<h3>Quota report shape</h3>
-<table>
-<thead>
-<tr>
-<th>Object</th>
-<th>Fields</th>
-</tr>
-</thead>
-<tbody><tr>
-<td>Quota report</td>
-<td><code>providers</code></td>
-</tr>
-<tr>
-<td>Provider report</td>
-<td><code>provider</code>, <code>label</code>, <code>source</code>, <code>windows</code>, <code>state</code>, optional <code>plan</code>, and optional <code>credits</code></td>
-</tr>
-<tr>
-<td>Provider report with <code>--full</code></td>
-<td>Optional <code>account</code> identity and per-source <code>attempts</code></td>
-</tr>
-</tbody></table>
-<p>Account identity and per-source <code>attempts</code> are omitted unless <code>--full</code> is passed.</p>
-<h3>Provider <code>state</code></h3>
-<table>
-<thead>
-<tr>
-<th>Field</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody><tr>
-<td><code>status</code></td>
-<td>Provider status</td>
-</tr>
-<tr>
-<td><code>stale</code></td>
-<td>Whether the provider report is stale</td>
-</tr>
-<tr>
-<td><code>sourcesTried</code></td>
-<td>Sources tried for the provider</td>
-</tr>
-<tr>
-<td><code>refreshedAt</code></td>
-<td>Optional refresh timestamp</td>
-</tr>
-<tr>
-<td><code>error</code></td>
-<td>Optional error</td>
-</tr>
-<tr>
-<td><code>retryAfter</code></td>
-<td>Optional retry-after state</td>
-</tr>
-<tr>
-<td><code>reason</code></td>
-<td>Optional reason</td>
-</tr>
-<tr>
-<td><code>remedyCommand</code></td>
-<td>Optional remedy command</td>
-</tr>
-</tbody></table>
-<p>When stale or unavailable quota is likely fixable by a one-time macOS Keychain grant, <code>state.reason</code> is <code>keychain_access_required</code>, <code>state.remedyCommand</code> is <code>quota-axi --allow-keychain-prompt</code>, and JSON includes an agent-directed <code>help</code> entry.
-Default TOON output includes the same condition in an <code>advice</code> block with <code>provider</code>, <code>reason</code>, and <code>remedyCommand</code>, plus the agent-directed help line.</p>
-<h3>Quota windows</h3>
-<table>
-<thead>
-<tr>
-<th>Field set</th>
-<th>Fields</th>
-</tr>
-</thead>
-<tbody><tr>
-<td>Required</td>
-<td><code>id</code>, <code>label</code>, <code>kind</code></td>
-</tr>
-<tr>
-<td>Optional</td>
-<td>Percentages, reset fields, <code>windowSeconds</code>, and credit-spend fields</td>
-</tr>
-</tbody></table>
-<h3>Quota enums</h3>
-<table>
-<thead>
-<tr>
-<th>Name</th>
-<th>Values</th>
-</tr>
-</thead>
-<tbody><tr>
-<td>Provider statuses</td>
-<td><code>fresh</code>, <code>stale</code>, <code>unavailable</code>, <code>auth_required</code>, <code>rate_limited</code>, or <code>error</code></td>
-</tr>
-<tr>
-<td>Provider sources</td>
-<td><code>oauth</code>, <code>cli-rpc</code>, <code>api</code>, <code>web</code>, <code>cache</code>, or <code>unavailable</code></td>
-</tr>
-<tr>
-<td>Current provider adapter sources</td>
-<td><code>oauth</code>, <code>cli-rpc</code>, <code>api</code>, <code>cache</code>, and <code>unavailable</code></td>
-</tr>
-<tr>
-<td>Window kinds</td>
-<td><code>session</code>, <code>weekly</code>, <code>monthly</code>, <code>model</code>, <code>credits</code>, or <code>unknown</code></td>
-</tr>
-<tr>
-<td>Source attempt statuses</td>
-<td><code>success</code>, <code>failed</code>, or <code>skipped</code></td>
-</tr>
-</tbody></table>
-<p>Source attempts can include <code>credentialPresent</code> when a non-secret probe confirms a credential item exists.</p>
-<h3>Provider windows</h3>
-<table>
-<thead>
-<tr>
-<th>Provider</th>
-<th>Windows and capabilities</th>
-</tr>
-</thead>
-<tbody><tr>
-<td>Claude</td>
-<td>Can report <code>five_hour</code>, <code>seven_day</code>, optional <code>seven_day_opus</code>, and optional <code>extra_usage</code> windows.</td>
-</tr>
-<tr>
-<td>Claude scoped <code>limits</code></td>
-<td>When the account&#39;s usage response includes a scoped <code>limits</code> list, quota-axi surfaces every active window it describes instead, including model-scoped ones (e.g. Fable) as a <code>model:&lt;slug&gt;</code> window.</td>
-</tr>
-<tr>
-<td>Codex</td>
-<td>Can report <code>five_hour</code> and <code>weekly</code> windows plus optional credit balance data, plus any additional model- or feature-scoped rate limits the account has as <code>model:&lt;id&gt;:5h</code> / <code>model:&lt;id&gt;:7d</code> windows, and an optional code-review rate limit as <code>code_review_five_hour</code> / <code>code_review_weekly</code>.</td>
-</tr>
-<tr>
-<td>Cursor</td>
-<td>Can report <code>included_usage</code>, <code>auto_usage</code>, <code>api_usage</code>, and optional <code>spend_limit</code> windows.</td>
-</tr>
-<tr>
-<td>GitHub Copilot</td>
-<td>Can report quota snapshot windows such as <code>chat</code>, <code>completions</code>, and <code>premium_interactions</code>; when the first-party endpoint exposes entitlement but no numeric quota windows, quota-axi reports a fresh provider state with an empty <code>windows</code> list rather than inventing percentages.</td>
-</tr>
-<tr>
-<td>Grok</td>
-<td>Can report <code>credits</code>, optional <code>on_demand</code>, and optional product-scoped <code>product:&lt;slug&gt;</code> windows.</td>
-</tr>
-<tr>
-<td>Grok current period only</td>
-<td>If Grok&#39;s billing response only exposes the current billing period and prepaid balance, quota-axi reports a fresh <code>credits</code> window with <code>resetsAt</code> and <code>credits.remaining</code> but no usage percentage.</td>
-</tr>
-</tbody></table>
-<h3><code>auth --json</code> shape</h3>
-<table>
-<thead>
-<tr>
-<th>Object</th>
-<th>Fields</th>
-</tr>
-</thead>
-<tbody><tr>
-<td>Auth report</td>
-<td><code>generatedAt</code>, <code>schemaVersion: 1</code>, and <code>auth</code></td>
-</tr>
-<tr>
-<td>Provider auth report</td>
-<td><code>provider</code> and <code>sources</code></td>
-</tr>
-<tr>
-<td>Auth source entry</td>
-<td><code>source</code>, optional <code>path</code>, <code>status</code>, and optional <code>error</code></td>
-</tr>
-</tbody></table>
-<p>Auth source entries can include <code>credentialPresent</code> when a non-secret probe confirms a credential item exists.</p>
-<table>
-<thead>
-<tr>
-<th>Name</th>
-<th>Values</th>
-</tr>
-</thead>
-<tbody><tr>
-<td>Auth source statuses</td>
-<td><code>available</code>, <code>missing</code>, <code>invalid</code>, <code>expired</code>, or <code>skipped</code></td>
-</tr>
-<tr>
-<td>Auth source names</td>
-<td><code>oauth-file</code>, <code>keychain</code>, <code>auth-json</code>, <code>auth-env</code>, <code>apps-json</code>, <code>state-vscdb</code>, and <code>cli-rpc</code></td>
-</tr>
-</tbody></table>
-<h2>Security Posture</h2>
-<h3>Provider credential sources</h3>
-<table>
-<thead>
-<tr>
-<th>Provider</th>
-<th>Credential sources read</th>
-</tr>
-</thead>
-<tbody><tr>
-<td>Claude</td>
-<td><code>~/.claude/.credentials.json</code>; on macOS, the <code>Claude Code-credentials</code> Keychain value with <code>--allow-keychain-prompt</code> or, after a non-secret access marker exists, on plain calls</td>
-</tr>
-<tr>
-<td>Codex</td>
-<td><code>$CODEX_HOME/auth.json</code> or <code>~/.codex/auth.json</code> before the read-only CLI fallback</td>
-</tr>
-<tr>
-<td>Cursor</td>
-<td><code>$CURSOR_STATE_DB</code> when set or the platform Cursor state database path</td>
-</tr>
-<tr>
-<td>GitHub Copilot</td>
-<td><code>$GITHUB_COPILOT_APPS_JSON</code> when set or the local Copilot apps auth file</td>
-</tr>
-<tr>
-<td>Grok</td>
-<td><code>$GROK_AUTH_JSON</code>, inline <code>$GROK_AUTH</code>, <code>$GROK_AUTH_PATH</code>, or <code>$GROK_HOME/auth.json</code> / <code>~/.grok/auth.json</code></td>
-</tr>
-</tbody></table>
-<h3>Provider notes</h3>
-<p><strong>Claude</strong></p>
-<ul>
-<li>quota-axi records the non-secret access marker after any successful Keychain value read.</li>
-<li>When that marker exists, plain calls read the Keychain value again so an already-approved &quot;Always Allow&quot; grant keeps live Claude quota fresh.</li>
-<li>Without the flag or marker, quota-axi may perform a non-secret Keychain item presence check so it only suggests Keychain access when a Claude credential item exists.</li>
-</ul>
-<p><strong>Codex</strong></p>
-<ul>
-<li>Codex <code>auth.json</code> support is OAuth-token only; API key values such as <code>OPENAI_API_KEY</code> are treated as invalid for quota usage calls and are not sent to ChatGPT usage endpoints.</li>
-<li>It may run <code>codex -s read-only -a untrusted app-server</code> for Codex JSON-RPC fallback.</li>
-</ul>
-<p><strong>Cursor</strong></p>
-<ul>
-<li>It uses <code>sqlite3 -readonly</code> to read <code>cursorAuth</code> values and calls Cursor&#39;s first-party dashboard usage endpoint.</li>
-<li>If <code>sqlite3</code> is unavailable, Cursor auth is reported as skipped with <code>sqlite3_unavailable</code>.</li>
-</ul>
-<p><strong>GitHub Copilot</strong></p>
-<ul>
-<li>It calls GitHub&#39;s first-party Copilot user endpoint.</li>
-<li>It only sends tokens associated with public GitHub hosts to that public endpoint; host-specific GitHub Enterprise tokens are treated as unavailable there.</li>
-</ul>
-<p><strong>Grok</strong></p>
-<ul>
-<li>It selects session-scoped auth instead of API-key entries and calls Grok&#39;s first-party billing endpoint.</li>
-<li>Session-scoped Grok auth includes web/session scopes and OIDC records scoped to <code>auth.x.ai</code> with <code>auth_mode</code> or <code>authMode</code> set to <code>oidc</code>, including scope keys with <code>::&lt;client id&gt;</code> suffixes.</li>
-<li>It may read <code>$GROK_HOME/version.json</code> or package metadata near a local <code>grok</code> executable to send an <code>x-grok-client-version</code> header, but it does not launch the Grok CLI.</li>
-</ul>
-<h3>Safety guarantees</h3>
-<ul>
-<li>Direct HTTP requests go only to first-party provider usage, quota, billing, or entitlement endpoints with the user&#39;s local credentials.</li>
-<li>It sends credential values only to the first-party provider request they authenticate.</li>
-<li>It never prints, logs, or caches credential values.</li>
-<li>It never launches the Claude CLI, so it cannot accidentally spend the quota it measures.</li>
-</ul>
-<h3>Cache</h3>
-<table>
-<thead>
-<tr>
-<th>Item</th>
-<th>Behavior</th>
-</tr>
-</thead>
-<tbody><tr>
-<td>Quota cache</td>
-<td>Lives at <code>~/.cache/quota-axi/quotas.json</code> or under <code>$XDG_CACHE_HOME/quota-axi/</code> when <code>XDG_CACHE_HOME</code> is set.</td>
-</tr>
-<tr>
-<td>Quota cache permissions</td>
-<td>Uses <code>0600</code> file permissions.</td>
-</tr>
-<tr>
-<td>Quota cache contents</td>
-<td>Stores normalized non-secret snapshots only.</td>
-</tr>
-<tr>
-<td>Claude Keychain access marker</td>
-<td>Lives alongside the quota cache as <code>claude-keychain-access-granted</code>, uses <code>0600</code> file permissions, and contains no credential material.</td>
-</tr>
-<tr>
-<td>Cached reports</td>
-<td>Only fresh provider snapshots with windows are cached.</td>
-</tr>
-<tr>
-<td>Fresh provider reports with no windows</td>
-<td>Clear any cached snapshot for that provider, so entitlement-only reports do not leave stale quota windows behind.</td>
-</tr>
-<tr>
-<td>Reports and details not cached</td>
-<td>Failed providers, stale providers, account identity, and source attempts are not cached.</td>
-</tr>
-</tbody></table>
-
-  </article>
-</main>
-</body>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>README Output Model and Security Posture Rendering</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --fg: #1f2328;
+        --muted: #59636e;
+        --border: #d1d9e0;
+        --bg: #ffffff;
+        --subtle: #f6f8fa;
+        --accent: #0969da;
+        --ok: #1a7f37;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--subtle);
+        color: var(--fg);
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial,
+          sans-serif;
+        font-size: 16px;
+        line-height: 1.5;
+      }
+      .page {
+        max-width: 1040px;
+        margin: 32px auto;
+        padding: 0 20px 40px;
+      }
+      .evidence-header {
+        background: var(--bg);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 16px 20px;
+        margin-bottom: 16px;
+      }
+      .evidence-header h1 {
+        margin: 0 0 8px;
+        font-size: 22px;
+        line-height: 1.25;
+      }
+      .evidence-header p {
+        margin: 0;
+        color: var(--muted);
+      }
+      .badges {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 12px;
+      }
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        border: 1px solid #b7e1c0;
+        background: #dafbe1;
+        color: var(--ok);
+        border-radius: 999px;
+        padding: 4px 10px;
+        font-size: 13px;
+        font-weight: 600;
+      }
+      .markdown-body {
+        background: var(--bg);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 32px;
+        overflow: auto;
+      }
+      .markdown-body h2 {
+        margin: 28px 0 16px;
+        padding-bottom: 0.3em;
+        border-bottom: 1px solid var(--border);
+        font-size: 1.5em;
+      }
+      .markdown-body h2:first-child {
+        margin-top: 0;
+      }
+      .markdown-body h3 {
+        margin: 24px 0 12px;
+        font-size: 1.25em;
+      }
+      .markdown-body p {
+        margin: 0 0 16px;
+      }
+      .markdown-body ul {
+        margin: 0 0 16px;
+        padding-left: 2em;
+      }
+      .markdown-body li + li {
+        margin-top: 0.25em;
+      }
+      .markdown-body table {
+        display: block;
+        width: 100%;
+        overflow-x: auto;
+        border-spacing: 0;
+        border-collapse: collapse;
+        margin: 0 0 16px;
+      }
+      .markdown-body th,
+      .markdown-body td {
+        padding: 6px 13px;
+        border: 1px solid var(--border);
+        vertical-align: top;
+      }
+      .markdown-body tr:nth-child(2n) {
+        background: var(--subtle);
+      }
+      .markdown-body th {
+        font-weight: 600;
+        background: var(--subtle);
+      }
+      .markdown-body code {
+        padding: 0.2em 0.4em;
+        background: rgba(175, 184, 193, 0.2);
+        border-radius: 6px;
+        font-family:
+          ui-monospace, SFMono-Regular, SFMono, Menlo, Consolas,
+          "Liberation Mono", monospace;
+        font-size: 85%;
+      }
+      @media (max-width: 760px) {
+        .page {
+          margin: 16px auto;
+          padding: 0 12px 24px;
+        }
+        .markdown-body {
+          padding: 20px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="page">
+      <section class="evidence-header" aria-label="Validation summary">
+        <h1>Rendered README target sections</h1>
+        <p>
+          GFM rendering of <strong>Output Model</strong> and
+          <strong>Security Posture</strong> at target commit
+          <code>8c68b793f174</code>.
+        </p>
+        <div class="badges">
+          <span class="badge">9 tables</span>
+          <span class="badge">10 subsections</span>
+          <span class="badge">16 bullets</span>
+          <span class="badge">146 original code spans preserved</span>
+        </div>
+      </section>
+      <article class="markdown-body">
+        <h2>Output Model</h2>
+        <p><code>--json</code> emits <code>schemaVersion: 2</code>.</p>
+        <h3>Quota report shape</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>Object</th>
+              <th>Fields</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Quota report</td>
+              <td><code>providers</code></td>
+            </tr>
+            <tr>
+              <td>Provider report</td>
+              <td>
+                <code>provider</code>, <code>label</code>, <code>source</code>,
+                <code>windows</code>, <code>state</code>, optional
+                <code>plan</code>, and optional <code>credits</code>
+              </td>
+            </tr>
+            <tr>
+              <td>Provider report with <code>--full</code></td>
+              <td>
+                Optional <code>account</code> identity and per-source
+                <code>attempts</code>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <p>
+          Account identity and per-source <code>attempts</code> are omitted
+          unless <code>--full</code> is passed.
+        </p>
+        <h3>Provider <code>state</code></h3>
+        <table>
+          <thead>
+            <tr>
+              <th>Field</th>
+              <th>Description</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>status</code></td>
+              <td>Provider status</td>
+            </tr>
+            <tr>
+              <td><code>stale</code></td>
+              <td>Whether the provider report is stale</td>
+            </tr>
+            <tr>
+              <td><code>sourcesTried</code></td>
+              <td>Sources tried for the provider</td>
+            </tr>
+            <tr>
+              <td><code>refreshedAt</code></td>
+              <td>Optional refresh timestamp</td>
+            </tr>
+            <tr>
+              <td><code>error</code></td>
+              <td>Optional error</td>
+            </tr>
+            <tr>
+              <td><code>retryAfter</code></td>
+              <td>Optional retry-after state</td>
+            </tr>
+            <tr>
+              <td><code>reason</code></td>
+              <td>Optional reason</td>
+            </tr>
+            <tr>
+              <td><code>remedyCommand</code></td>
+              <td>Optional remedy command</td>
+            </tr>
+          </tbody>
+        </table>
+        <p>
+          When stale or unavailable quota is likely fixable by a one-time macOS
+          Keychain grant, <code>state.reason</code> is
+          <code>keychain_access_required</code>,
+          <code>state.remedyCommand</code> is
+          <code>quota-axi --allow-keychain-prompt</code>, and JSON includes an
+          agent-directed <code>help</code> entry. Default TOON output includes
+          the same condition in an <code>advice</code> block with
+          <code>provider</code>, <code>reason</code>, and
+          <code>remedyCommand</code>, plus the agent-directed help line.
+        </p>
+        <h3>Quota windows</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>Field set</th>
+              <th>Fields</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Required</td>
+              <td><code>id</code>, <code>label</code>, <code>kind</code></td>
+            </tr>
+            <tr>
+              <td>Optional</td>
+              <td>
+                Percentages, reset fields, <code>windowSeconds</code>, and
+                credit-spend fields
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <h3>Quota enums</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Values</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Provider statuses</td>
+              <td>
+                <code>fresh</code>, <code>stale</code>,
+                <code>unavailable</code>, <code>auth_required</code>,
+                <code>rate_limited</code>, or <code>error</code>
+              </td>
+            </tr>
+            <tr>
+              <td>Provider sources</td>
+              <td>
+                <code>oauth</code>, <code>cli-rpc</code>, <code>api</code>,
+                <code>web</code>, <code>cache</code>, or
+                <code>unavailable</code>
+              </td>
+            </tr>
+            <tr>
+              <td>Current provider adapter sources</td>
+              <td>
+                <code>oauth</code>, <code>cli-rpc</code>, <code>api</code>,
+                <code>cache</code>, and <code>unavailable</code>
+              </td>
+            </tr>
+            <tr>
+              <td>Window kinds</td>
+              <td>
+                <code>session</code>, <code>weekly</code>, <code>monthly</code>,
+                <code>model</code>, <code>credits</code>, or
+                <code>unknown</code>
+              </td>
+            </tr>
+            <tr>
+              <td>Source attempt statuses</td>
+              <td>
+                <code>success</code>, <code>failed</code>, or
+                <code>skipped</code>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <p>
+          Source attempts can include <code>credentialPresent</code> when a
+          non-secret probe confirms a credential item exists.
+        </p>
+        <h3>Provider windows</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>Provider</th>
+              <th>Windows and capabilities</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Claude</td>
+              <td>
+                Can report <code>five_hour</code>, <code>seven_day</code>,
+                optional <code>seven_day_opus</code>, and optional
+                <code>extra_usage</code> windows.
+              </td>
+            </tr>
+            <tr>
+              <td>Claude scoped <code>limits</code></td>
+              <td>
+                When the account&#39;s usage response includes a scoped
+                <code>limits</code> list, quota-axi surfaces every active window
+                it describes instead, including model-scoped ones (e.g. Fable)
+                as a <code>model:&lt;slug&gt;</code> window.
+              </td>
+            </tr>
+            <tr>
+              <td>Codex</td>
+              <td>
+                Can report <code>five_hour</code> and
+                <code>weekly</code> windows plus optional credit balance data,
+                plus any additional model- or feature-scoped rate limits the
+                account has as <code>model:&lt;id&gt;:5h</code> /
+                <code>model:&lt;id&gt;:7d</code> windows, and an optional
+                code-review rate limit as <code>code_review_five_hour</code> /
+                <code>code_review_weekly</code>.
+              </td>
+            </tr>
+            <tr>
+              <td>Cursor</td>
+              <td>
+                Can report <code>included_usage</code>, <code>auto_usage</code>,
+                <code>api_usage</code>, and optional
+                <code>spend_limit</code> windows.
+              </td>
+            </tr>
+            <tr>
+              <td>GitHub Copilot</td>
+              <td>
+                Can report quota snapshot windows such as <code>chat</code>,
+                <code>completions</code>, and <code>premium_interactions</code>;
+                when the first-party endpoint exposes entitlement but no numeric
+                quota windows, quota-axi reports a fresh provider state with an
+                empty <code>windows</code> list rather than inventing
+                percentages.
+              </td>
+            </tr>
+            <tr>
+              <td>Grok</td>
+              <td>
+                Can report <code>credits</code>, optional
+                <code>on_demand</code>, and optional product-scoped
+                <code>product:&lt;slug&gt;</code> windows.
+              </td>
+            </tr>
+            <tr>
+              <td>Grok current period only</td>
+              <td>
+                If Grok&#39;s billing response only exposes the current billing
+                period and prepaid balance, quota-axi reports a fresh
+                <code>credits</code> window with <code>resetsAt</code> and
+                <code>credits.remaining</code> but no usage percentage.
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <h3><code>auth --json</code> shape</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>Object</th>
+              <th>Fields</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Auth report</td>
+              <td>
+                <code>generatedAt</code>, <code>schemaVersion: 1</code>, and
+                <code>auth</code>
+              </td>
+            </tr>
+            <tr>
+              <td>Provider auth report</td>
+              <td><code>provider</code> and <code>sources</code></td>
+            </tr>
+            <tr>
+              <td>Auth source entry</td>
+              <td>
+                <code>source</code>, optional <code>path</code>,
+                <code>status</code>, and optional <code>error</code>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <p>
+          Auth source entries can include <code>credentialPresent</code> when a
+          non-secret probe confirms a credential item exists.
+        </p>
+        <table>
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Values</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Auth source statuses</td>
+              <td>
+                <code>available</code>, <code>missing</code>,
+                <code>invalid</code>, <code>expired</code>, or
+                <code>skipped</code>
+              </td>
+            </tr>
+            <tr>
+              <td>Auth source names</td>
+              <td>
+                <code>oauth-file</code>, <code>keychain</code>,
+                <code>auth-json</code>, <code>auth-env</code>,
+                <code>apps-json</code>, <code>state-vscdb</code>, and
+                <code>cli-rpc</code>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <h2>Security Posture</h2>
+        <h3>Provider credential sources</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>Provider</th>
+              <th>Credential sources read</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Claude</td>
+              <td>
+                <code>~/.claude/.credentials.json</code>; on macOS, the
+                <code>Claude Code-credentials</code> Keychain value with
+                <code>--allow-keychain-prompt</code> or, after a non-secret
+                access marker exists, on plain calls
+              </td>
+            </tr>
+            <tr>
+              <td>Codex</td>
+              <td>
+                <code>$CODEX_HOME/auth.json</code> or
+                <code>~/.codex/auth.json</code> before the read-only CLI
+                fallback
+              </td>
+            </tr>
+            <tr>
+              <td>Cursor</td>
+              <td>
+                <code>$CURSOR_STATE_DB</code> when set or the platform Cursor
+                state database path
+              </td>
+            </tr>
+            <tr>
+              <td>GitHub Copilot</td>
+              <td>
+                <code>$GITHUB_COPILOT_APPS_JSON</code> when set or the local
+                Copilot apps auth file
+              </td>
+            </tr>
+            <tr>
+              <td>Grok</td>
+              <td>
+                <code>$GROK_AUTH_JSON</code>, inline <code>$GROK_AUTH</code>,
+                <code>$GROK_AUTH_PATH</code>, or
+                <code>$GROK_HOME/auth.json</code> /
+                <code>~/.grok/auth.json</code>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <h3>Provider notes</h3>
+        <p><strong>Claude</strong></p>
+        <ul>
+          <li>
+            quota-axi records the non-secret access marker after any successful
+            Keychain value read.
+          </li>
+          <li>
+            When that marker exists, plain calls read the Keychain value again
+            so an already-approved &quot;Always Allow&quot; grant keeps live
+            Claude quota fresh.
+          </li>
+          <li>
+            Without the flag or marker, quota-axi may perform a non-secret
+            Keychain item presence check so it only suggests Keychain access
+            when a Claude credential item exists.
+          </li>
+        </ul>
+        <p><strong>Codex</strong></p>
+        <ul>
+          <li>
+            Codex <code>auth.json</code> support is OAuth-token only; API key
+            values such as <code>OPENAI_API_KEY</code> are treated as invalid
+            for quota usage calls and are not sent to ChatGPT usage endpoints.
+          </li>
+          <li>
+            It may run
+            <code>codex -s read-only -a untrusted app-server</code> for Codex
+            JSON-RPC fallback.
+          </li>
+        </ul>
+        <p><strong>Cursor</strong></p>
+        <ul>
+          <li>
+            It uses <code>sqlite3 -readonly</code> to read
+            <code>cursorAuth</code> values and calls Cursor&#39;s first-party
+            dashboard usage endpoint.
+          </li>
+          <li>
+            If <code>sqlite3</code> is unavailable, Cursor auth is reported as
+            skipped with <code>sqlite3_unavailable</code>.
+          </li>
+        </ul>
+        <p><strong>GitHub Copilot</strong></p>
+        <ul>
+          <li>It calls GitHub&#39;s first-party Copilot user endpoint.</li>
+          <li>
+            It only sends tokens associated with public GitHub hosts to that
+            public endpoint; host-specific GitHub Enterprise tokens are treated
+            as unavailable there.
+          </li>
+        </ul>
+        <p><strong>Grok</strong></p>
+        <ul>
+          <li>
+            It selects session-scoped auth instead of API-key entries and calls
+            Grok&#39;s first-party billing endpoint.
+          </li>
+          <li>
+            Session-scoped Grok auth includes web/session scopes and OIDC
+            records scoped to <code>auth.x.ai</code> with
+            <code>auth_mode</code> or <code>authMode</code> set to
+            <code>oidc</code>, including scope keys with
+            <code>::&lt;client id&gt;</code> suffixes.
+          </li>
+          <li>
+            It may read <code>$GROK_HOME/version.json</code> or package metadata
+            near a local <code>grok</code> executable to send an
+            <code>x-grok-client-version</code> header, but it does not launch
+            the Grok CLI.
+          </li>
+        </ul>
+        <h3>Safety guarantees</h3>
+        <ul>
+          <li>
+            Direct HTTP requests go only to first-party provider usage, quota,
+            billing, or entitlement endpoints with the user&#39;s local
+            credentials.
+          </li>
+          <li>
+            It sends credential values only to the first-party provider request
+            they authenticate.
+          </li>
+          <li>It never prints, logs, or caches credential values.</li>
+          <li>
+            It never launches the Claude CLI, so it cannot accidentally spend
+            the quota it measures.
+          </li>
+        </ul>
+        <h3>Cache</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>Item</th>
+              <th>Behavior</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Quota cache</td>
+              <td>
+                Lives at <code>~/.cache/quota-axi/quotas.json</code> or under
+                <code>$XDG_CACHE_HOME/quota-axi/</code> when
+                <code>XDG_CACHE_HOME</code> is set.
+              </td>
+            </tr>
+            <tr>
+              <td>Quota cache permissions</td>
+              <td>Uses <code>0600</code> file permissions.</td>
+            </tr>
+            <tr>
+              <td>Quota cache contents</td>
+              <td>Stores normalized non-secret snapshots only.</td>
+            </tr>
+            <tr>
+              <td>Claude Keychain access marker</td>
+              <td>
+                Lives alongside the quota cache as
+                <code>claude-keychain-access-granted</code>, uses
+                <code>0600</code> file permissions, and contains no credential
+                material.
+              </td>
+            </tr>
+            <tr>
+              <td>Cached reports</td>
+              <td>Only fresh provider snapshots with windows are cached.</td>
+            </tr>
+            <tr>
+              <td>Fresh provider reports with no windows</td>
+              <td>
+                Clear any cached snapshot for that provider, so entitlement-only
+                reports do not leave stale quota windows behind.
+              </td>
+            </tr>
+            <tr>
+              <td>Reports and details not cached</td>
+              <td>
+                Failed providers, stale providers, account identity, and source
+                attempts are not cached.
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </article>
+    </main>
+  </body>
 </html>

@@ -1,9 +1,7 @@
 {
   "base": "615bfc2f0db08b8521c33c1de46bf2c43206cf98",
   "target": "8c68b793f1740c1c94464a7b1fc080fdfb394a4f",
-  "changedFiles": [
-    "README.md"
-  ],
+  "changedFiles": ["README.md"],
   "sectionBounds": {
     "comparedStartHeading": "## Output Model",
     "comparedEndHeadingExclusive": "## Development"
@@ -59,9 +57,7 @@
     {
       "id": "schema-v2",
       "label": "Quota JSON schema version 2 is retained",
-      "required": [
-        "`schemaVersion: 2`"
-      ],
+      "required": ["`schemaVersion: 2`"],
       "pass": true,
       "missing": []
     },

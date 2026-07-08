@@ -133,4 +133,3 @@ Auth source entries can include `credentialPresent` when a non-secret probe conf
 | Cached reports                         | Only fresh provider snapshots with windows are cached.                                                                                  |
 | Fresh provider reports with no windows | Clear any cached snapshot for that provider, so entitlement-only reports do not leave stale quota windows behind.                       |
 | Reports and details not cached         | Failed providers, stale providers, account identity, and source attempts are not cached.                                                |
-
