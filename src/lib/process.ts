@@ -25,12 +25,18 @@ export function execFileText(
 }
 
 export async function commandExists(command: string): Promise<boolean> {
+  return (await findCommandPath(command)) !== undefined;
+}
+
+export async function findCommandPath(
+  command: string,
+): Promise<string | undefined> {
   const normalized = command.trim();
-  if (normalized.length === 0) return false;
+  if (normalized.length === 0) return undefined;
   for (const candidate of commandPathCandidates(normalized)) {
-    if (await isExecutableFile(candidate)) return true;
+    if (await isExecutableFile(candidate)) return candidate;
   }
-  return false;
+  return undefined;
 }
 
 function commandPathCandidates(command: string): string[] {

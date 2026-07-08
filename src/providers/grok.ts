@@ -1,7 +1,9 @@
+import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { readCachedProvider } from "../cache.js";
 import { readJsonFileResult, type JsonFileReadResult } from "../lib/fs.js";
+import { findCommandPath } from "../lib/process.js";
 import {
   clampPercent,
   nowIso,
@@ -27,7 +29,6 @@ import {
 } from "./common.js";
 
 const BILLING_URL = "https://cli-chat-proxy.grok.com/v1/billing?format=credits";
-const GROK_CLIENT_VERSION = "0.2.91";
 const API_TIMEOUT_MS = 15_000;
 
 type GrokCredentials = {
@@ -210,12 +211,14 @@ async function fetchGrokBilling(credentials: GrokCredentials): Promise<{
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
   try {
+    const headers: Record<string, string> = {
+      authorization: `Bearer ${credentials.key}`,
+      accept: "application/json",
+    };
+    const clientVersion = await readGrokClientVersion();
+    if (clientVersion) headers["x-grok-client-version"] = clientVersion;
     const response = await fetch(BILLING_URL, {
-      headers: {
-        authorization: `Bearer ${credentials.key}`,
-        accept: "application/json",
-        "x-grok-client-version": GROK_CLIENT_VERSION,
-      },
+      headers,
       signal: controller.signal,
     });
     rejectUnusableUsageResponse(response);
@@ -224,6 +227,44 @@ async function fetchGrokBilling(credentials: GrokCredentials): Promise<{
     return quota;
   } finally {
     clearTimeout(timer);
+  }
+}
+
+async function readGrokClientVersion(): Promise<string | undefined> {
+  const executable = await findCommandPath("grok");
+  if (!executable) return undefined;
+  return readPackageVersionNear(realpathBestEffort(executable));
+}
+
+function readPackageVersionNear(file: string): string | undefined {
+  let directory = dirname(file);
+  while (true) {
+    const packageJson = readJsonFileResult(join(directory, "package.json"));
+    if (packageJson.status === "success") {
+      const pkg = objectValue(packageJson.value);
+      const version = stringValue(pkg?.version);
+      if (version && packageLooksLikeGrok(pkg)) return version;
+    }
+    const parent = dirname(directory);
+    if (parent === directory) return undefined;
+    directory = parent;
+  }
+}
+
+function packageLooksLikeGrok(
+  pkg: Record<string, unknown> | undefined,
+): boolean {
+  const name = stringValue(pkg?.name)?.toLowerCase();
+  if (name?.includes("grok")) return true;
+  const bin = objectValue(pkg?.bin);
+  return stringValue(bin?.grok) !== undefined;
+}
+
+function realpathBestEffort(file: string): string {
+  try {
+    return realpathSync(file);
+  } catch {
+    return file;
   }
 }
 

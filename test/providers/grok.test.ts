@@ -1,4 +1,10 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -6,12 +12,16 @@ import { fetchQuota, normalizeGrokBilling } from "../../src/providers/grok.js";
 
 const originalGrokAuthJson = process.env.GROK_AUTH_JSON;
 const originalXdgCacheHome = process.env.XDG_CACHE_HOME;
+const originalPath = process.env.PATH;
+const originalPathExt = process.env.PATHEXT;
 let tempDir: string | undefined;
 
 beforeEach(() => {
   tempDir = mkdtempSync(join(tmpdir(), "quota-axi-grok-auth-"));
   process.env.GROK_AUTH_JSON = join(tempDir, "auth.json");
   process.env.XDG_CACHE_HOME = join(tempDir, "cache");
+  process.env.PATH = join(tempDir, "empty-bin");
+  process.env.PATHEXT = ".CMD;.EXE";
 });
 
 afterEach(() => {
@@ -20,12 +30,36 @@ afterEach(() => {
   else process.env.GROK_AUTH_JSON = originalGrokAuthJson;
   if (originalXdgCacheHome === undefined) delete process.env.XDG_CACHE_HOME;
   else process.env.XDG_CACHE_HOME = originalXdgCacheHome;
+  if (originalPath === undefined) delete process.env.PATH;
+  else process.env.PATH = originalPath;
+  if (originalPathExt === undefined) delete process.env.PATHEXT;
+  else process.env.PATHEXT = originalPathExt;
   if (tempDir) rmSync(tempDir, { recursive: true, force: true });
   tempDir = undefined;
 });
 
 function writeAuth(value: unknown): void {
   writeFileSync(process.env.GROK_AUTH_JSON!, JSON.stringify(value));
+}
+
+function writeLocalGrokPackage(version: string): void {
+  const packageDir = join(tempDir!, "lib", "node_modules", "grok");
+  const binDir = join(packageDir, "bin");
+  mkdirSync(binDir, { recursive: true });
+  writeFileSync(
+    join(packageDir, "package.json"),
+    JSON.stringify({ name: "grok", version, bin: { grok: "bin/grok" } }),
+  );
+  const command =
+    process.platform === "win32"
+      ? join(binDir, "grok.CMD")
+      : join(binDir, "grok");
+  writeFileSync(
+    command,
+    process.platform === "win32" ? "@echo off\r\n" : "#!/bin/sh\nexit 0\n",
+  );
+  chmodSync(command, 0o700);
+  process.env.PATH = binDir;
 }
 
 describe("Grok quota parsing", () => {
@@ -128,6 +162,71 @@ describe("Grok quota parsing", () => {
       expect.objectContaining({
         headers: expect.objectContaining({
           authorization: "Bearer valid-key",
+        }),
+      }),
+    );
+  });
+
+  it("uses the installed local Grok package version in billing requests", async () => {
+    writeAuth({
+      current: {
+        key: "valid-key",
+        expires_at: "2035-01-01T00:00:00.000Z",
+      },
+    });
+    writeLocalGrokPackage("9.9.9");
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            config: {
+              creditUsagePercent: 25,
+            },
+          }),
+          { status: 200 },
+        ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await fetchQuota({ allowKeychainPrompt: false });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://cli-chat-proxy.grok.com/v1/billing?format=credits",
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          "x-grok-client-version": "9.9.9",
+        }),
+      }),
+    );
+  });
+
+  it("omits the Grok client version header without a local Grok package", async () => {
+    writeAuth({
+      current: {
+        key: "valid-key",
+        expires_at: "2035-01-01T00:00:00.000Z",
+      },
+    });
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            config: {
+              creditUsagePercent: 25,
+            },
+          }),
+          { status: 200 },
+        ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await fetchQuota({ allowKeychainPrompt: false });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://cli-chat-proxy.grok.com/v1/billing?format=credits",
+      expect.objectContaining({
+        headers: expect.not.objectContaining({
+          "x-grok-client-version": expect.any(String),
         }),
       }),
     );
