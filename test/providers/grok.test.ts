@@ -11,6 +11,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fetchQuota, normalizeGrokBilling } from "../../src/providers/grok.js";
 
 const originalGrokAuthJson = process.env.GROK_AUTH_JSON;
+const originalGrokAuthPath = process.env.GROK_AUTH_PATH;
+const originalGrokAuth = process.env.GROK_AUTH;
 const originalGrokHome = process.env.GROK_HOME;
 const originalXdgCacheHome = process.env.XDG_CACHE_HOME;
 const originalPath = process.env.PATH;
@@ -20,6 +22,8 @@ let tempDir: string | undefined;
 beforeEach(() => {
   tempDir = mkdtempSync(join(tmpdir(), "quota-axi-grok-auth-"));
   process.env.GROK_AUTH_JSON = join(tempDir, "auth.json");
+  delete process.env.GROK_AUTH_PATH;
+  delete process.env.GROK_AUTH;
   process.env.GROK_HOME = join(tempDir, "grok-home");
   process.env.XDG_CACHE_HOME = join(tempDir, "cache");
   process.env.PATH = join(tempDir, "empty-bin");
@@ -30,6 +34,10 @@ afterEach(() => {
   vi.unstubAllGlobals();
   if (originalGrokAuthJson === undefined) delete process.env.GROK_AUTH_JSON;
   else process.env.GROK_AUTH_JSON = originalGrokAuthJson;
+  if (originalGrokAuthPath === undefined) delete process.env.GROK_AUTH_PATH;
+  else process.env.GROK_AUTH_PATH = originalGrokAuthPath;
+  if (originalGrokAuth === undefined) delete process.env.GROK_AUTH;
+  else process.env.GROK_AUTH = originalGrokAuth;
   if (originalGrokHome === undefined) delete process.env.GROK_HOME;
   else process.env.GROK_HOME = originalGrokHome;
   if (originalXdgCacheHome === undefined) delete process.env.XDG_CACHE_HOME;
@@ -191,6 +199,61 @@ describe("Grok quota parsing", () => {
     );
   });
 
+  it("prefers session-scoped auth over API-key entries", async () => {
+    writeAuth({
+      "https://api.x.ai/v1": {
+        key: "api-key",
+        expires_at: "2035-01-01T00:00:00.000Z",
+      },
+      "https://accounts.x.ai/sign-in": {
+        key: "session-key",
+        email: "person@example.invalid",
+        expires_at: "2035-01-01T00:00:00.000Z",
+      },
+    });
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            config: {
+              creditUsagePercent: 25,
+            },
+          }),
+          { status: 200 },
+        ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await fetchQuota({ allowKeychainPrompt: false });
+
+    expect(result.state.status).toBe("fresh");
+    expect(result.account?.email).toBe("person@example.invalid");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://cli-chat-proxy.grok.com/v1/billing?format=credits",
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          authorization: "Bearer session-key",
+        }),
+      }),
+    );
+  });
+
+  it("does not use API-key auth entries for billing", async () => {
+    writeAuth({
+      "https://api.x.ai/v1": {
+        key: "api-key",
+        expires_at: "2035-01-01T00:00:00.000Z",
+      },
+    });
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await fetchQuota({ allowKeychainPrompt: false });
+
+    expect(result.state.status).toBe("auth_required");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("uses the installed local Grok package version in billing requests", async () => {
     writeAuth({
       current: {
@@ -326,6 +389,100 @@ describe("Grok quota parsing", () => {
       expect.objectContaining({
         headers: expect.objectContaining({
           authorization: "Bearer home-key",
+        }),
+      }),
+    );
+  });
+
+  it("reads official GROK_AUTH_PATH before GROK_HOME", async () => {
+    delete process.env.GROK_AUTH_JSON;
+    process.env.GROK_AUTH_PATH = join(tempDir!, "official-auth.json");
+    writeAuth(
+      {
+        "https://accounts.x.ai/sign-in": {
+          key: "path-key",
+          email: "path@example.invalid",
+          expires_at: "2035-01-01T00:00:00.000Z",
+        },
+      },
+      process.env.GROK_AUTH_PATH,
+    );
+    writeAuth(
+      {
+        "https://accounts.x.ai/sign-in": {
+          key: "home-key",
+          expires_at: "2035-01-01T00:00:00.000Z",
+        },
+      },
+      join(process.env.GROK_HOME!, "auth.json"),
+    );
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            config: {
+              creditUsagePercent: 25,
+            },
+          }),
+          { status: 200 },
+        ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await fetchQuota({ allowKeychainPrompt: false });
+
+    expect(result.state.status).toBe("fresh");
+    expect(result.account?.email).toBe("path@example.invalid");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://cli-chat-proxy.grok.com/v1/billing?format=credits",
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          authorization: "Bearer path-key",
+        }),
+      }),
+    );
+  });
+
+  it("reads inline GROK_AUTH before file fallbacks", async () => {
+    delete process.env.GROK_AUTH_JSON;
+    process.env.GROK_AUTH = JSON.stringify({
+      "https://accounts.x.ai/sign-in": {
+        key: "inline-key",
+        email: "inline@example.invalid",
+        expires_at: "2035-01-01T00:00:00.000Z",
+      },
+    });
+    writeAuth(
+      {
+        "https://accounts.x.ai/sign-in": {
+          key: "home-key",
+          expires_at: "2035-01-01T00:00:00.000Z",
+        },
+      },
+      join(process.env.GROK_HOME!, "auth.json"),
+    );
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            config: {
+              creditUsagePercent: 25,
+            },
+          }),
+          { status: 200 },
+        ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await fetchQuota({ allowKeychainPrompt: false });
+
+    expect(result.state.status).toBe("fresh");
+    expect(result.account?.email).toBe("inline@example.invalid");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://cli-chat-proxy.grok.com/v1/billing?format=credits",
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          authorization: "Bearer inline-key",
         }),
       }),
     );

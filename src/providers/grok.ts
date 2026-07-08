@@ -46,6 +46,11 @@ type CredentialState =
     }
   | { status: "missing" | "invalid" | "expired"; source: AuthSourceReport };
 
+type CredentialCandidate = GrokCredentials & {
+  scope?: string;
+  raw: Record<string, unknown>;
+};
+
 export const grokAdapter: ProviderAdapter = {
   id: "grok",
   label: "Grok",
@@ -89,7 +94,7 @@ export async function fetchQuota(
     }
   } else {
     attempts.push({
-      source: "auth-json",
+      source: credentialState.source.source,
       status: "skipped",
       error: `credentials_${credentialState.status}`,
     });
@@ -317,42 +322,67 @@ function realpathBestEffort(file: string): string {
   }
 }
 
-function readCredentialState(authFile = grokAuthFile()): CredentialState {
+function readCredentialState(): CredentialState {
+  const explicitAuthFile = stringValue(process.env.GROK_AUTH_JSON);
+  if (explicitAuthFile) {
+    return extractCredentialState(
+      readJsonFileResult(explicitAuthFile),
+      explicitAuthFile,
+    );
+  }
+  const inlineAuth = stringValue(process.env.GROK_AUTH);
+  if (inlineAuth) {
+    return extractCredentialState(
+      readInlineAuth(inlineAuth),
+      undefined,
+      "auth-env",
+    );
+  }
+  const authFile = grokAuthFile();
   return extractCredentialState(readJsonFileResult(authFile), authFile);
+}
+
+function readInlineAuth(value: string): JsonFileReadResult {
+  const text = value.trim();
+  try {
+    return { status: "success", value: normalizeInlineAuth(JSON.parse(text)) };
+  } catch {
+    return { status: "success", value: inlineTokenAuth(text) };
+  }
+}
+
+function normalizeInlineAuth(value: unknown): unknown {
+  return typeof value === "string" ? inlineTokenAuth(value) : value;
+}
+
+function inlineTokenAuth(key: string): Record<string, unknown> {
+  return { "https://accounts.x.ai/sign-in": { key } };
 }
 
 function extractCredentialState(
   raw: JsonFileReadResult,
-  path: string,
+  path?: string,
+  source = "auth-json",
 ): CredentialState {
   if (raw.status === "missing")
     return {
       status: "missing",
-      source: { source: "auth-json", path, status: "missing" },
+      source: authSource(source, path, "missing"),
     };
   if (raw.status === "invalid")
     return {
       status: "invalid",
-      source: {
-        source: "auth-json",
-        path,
-        status: "invalid",
-        error: raw.error,
-      },
+      source: authSource(source, path, "invalid", raw.error),
     };
   const data = objectValue(raw.value);
   if (!data)
     return {
       status: "invalid",
-      source: { source: "auth-json", path, status: "invalid" },
+      source: authSource(source, path, "invalid"),
     };
   let expired = false;
-  for (const value of Object.values(data)) {
-    const item = objectValue(value);
-    const key = stringValue(item?.key);
-    if (!key) continue;
-    const expiresAt =
-      stringValue(item?.expires_at) ?? stringValue(item?.expiresAt);
+  for (const candidate of selectedCredentialCandidates(data)) {
+    const expiresAt = candidate.expiresAt;
     if (isExpired(expiresAt)) {
       expired = true;
       continue;
@@ -360,30 +390,32 @@ function extractCredentialState(
     return {
       status: "available",
       credentials: {
-        key,
-        email: stringValue(item?.email),
-        teamId: stringValue(item?.team_id) ?? stringValue(item?.teamId),
+        key: candidate.key,
+        email: candidate.email,
+        teamId: candidate.teamId,
         expiresAt,
       },
-      source: { source: "auth-json", path, status: "available" },
+      source: authSource(source, path, "available"),
     };
   }
   if (expired) {
     return {
       status: "expired",
-      source: { source: "auth-json", path, status: "expired" },
+      source: authSource(source, path, "expired"),
     };
   }
   return {
     status: "invalid",
-    source: { source: "auth-json", path, status: "invalid" },
+    source: authSource(source, path, "invalid"),
   };
 }
 
 function grokAuthFile(): string {
-  return process.env.GROK_AUTH_JSON
-    ? process.env.GROK_AUTH_JSON
-    : join(grokHomeDir(), "auth.json");
+  return (
+    stringValue(process.env.GROK_AUTH_JSON) ??
+    stringValue(process.env.GROK_AUTH_PATH) ??
+    join(grokHomeDir(), "auth.json")
+  );
 }
 
 function grokHomeDir(): string {
@@ -407,6 +439,106 @@ function isExpired(value: string | undefined): boolean {
   if (!value) return false;
   const parsed = Date.parse(value);
   return !Number.isNaN(parsed) && parsed <= Date.now();
+}
+
+function authSource(
+  source: string,
+  path: string | undefined,
+  status: AuthSourceReport["status"],
+  error?: string,
+): AuthSourceReport {
+  return {
+    source,
+    path,
+    status,
+    error,
+  };
+}
+
+function selectedCredentialCandidates(
+  data: Record<string, unknown>,
+): CredentialCandidate[] {
+  const candidates = credentialCandidates(data);
+  const sessionCandidates = candidates.filter(isGrokSessionCandidate);
+  if (sessionCandidates.length > 0) return sessionCandidates;
+  return candidates.filter((candidate) => !isGrokApiKeyCandidate(candidate));
+}
+
+function credentialCandidates(
+  data: Record<string, unknown>,
+): CredentialCandidate[] {
+  const direct = credentialCandidate(data, stringValue(data.scope));
+  if (direct) return [direct];
+  return Object.entries(data).flatMap(([scope, value]) => {
+    const item = objectValue(value);
+    const candidate = item ? credentialCandidate(item, scope) : undefined;
+    return candidate ? [candidate] : [];
+  });
+}
+
+function credentialCandidate(
+  item: Record<string, unknown>,
+  scope: string | undefined,
+): CredentialCandidate | undefined {
+  const key = stringValue(item.key);
+  if (!key) return undefined;
+  return {
+    key,
+    scope: credentialScope(scope, item),
+    raw: item,
+    email: stringValue(item.email),
+    teamId: stringValue(item.team_id) ?? stringValue(item.teamId),
+    expiresAt: stringValue(item.expires_at) ?? stringValue(item.expiresAt),
+  };
+}
+
+function credentialScope(
+  scope: string | undefined,
+  item: Record<string, unknown>,
+): string | undefined {
+  return (
+    stringValue(item.scope) ??
+    stringValue(item.url) ??
+    stringValue(item.audience) ??
+    scope
+  );
+}
+
+function isGrokSessionCandidate(candidate: CredentialCandidate): boolean {
+  if (isGrokApiKeyCandidate(candidate)) return false;
+  const scope = parseScope(candidate.scope);
+  if (!scope) return false;
+  if (scope.host === "accounts.x.ai" && scope.path.startsWith("/sign-in"))
+    return true;
+  return scope.host === "grok.com" || scope.host === "www.grok.com";
+}
+
+function isGrokApiKeyCandidate(candidate: CredentialCandidate): boolean {
+  const scope = parseScope(candidate.scope);
+  const loweredScope = candidate.scope?.toLowerCase() ?? "";
+  const type =
+    stringValue(candidate.raw.type)?.toLowerCase() ??
+    stringValue(candidate.raw.kind)?.toLowerCase();
+  return (
+    type === "api-key" ||
+    type === "api_key" ||
+    loweredScope.includes("api-key") ||
+    loweredScope.includes("api_key") ||
+    scope?.host === "api.x.ai" ||
+    scope?.host === "api.grok.com"
+  );
+}
+
+function parseScope(
+  value: string | undefined,
+): { host: string; path: string } | undefined {
+  if (!value) return undefined;
+  try {
+    const url = new URL(value.includes("://") ? value : `https://${value}`);
+    return { host: url.hostname.toLowerCase(), path: url.pathname };
+  } catch {
+    return undefined;
+  }
 }
 
 function parseIso(value: unknown): string | undefined {
