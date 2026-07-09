@@ -3,7 +3,7 @@
 This file is the project's committed home for project-intrinsic agent knowledge: build, test, release, architecture, and sharp-edge notes that should travel with the code.
 
 - quota-axi is data only.
-- It reports local Claude, Codex, Cursor, GitHub Copilot, and Grok quota windows, and it must never route, recommend, proxy, intercept, log in, import browser cookies, or mutate provider state.
+- It reports local Claude, Codex, Cursor, GitHub Copilot, Grok, and Antigravity (`agy`) quota windows, and it must never route, recommend, proxy, intercept, log in, import browser cookies, or mutate provider state.
 - Claude quota windows can include `five_hour`, `seven_day`, `seven_day_opus`, and `extra_usage`. When the OAuth usage response includes a `limits` array, that array is the authoritative, self-describing source and is preferred over the fixed top-level fields: it surfaces every active limit, including ones scoped to a specific model (e.g. Fable) via `scope.model.display_name`, with a `model:<slug>` window id.
 - Codex quota windows can include `five_hour` and `weekly`, plus optional credit balance data. Codex responses can also carry extra limits scoped to a specific model or feature (HTTP: `additional_rate_limits`; app-server RPC: `rateLimitsByLimitId`), surfaced as `model:<id>:5h` / `model:<id>:7d` windows.
 - Cursor reads `$CURSOR_STATE_DB` or the local Cursor state database via `sqlite3 -readonly` for `cursorAuth` values and can report `included_usage`, `auto_usage`, `api_usage`, and optional `spend_limit` windows from the first-party dashboard usage endpoint.
@@ -13,6 +13,7 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 - Grok reads `$GROK_AUTH_JSON`, inline `$GROK_AUTH`, `$GROK_AUTH_PATH`, or `$GROK_HOME/auth.json`/`~/.grok/auth.json`, selects session-scoped auth instead of API-key entries, recognizes OIDC records scoped to `auth.x.ai` with `auth_mode` or `authMode` set to `oidc`, and can report `credits`, optional `on_demand`, and optional `product:<slug>` windows from the first-party billing endpoint.
   When billing exposes only a current period and prepaid balance, Grok reports a reset-only `credits` window without inventing usage percentages.
 - Grok may read `$GROK_HOME/version.json` or package metadata near a local `grok` executable to send `x-grok-client-version`, but it must not launch the Grok CLI.
+- Antigravity (`agy`) discovers already-running Antigravity/`agy` processes via `ps` plus listening ports via `lsof`, then reads only 127.0.0.1 loopback quota endpoints. It prefers `RetrieveUserQuotaSummary`, may use `GetUserStatus` / `GetCommandModelConfigs` as read-only fallbacks, reports `gemini_5h`, `gemini_weekly`, `claude_gpt_5h`, and `claude_gpt_weekly` when grouped summary exists, and must never launch or restart Antigravity/`agy`.
 - Provider adapter behavior (retry-after handling, snake/camel field tolerance, window parsing) is an original, clean-room implementation derived only from the vendors' own OAuth/HTTP behavior; quota-axi carries no vendored or attributed third-party adapter code.
 - Default stdout is compact TOON.
 - `--json` emits the normalized model, and `--full` is required before account identity or per-source attempts are shown.
