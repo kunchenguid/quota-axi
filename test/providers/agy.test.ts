@@ -1,6 +1,9 @@
 import { readFileSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { writeCachedProviders } from "../../src/cache.js";
 import {
   fetchQuotaWithRuntime,
   normalizeAgyQuotaSummary,
@@ -10,8 +13,17 @@ import {
   type AgyConnectionEndpoint,
   type AgyProbeRuntime,
 } from "../../src/providers/agy.js";
+import type { ProviderQuota } from "../../src/types.js";
+
+const originalXdgCacheHome = process.env.XDG_CACHE_HOME;
+let tempDir: string | undefined;
+
 afterEach(() => {
   vi.restoreAllMocks();
+  if (originalXdgCacheHome === undefined) delete process.env.XDG_CACHE_HOME;
+  else process.env.XDG_CACHE_HOME = originalXdgCacheHome;
+  if (tempDir) rmSync(tempDir, { recursive: true, force: true });
+  tempDir = undefined;
 });
 
 describe("Antigravity quota parsing", () => {
@@ -279,6 +291,20 @@ describe("Antigravity provider", () => {
     expect(result.state.error).toBe("Antigravity quota summary malformed");
   });
 
+  it("uses stale cache when the live loopback source is unavailable", async () => {
+    useTempCache();
+    writeCachedProviders([cachedAgyQuota()]);
+
+    const result = await fetchQuotaWithRuntime(runtimeWith({ ps: "" }));
+
+    expect(result.state.status).toBe("stale");
+    expect(result.source).toBe("cache");
+    expect(result.windows[0]).toMatchObject({
+      id: "gemini_5h",
+      percentRemaining: 88,
+    });
+  });
+
   it("does not launch agy or any provider process", async () => {
     const commands: string[] = [];
     const runtime = runtimeWith({
@@ -337,4 +363,32 @@ function lsofFor(pid: number, port: number): string {
   return `COMMAND PID USER FD TYPE DEVICE SIZE/OFF NODE NAME
 agy ${pid} test 8u IPv4 0x1 0t0 TCP 127.0.0.1:${port} (LISTEN)
 `;
+}
+
+function useTempCache(): void {
+  tempDir = mkdtempSync(join(tmpdir(), "quota-axi-agy-cache-"));
+  process.env.XDG_CACHE_HOME = tempDir;
+}
+
+function cachedAgyQuota(): ProviderQuota {
+  return {
+    provider: "agy",
+    label: "Antigravity",
+    source: "cli-rpc",
+    windows: [
+      {
+        id: "gemini_5h",
+        label: "Gemini 5-hour",
+        kind: "session",
+        percentUsed: 12,
+        percentRemaining: 88,
+      },
+    ],
+    state: {
+      status: "fresh",
+      stale: false,
+      refreshedAt: "2026-06-15T11:39:34.000Z",
+      sourcesTried: ["loopback"],
+    },
+  };
 }

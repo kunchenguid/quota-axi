@@ -1,5 +1,6 @@
 import * as http from "node:http";
 import * as https from "node:https";
+import { readCachedProvider } from "../cache.js";
 import { execFileText } from "../lib/process.js";
 import {
   clampPercent,
@@ -19,6 +20,7 @@ import type {
 import {
   failedProvider,
   sourceNames,
+  staleFromCache,
   statusFromError,
   successProvider,
 } from "./common.js";
@@ -109,6 +111,11 @@ export async function fetchQuotaWithRuntime(
       status: error instanceof AgyUnavailableError ? "skipped" : "failed",
       error: finalError,
     };
+  }
+
+  const cached = readCachedProvider("agy");
+  if (cached) {
+    return staleFromCache(cached, finalError, sourceNames(attempts), attempts);
   }
 
   return failedProvider({
