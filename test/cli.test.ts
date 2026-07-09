@@ -18,6 +18,7 @@ const originalCursorProvider = PROVIDERS.cursor;
 const originalCopilotProvider = PROVIDERS.copilot;
 const originalGrokProvider = PROVIDERS.grok;
 const originalKimiProvider = PROVIDERS.kimi;
+const originalAgyProvider = PROVIDERS.agy;
 const originalXdgCacheHome = process.env.XDG_CACHE_HOME;
 let tempDir: string | undefined;
 
@@ -28,6 +29,7 @@ afterEach(() => {
   PROVIDERS.copilot = originalCopilotProvider;
   PROVIDERS.grok = originalGrokProvider;
   PROVIDERS.kimi = originalKimiProvider;
+  PROVIDERS.agy = originalAgyProvider;
   if (originalXdgCacheHome === undefined) delete process.env.XDG_CACHE_HOME;
   else process.env.XDG_CACHE_HOME = originalXdgCacheHome;
   if (tempDir) rmSync(tempDir, { recursive: true, force: true });
@@ -45,6 +47,7 @@ describe("CLI flag parsing", () => {
       "copilot",
       "grok",
       "kimi",
+      "agy",
     ]);
   });
 
@@ -53,6 +56,12 @@ describe("CLI flag parsing", () => {
     expect(
       parseFlags(["--provider=cursor,copilot,grok,kimi"]).providers,
     ).toEqual(["cursor", "copilot", "grok", "kimi"]);
+    expect(parseFlags(["--provider=cursor,copilot,grok"]).providers).toEqual([
+      "cursor",
+      "copilot",
+      "grok",
+    ]);
+    expect(parseFlags(["--provider", "agy"]).providers).toEqual(["agy"]);
   });
 
   it("ignores a standalone argument separator", () => {

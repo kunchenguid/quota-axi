@@ -282,5 +282,6 @@ function providerLabel(provider: ProviderId): string {
   if (provider === "cursor") return "Cursor";
   if (provider === "copilot") return "GitHub Copilot";
   if (provider === "grok") return "Grok";
+  if (provider === "agy") return "Antigravity";
   return "Kimi";
 }
