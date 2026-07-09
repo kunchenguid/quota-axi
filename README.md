@@ -15,10 +15,10 @@ Quota CLI for agents - designed with [AXI](https://axi.md) (Agent eXperience Int
 Agents need quota state before they choose where work can safely run.
 Vendor dashboards are not shaped for shell automation, and local CLIs expose different windows, resets, and auth sources.
 
-quota-axi reports local Claude, Codex, Cursor, GitHub Copilot, and Grok quota windows in one [AXI](https://axi.md)-shaped call.
+quota-axi reports local Claude, Codex, Cursor, GitHub Copilot, Grok, and Antigravity (`agy`) quota windows in one [AXI](https://axi.md)-shaped call.
 It is data only: it never routes, recommends, proxies, intercepts, logs in, imports browser cookies, or mutates provider state.
 
-- **Official sources** - quota-axi reads local provider auth sources and calls the first-party quota, usage, billing, or entitlement endpoints used by the local agents, with a read-only Codex app-server probe as fallback.
+- **Official sources** - quota-axi reads local provider auth sources and calls the first-party quota, usage, billing, entitlement, or local loopback endpoints used by the local agents, with a read-only Codex app-server probe as fallback.
 - **Local first** - everything runs on the machine that holds the credentials; the only network calls are to first-party provider endpoints, never a third-party relay.
 - **Token efficient** - default stdout is compact TOON so agents spend fewer tokens parsing quota state, with `--json` available when a caller needs the normalized model.
 
@@ -34,13 +34,14 @@ $ npx -y quota-axi
 bin: ~/.npm/_npx/.../quota-axi
 description: Report local agent-provider quota windows for routing-aware agents
 generatedAt: "2026-03-15T16:42:00.000Z"
-providers[5]{provider,plan,source,status,refreshedAt}:
+providers[6]{provider,plan,source,status,refreshedAt}:
   claude,pro,oauth,fresh,"2026-03-15T16:41:55.000Z"
   codex,plus,cli-rpc,fresh,"2026-03-15T16:41:58.000Z"
   cursor,pro,api,fresh,"2026-03-15T16:41:59.000Z"
   copilot,individual,api,fresh,"2026-03-15T16:42:00.000Z"
   grok,supergrok,api,fresh,"2026-03-15T16:42:00.000Z"
-windows[13]{provider,id,label,percentRemaining,resetsAt,state}:
+  agy,Pro,cli-rpc,fresh,"2026-03-15T16:42:00.000Z"
+windows[17]{provider,id,label,percentRemaining,resetsAt,state}:
   claude,five_hour,session,82,"2026-03-15T21:15:00.000Z",fresh
   claude,seven_day,week,64,"2026-03-19T15:00:00.000Z",fresh
   claude,seven_day_opus,opus week,93,"2026-03-20T09:30:00.000Z",fresh
@@ -54,6 +55,10 @@ windows[13]{provider,id,label,percentRemaining,resetsAt,state}:
   copilot,chat,chat,84,"2026-04-01T00:00:00.000Z",fresh
   copilot,premium_interactions,premium interactions,53,"2026-04-01T00:00:00.000Z",fresh
   grok,credits,credits,67,"2026-04-01T00:00:00.000Z",fresh
+  agy,gemini_5h,Gemini 5-hour,100,"2026-03-15T21:42:00.000Z",fresh
+  agy,gemini_weekly,Gemini weekly,98,"2026-03-18T21:30:30.000Z",fresh
+  agy,claude_gpt_5h,Claude/GPT 5-hour,100,"2026-03-15T21:42:00.000Z",fresh
+  agy,claude_gpt_weekly,Claude/GPT weekly,99,"2026-03-19T00:39:50.000Z",fresh
 help[3]:
   Run `quota-axi --provider claude --json` for JSON output
   Run `quota-axi --full` to include account and source-attempt details
@@ -106,7 +111,7 @@ $ quota-axi --provider claude --json
 $ quota-axi auth
 bin: ~/.npm/_npx/.../quota-axi
 description: Inspect local quota auth sources without printing secret values
-auth[7]{provider,source,path,status,error}:
+auth[8]{provider,source,path,status,error}:
   claude,oauth-file,~/.claude/.credentials.json,available,none
   claude,keychain,none,skipped,keychain_prompt_required
   codex,auth-json,~/.codex/auth.json,available,none
@@ -114,6 +119,7 @@ auth[7]{provider,source,path,status,error}:
   cursor,state-vscdb,~/Library/Application Support/Cursor/User/globalStorage/state.vscdb,available,none
   copilot,apps-json,~/.config/github-copilot/apps.json,available,none
   grok,auth-json,~/.grok/auth.json,available,none
+  agy,loopback,none,available,none
 help[1]:
   Run `quota-axi --allow-keychain-prompt auth` to permit macOS Keychain access
 ```
@@ -201,14 +207,14 @@ It is generated from `src/skill.ts`; update it with `pnpm run build:skill` and v
 
 ### Flags
 
-| Flag                                          | Description                                            |
-| --------------------------------------------- | ------------------------------------------------------ |
-| `--provider claude,codex,cursor,copilot,grok` | Scope providers                                        |
-| `--json`                                      | Emit normalized JSON instead of TOON for quota or auth |
-| `--full`                                      | Include quota account identity and source attempts     |
-| `--allow-keychain-prompt`                     | Permit macOS Claude Keychain access that could prompt  |
-| `-h`, `--help`                                | Print terse [AXI](https://axi.md) help                 |
-| `-v`, `-V`, `--version`                       | Print version                                          |
+| Flag                                              | Description                                            |
+| ------------------------------------------------- | ------------------------------------------------------ |
+| `--provider claude,codex,cursor,copilot,grok,agy` | Scope providers                                        |
+| `--json`                                          | Emit normalized JSON instead of TOON for quota or auth |
+| `--full`                                          | Include quota account identity and source attempts     |
+| `--allow-keychain-prompt`                         | Permit macOS Claude Keychain access that could prompt  |
+| `-h`, `--help`                                    | Print terse [AXI](https://axi.md) help                 |
+| `-v`, `-V`, `--version`                           | Print version                                          |
 
 ## Output Model
 
@@ -270,6 +276,7 @@ Source attempts can include `credentialPresent` when a non-secret probe confirms
 | GitHub Copilot           | Can report quota snapshot windows such as `chat`, `completions`, and `premium_interactions`; when the first-party endpoint exposes entitlement but no numeric quota windows, quota-axi reports a fresh provider state with an empty `windows` list rather than inventing percentages.           |
 | Grok                     | Can report `credits`, optional `on_demand`, and optional product-scoped `product:<slug>` windows.                                                                                                                                                                                               |
 | Grok current period only | If Grok's billing response only exposes the current billing period and prepaid balance, quota-axi reports a fresh `credits` window with `resetsAt` and `credits.remaining` but no usage percentage.                                                                                             |
+| Antigravity (`agy`)      | Can report `gemini_5h`, `gemini_weekly`, `claude_gpt_5h`, and `claude_gpt_weekly` from an already-running Antigravity app or `agy` loopback quota summary. If only model config quota is exposed, quota-axi reports model-scoped `model:<slug>` windows instead of inventing grouped windows.   |
 
 ### `auth --json` shape
 
@@ -281,10 +288,10 @@ Source attempts can include `credentialPresent` when a non-secret probe confirms
 
 Auth source entries can include `credentialPresent` when a non-secret probe confirms a credential item exists.
 
-| Name                 | Values                                                                                       |
-| -------------------- | -------------------------------------------------------------------------------------------- |
-| Auth source statuses | `available`, `missing`, `invalid`, `expired`, or `skipped`                                   |
-| Auth source names    | `oauth-file`, `keychain`, `auth-json`, `auth-env`, `apps-json`, `state-vscdb`, and `cli-rpc` |
+| Name                 | Values                                                                                                   |
+| -------------------- | -------------------------------------------------------------------------------------------------------- |
+| Auth source statuses | `available`, `missing`, `invalid`, `expired`, or `skipped`                                               |
+| Auth source names    | `oauth-file`, `keychain`, `auth-json`, `auth-env`, `apps-json`, `state-vscdb`, `cli-rpc`, and `loopback` |
 
 ## Security Posture
 
@@ -297,6 +304,7 @@ Auth source entries can include `credentialPresent` when a non-secret probe conf
 | Cursor         | `$CURSOR_STATE_DB` when set or the platform Cursor state database path                                                                                                           |
 | GitHub Copilot | `$GITHUB_COPILOT_APPS_JSON` when set or the local Copilot apps auth file                                                                                                         |
 | Grok           | `$GROK_AUTH_JSON`, inline `$GROK_AUTH`, `$GROK_AUTH_PATH`, or `$GROK_HOME/auth.json` / `~/.grok/auth.json`                                                                       |
+| Antigravity    | No credential files; discovers already-running Antigravity or `agy` processes and reads only their 127.0.0.1 loopback quota endpoints                                            |
 
 ### Provider notes
 
@@ -327,12 +335,19 @@ Auth source entries can include `credentialPresent` when a non-secret probe conf
 - Session-scoped Grok auth includes web/session scopes and OIDC records scoped to `auth.x.ai` with `auth_mode` or `authMode` set to `oidc`, including scope keys with `::<client id>` suffixes.
 - It may read `$GROK_HOME/version.json` or package metadata near a local `grok` executable to send an `x-grok-client-version` header, but it does not launch the Grok CLI.
 
+**Antigravity**
+
+- It never launches, restarts, signs in to, or mutates Antigravity or `agy`.
+- It runs process and listening-port discovery, then POSTs `{}` to documented local read endpoints on `127.0.0.1`.
+- It prefers `RetrieveUserQuotaSummary`, uses `GetUserStatus` for account plan identity behind `--full`, and can fall back to model quota data from `GetUserStatus` / `GetCommandModelConfigs` when grouped quota summary is unavailable.
+- Burn rate is not reported for Antigravity v1 because the local payload exposes point-in-time quota snapshots, not enough history to compute a rate honestly.
+
 ### Safety guarantees
 
 - Direct HTTP requests go only to first-party provider usage, quota, billing, or entitlement endpoints with the user's local credentials.
 - It sends credential values only to the first-party provider request they authenticate.
 - It never prints, logs, or caches credential values.
-- It never launches the Claude CLI, so it cannot accidentally spend the quota it measures.
+- It never launches the Claude CLI or Antigravity/`agy`, so it cannot accidentally spend the quota it measures.
 
 ### Cache
 

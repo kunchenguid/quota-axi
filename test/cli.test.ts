@@ -16,6 +16,7 @@ const originalCodexProvider = PROVIDERS.codex;
 const originalCursorProvider = PROVIDERS.cursor;
 const originalCopilotProvider = PROVIDERS.copilot;
 const originalGrokProvider = PROVIDERS.grok;
+const originalAgyProvider = PROVIDERS.agy;
 const originalXdgCacheHome = process.env.XDG_CACHE_HOME;
 let tempDir: string | undefined;
 
@@ -25,6 +26,7 @@ afterEach(() => {
   PROVIDERS.cursor = originalCursorProvider;
   PROVIDERS.copilot = originalCopilotProvider;
   PROVIDERS.grok = originalGrokProvider;
+  PROVIDERS.agy = originalAgyProvider;
   if (originalXdgCacheHome === undefined) delete process.env.XDG_CACHE_HOME;
   else process.env.XDG_CACHE_HOME = originalXdgCacheHome;
   if (tempDir) rmSync(tempDir, { recursive: true, force: true });
@@ -40,6 +42,7 @@ describe("CLI argument parsing", () => {
       "cursor",
       "copilot",
       "grok",
+      "agy",
     ]);
   });
 
@@ -50,6 +53,7 @@ describe("CLI argument parsing", () => {
       "copilot",
       "grok",
     ]);
+    expect(parseArgs(["--provider", "agy"]).providers).toEqual(["agy"]);
   });
 
   it("ignores a standalone argument separator", () => {
