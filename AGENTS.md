@@ -30,6 +30,7 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 - Only fresh provider snapshots with windows are cached; fresh provider reports with no windows clear any existing cached snapshot for that provider.
 - Failed providers, stale providers, account identity, and source attempts are not cached.
 - Do not cache raw provider responses or credential headers.
+- Watch snapshots live in `src/snapshot.ts`: `getWatchSnapshot` / `buildWatchSnapshot` produce a render-ready `WatchSnapshot` (remaining %, reset countdown, derived burn rate or honest unavailable, trust/staleness). Default `refresh: false` is cache/last-known only so the agent read path stays untaxed; `refresh: true` is the only path that fetches providers. Snapshots never include account identity or USD fields.
 
 ## Development
 
