@@ -1,0 +1,49 @@
+{
+  "response": {
+    "groups": [
+      {
+        "displayName": "Gemini Models",
+        "description": "Models within this group: Gemini Flash, Gemini Pro",
+        "buckets": [
+          {
+            "bucketId": "gemini-weekly",
+            "displayName": "Weekly Limit",
+            "description": "Fixture weekly reset",
+            "window": "weekly",
+            "remainingFraction": 0.82,
+            "resetTime": "2026-06-19T08:45:39Z"
+          },
+          {
+            "bucketId": "gemini-5h",
+            "displayName": "Five Hour Limit",
+            "window": "5h",
+            "remainingFraction": 0.91,
+            "resetTime": "2026-06-15T11:39:34Z"
+          }
+        ]
+      },
+      {
+        "displayName": "Claude and GPT models",
+        "description": "Models within this group: Claude Opus, Claude Sonnet, GPT-OSS",
+        "buckets": [
+          {
+            "bucketId": "3p-weekly",
+            "displayName": "Weekly Limit",
+            "description": "Fixture third-party weekly reset",
+            "window": "weekly",
+            "remainingFraction": 0.64,
+            "resetTime": "2026-06-20T00:39:54Z"
+          },
+          {
+            "bucketId": "3p-5h",
+            "displayName": "Five Hour Limit",
+            "window": "5h",
+            "remainingFraction": 0.73,
+            "resetTime": "2026-06-15T12:52:10Z"
+          }
+        ]
+      }
+    ],
+    "description": "Fixture quota summary"
+  }
+}

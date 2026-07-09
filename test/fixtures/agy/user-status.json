@@ -1,0 +1,37 @@
+{
+  "userStatus": {
+    "email": "person@example.invalid",
+    "planStatus": {
+      "planInfo": {
+        "planName": "Pro"
+      }
+    },
+    "cascadeModelConfigData": {
+      "clientModelConfigs": [
+        {
+          "label": "Gemini 3.5 Flash (Medium)",
+          "modelOrAlias": {
+            "model": "MODEL_FIXTURE_GEMINI_FLASH"
+          },
+          "quotaInfo": {
+            "remainingFraction": 1,
+            "resetTime": "2026-06-15T12:52:10Z"
+          }
+        },
+        {
+          "label": "Claude Sonnet Fixture",
+          "modelOrAlias": {
+            "model": "MODEL_FIXTURE_CLAUDE_SONNET"
+          },
+          "quotaInfo": {
+            "remainingFraction": 0.5,
+            "resetTime": "2026-06-15T12:52:10Z"
+          }
+        }
+      ]
+    },
+    "userTier": {
+      "name": "Google AI Pro"
+    }
+  }
+}
