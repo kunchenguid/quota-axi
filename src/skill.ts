@@ -3,7 +3,7 @@ import { DESCRIPTION, TOP_HELP } from "./cli.js";
 // Trigger string Claude Code (and other agents) match against to auto-load the skill.
 // Kept terse and outcome-focused so it fires on "check quota/rate limits" intents.
 export const SKILL_DESCRIPTION =
-  "Report local Claude, Codex, Cursor, GitHub Copilot, Grok, and Kimi quota windows via the quota-axi CLI - remaining " +
+  "Report local Claude, Codex, Cursor, GitHub Copilot, Grok, Kimi, and Antigravity quota windows via the quota-axi CLI - remaining " +
   "effective usable runway, percentages, reset times, cycle-average pace vs the reset clock, and provider status read from local auth sources, " +
   "with no routing, recommendation, or provider mutation. Use before deciding whether it is safe " +
   "to keep spending a provider's quota, when the user asks about usage, rate limits, pace, or " +
@@ -24,12 +24,18 @@ export const HERMES_TAGS = [
   "copilot",
   "grok",
   "kimi",
+  "agy",
+  "antigravity",
   "cli",
 ];
 export const HERMES_CATEGORY = "observability";
 
 function yamlDoubleQuote(value: string): string {
   return JSON.stringify(value);
+}
+
+function yamlStringList(values: string[], indent: string): string {
+  return values.map((value) => `${indent}- ${value}`).join("\n");
 }
 
 /**
@@ -48,7 +54,8 @@ user-invocable: false
 author: ${SKILL_AUTHOR}
 metadata:
   hermes:
-    tags: [${HERMES_TAGS.join(", ")}]
+    tags:
+${yamlStringList(HERMES_TAGS, "      ")}
     category: ${HERMES_CATEGORY}
 ---
 
@@ -60,8 +67,8 @@ You do not need quota-axi installed globally - invoke it with \`npx -y quota-axi
 
 quota-axi is data only: it never routes, recommends, proxies, intercepts, logs in, imports
 browser cookies, or mutates provider state. It reads local provider auth sources and calls
-first-party provider quota, usage, billing, or entitlement endpoints; it never launches the
-Claude, Grok, Pi, or Kimi CLIs, so it cannot spend the quota it measures.
+first-party provider quota, usage, billing, entitlement, or local loopback endpoints; it never
+launches the Claude, Grok, Pi, Kimi, or Antigravity/agy CLIs, so it cannot spend the quota it measures.
 
 ## When to use
 
@@ -72,7 +79,7 @@ or when comparing supported local provider headroom side by side.
 ## Workflow
 
 1. Run \`npx -y quota-axi\` for compact TOON output covering supported providers' quota windows.
-2. Scope to one provider with \`--provider claude\` or to a subset with \`--provider cursor,copilot,grok,kimi\`.
+2. Scope to one provider with \`--provider claude\` or to a subset with \`--provider cursor,copilot,grok,kimi,agy\`.
 3. Pass \`--json\` for the normalized machine-readable model instead of TOON. Read
    \`quotaSemantics.effectiveAvailability\` rather than treating a model window in isolation:
    account windows can bound every model, and \`boundedBy\` names every window included in the
