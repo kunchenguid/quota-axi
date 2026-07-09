@@ -26,11 +26,12 @@ export const TOP_HELP = `usage: quota-axi [auth] [flags]
 commands[2]:
   (none)=quota, auth
 flags[6]:
-  --provider <claude,codex,cursor,copilot,grok>, --json, --full, --allow-keychain-prompt, --help, -v/--version
+  --provider <claude,codex,cursor,copilot,grok,agy>, --json, --full, --allow-keychain-prompt, --help, -v/--version
 examples:
   quota-axi
   quota-axi --provider claude
-  quota-axi --provider cursor,copilot,grok
+  quota-axi --provider agy
+  quota-axi --provider cursor,copilot,grok,agy
   quota-axi --json
   quota-axi --full
   quota-axi auth
