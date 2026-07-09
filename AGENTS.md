@@ -3,7 +3,7 @@
 This file is the project's committed home for project-intrinsic agent knowledge: build, test, release, architecture, and sharp-edge notes that should travel with the code.
 
 - quota-axi is data only.
-- It reports local Claude, Codex, Cursor, GitHub Copilot, Grok, and Kimi quota windows, and it must never route, recommend, proxy, intercept, log in, import browser cookies, or mutate provider state.
+- It reports local Claude, Codex, Cursor, GitHub Copilot, Grok, Kimi, and Antigravity (`agy`) quota windows, and it must never route, recommend, proxy, intercept, log in, import browser cookies, or mutate provider state.
 - Claude quota windows can include `five_hour`, `seven_day`, `seven_day_opus`, and `extra_usage`. When the OAuth usage response includes a `limits` array, that array is the authoritative, self-describing source and is preferred over the fixed top-level fields: it surfaces every active limit, including ones scoped to a specific model (e.g. Fable) via `scope.model.display_name`, with a `model:<slug>` window id.
 - Claude credential-validity and cache-fallback contracts are documented in [README Security Posture](README.md#security-posture).
 - Codex window identity and cache-validation contracts are documented in [README Provider windows](README.md#provider-windows) and [README Cache](README.md#cache).
@@ -18,6 +18,7 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 - Grok cache fallback accepts only current `web` source snapshots, not legacy `api` billing-proxy entries. Never send cookies, launch Grok or Pi, refresh credentials, or retain raw responses.
 - Codex OAuth credential availability is access-token authoritative: expired `id_token` alone must not mark `auth-json` expired or skip the bearer quota probe.
 - Kimi's credential, fallback, and transport contracts are documented in [README Security Posture](README.md#security-posture).
+- Antigravity (`agy`) discovers already-running Antigravity/`agy` processes via `ps` plus listening ports via `lsof`, then reads only 127.0.0.1 loopback quota endpoints. It prefers `RetrieveUserQuotaSummary`, may use `GetUserStatus` / `GetCommandModelConfigs` as read-only fallbacks, reports `gemini_5h`, `gemini_weekly`, `claude_gpt_5h`, and `claude_gpt_weekly` when grouped summary exists, and must never launch or restart Antigravity/`agy`.
 - Provider adapter behavior (retry-after handling, snake/camel field tolerance, window parsing) is an original, clean-room implementation derived only from the vendors' own OAuth/HTTP behavior; quota-axi carries no vendored or attributed third-party adapter code.
 - CLI plumbing (routing, `--help`, `-v/--version`, error framing, exit codes, and the built-in `update` self-updater) comes from `axi-sdk-js` `runAxiCli`, matching sibling tasks-axi; product TOON/JSON rendering stays in `src/render.ts` and the command bodies live in `src/commands.ts`.
 - `quota` is the implicit default command: `runAxiCli` routes on `argv[0]` and rejects a leading flag, so `src/cli.ts` `normalizeArgv` prepends `quota` for a bare call or flag-first call (`quota-axi --json`) while leaving `auth`, `update`, and the single-token `--help`/version through to the SDK. Validation errors throw `AxiError("...", "VALIDATION_ERROR")` (exit 2); the all-providers-failed path sets `process.exitCode = 1` and still renders.
