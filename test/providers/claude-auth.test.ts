@@ -5,6 +5,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -12,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const originalHome = process.env.HOME;
 const originalUserProfile = process.env.USERPROFILE;
 const originalXdgCacheHome = process.env.XDG_CACHE_HOME;
+const originalClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
 const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
 let tempDir: string | undefined;
 
@@ -32,6 +34,9 @@ afterEach(() => {
   else process.env.USERPROFILE = originalUserProfile;
   if (originalXdgCacheHome === undefined) delete process.env.XDG_CACHE_HOME;
   else process.env.XDG_CACHE_HOME = originalXdgCacheHome;
+  if (originalClaudeConfigDir === undefined)
+    delete process.env.CLAUDE_CONFIG_DIR;
+  else process.env.CLAUDE_CONFIG_DIR = originalClaudeConfigDir;
   if (tempDir) rmSync(tempDir, { recursive: true, force: true });
   tempDir = undefined;
 });
@@ -52,6 +57,65 @@ function usePlatform(platform: NodeJS.Platform): void {
 }
 
 describe("Claude credential-state reporting", () => {
+  it("uses CLAUDE_CONFIG_DIR for file credentials", async () => {
+    const home = useTempHome();
+    const configDir = join(home, "managed-claude");
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      join(configDir, ".credentials.json"),
+      JSON.stringify({
+        claudeAiOauth: {
+          accessToken: "fresh-token",
+          expiresAt: "2035-01-01T00:00:00.000Z",
+        },
+      }),
+    );
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ five_hour: { utilization: 12 } }), {
+            status: 200,
+          }),
+      ),
+    );
+
+    const { fetchQuota, inspectAuth } =
+      await import("../../src/providers/claude.js");
+    const auth = await inspectAuth({ allowKeychainPrompt: false });
+    const result = await fetchQuota({ allowKeychainPrompt: false });
+
+    expect(auth.sources[0]).toMatchObject({
+      source: "oauth-file",
+      path: join(configDir, ".credentials.json"),
+      status: "available",
+    });
+    expect(result.state.status).toBe("fresh");
+  });
+
+  it("derives the custom-config Keychain service from the literal config path", async () => {
+    usePlatform("darwin");
+    const home = useTempHome();
+    const configDir = join(home, "managed-claude");
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    const suffix = createHash("sha256")
+      .update(configDir)
+      .digest("hex")
+      .slice(0, 8);
+    const execFileText = vi.fn(async () => "");
+    vi.doMock("../../src/lib/process.js", () => ({ execFileText }));
+
+    const { inspectAuth } = await import("../../src/providers/claude.js");
+    await inspectAuth({ allowKeychainPrompt: false });
+
+    expect(execFileText).toHaveBeenCalledWith(
+      "security",
+      ["find-generic-password", "-s", `Claude Code-credentials-${suffix}`],
+      expect.any(Number),
+    );
+  });
+
   it("surfaces expired file credentials as a skipped attempt and auth_required", async () => {
     const home = useTempHome();
     mkdirSync(join(home, ".claude"), { recursive: true });

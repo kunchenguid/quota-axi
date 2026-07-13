@@ -293,13 +293,13 @@ Auth source entries can include `credentialPresent` when a non-secret probe conf
 
 ### Provider credential sources
 
-| Provider       | Credential sources read                                                                                                                                                          |
-| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Claude         | `~/.claude/.credentials.json`; on macOS, the `Claude Code-credentials` Keychain value with `--allow-keychain-prompt` or, after a non-secret access marker exists, on plain calls |
-| Codex          | `$CODEX_HOME/auth.json` or `~/.codex/auth.json` before the read-only CLI fallback                                                                                                |
-| Cursor         | `$CURSOR_STATE_DB` when set or the platform Cursor state database path                                                                                                           |
-| GitHub Copilot | `$GITHUB_COPILOT_APPS_JSON` when set or the local Copilot apps auth file                                                                                                         |
-| Grok           | `$GROK_AUTH_JSON`, inline `$GROK_AUTH`, `$GROK_AUTH_PATH`, or `$GROK_HOME/auth.json` / `~/.grok/auth.json`                                                                       |
+| Provider       | Credential sources read                                                                                                                                                                                                                                          |
+| -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Claude         | `$CLAUDE_CONFIG_DIR/.credentials.json` or `~/.claude/.credentials.json`; on macOS, the corresponding default or path-hashed Claude Code Keychain value with `--allow-keychain-prompt` or, after a profile-scoped non-secret access marker exists, on plain calls |
+| Codex          | `$CODEX_HOME/auth.json` or `~/.codex/auth.json` before the read-only CLI fallback                                                                                                                                                                                |
+| Cursor         | `$CURSOR_STATE_DB` when set or the platform Cursor state database path                                                                                                                                                                                           |
+| GitHub Copilot | `$GITHUB_COPILOT_APPS_JSON` when set or the local Copilot apps auth file                                                                                                                                                                                         |
+| Grok           | `$GROK_AUTH_JSON`, inline `$GROK_AUTH`, `$GROK_AUTH_PATH`, or `$GROK_HOME/auth.json` / `~/.grok/auth.json`                                                                                                                                                       |
 
 ### Provider notes
 

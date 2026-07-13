@@ -1,4 +1,5 @@
 import { mkdirSync, readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
 
@@ -47,8 +48,11 @@ export function cacheFilePath(): string {
   return join(cacheDirPath(), "quotas.json");
 }
 
-export function claudeKeychainAccessMarkerPath(): string {
-  return join(cacheDirPath(), "claude-keychain-access-granted");
+export function claudeKeychainAccessMarkerPath(configDir?: string): string {
+  const suffix = configDir
+    ? `-${createHash("sha256").update(configDir).digest("hex").slice(0, 8)}`
+    : "";
+  return join(cacheDirPath(), `claude-keychain-access-granted${suffix}`);
 }
 
 function cacheDirPath(): string {

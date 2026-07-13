@@ -1,4 +1,5 @@
 import { chmodSync, existsSync, renameSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { readCachedProvider } from "../cache.js";
@@ -35,8 +36,7 @@ const API_TIMEOUT_MS = 15_000;
 const KEYCHAIN_PROMPT_TIMEOUT_MS = 60_000;
 const KEYCHAIN_PRESENCE_TIMEOUT_MS = 5_000;
 const KEYCHAIN_ITEM_NOT_FOUND_EXIT_CODE = 44;
-const CREDENTIAL_FILE = join(homedir(), ".claude", ".credentials.json");
-const KEYCHAIN_SERVICE = "Claude Code-credentials";
+const DEFAULT_KEYCHAIN_SERVICE = "Claude Code-credentials";
 
 type ClaudeCredentials = {
   source: "oauth-file" | "keychain";
@@ -188,6 +188,7 @@ export async function fetchQuota(
 export async function inspectAuth(
   options: ProviderOptions,
 ): Promise<AuthProviderReport> {
+  const credentialFile = claudeCredentialFile();
   const states = await readCredentialStates(options);
   const sources = states.map((state): AuthSourceReport => {
     if (state.status === "available") {
@@ -195,7 +196,7 @@ export async function inspectAuth(
         source: state.credentials.source,
         path:
           state.credentials.source === "oauth-file"
-            ? CREDENTIAL_FILE
+            ? credentialFile
             : undefined,
         status: "available",
       };
@@ -311,11 +312,12 @@ async function readCredentialStates(
   options: ProviderOptions,
 ): Promise<CredentialState[]> {
   const states: CredentialState[] = [];
+  const credentialFile = claudeCredentialFile();
 
   const fileState = extractCredentialState(
-    readJsonFileResult(CREDENTIAL_FILE),
+    readJsonFileResult(credentialFile),
     "oauth-file",
-    CREDENTIAL_FILE,
+    credentialFile,
   );
   states.push(fileState);
 
@@ -363,7 +365,7 @@ async function readKeychainItemPresence(): Promise<KeychainItemPresence> {
   try {
     await execFileText(
       "security",
-      ["find-generic-password", "-s", KEYCHAIN_SERVICE],
+      ["find-generic-password", "-s", claudeKeychainService()],
       KEYCHAIN_PRESENCE_TIMEOUT_MS,
     );
     return "present";
@@ -377,7 +379,7 @@ async function readKeychainCredentialState(): Promise<CredentialState> {
   try {
     blob = await execFileText(
       "security",
-      ["find-generic-password", "-s", KEYCHAIN_SERVICE, "-w"],
+      ["find-generic-password", "-s", claudeKeychainService(), "-w"],
       KEYCHAIN_PROMPT_TIMEOUT_MS,
     );
   } catch (error) {
@@ -402,12 +404,14 @@ async function readKeychainCredentialState(): Promise<CredentialState> {
 }
 
 function hasKeychainAccessMarker(): boolean {
-  return existsSync(claudeKeychainAccessMarkerPath());
+  return existsSync(
+    claudeKeychainAccessMarkerPath(process.env.CLAUDE_CONFIG_DIR),
+  );
 }
 
 function writeKeychainAccessMarkerBestEffort(): void {
   try {
-    const file = claudeKeychainAccessMarkerPath();
+    const file = claudeKeychainAccessMarkerPath(process.env.CLAUDE_CONFIG_DIR);
     ensurePrivateParent(file);
     const temp = `${file}.${process.pid}.tmp`;
     writeFileSync(temp, "granted\n", { mode: 0o600 });
@@ -417,6 +421,23 @@ function writeKeychainAccessMarkerBestEffort(): void {
   } catch {
     return;
   }
+}
+
+export function claudeCredentialFile(): string {
+  return join(
+    process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude"),
+    ".credentials.json",
+  );
+}
+
+export function claudeKeychainService(): string {
+  const configDir = process.env.CLAUDE_CONFIG_DIR;
+  if (!configDir) return DEFAULT_KEYCHAIN_SERVICE;
+  const suffix = createHash("sha256")
+    .update(configDir)
+    .digest("hex")
+    .slice(0, 8);
+  return `${DEFAULT_KEYCHAIN_SERVICE}-${suffix}`;
 }
 
 function isKeychainItemNotFound(error: unknown): boolean {
