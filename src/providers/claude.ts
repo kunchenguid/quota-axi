@@ -360,7 +360,6 @@ async function readCredentialStates(
   locations = resolveClaudeProfileLocations(),
 ): Promise<CredentialState[]> {
   const states: CredentialState[] = [];
-
   const fileState = extractCredentialState(
     readJsonFileResult(locations.credentialFile),
     "oauth-file",

@@ -212,7 +212,6 @@ describe("Claude credential-state reporting", () => {
       status: "available",
     });
   });
-
   it("surfaces expired file credentials as a skipped attempt and auth_required", async () => {
     const home = useTempHome();
     mkdirSync(join(home, ".claude"), { recursive: true });
