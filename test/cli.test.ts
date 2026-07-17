@@ -2,7 +2,8 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { main, parseArgs } from "../src/cli.js";
+import { parseFlags } from "../src/args.js";
+import { main, normalizeArgv } from "../src/cli.js";
 import { PROVIDERS } from "../src/providers/index.js";
 import { redactedResponse } from "../src/render.js";
 import type {
@@ -32,9 +33,9 @@ afterEach(() => {
   process.exitCode = undefined;
 });
 
-describe("CLI argument parsing", () => {
+describe("CLI flag parsing", () => {
   it("defaults to all supported providers", () => {
-    expect(parseArgs([]).providers).toEqual([
+    expect(parseFlags([]).providers).toEqual([
       "claude",
       "codex",
       "cursor",
@@ -44,8 +45,8 @@ describe("CLI argument parsing", () => {
   });
 
   it("scopes comma-separated providers", () => {
-    expect(parseArgs(["--provider", "claude"]).providers).toEqual(["claude"]);
-    expect(parseArgs(["--provider=cursor,copilot,grok"]).providers).toEqual([
+    expect(parseFlags(["--provider", "claude"]).providers).toEqual(["claude"]);
+    expect(parseFlags(["--provider=cursor,copilot,grok"]).providers).toEqual([
       "cursor",
       "copilot",
       "grok",
@@ -53,16 +54,62 @@ describe("CLI argument parsing", () => {
   });
 
   it("ignores a standalone argument separator", () => {
-    expect(parseArgs(["--", "--provider", "grok", "--json"])).toMatchObject({
+    expect(parseFlags(["--", "--provider", "grok", "--json"])).toMatchObject({
       providers: ["grok"],
       json: true,
     });
   });
 
+  it("collects the boolean flags", () => {
+    expect(parseFlags(["--json", "--full", "--allow-keychain-prompt"])).toEqual(
+      {
+        providers: ["claude", "codex", "cursor", "copilot", "grok"],
+        json: true,
+        full: true,
+        allowKeychainPrompt: true,
+      },
+    );
+  });
+
   it("rejects unsupported providers", () => {
-    expect(() => parseArgs(["--provider", "gemini"])).toThrow(
+    expect(() => parseFlags(["--provider", "gemini"])).toThrow(
       "unsupported provider",
     );
+  });
+
+  it("rejects unknown flags", () => {
+    expect(() => parseFlags(["--bogus"])).toThrow("unknown argument: --bogus");
+  });
+});
+
+describe("argv normalization", () => {
+  it("prefixes the implicit quota command onto a bare invocation", () => {
+    expect(normalizeArgv([])).toEqual(["quota"]);
+  });
+
+  it("routes leading flags to the quota command", () => {
+    expect(normalizeArgv(["--json"])).toEqual(["quota", "--json"]);
+    expect(normalizeArgv(["--provider", "claude"])).toEqual([
+      "quota",
+      "--provider",
+      "claude",
+    ]);
+  });
+
+  it("leaves explicit commands and SDK built-ins untouched", () => {
+    expect(normalizeArgv(["auth", "--json"])).toEqual(["auth", "--json"]);
+    expect(normalizeArgv(["update", "--check"])).toEqual(["update", "--check"]);
+    expect(normalizeArgv(["quota", "--full"])).toEqual(["quota", "--full"]);
+  });
+
+  it("preserves the single-token help and version flags for the SDK", () => {
+    expect(normalizeArgv(["--help"])).toEqual(["--help"]);
+    expect(normalizeArgv(["-v"])).toEqual(["-v"]);
+    expect(normalizeArgv(["--version"])).toEqual(["--version"]);
+  });
+
+  it("leaves an unknown command for the SDK to reject", () => {
+    expect(normalizeArgv(["boguscmd"])).toEqual(["boguscmd"]);
   });
 });
 
@@ -290,6 +337,35 @@ describe("CLI quota rendering", () => {
   });
 });
 
+describe("CLI plumbing via the axi SDK", () => {
+  it("prints the version for -v/--version", async () => {
+    for (const flag of ["-v", "--version"]) {
+      const chunks = await capture([flag]);
+      expect(chunks.trim()).toMatch(/^\d+\.\d+\.\d+$/);
+      expect(process.exitCode).toBeUndefined();
+    }
+  });
+
+  it("prints the top-level help for --help", async () => {
+    const output = await capture(["--help"]);
+    expect(output).toContain("usage: quota-axi [auth] [flags]");
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("frames unknown flags as a validation error with exit code 2", async () => {
+    const output = await capture(["--bogus"]);
+    expect(output).toContain("unknown argument: --bogus");
+    expect(output).toContain("code: VALIDATION_ERROR");
+    expect(process.exitCode).toBe(2);
+  });
+
+  it("frames unknown commands as a validation error with exit code 2", async () => {
+    const output = await capture(["boguscmd"]);
+    expect(output).toContain("Unknown command: boguscmd");
+    expect(process.exitCode).toBe(2);
+  });
+});
+
 describe("response redaction", () => {
   it("hides account identity and attempts unless --full is set", () => {
     const response: QuotaAxiResponse = {
@@ -319,6 +395,21 @@ describe("response redaction", () => {
     );
   });
 });
+
+async function capture(argv: string[]): Promise<string> {
+  const chunks: string[] = [];
+  await main({
+    argv,
+    binPath: "quota-axi",
+    stdout: {
+      write(chunk) {
+        chunks.push(String(chunk));
+        return true;
+      },
+    },
+  });
+  return chunks.join("");
+}
 
 function providerWithQuota(quota: ProviderQuota): ProviderAdapter {
   return {

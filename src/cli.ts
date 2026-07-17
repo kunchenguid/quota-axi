@@ -1,23 +1,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { annotateQuotaAdvice } from "./advice.js";
-import { writeCachedProviders } from "./cache.js";
-import { nowIso } from "./lib/time.js";
-import { PROVIDERS, parseProviders } from "./providers/index.js";
-import {
-  redactedResponse,
-  renderAuthToon,
-  renderError,
-  renderQuotaToon,
-} from "./render.js";
-import type {
-  AuthProviderReport,
-  ProviderId,
-  ProviderOptions,
-  ProviderQuota,
-  QuotaAxiResponse,
-} from "./types.js";
+import { runAxiCli } from "axi-sdk-js";
+import { authCommand, quotaCommand, type QuotaContext } from "./commands.js";
 
 export const DESCRIPTION =
   "Report local agent-provider quota windows for routing-aware agents.";
@@ -36,166 +21,63 @@ examples:
   quota-axi auth
 `;
 
+const VERSION = readPackageVersion();
+
 type MainOptions = {
   argv?: string[];
-  stdout?: Pick<NodeJS.WriteStream, "write">;
+  stdout?: { write: (chunk: string) => unknown };
   binPath?: string;
 };
 
-type ParsedArgs = {
-  command: "quota" | "auth" | "help" | "version";
-  providers: ProviderId[];
-  json: boolean;
-  full: boolean;
-  allowKeychainPrompt: boolean;
-};
-
 export async function main(options: MainOptions = {}): Promise<void> {
-  const stdout = options.stdout ?? process.stdout;
   const binPath = options.binPath ?? process.argv[1] ?? "quota-axi";
-  try {
-    const parsed = parseArgs(options.argv ?? process.argv.slice(2));
-    if (parsed.command === "help") {
-      stdout.write(TOP_HELP);
-      return;
-    }
-    if (parsed.command === "version") {
-      stdout.write(`quota-axi ${readPackageVersion()}\n`);
-      return;
-    }
-    const providerOptions: ProviderOptions = {
-      allowKeychainPrompt: parsed.allowKeychainPrompt,
-    };
-    if (parsed.command === "auth") {
-      const reports = await inspectAuth(parsed.providers, providerOptions);
-      if (parsed.json) {
-        stdout.write(
-          `${JSON.stringify({ generatedAt: nowIso(), schemaVersion: 1, auth: reports }, null, 2)}\n`,
-        );
-      } else {
-        stdout.write(`${renderAuthToon(reports, binPath)}\n`);
-      }
-      return;
-    }
+  const argv = normalizeArgv(options.argv ?? process.argv.slice(2));
 
-    const response = await fetchQuota(parsed.providers, providerOptions);
-    const rendered = parsed.json
-      ? JSON.stringify(redactedResponse(response, parsed.full), null, 2)
-      : renderQuotaToon(
-          redactedResponse(response, parsed.full),
-          binPath,
-          parsed.full,
-        );
-    stdout.write(`${rendered}\n`);
-
-    if (response.providers.every((provider) => isFailed(provider))) {
-      process.exitCode = 1;
-    }
-    writeCachedProvidersBestEffort(response.providers);
-  } catch (error) {
-    stdout.write(
-      `${renderError(
-        error instanceof Error ? error.message : "quota-axi failed",
-        "usage",
-        ["Run `quota-axi --help` for supported commands and flags"],
-      )}\n`,
-    );
-    process.exitCode = 2;
-  }
-}
-
-export function parseArgs(argv: string[]): ParsedArgs {
-  let command: ParsedArgs["command"] = "quota";
-  let providerValue: string | undefined;
-  let json = false;
-  let full = false;
-  let allowKeychainPrompt = false;
-
-  for (let index = 0; index < argv.length; index++) {
-    const arg = argv[index];
-    if (arg === "--") {
-      continue;
-    }
-    if (arg === "auth") {
-      command = "auth";
-      continue;
-    }
-    if (arg === "--help" || arg === "-h") {
-      command = "help";
-      continue;
-    }
-    if (arg === "--version" || arg === "-v" || arg === "-V") {
-      command = "version";
-      continue;
-    }
-    if (arg === "--json") {
-      json = true;
-      continue;
-    }
-    if (arg === "--full") {
-      full = true;
-      continue;
-    }
-    if (arg === "--allow-keychain-prompt") {
-      allowKeychainPrompt = true;
-      continue;
-    }
-    if (arg === "--provider") {
-      const value = argv[index + 1];
-      if (!value)
-        throw new Error("--provider requires a comma-separated provider list");
-      providerValue = value;
-      index++;
-      continue;
-    }
-    if (arg.startsWith("--provider=")) {
-      providerValue = arg.slice("--provider=".length);
-      continue;
-    }
-    throw new Error(`unknown argument: ${arg}`);
-  }
-
-  return {
-    command,
-    providers: parseProviders(providerValue),
-    json,
-    full,
-    allowKeychainPrompt,
-  };
-}
-
-async function fetchQuota(
-  providers: ProviderId[],
-  options: ProviderOptions,
-): Promise<QuotaAxiResponse> {
-  const results = await Promise.all(
-    providers.map((provider) => PROVIDERS[provider].fetchQuota(options)),
-  );
-  return annotateQuotaAdvice({
-    generatedAt: nowIso(),
-    providers: results,
+  await runAxiCli<QuotaContext>({
+    argv,
+    description: DESCRIPTION,
+    version: VERSION,
+    topLevelHelp: TOP_HELP,
+    ...(options.stdout ? { stdout: options.stdout } : {}),
+    commands: {
+      quota: quotaCommand,
+      auth: authCommand,
+    },
+    // `quota` is the implicit default command, so the bare-invocation home view
+    // is never reached (see normalizeArgv); wiring it keeps the SDK contract.
+    home: quotaCommand,
+    resolveContext: () => ({ binPath }),
+    getCommandHelp: (command) =>
+      command === "quota" || command === "auth" ? TOP_HELP : undefined,
   });
 }
 
-async function inspectAuth(
-  providers: ProviderId[],
-  options: ProviderOptions,
-): Promise<AuthProviderReport[]> {
-  return Promise.all(
-    providers.map((provider) => PROVIDERS[provider].inspectAuth(options)),
-  );
-}
-
-function isFailed(provider: ProviderQuota): boolean {
-  return !["fresh", "stale"].includes(provider.state.status);
-}
-
-function writeCachedProvidersBestEffort(providers: ProviderQuota[]): void {
-  try {
-    writeCachedProviders(providers);
-  } catch {
-    return;
+/**
+ * Route the flag-first default surface onto the `quota` command. `quota-axi`,
+ * `quota-axi --json`, and `quota-axi --provider claude` all mean "run quota",
+ * but runAxiCli routes on argv[0] and rejects a leading flag. Prefixing the
+ * implicit `quota` command name preserves the historical surface while letting
+ * the SDK own routing, help, version, and error framing.
+ */
+export function normalizeArgv(raw: string[]): string[] {
+  if (raw.length === 0) return ["quota"];
+  const first = raw[0];
+  if (raw.length === 1 && isTopLevelFlag(first)) {
+    return raw;
   }
+  if (first === "quota" || first === "auth" || first === "update") {
+    return raw;
+  }
+  if (first.startsWith("-")) {
+    return ["quota", ...raw];
+  }
+  return raw;
+}
+
+function isTopLevelFlag(flag: string): boolean {
+  return (
+    flag === "--help" || flag === "-v" || flag === "-V" || flag === "--version"
+  );
 }
 
 function readPackageVersion(): string {
