@@ -81,6 +81,115 @@ describe("Codex quota parsing", () => {
     });
   });
 
+  it("derives a weekly primary window identity from its duration", () => {
+    const result = normalizeCodexUsage({
+      rate_limit: {
+        primary_window: {
+          used_percent: 20,
+          limit_window_seconds: 604800,
+        },
+      },
+    });
+
+    expect(result?.windows[0]).toMatchObject({
+      id: "seven_day",
+      label: "week",
+      kind: "weekly",
+      windowSeconds: 604800,
+    });
+  });
+
+  it("derives a session primary window identity from its duration", () => {
+    const result = normalizeCodexUsage({
+      rate_limit: {
+        primary_window: {
+          used_percent: 20,
+          limit_window_seconds: 18000,
+        },
+      },
+    });
+
+    expect(result?.windows[0]).toMatchObject({
+      id: "five_hour",
+      label: "session",
+      kind: "session",
+      windowSeconds: 18000,
+    });
+  });
+
+  it("keeps the positional identity when window duration is absent", () => {
+    const result = normalizeCodexUsage({
+      rate_limit: { primary_window: { used_percent: 20 } },
+    });
+
+    expect(result?.windows[0]).toMatchObject({
+      id: "five_hour",
+      label: "session",
+      kind: "session",
+    });
+  });
+
+  it("derives a weekly named-limit suffix and label from its duration", () => {
+    const result = normalizeCodexUsage({
+      additional_rate_limits: [
+        {
+          metered_feature: "codex_previewfeature",
+          limit_name: "GPT-Preview-Spark",
+          rate_limit: {
+            primary_window: {
+              used_percent: 33,
+              limit_window_seconds: 604800,
+            },
+          },
+        },
+      ],
+    });
+
+    expect(result?.windows[0]).toMatchObject({
+      id: "model:codex_previewfeature:7d",
+      label: "GPT-Preview-Spark week",
+      kind: "model",
+      windowSeconds: 604800,
+    });
+  });
+
+  it("derives a readable identity for a known nonstandard duration", () => {
+    const result = normalizeCodexUsage({
+      rate_limit: {
+        primary_window: {
+          used_percent: 20,
+          limit_window_seconds: 43200,
+        },
+      },
+    });
+
+    expect(result?.windows[0]).toMatchObject({
+      id: "window:12h",
+      label: "12h window",
+      kind: "session",
+    });
+  });
+
+  it("suffixes duplicate ids produced by duration-based identities", () => {
+    const result = normalizeCodexUsage({
+      rate_limit: {
+        primary_window: {
+          used_percent: 20,
+          limit_window_seconds: 604800,
+        },
+        secondary_window: {
+          used_percent: 40,
+          limit_window_seconds: 604800,
+        },
+      },
+    });
+
+    expect(result?.windows.map(({ id }) => id)).toEqual([
+      "seven_day",
+      "seven_day_2",
+    ]);
+  });
+
   it("surfaces code-review and additional per-feature windows from snake_case responses", () => {
     const raw = JSON.parse(
       readFileSync(join(fixtureDir, "oauth-additional-limits.json"), "utf8"),
@@ -151,7 +260,7 @@ describe("Codex quota parsing", () => {
     });
     expect(result?.windows).toMatchObject([
       { id: "five_hour", percentUsed: 18 },
-      { id: "weekly", percentUsed: 52 },
+      { id: "seven_day", label: "week", percentUsed: 52 },
       {
         id: "model:codex_previewfeature:5h",
         label: "GPT-Preview-Spark session",
