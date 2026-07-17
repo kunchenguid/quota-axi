@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.6](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.5...quota-axi-v0.1.6) (2026-07-17)
+
+
+### Features
+
+* **cli:** migrate CLI plumbing to axi-sdk-js ([#20](https://github.com/kunchenguid/quota-axi/issues/20)) ([d59fc2a](https://github.com/kunchenguid/quota-axi/commit/d59fc2ab4e8c94fda2e38f0bbf7fecb72dc60a56))
+
 ## [0.1.5](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.4...quota-axi-v0.1.5) (2026-07-08)
 
 
