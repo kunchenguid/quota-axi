@@ -190,7 +190,7 @@ export function normalizeCodexUsage(raw: unknown):
   const data = raw as Record<string, unknown>;
   const rateLimit = resolveRateLimitContainer(data);
 
-  const windows = [
+  const windows = deduplicateWindowIds([
     ...windowPairFromContainer(
       rateLimit,
       "five_hour",
@@ -210,7 +210,7 @@ export function normalizeCodexUsage(raw: unknown):
       "weekly",
     ),
     ...collectNamedRateLimitWindows(data),
-  ];
+  ]);
 
   if (windows.length === 0) return undefined;
 
@@ -307,15 +307,31 @@ function namedLimitWindows(
   label: string,
   container: Record<string, unknown>,
 ): QuotaWindow[] {
-  return windowPairFromContainer(
-    container,
-    `model:${id}:5h`,
-    `${label} session`,
-    "model",
-    `model:${id}:7d`,
-    `${label} week`,
-    "model",
-  );
+  return [
+    normalizeWindow(
+      container.primary_window ?? container.primary,
+      `model:${id}:5h`,
+      `${label} session`,
+      "model",
+      { id, label },
+    ),
+    normalizeWindow(
+      container.secondary_window ?? container.secondary,
+      `model:${id}:7d`,
+      `${label} week`,
+      "model",
+      { id, label },
+    ),
+  ].filter((window): window is QuotaWindow => Boolean(window));
+}
+
+function deduplicateWindowIds(windows: QuotaWindow[]): QuotaWindow[] {
+  const counts = new Map<string, number>();
+  return windows.map((window) => {
+    const count = (counts.get(window.id) ?? 0) + 1;
+    counts.set(window.id, count);
+    return count === 1 ? window : { ...window, id: `${window.id}_${count}` };
+  });
 }
 
 export function mergeAccountAndLimits(
@@ -585,6 +601,7 @@ function normalizeWindow(
   id: string,
   label: string,
   kind: QuotaWindow["kind"],
+  namedLimit?: { id: string; label: string },
 ): QuotaWindow | undefined {
   const data = objectValue(raw) as RawWindow | undefined;
   if (!data) return undefined;
@@ -601,10 +618,9 @@ function normalizeWindow(
       : new Date(
           Date.now() + numberValue(data.reset_after_seconds)! * 1000,
         ).toISOString();
+  const identity = windowIdentity(windowSeconds, id, label, kind, namedLimit);
   return withRemaining({
-    id,
-    label,
-    kind,
+    ...identity,
     percentUsed: clampPercent(used),
     resetsAt:
       parseEpochOrIso(data.reset_at) ??
@@ -612,6 +628,56 @@ function normalizeWindow(
       resetFromSeconds,
     windowSeconds,
   });
+}
+
+function windowIdentity(
+  windowSeconds: number | undefined,
+  fallbackId: string,
+  fallbackLabel: string,
+  fallbackKind: QuotaWindow["kind"],
+  namedLimit?: { id: string; label: string },
+): Pick<QuotaWindow, "id" | "label" | "kind"> {
+  if (windowSeconds === undefined) {
+    return { id: fallbackId, label: fallbackLabel, kind: fallbackKind };
+  }
+
+  if (windowSeconds <= 21_600) {
+    return namedLimit
+      ? {
+          id: `model:${namedLimit.id}:5h`,
+          label: `${namedLimit.label} session`,
+          kind: "model",
+        }
+      : { id: "five_hour", label: "session", kind: "session" };
+  }
+
+  if (windowSeconds >= 518_400) {
+    return namedLimit
+      ? {
+          id: `model:${namedLimit.id}:7d`,
+          label: `${namedLimit.label} week`,
+          kind: "model",
+        }
+      : { id: "seven_day", label: "week", kind: "weekly" };
+  }
+
+  const duration = readableWindowDuration(windowSeconds);
+  return namedLimit
+    ? {
+        id: `model:${namedLimit.id}:window:${duration}`,
+        label: `${namedLimit.label} ${duration} window`,
+        kind: "model",
+      }
+    : {
+        id: `window:${duration}`,
+        label: `${duration} window`,
+        kind: fallbackKind,
+      };
+}
+
+function readableWindowDuration(windowSeconds: number): string {
+  const hours = windowSeconds / 3600;
+  return `${Number.isInteger(hours) ? hours : Number(hours.toFixed(2))}h`;
 }
 
 function normalizeCredits(raw: unknown): ProviderQuota["credits"] | undefined {
