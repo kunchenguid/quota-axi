@@ -97,16 +97,6 @@ export function renderAuthToon(
   ].join("\n");
 }
 
-export function renderError(
-  message: string,
-  code = "error",
-  help: string[] = [],
-): string {
-  const blocks = [encode({ error: message, code })];
-  if (help.length > 0) blocks.push(renderHelp(help));
-  return blocks.join("\n");
-}
-
 export function redactedResponse(
   response: QuotaAxiResponse,
   full: boolean,

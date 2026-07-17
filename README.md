@@ -19,7 +19,8 @@ quota-axi reports local Claude, Codex, Cursor, GitHub Copilot, and Grok quota wi
 It is data only: it never routes, recommends, proxies, intercepts, logs in, imports browser cookies, or mutates provider state.
 
 - **Official sources** - quota-axi reads local provider auth sources and calls the first-party quota, usage, billing, or entitlement endpoints used by the local agents, with a read-only Codex app-server probe as fallback.
-- **Local first** - everything runs on the machine that holds the credentials; the only network calls are to first-party provider endpoints, never a third-party relay.
+- **Local first** - quota and auth reports run on the machine that holds the credentials; their network calls go to first-party provider endpoints, never a third-party relay.
+  The separate `update` command contacts npm only when the user runs it.
 - **Token efficient** - default stdout is compact TOON so agents spend fewer tokens parsing quota state, with `--json` available when a caller needs the normalized model.
 
 ## Quick Start
@@ -194,10 +195,12 @@ It is generated from `src/skill.ts`; update it with `pnpm run build:skill` and v
 
 ## CLI Reference
 
-| Command     | Description                                      |
-| ----------- | ------------------------------------------------ |
-| `quota-axi` | Report supported local quota windows             |
-| `auth`      | Report local auth-source availability, no values |
+| Command          | Description                                       |
+| ---------------- | ------------------------------------------------- |
+| `quota-axi`      | Report supported local quota windows              |
+| `auth`           | Report local auth-source availability, no values  |
+| `update`         | Upgrade quota-axi to the latest published version |
+| `update --check` | Report current vs. latest without installing      |
 
 ### Flags
 
@@ -329,7 +332,8 @@ Auth source entries can include `credentialPresent` when a non-secret probe conf
 
 ### Safety guarantees
 
-- Direct HTTP requests go only to first-party provider usage, quota, billing, or entitlement endpoints with the user's local credentials.
+- Quota and auth HTTP requests go only to first-party provider usage, quota, billing, or entitlement endpoints with the user's local credentials.
+- The user-initiated `update` command is the only non-provider network surface, and it is not part of quota measurement.
 - It sends credential values only to the first-party provider request they authenticate.
 - It never prints, logs, or caches credential values.
 - It never launches the Claude CLI, so it cannot accidentally spend the quota it measures.

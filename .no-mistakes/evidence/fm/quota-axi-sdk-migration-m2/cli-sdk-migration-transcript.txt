@@ -1,0 +1,116 @@
+# quota-axi SDK migration CLI transcript
+Target commit: 2651f71ac09ee9fec33b353db0215cde9175bf63
+Fixture: isolated HOME/CODEX_HOME/XDG cache with no provider credentials.
+
+### SDK top-level help includes legacy help plus built-in commands
+$ pnpm exec tsx bin/quota-axi.ts --help
+usage: quota-axi [auth] [flags]
+commands[2]:
+  (none)=quota, auth
+flags[6]:
+  --provider <claude,codex,cursor,copilot,grok>, --json, --full, --allow-keychain-prompt, --help, -v/--version
+examples:
+  quota-axi
+  quota-axi --provider claude
+  quota-axi --provider cursor,copilot,grok
+  quota-axi --json
+  quota-axi --full
+  quota-axi auth
+"built-in":
+  update: Upgrade `quota-axi.ts` to the latest published version
+  "update --check": Report current vs latest without installing
+[exit 0]
+
+### SDK version output is bare semver
+$ pnpm exec tsx bin/quota-axi.ts -v
+0.1.5
+[exit 0]
+
+### Implicit quota command accepts flag-first JSON invocation
+$ pnpm exec tsx bin/quota-axi.ts --provider codex --json
+{
+  "generatedAt": "2026-07-17T04:44:35.069Z",
+  "schemaVersion": 2,
+  "providers": [
+    {
+      "provider": "codex",
+      "label": "Codex",
+      "source": "unavailable",
+      "windows": [],
+      "state": {
+        "status": "error",
+        "stale": false,
+        "error": "Codex quota unavailable",
+        "sourcesTried": [
+          "oauth",
+          "cli-rpc"
+        ]
+      }
+    }
+  ]
+}
+[exit 1]
+
+### Explicit quota command keeps TOON rendering and all-providers-failed exit 1
+$ pnpm exec tsx bin/quota-axi.ts quota --provider codex
+bin: /Users/kunchen/.no-mistakes/worktrees/6eca570dbcdb/01KXQ5G5HPXNEGDDNFDY0N6BDM/bin/quota-axi.ts
+description: Report local agent-provider quota windows for routing-aware agents
+generatedAt: "2026-07-17T04:44:35.620Z"
+providers[1]{provider,plan,source,status,refreshedAt}:
+  codex,unknown,unavailable,error,none
+windows[0]:
+help[3]:
+  Run `quota-axi --provider claude --json` for JSON output
+  Run `quota-axi --full` to include account and source-attempt details
+  Run `quota-axi auth` to inspect local auth source availability without printing secrets
+[exit 1]
+
+### Auth command keeps JSON shape through SDK routing
+$ pnpm exec tsx bin/quota-axi.ts auth --provider codex --json
+{
+  "generatedAt": "2026-07-17T04:44:36.113Z",
+  "schemaVersion": 1,
+  "auth": [
+    {
+      "provider": "codex",
+      "sources": [
+        {
+          "source": "auth-json",
+          "path": "/Users/kunchen/.no-mistakes/worktrees/6eca570dbcdb/01KXQ5G5HPXNEGDDNFDY0N6BDM/.no-mistakes/evidence/fm/quota-axi-sdk-migration-m2/sandbox/codex/auth.json",
+          "status": "missing"
+        },
+        {
+          "source": "cli-rpc",
+          "status": "available"
+        }
+      ]
+    }
+  ]
+}
+[exit 0]
+
+### Validation errors use SDK AxiError framing and exit 2
+$ pnpm exec tsx bin/quota-axi.ts --bogus
+error: "unknown argument: --bogus"
+code: VALIDATION_ERROR
+help[1]: Run `quota-axi --help` for supported commands and flags
+[exit 2]
+
+### SDK built-in update command is registered without running an update
+$ pnpm exec tsx bin/quota-axi.ts update --help
+usage: quota-axi [auth] [flags]
+commands[2]:
+  (none)=quota, auth
+flags[6]:
+  --provider <claude,codex,cursor,copilot,grok>, --json, --full, --allow-keychain-prompt, --help, -v/--version
+examples:
+  quota-axi
+  quota-axi --provider claude
+  quota-axi --provider cursor,copilot,grok
+  quota-axi --json
+  quota-axi --full
+  quota-axi auth
+"built-in":
+  update: Upgrade `quota-axi.ts` to the latest published version
+  "update --check": Report current vs latest without installing
+[exit 0]
