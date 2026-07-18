@@ -69,8 +69,10 @@ type ClaudeIdentityResult = {
 type ClaudeProfileLocations = {
   credentialFile: string;
   keychainService: string;
-  keychainAccount: string;
   keychainAccessMarker: string;
+};
+type ClaudeKeychainLocations = ClaudeProfileLocations & {
+  keychainAccount: string;
 };
 
 type RawUsageWindow = {
@@ -370,10 +372,27 @@ async function readCredentialStates(
   states.push(fileState);
 
   if (process.platform === "darwin") {
-    if (options.allowKeychainPrompt || hasKeychainAccessMarker(locations)) {
-      states.push(await readKeychainCredentialState(locations));
+    let keychainLocations: ClaudeKeychainLocations;
+    try {
+      keychainLocations = resolveClaudeKeychainLocations(locations);
+    } catch {
+      states.push({
+        status: "skipped",
+        source: {
+          source: "keychain",
+          status: "skipped",
+          error: "keychain_account_unavailable",
+        },
+      });
+      return states;
+    }
+    if (
+      options.allowKeychainPrompt ||
+      hasKeychainAccessMarker(keychainLocations)
+    ) {
+      states.push(await readKeychainCredentialState(keychainLocations));
     } else {
-      states.push(await readSkippedKeychainCredentialState(locations));
+      states.push(await readSkippedKeychainCredentialState(keychainLocations));
     }
   }
 
@@ -381,7 +400,7 @@ async function readCredentialStates(
 }
 
 async function readSkippedKeychainCredentialState(
-  locations: ClaudeProfileLocations,
+  locations: ClaudeKeychainLocations,
 ): Promise<CredentialState> {
   const presence = await readKeychainItemPresence(locations);
   if (presence === "present") {
@@ -412,7 +431,7 @@ async function readSkippedKeychainCredentialState(
 }
 
 async function readKeychainItemPresence(
-  locations: ClaudeProfileLocations,
+  locations: ClaudeKeychainLocations,
 ): Promise<KeychainItemPresence> {
   try {
     await execFileText(
@@ -427,7 +446,7 @@ async function readKeychainItemPresence(
 }
 
 async function readKeychainCredentialState(
-  locations: ClaudeProfileLocations,
+  locations: ClaudeKeychainLocations,
 ): Promise<CredentialState> {
   let blob: string;
   try {
@@ -494,9 +513,14 @@ function resolveClaudeProfileLocations(): ClaudeProfileLocations {
   return {
     credentialFile: join(configDir, ".credentials.json"),
     keychainService: keychainServiceForConfigDir(keychainConfigDir),
-    keychainAccount: process.platform === "darwin" ? currentMacOSAccount() : "",
     keychainAccessMarker: claudeKeychainAccessMarkerPath(keychainConfigDir),
   };
+}
+
+function resolveClaudeKeychainLocations(
+  locations: ClaudeProfileLocations,
+): ClaudeKeychainLocations {
+  return { ...locations, keychainAccount: currentMacOSAccount() };
 }
 
 function currentMacOSAccount(): string {
@@ -508,7 +532,7 @@ function currentMacOSAccount(): string {
 }
 
 function keychainLookupArguments(
-  locations: ClaudeProfileLocations,
+  locations: ClaudeKeychainLocations,
   readValue: boolean,
 ): string[] {
   const args = [

@@ -28,6 +28,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.doUnmock("node:os");
   vi.doUnmock("../../src/lib/process.js");
   vi.useRealTimers();
   if (originalPlatform)
@@ -156,6 +157,67 @@ describe("Claude credential-state reporting", () => {
       expect.any(Number),
     );
     expect(keychainAccount).not.toBe("wrong-account");
+  });
+
+  it("keeps file credentials available when the OS account is unavailable", async () => {
+    usePlatform("darwin");
+    const home = useTempHome();
+    mkdirSync(join(home, ".claude"), { recursive: true });
+    writeFileSync(
+      join(home, ".claude", ".credentials.json"),
+      JSON.stringify({
+        claudeAiOauth: {
+          accessToken: "fresh-file-token",
+          expiresAt: "2035-01-01T00:00:00.000Z",
+        },
+      }),
+    );
+    vi.doMock("node:os", async (importOriginal) => {
+      const original = await importOriginal<typeof import("node:os")>();
+      return {
+        ...original,
+        userInfo: () => {
+          throw new Error("account unavailable");
+        },
+      };
+    });
+    const execFileText = vi.fn(async () => "");
+    vi.doMock("../../src/lib/process.js", () => ({ execFileText }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ five_hour: { utilization: 12 } }), {
+            status: 200,
+          }),
+      ),
+    );
+
+    const { claudeCredentialFile, fetchQuota, inspectAuth } =
+      await import("../../src/providers/claude.js");
+    const auth = await inspectAuth({ allowKeychainPrompt: false });
+    const result = await fetchQuota({ allowKeychainPrompt: false });
+
+    expect(claudeCredentialFile()).toBe(
+      join(home, ".claude", ".credentials.json"),
+    );
+    expect(auth.sources).toContainEqual({
+      source: "oauth-file",
+      path: join(home, ".claude", ".credentials.json"),
+      status: "available",
+    });
+    expect(auth.sources).toContainEqual({
+      source: "keychain",
+      status: "skipped",
+      error: "keychain_account_unavailable",
+    });
+    expect(result.state.status).toBe("fresh");
+    expect(result.attempts).toContainEqual({
+      source: "keychain",
+      status: "skipped",
+      error: "keychain_account_unavailable",
+    });
+    expect(execFileText).not.toHaveBeenCalled();
   });
 
   it("preserves an empty-present CLAUDE_CONFIG_DIR across profile derivations", async () => {
@@ -658,6 +720,36 @@ describe("Claude credential-state reporting", () => {
     };
     expect(output.providers[0]?.state.status).toBe("fresh");
     expect(readCachedProvider("claude")?.windows[0]?.percentUsed).toBe(12);
+  });
+
+  it("uses cached quota when the OS account is unavailable", async () => {
+    usePlatform("darwin");
+    useTempHome();
+    vi.doMock("node:os", async (importOriginal) => {
+      const original = await importOriginal<typeof import("node:os")>();
+      return {
+        ...original,
+        userInfo: () => {
+          throw new Error("account unavailable");
+        },
+      };
+    });
+    const execFileText = vi.fn(async () => "");
+    vi.doMock("../../src/lib/process.js", () => ({ execFileText }));
+    const { writeCachedProviders } = await import("../../src/cache.js");
+    writeCachedProviders([cachedClaudeQuota(80)]);
+
+    const { fetchQuota } = await import("../../src/providers/claude.js");
+    const result = await fetchQuota({ allowKeychainPrompt: false });
+
+    expect(result.state.status).toBe("stale");
+    expect(result.windows[0]?.percentUsed).toBe(80);
+    expect(result.attempts).toContainEqual({
+      source: "keychain",
+      status: "skipped",
+      error: "keychain_account_unavailable",
+    });
+    expect(execFileText).not.toHaveBeenCalled();
   });
 
   it("does not mark keychain prompt required when the keychain item is missing", async () => {
