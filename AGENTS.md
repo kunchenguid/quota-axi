@@ -19,8 +19,7 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 - Default stdout is compact TOON.
 - `--json` emits the normalized model, and `--full` is required before account identity or per-source attempts are shown.
 - JSON provider reports include `provider`, `label`, `source`, `windows`, and `state`; `state.retryAfter` can appear for provider rate limits, and `state.reason: keychain_access_required` plus `state.remedyCommand` can appear when a stale or unavailable Claude result is blocked by a skipped macOS Keychain prompt.
-- macOS Claude Keychain presence and value reads bind both the profile-derived service and the current macOS account. Value reads are skipped on plain calls until a successful value read records the non-secret access marker under the quota-axi cache directory; after that, plain calls may reuse the existing grant and read live Claude quota.
-- Managed-profile, Claude identity, and Codex executable-override contracts are documented in [README Security Posture](README.md#security-posture).
+- Claude Keychain selection, managed-profile, Claude identity, and Codex executable-override contracts are documented in [README Security Posture](README.md#security-posture).
 - `--allow-keychain-prompt` is the first-time opt-in that permits the Claude Keychain value read which can prompt, and agents should relay the one-time "Always Allow" grant when `keychain_access_required` advice appears.
 - Codex uses `$CODEX_HOME/auth.json` or `~/.codex/auth.json` OAuth before the CLI fallback.
 - Codex `auth.json` support is OAuth-token only; never treat `OPENAI_API_KEY` as valid quota auth or send API keys to ChatGPT quota endpoints.
