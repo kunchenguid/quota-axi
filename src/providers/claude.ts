@@ -488,16 +488,16 @@ function resolveClaudeProfileLocations(): ClaudeProfileLocations {
   const configDir = (configuredDir ?? join(homedir(), ".claude")).normalize(
     "NFC",
   );
-  const keychainConfigDir = configuredDir ? configDir : undefined;
+  const profileConfigDir = configuredDir === undefined ? undefined : configDir;
   return {
     credentialFile: join(configDir, ".credentials.json"),
-    keychainService: keychainServiceForConfigDir(keychainConfigDir),
-    keychainAccessMarker: claudeKeychainAccessMarkerPath(keychainConfigDir),
+    keychainService: keychainServiceForConfigDir(profileConfigDir),
+    keychainAccessMarker: claudeKeychainAccessMarkerPath(profileConfigDir),
   };
 }
 
 function keychainServiceForConfigDir(configDir?: string): string {
-  if (!configDir) return DEFAULT_KEYCHAIN_SERVICE;
+  if (configDir === undefined) return DEFAULT_KEYCHAIN_SERVICE;
   const suffix = createHash("sha256")
     .update(configDir)
     .digest("hex")
