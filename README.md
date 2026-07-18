@@ -111,7 +111,7 @@ auth[7]{provider,source,path,status,error}:
   claude,oauth-file,~/.claude/.credentials.json,available,none
   claude,keychain,none,skipped,keychain_prompt_required
   codex,auth-json,~/.codex/auth.json,available,none
-  codex,cli-rpc,none,available,none
+  codex,cli-rpc,~/.local/bin/codex,available,none
   cursor,state-vscdb,~/Library/Application Support/Cursor/User/globalStorage/state.vscdb,available,none
   copilot,apps-json,~/.config/github-copilot/apps.json,available,none
   grok,auth-json,~/.grok/auth.json,available,none
@@ -224,8 +224,10 @@ It is generated from `src/skill.ts`; update it with `pnpm run build:skill` and v
 | Quota report                  | `providers`                                                                                |
 | Provider report               | `provider`, `label`, `source`, `windows`, `state`, optional `plan`, and optional `credits` |
 | Provider report with `--full` | Optional `account` identity and per-source `attempts`                                      |
+| Account identity (`--full`)   | Optional `email`, `organization`, `accountId`, and `identityStatus`                        |
 
 Account identity and per-source `attempts` are omitted unless `--full` is passed.
+Claude `identityStatus` is `verified` only when Anthropic returns an authoritative account identifier; `email` and `organization` are display-only and must not be used for duplicate detection.
 
 ### Provider `state`
 
@@ -342,15 +344,15 @@ Auth source entries can include `credentialPresent` when a non-secret probe conf
 
 ### Cache
 
-| Item                                   | Behavior                                                                                                                                |
-| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| Quota cache                            | Lives at `~/.cache/quota-axi/quotas.json` or under `$XDG_CACHE_HOME/quota-axi/` when `XDG_CACHE_HOME` is set.                           |
-| Quota cache permissions                | Uses `0600` file permissions.                                                                                                           |
-| Quota cache contents                   | Stores normalized non-secret snapshots only.                                                                                            |
-| Claude Keychain access marker          | Lives alongside the quota cache as `claude-keychain-access-granted`, uses `0600` file permissions, and contains no credential material. |
-| Cached reports                         | Only fresh provider snapshots with windows are cached.                                                                                  |
-| Fresh provider reports with no windows | Clear any cached snapshot for that provider, so entitlement-only reports do not leave stale quota windows behind.                       |
-| Reports and details not cached         | Failed providers, stale providers, account identity, and source attempts are not cached.                                                |
+| Item                                   | Behavior                                                                                                                                                                                                                                      |
+| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Quota cache                            | Lives at `~/.cache/quota-axi/quotas.json` or under `$XDG_CACHE_HOME/quota-axi/` when `XDG_CACHE_HOME` is set.                                                                                                                                 |
+| Quota cache permissions                | Uses `0600` file permissions.                                                                                                                                                                                                                 |
+| Quota cache contents                   | Stores normalized non-secret snapshots only.                                                                                                                                                                                                  |
+| Claude Keychain access marker          | Lives alongside the quota cache as `claude-keychain-access-granted` for the default profile or with an eight-character path-hash suffix for a `$CLAUDE_CONFIG_DIR` profile; uses `0600` file permissions and contains no credential material. |
+| Cached reports                         | Only fresh provider snapshots with windows are cached.                                                                                                                                                                                        |
+| Fresh provider reports with no windows | Clear any cached snapshot for that provider, so entitlement-only reports do not leave stale quota windows behind.                                                                                                                             |
+| Reports and details not cached         | Failed providers, stale providers, account identity, and source attempts are not cached.                                                                                                                                                      |
 
 ## Development
 

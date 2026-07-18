@@ -20,11 +20,9 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 - `--json` emits the normalized model, and `--full` is required before account identity or per-source attempts are shown.
 - JSON provider reports include `provider`, `label`, `source`, `windows`, and `state`; `state.retryAfter` can appear for provider rate limits, and `state.reason: keychain_access_required` plus `state.remedyCommand` can appear when a stale or unavailable Claude result is blocked by a skipped macOS Keychain prompt.
 - macOS Claude Keychain value reads are skipped on plain calls until a successful value read records the non-secret access marker under the quota-axi cache directory; after that, plain calls may reuse the existing grant and read live Claude quota.
-- Claude credential discovery honors `$CLAUDE_CONFIG_DIR` for both `.credentials.json` and the path-hashed macOS Keychain service; custom-home Keychain markers are namespaced by that literal config path.
-- Claude quota reads also query the first-party `/api/oauth/profile` endpoint with the same OAuth credential. Only the authoritative root `account.uuid` is normalized as `account.accountId`; unrecognized responses are marked `identityStatus: unverified`, and account identity is never cached.
+- Managed-profile, Claude identity, and Codex executable-override contracts are documented in [README Security Posture](README.md#security-posture).
 - `--allow-keychain-prompt` is the first-time opt-in that permits the Claude Keychain value read which can prompt, and agents should relay the one-time "Always Allow" grant when `keychain_access_required` advice appears.
 - Codex uses `$CODEX_HOME/auth.json` or `~/.codex/auth.json` OAuth before the CLI fallback.
-- `$QUOTA_AXI_CODEX_BINARY` may pin the Codex auth inspection and app-server fallback to one absolute executable path; invalid or non-executable overrides fail closed instead of falling back to `PATH`.
 - Codex `auth.json` support is OAuth-token only; never treat `OPENAI_API_KEY` as valid quota auth or send API keys to ChatGPT quota endpoints.
 - Never launch the Claude CLI to probe quota, because that would spend the quota being measured.
 - The read-only Codex app-server JSON-RPC probe is the only CLI fallback.
