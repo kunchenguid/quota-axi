@@ -95,7 +95,7 @@ $ quota-axi --provider claude --json
       "state": {
         "status": "fresh",
         "stale": false,
-        "sourcesTried": ["oauth"],
+        "sourcesTried": ["oauth", "oauth-profile"],
         "refreshedAt": "2026-03-15T16:41:55.000Z"
       }
     }

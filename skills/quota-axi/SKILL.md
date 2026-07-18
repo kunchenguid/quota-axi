@@ -68,8 +68,9 @@ examples:
   every provider failed; exit code 2 means a usage error.
 - Percentages are not comparable across providers - quota-axi never claims one provider's
   percentage equals another's.
-- Claude `--full` output includes the authoritative OAuth profile `account.uuid` when Anthropic
-  returns one; otherwise the account identity is explicitly marked unverified rather than inferred.
+- Claude `--full` output exposes the authoritative OAuth profile `account.uuid` as
+  `account.accountId` when Anthropic returns one; otherwise the account identity is explicitly
+  marked unverified rather than inferred.
 - The quota cache at `~/.cache/quota-axi/quotas.json` only ever holds normalized
   non-secret snapshots.
   Fresh provider reports with no windows clear stale provider snapshots instead of caching
