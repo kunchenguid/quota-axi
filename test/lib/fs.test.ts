@@ -63,7 +63,7 @@ describe("cache paths", () => {
       /^\/tmp\/quota-cache\/quota-axi\/claude-keychain-access-granted-[0-9a-f]{8}$/,
     );
     expect(claudeKeychainAccessMarkerPath("")).toBe(
-      "/tmp/quota-cache/quota-axi/claude-keychain-access-granted-e3b0c442",
+      "/tmp/quota-cache/quota-axi/claude-keychain-access-granted",
     );
   });
 });

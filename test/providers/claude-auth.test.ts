@@ -120,7 +120,6 @@ describe("Claude credential-state reporting", () => {
     usePlatform("darwin");
     const home = useTempHome();
     process.env.CLAUDE_CONFIG_DIR = "";
-    const suffix = createHash("sha256").update("").digest("hex").slice(0, 8);
     const { claudeKeychainAccessMarkerPath } =
       await import("../../src/lib/fs.js");
     const marker = claudeKeychainAccessMarkerPath("");
@@ -142,21 +141,11 @@ describe("Claude credential-state reporting", () => {
 
     expect(claudeCredentialFile()).toBe(".credentials.json");
     expect(marker).toBe(
-      join(
-        home,
-        "cache",
-        "quota-axi",
-        `claude-keychain-access-granted-${suffix}`,
-      ),
+      join(home, "cache", "quota-axi", "claude-keychain-access-granted"),
     );
     expect(execFileText).toHaveBeenCalledWith(
       "security",
-      [
-        "find-generic-password",
-        "-s",
-        `Claude Code-credentials-${suffix}`,
-        "-w",
-      ],
+      ["find-generic-password", "-s", "Claude Code-credentials", "-w"],
       expect.any(Number),
     );
     expect(auth.sources).toContainEqual({

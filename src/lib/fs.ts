@@ -49,10 +49,9 @@ export function cacheFilePath(): string {
 }
 
 export function claudeKeychainAccessMarkerPath(configDir?: string): string {
-  const suffix =
-    configDir === undefined
-      ? ""
-      : `-${createHash("sha256").update(configDir).digest("hex").slice(0, 8)}`;
+  const suffix = configDir
+    ? `-${createHash("sha256").update(configDir).digest("hex").slice(0, 8)}`
+    : "";
   return join(cacheDirPath(), `claude-keychain-access-granted${suffix}`);
 }
 
