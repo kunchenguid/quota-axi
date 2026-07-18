@@ -6,7 +6,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createHash } from "node:crypto";
-import { tmpdir } from "node:os";
+import { tmpdir, userInfo } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -14,7 +14,11 @@ const originalHome = process.env.HOME;
 const originalUserProfile = process.env.USERPROFILE;
 const originalXdgCacheHome = process.env.XDG_CACHE_HOME;
 const originalClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
+const originalUser = process.env.USER;
+const originalLogname = process.env.LOGNAME;
+const originalPath = process.env.PATH;
 const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+const keychainAccount = userInfo().username;
 let tempDir: string | undefined;
 
 beforeEach(() => {
@@ -37,6 +41,12 @@ afterEach(() => {
   if (originalClaudeConfigDir === undefined)
     delete process.env.CLAUDE_CONFIG_DIR;
   else process.env.CLAUDE_CONFIG_DIR = originalClaudeConfigDir;
+  if (originalUser === undefined) delete process.env.USER;
+  else process.env.USER = originalUser;
+  if (originalLogname === undefined) delete process.env.LOGNAME;
+  else process.env.LOGNAME = originalLogname;
+  if (originalPath === undefined) delete process.env.PATH;
+  else process.env.PATH = originalPath;
   if (tempDir) rmSync(tempDir, { recursive: true, force: true });
   tempDir = undefined;
 });
@@ -110,10 +120,42 @@ describe("Claude credential-state reporting", () => {
     await inspectAuth({ allowKeychainPrompt: false });
 
     expect(execFileText).toHaveBeenCalledWith(
-      "security",
-      ["find-generic-password", "-s", `Claude Code-credentials-${suffix}`],
+      "/usr/bin/security",
+      [
+        "find-generic-password",
+        "-s",
+        `Claude Code-credentials-${suffix}`,
+        "-a",
+        keychainAccount,
+      ],
       expect.any(Number),
     );
+  });
+
+  it("binds Keychain lookup to the OS account and fixed security binary", async () => {
+    usePlatform("darwin");
+    useTempHome();
+    process.env.USER = "wrong-account";
+    process.env.LOGNAME = "wrong-account";
+    process.env.PATH = "/hostile/bin";
+    const execFileText = vi.fn(async () => "");
+    vi.doMock("../../src/lib/process.js", () => ({ execFileText }));
+
+    const { inspectAuth } = await import("../../src/providers/claude.js");
+    await inspectAuth({ allowKeychainPrompt: false });
+
+    expect(execFileText).toHaveBeenCalledWith(
+      "/usr/bin/security",
+      [
+        "find-generic-password",
+        "-s",
+        "Claude Code-credentials",
+        "-a",
+        keychainAccount,
+      ],
+      expect.any(Number),
+    );
+    expect(keychainAccount).not.toBe("wrong-account");
   });
 
   it("preserves an empty-present CLAUDE_CONFIG_DIR across profile derivations", async () => {
@@ -144,8 +186,15 @@ describe("Claude credential-state reporting", () => {
       join(home, "cache", "quota-axi", "claude-keychain-access-granted"),
     );
     expect(execFileText).toHaveBeenCalledWith(
-      "security",
-      ["find-generic-password", "-s", "Claude Code-credentials", "-w"],
+      "/usr/bin/security",
+      [
+        "find-generic-password",
+        "-s",
+        "Claude Code-credentials",
+        "-a",
+        keychainAccount,
+        "-w",
+      ],
       expect.any(Number),
     );
     expect(auth.sources).toContainEqual({
@@ -198,11 +247,13 @@ describe("Claude credential-state reporting", () => {
       status: "available",
     });
     expect(execFileText).toHaveBeenCalledWith(
-      "security",
+      "/usr/bin/security",
       [
         "find-generic-password",
         "-s",
         `Claude Code-credentials-${suffix}`,
+        "-a",
+        keychainAccount,
         "-w",
       ],
       expect.any(Number),
@@ -425,12 +476,18 @@ describe("Claude credential-state reporting", () => {
     const result = await fetchQuota({ allowKeychainPrompt: false });
 
     expect(execFileText).toHaveBeenCalledWith(
-      "security",
-      ["find-generic-password", "-s", "Claude Code-credentials"],
+      "/usr/bin/security",
+      [
+        "find-generic-password",
+        "-s",
+        "Claude Code-credentials",
+        "-a",
+        keychainAccount,
+      ],
       expect.any(Number),
     );
     expect(execFileText).not.toHaveBeenCalledWith(
-      "security",
+      "/usr/bin/security",
       expect.arrayContaining(["-w"]),
       expect.any(Number),
     );
@@ -476,13 +533,26 @@ describe("Claude credential-state reporting", () => {
 
     expect(marker).toContain("claude-keychain-access-granted");
     expect(execFileText).toHaveBeenCalledWith(
-      "security",
-      ["find-generic-password", "-s", "Claude Code-credentials", "-w"],
+      "/usr/bin/security",
+      [
+        "find-generic-password",
+        "-s",
+        "Claude Code-credentials",
+        "-a",
+        keychainAccount,
+        "-w",
+      ],
       expect.any(Number),
     );
     expect(execFileText).not.toHaveBeenCalledWith(
-      "security",
-      ["find-generic-password", "-s", "Claude Code-credentials"],
+      "/usr/bin/security",
+      [
+        "find-generic-password",
+        "-s",
+        "Claude Code-credentials",
+        "-a",
+        keychainAccount,
+      ],
       expect.any(Number),
     );
     expect(auth.sources).toContainEqual({
@@ -530,8 +600,15 @@ describe("Claude credential-state reporting", () => {
 
     expect(result.state.status).toBe("fresh");
     expect(execFileText).toHaveBeenCalledWith(
-      "security",
-      ["find-generic-password", "-s", "Claude Code-credentials", "-w"],
+      "/usr/bin/security",
+      [
+        "find-generic-password",
+        "-s",
+        "Claude Code-credentials",
+        "-a",
+        keychainAccount,
+        "-w",
+      ],
       expect.any(Number),
     );
     expect(existsSync(claudeKeychainAccessMarkerPath())).toBe(true);

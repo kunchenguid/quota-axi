@@ -1,6 +1,6 @@
 import { chmodSync, existsSync, renameSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { homedir } from "node:os";
+import { homedir, userInfo } from "node:os";
 import { join } from "node:path";
 import { readCachedProvider } from "../cache.js";
 import {
@@ -38,6 +38,7 @@ const KEYCHAIN_PROMPT_TIMEOUT_MS = 60_000;
 const KEYCHAIN_PRESENCE_TIMEOUT_MS = 5_000;
 const KEYCHAIN_ITEM_NOT_FOUND_EXIT_CODE = 44;
 const DEFAULT_KEYCHAIN_SERVICE = "Claude Code-credentials";
+const MACOS_SECURITY_BINARY = "/usr/bin/security";
 
 type ClaudeCredentials = {
   source: "oauth-file" | "keychain";
@@ -68,6 +69,7 @@ type ClaudeIdentityResult = {
 type ClaudeProfileLocations = {
   credentialFile: string;
   keychainService: string;
+  keychainAccount: string;
   keychainAccessMarker: string;
 };
 
@@ -414,8 +416,8 @@ async function readKeychainItemPresence(
 ): Promise<KeychainItemPresence> {
   try {
     await execFileText(
-      "security",
-      ["find-generic-password", "-s", locations.keychainService],
+      MACOS_SECURITY_BINARY,
+      keychainLookupArguments(locations, false),
       KEYCHAIN_PRESENCE_TIMEOUT_MS,
     );
     return "present";
@@ -430,8 +432,8 @@ async function readKeychainCredentialState(
   let blob: string;
   try {
     blob = await execFileText(
-      "security",
-      ["find-generic-password", "-s", locations.keychainService, "-w"],
+      MACOS_SECURITY_BINARY,
+      keychainLookupArguments(locations, true),
       KEYCHAIN_PROMPT_TIMEOUT_MS,
     );
   } catch (error) {
@@ -492,8 +494,32 @@ function resolveClaudeProfileLocations(): ClaudeProfileLocations {
   return {
     credentialFile: join(configDir, ".credentials.json"),
     keychainService: keychainServiceForConfigDir(keychainConfigDir),
+    keychainAccount: process.platform === "darwin" ? currentMacOSAccount() : "",
     keychainAccessMarker: claudeKeychainAccessMarkerPath(keychainConfigDir),
   };
+}
+
+function currentMacOSAccount(): string {
+  const account = userInfo().username;
+  if (account.length === 0 || account.includes("\0")) {
+    throw new Error("macOS account name is unavailable");
+  }
+  return account;
+}
+
+function keychainLookupArguments(
+  locations: ClaudeProfileLocations,
+  readValue: boolean,
+): string[] {
+  const args = [
+    "find-generic-password",
+    "-s",
+    locations.keychainService,
+    "-a",
+    locations.keychainAccount,
+  ];
+  if (readValue) args.push("-w");
+  return args;
 }
 
 function keychainServiceForConfigDir(configDir?: string): string {
