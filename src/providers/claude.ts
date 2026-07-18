@@ -65,6 +65,11 @@ type ClaudeIdentityResult = {
   account: ClaudeAccount;
   error?: string;
 };
+type ClaudeProfileLocations = {
+  credentialFile: string;
+  keychainService: string;
+  keychainAccessMarker: string;
+};
 
 type RawUsageWindow = {
   utilization?: unknown;
@@ -203,15 +208,15 @@ export async function fetchQuota(
 export async function inspectAuth(
   options: ProviderOptions,
 ): Promise<AuthProviderReport> {
-  const credentialFile = claudeCredentialFile();
-  const states = await readCredentialStates(options);
+  const locations = resolveClaudeProfileLocations();
+  const states = await readCredentialStates(options, locations);
   const sources = states.map((state): AuthSourceReport => {
     if (state.status === "available") {
       return {
         source: state.credentials.source,
         path:
           state.credentials.source === "oauth-file"
-            ? credentialFile
+            ? locations.credentialFile
             : undefined,
         status: "available",
       };
@@ -352,30 +357,32 @@ function slugify(value: string): string {
 
 async function readCredentialStates(
   options: ProviderOptions,
+  locations = resolveClaudeProfileLocations(),
 ): Promise<CredentialState[]> {
   const states: CredentialState[] = [];
-  const credentialFile = claudeCredentialFile();
 
   const fileState = extractCredentialState(
-    readJsonFileResult(credentialFile),
+    readJsonFileResult(locations.credentialFile),
     "oauth-file",
-    credentialFile,
+    locations.credentialFile,
   );
   states.push(fileState);
 
   if (process.platform === "darwin") {
-    if (options.allowKeychainPrompt || hasKeychainAccessMarker()) {
-      states.push(await readKeychainCredentialState());
+    if (options.allowKeychainPrompt || hasKeychainAccessMarker(locations)) {
+      states.push(await readKeychainCredentialState(locations));
     } else {
-      states.push(await readSkippedKeychainCredentialState());
+      states.push(await readSkippedKeychainCredentialState(locations));
     }
   }
 
   return states;
 }
 
-async function readSkippedKeychainCredentialState(): Promise<CredentialState> {
-  const presence = await readKeychainItemPresence();
+async function readSkippedKeychainCredentialState(
+  locations: ClaudeProfileLocations,
+): Promise<CredentialState> {
+  const presence = await readKeychainItemPresence(locations);
   if (presence === "present") {
     return {
       status: "skipped",
@@ -403,11 +410,13 @@ async function readSkippedKeychainCredentialState(): Promise<CredentialState> {
   };
 }
 
-async function readKeychainItemPresence(): Promise<KeychainItemPresence> {
+async function readKeychainItemPresence(
+  locations: ClaudeProfileLocations,
+): Promise<KeychainItemPresence> {
   try {
     await execFileText(
       "security",
-      ["find-generic-password", "-s", claudeKeychainService()],
+      ["find-generic-password", "-s", locations.keychainService],
       KEYCHAIN_PRESENCE_TIMEOUT_MS,
     );
     return "present";
@@ -416,18 +425,20 @@ async function readKeychainItemPresence(): Promise<KeychainItemPresence> {
   }
 }
 
-async function readKeychainCredentialState(): Promise<CredentialState> {
+async function readKeychainCredentialState(
+  locations: ClaudeProfileLocations,
+): Promise<CredentialState> {
   let blob: string;
   try {
     blob = await execFileText(
       "security",
-      ["find-generic-password", "-s", claudeKeychainService(), "-w"],
+      ["find-generic-password", "-s", locations.keychainService, "-w"],
       KEYCHAIN_PROMPT_TIMEOUT_MS,
     );
   } catch (error) {
     return keychainFailureState(error);
   }
-  writeKeychainAccessMarkerBestEffort();
+  writeKeychainAccessMarkerBestEffort(locations);
   try {
     return extractCredentialState(
       { status: "success", value: JSON.parse(blob) },
@@ -445,15 +456,15 @@ async function readKeychainCredentialState(): Promise<CredentialState> {
   }
 }
 
-function hasKeychainAccessMarker(): boolean {
-  return existsSync(
-    claudeKeychainAccessMarkerPath(process.env.CLAUDE_CONFIG_DIR),
-  );
+function hasKeychainAccessMarker(locations: ClaudeProfileLocations): boolean {
+  return existsSync(locations.keychainAccessMarker);
 }
 
-function writeKeychainAccessMarkerBestEffort(): void {
+function writeKeychainAccessMarkerBestEffort(
+  locations: ClaudeProfileLocations,
+): void {
   try {
-    const file = claudeKeychainAccessMarkerPath(process.env.CLAUDE_CONFIG_DIR);
+    const file = locations.keychainAccessMarker;
     ensurePrivateParent(file);
     const temp = `${file}.${process.pid}.tmp`;
     writeFileSync(temp, "granted\n", { mode: 0o600 });
@@ -466,15 +477,28 @@ function writeKeychainAccessMarkerBestEffort(): void {
 }
 
 export function claudeCredentialFile(): string {
-  return join(
-    process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude"),
-    ".credentials.json",
-  );
+  return resolveClaudeProfileLocations().credentialFile;
 }
 
 export function claudeKeychainService(): string {
-  const configDir = process.env.CLAUDE_CONFIG_DIR;
-  if (!configDir) return DEFAULT_KEYCHAIN_SERVICE;
+  return resolveClaudeProfileLocations().keychainService;
+}
+
+function resolveClaudeProfileLocations(): ClaudeProfileLocations {
+  const configuredDir = process.env.CLAUDE_CONFIG_DIR;
+  const configDir = (configuredDir ?? join(homedir(), ".claude")).normalize(
+    "NFC",
+  );
+  const profileConfigDir = configuredDir === undefined ? undefined : configDir;
+  return {
+    credentialFile: join(configDir, ".credentials.json"),
+    keychainService: keychainServiceForConfigDir(profileConfigDir),
+    keychainAccessMarker: claudeKeychainAccessMarkerPath(profileConfigDir),
+  };
+}
+
+function keychainServiceForConfigDir(configDir?: string): string {
+  if (configDir === undefined) return DEFAULT_KEYCHAIN_SERVICE;
   const suffix = createHash("sha256")
     .update(configDir)
     .digest("hex")

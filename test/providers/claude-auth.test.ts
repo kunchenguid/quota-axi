@@ -116,6 +116,114 @@ describe("Claude credential-state reporting", () => {
     );
   });
 
+  it("preserves an empty-present CLAUDE_CONFIG_DIR across profile derivations", async () => {
+    usePlatform("darwin");
+    const home = useTempHome();
+    process.env.CLAUDE_CONFIG_DIR = "";
+    const suffix = createHash("sha256").update("").digest("hex").slice(0, 8);
+    const { claudeKeychainAccessMarkerPath } =
+      await import("../../src/lib/fs.js");
+    const marker = claudeKeychainAccessMarkerPath("");
+    mkdirSync(dirname(marker), { recursive: true, mode: 0o700 });
+    writeFileSync(marker, "granted\n", { mode: 0o600 });
+    const execFileText = vi.fn(async () =>
+      JSON.stringify({
+        claudeAiOauth: {
+          accessToken: "fresh-keychain-token",
+          expiresAt: "2035-01-01T00:00:00.000Z",
+        },
+      }),
+    );
+    vi.doMock("../../src/lib/process.js", () => ({ execFileText }));
+
+    const { claudeCredentialFile, inspectAuth } =
+      await import("../../src/providers/claude.js");
+    const auth = await inspectAuth({ allowKeychainPrompt: false });
+
+    expect(claudeCredentialFile()).toBe(".credentials.json");
+    expect(marker).toBe(
+      join(
+        home,
+        "cache",
+        "quota-axi",
+        `claude-keychain-access-granted-${suffix}`,
+      ),
+    );
+    expect(execFileText).toHaveBeenCalledWith(
+      "security",
+      [
+        "find-generic-password",
+        "-s",
+        `Claude Code-credentials-${suffix}`,
+        "-w",
+      ],
+      expect.any(Number),
+    );
+    expect(auth.sources).toContainEqual({
+      source: "keychain",
+      status: "available",
+    });
+  });
+
+  it("normalizes a decomposed CLAUDE_CONFIG_DIR before profile derivations", async () => {
+    usePlatform("darwin");
+    const home = useTempHome();
+    const decomposedConfigDir = join(home, "managed-e\u0301");
+    const normalizedConfigDir = decomposedConfigDir.normalize("NFC");
+    process.env.CLAUDE_CONFIG_DIR = decomposedConfigDir;
+    mkdirSync(normalizedConfigDir, { recursive: true });
+    writeFileSync(
+      join(normalizedConfigDir, ".credentials.json"),
+      JSON.stringify({
+        claudeAiOauth: {
+          accessToken: "fresh-file-token",
+          expiresAt: "2035-01-01T00:00:00.000Z",
+        },
+      }),
+    );
+    const { claudeKeychainAccessMarkerPath } =
+      await import("../../src/lib/fs.js");
+    const marker = claudeKeychainAccessMarkerPath(normalizedConfigDir);
+    mkdirSync(dirname(marker), { recursive: true, mode: 0o700 });
+    writeFileSync(marker, "granted\n", { mode: 0o600 });
+    const suffix = createHash("sha256")
+      .update(normalizedConfigDir)
+      .digest("hex")
+      .slice(0, 8);
+    const execFileText = vi.fn(async () =>
+      JSON.stringify({
+        claudeAiOauth: {
+          accessToken: "fresh-keychain-token",
+          expiresAt: "2035-01-01T00:00:00.000Z",
+        },
+      }),
+    );
+    vi.doMock("../../src/lib/process.js", () => ({ execFileText }));
+
+    const { inspectAuth } = await import("../../src/providers/claude.js");
+    const auth = await inspectAuth({ allowKeychainPrompt: false });
+
+    expect(auth.sources[0]).toMatchObject({
+      source: "oauth-file",
+      path: join(normalizedConfigDir, ".credentials.json"),
+      status: "available",
+    });
+    expect(execFileText).toHaveBeenCalledWith(
+      "security",
+      [
+        "find-generic-password",
+        "-s",
+        `Claude Code-credentials-${suffix}`,
+        "-w",
+      ],
+      expect.any(Number),
+    );
+    expect(auth.sources).toContainEqual({
+      source: "keychain",
+      status: "available",
+    });
+  });
+
   it("surfaces expired file credentials as a skipped attempt and auth_required", async () => {
     const home = useTempHome();
     mkdirSync(join(home, ".claude"), { recursive: true });
