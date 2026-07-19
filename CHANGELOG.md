@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.7](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.6...quota-axi-v0.1.7) (2026-07-18)
+
+
+### Features
+
+* **providers:** isolate managed Claude and Codex profiles ([#22](https://github.com/kunchenguid/quota-axi/issues/22)) ([b81d311](https://github.com/kunchenguid/quota-axi/commit/b81d3119c4f4a0a2ef5b577dd42963aa7da5f404))
+
 ## [0.1.6](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.5...quota-axi-v0.1.6) (2026-07-17)
 
 
