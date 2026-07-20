@@ -98,7 +98,7 @@ async function readBoundedFile(
 ): Promise<Buffer> {
   const file = await open(path, "r");
   try {
-    const contents = Buffer.allocUnsafe(maxBytes + 1);
+    const contents = new Uint8Array(maxBytes + 1);
     let offset = 0;
     while (offset < contents.byteLength) {
       const { bytesRead } = await file.read(
@@ -110,7 +110,7 @@ async function readBoundedFile(
       if (bytesRead === 0) break;
       offset += bytesRead;
     }
-    return contents.subarray(0, offset);
+    return Buffer.from(contents.buffer, contents.byteOffset, offset);
   } finally {
     await file.close();
   }
