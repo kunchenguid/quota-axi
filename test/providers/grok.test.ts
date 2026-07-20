@@ -452,6 +452,7 @@ describe("Grok consumer quota acquisition", () => {
   it.each([
     [16, "auth_required", "Grok sign-in required"],
     [8, "rate_limited", "Grok quota endpoint rate limited"],
+    [7, "error", "Grok quota unavailable"],
     [13, "error", "Grok quota unavailable"],
   ])(
     "classifies gRPC trailer status %i without exposing its message",
@@ -471,6 +472,40 @@ describe("Grok consumer quota acquisition", () => {
 
       expect(result.state).toMatchObject({ status, error });
       expect(result.state.error).not.toContain("private-provider-diagnostic");
+    },
+  );
+
+  it.each([
+    ["trailer", "OAuth access token expired"],
+    ["header", "invalid credentials"],
+  ])(
+    "classifies credential-related gRPC permission denial in the %s as auth required",
+    async (location, diagnostic) => {
+      writeValidAuth();
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () =>
+          grpcResponse(
+            consumerPayload(),
+            location === "trailer"
+              ? { trailerStatus: 7, trailerMessage: diagnostic }
+              : {
+                  headers: {
+                    "grpc-status": "7",
+                    "grpc-message": encodeURIComponent(diagnostic),
+                  },
+                },
+          ),
+        ),
+      );
+
+      const result = await fetchQuota({ allowKeychainPrompt: false });
+
+      expect(result.state).toMatchObject({
+        status: "auth_required",
+        error: "Grok sign-in required",
+      });
+      expect(result.state.error).not.toContain(diagnostic);
     },
   );
 

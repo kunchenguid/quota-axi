@@ -24,6 +24,7 @@ const CONSUMER_QUOTA_URL =
   "https://grok.com/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig";
 const API_TIMEOUT_MS = 15_000;
 const RESPONSE_LIMIT_BYTES = 64 * 1024;
+const GRPC_MESSAGE_LIMIT_CHARS = 1_024;
 const EMPTY_GRPC_REQUEST = Uint8Array.from([0, 0, 0, 0, 0]);
 const GROK_SOURCE = "web" as const;
 
@@ -248,7 +249,10 @@ async function fetchGrokConsumerQuota(
     }
 
     rejectUnusableUsageResponse(response);
-    throwForGrpcStatus(response.headers.get("grpc-status"));
+    throwForGrpcStatus(
+      response.headers.get("grpc-status"),
+      response.headers.get("grpc-message"),
+    );
 
     let bytes: Uint8Array;
     try {
@@ -331,7 +335,10 @@ function decodeGrpcWebPayload(bytes: Uint8Array): Uint8Array {
       if (trailerSeen) throw new ProtocolError();
       trailerSeen = true;
       const trailers = parseTrailerFields(frame);
-      throwForGrpcStatus(trailers.get("grpc-status") ?? null);
+      throwForGrpcStatus(
+        trailers.get("grpc-status") ?? null,
+        trailers.get("grpc-message") ?? null,
+      );
     } else {
       if (trailerSeen || dataFrames.length > 0) throw new ProtocolError();
       dataFrames.push(frame);
@@ -361,14 +368,41 @@ function parseTrailerFields(bytes: Uint8Array): Map<string, string> {
   return trailers;
 }
 
-function throwForGrpcStatus(value: string | null): void {
+function throwForGrpcStatus(
+  value: string | null,
+  message: string | null = null,
+): void {
   if (value === null) return;
   if (!/^(?:[0-9]|1[0-6])$/.test(value)) throw new ProtocolError();
   const status = Number(value);
   if (status === 0) return;
   if (status === 16) throw new SafeGrokError("Grok sign-in required");
+  if (status === 7 && grpcMessageIndicatesAuthFailure(message))
+    throw new SafeGrokError("Grok sign-in required");
   if (status === 8) throw new RateLimitError();
   throw new SafeGrokError("Grok quota unavailable");
+}
+
+function grpcMessageIndicatesAuthFailure(value: string | null): boolean {
+  if (!value || value.length > GRPC_MESSAGE_LIMIT_CHARS) return false;
+  let message: string;
+  try {
+    message = decodeURIComponent(value);
+  } catch {
+    return false;
+  }
+  if (message.length > GRPC_MESSAGE_LIMIT_CHARS) return false;
+  return (
+    /\b(?:unauthenticated|authentication required|sign[ -]?in required)\b/i.test(
+      message,
+    ) ||
+    /\b(?:invalid|expired|missing|revoked)\s+(?:(?:oauth|access|auth(?:entication)?|bearer)\s+)*(?:token|credentials?|jwt)\b/i.test(
+      message,
+    ) ||
+    /\b(?:token|credentials?|jwt)\s+(?:is |are )?(?:invalid|expired|missing|revoked)\b/i.test(
+      message,
+    )
+  );
 }
 
 function scanMessage(bytes: Uint8Array): ProtoField[] {
