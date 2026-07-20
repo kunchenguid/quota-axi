@@ -1,0 +1,15 @@
+{
+  "generatedAt": "2026-07-20T22:29:54.198Z",
+  "schemaVersion": 1,
+  "auth": [
+    {
+      "provider": "kimi",
+      "sources": [
+        {
+          "source": "pi:kimi-coding",
+          "status": "available"
+        }
+      ]
+    }
+  ]
+}
