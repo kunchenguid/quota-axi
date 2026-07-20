@@ -105,17 +105,14 @@ ${TOP_HELP.trimEnd()}
   or stale data); exit code 1 means every row failed (\`summary.availability\` is \`unavailable\`);
   exit code 2 means a usage error.
 - Repeated Claude config flags take precedence over \`CLAUDE_CONFIG_DIRS\`, then the existing
-  singular \`CLAUDE_CONFIG_DIR\`, then the default. Normalized duplicates keep their first position;
-  zero or one selected config preserves the existing single-seat output schema.
+  singular \`CLAUDE_CONFIG_DIR\`, then the default. Normalized duplicates keep their first position.
 - Percentages are not comparable across providers - quota-axi never claims one provider's
   percentage equals another's.
 - Claude \`--full\` output exposes the authoritative OAuth profile \`account.uuid\` as
   \`account.accountId\` when Anthropic returns one; otherwise the account identity is explicitly
   marked unverified rather than inferred.
 - The quota cache at \`~/.cache/quota-axi/quotas.json\` only ever holds normalized
-  non-secret snapshots.
-  Fresh provider reports with no windows clear stale provider snapshots instead of caching
-  empty quota.
-  The Claude Keychain access marker lives alongside it and contains no credential values.
+  non-secret snapshots. The Claude Keychain access marker lives alongside it and contains no
+  credential values; see the README Security Posture for detailed cache behavior.
 `;
 }

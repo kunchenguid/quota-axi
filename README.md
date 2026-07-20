@@ -147,7 +147,7 @@ $env:CLAUDE_CONFIG_DIRS = "$HOME\.claude-work;$HOME\.claude-personal"
 quota-axi --provider claude,codex,grok
 ```
 
-Precedence is deterministic: repeated CLI values (in argument order), then `CLAUDE_CONFIG_DIRS`, then the existing singular `CLAUDE_CONFIG_DIR`, then `~/.claude`. Lexically normalized duplicate directories keep their first position. Multi-seat output uses non-secret directory basenames such as `.claude-work` and `.claude-personal`; normal output never includes the full config paths. With zero or one selected directory, the existing single-seat output and JSON schema are unchanged.
+Precedence is deterministic: repeated CLI values (in argument order), then `CLAUDE_CONFIG_DIRS`, then the existing singular `CLAUDE_CONFIG_DIR`, then `~/.claude`. Lexically normalized duplicate directories keep their first position. Selected directories remain separate rows even when they resolve to the same account identity. Multi-seat output uses non-secret directory basenames such as `.claude-work` and `.claude-personal`; normal output never includes the full config paths. See the [Output Model](#output-model) for conditional seat metadata.
 
 All config and provider access is read-only: quota-axi reads credentials and calls first-party usage endpoints but never writes config directories or changes provider auth/state.
 
@@ -261,7 +261,7 @@ It is generated from `src/skill.ts`; update it with `pnpm run build:skill` and v
 | Account identity (`--full`)   | Optional `email`, `organization`, `accountId`, and `identityStatus`                                  |
 
 Account identity and per-source `attempts` are omitted unless `--full` is passed.
-`seat` appears only when two or more Claude config directories are selected and contains a stable non-secret basename label; no multi-seat input preserves the prior schema exactly.
+`seat` appears only when two or more Claude config directories are selected and contains a stable non-secret basename label; selecting zero or one directory does not add seat metadata.
 Claude `identityStatus` is `verified` only when Anthropic returns an authoritative account identifier; `email` and `organization` are display-only and must not be used for duplicate detection.
 
 ### Provider `state`
@@ -342,7 +342,7 @@ Auth source entries can include `credentialPresent` when a non-secret probe conf
 
 **Claude**
 
-- Multiple selected config directories are queried independently and concurrently. One seat's auth or rate-limit failure does not suppress other Claude seats or providers.
+- Multiple selected config directories are queried independently and concurrently. Live failures and stale-cache fallbacks remain bounded to their seat and do not suppress other Claude seats or providers.
 - Selected config directories are read only and never created, rewritten, or used to mutate Claude state.
 - quota-axi records the non-secret access marker after any successful Keychain value read.
 - When that marker exists, plain calls read the Keychain value again so an already-approved "Always Allow" grant keeps live Claude quota fresh.
@@ -388,7 +388,7 @@ Auth source entries can include `credentialPresent` when a non-secret probe conf
 | Quota cache contents                   | Stores normalized non-secret snapshots only.                                                                                                                                                                                                                                                                              |
 | Claude Keychain access marker          | Lives alongside the quota cache as `claude-keychain-access-granted` for the default profile or with an eight-character path-hash suffix for a selected config-directory profile (`--claude-config-dir`, `CLAUDE_CONFIG_DIRS`, or `$CLAUDE_CONFIG_DIR`); uses `0600` file permissions and contains no credential material. |
 | Cached reports                         | Only fresh provider snapshots with windows are cached; explicit Claude profiles are isolated by a non-secret path hash.                                                                                                                                                                                                   |
-| Fresh provider reports with no windows | Clear any cached snapshot for that provider, so entitlement-only reports do not leave stale quota windows behind.                                                                                                                                                                                                         |
+| Fresh provider reports with no windows | Clear the matching provider or Claude-profile snapshot, so entitlement-only reports do not leave stale quota windows behind.                                                                                                                                                                                              |
 | Reports and details not cached         | Failed providers, stale providers, account identity, and source attempts are not cached.                                                                                                                                                                                                                                  |
 
 ## Development
