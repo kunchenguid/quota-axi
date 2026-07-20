@@ -15,7 +15,8 @@
     "axi",
     "toon",
     "claude",
-    "codex"
+    "codex",
+    "kimi"
   ],
   "bin": {
     "quota-axi": "./dist/bin/quota-axi.js"
@@ -47,9 +48,10 @@
   },
   "license": "MIT",
   "engines": {
-    "node": ">=20"
+    "node": ">=22.19"
   },
   "dependencies": {
+    "@earendil-works/pi-coding-agent": "0.80.10",
     "@toon-format/toon": "2.1.0",
     "axi-sdk-js": "^0.1.7"
   },
@@ -59,7 +61,7 @@
     "eslint": "10.1.0",
     "globals": "17.7.0",
     "prettier": "3.8.1",
-    "tsx": "4.0.0",
+    "tsx": "4.23.1",
     "typescript": "6.0.3",
     "typescript-eslint": "8.58.0",
     "vitest": "3.0.0"

@@ -15,7 +15,7 @@ Quota CLI for agents - designed with [AXI](https://axi.md) (Agent eXperience Int
 Agents need quota state before they choose where work can safely run.
 Vendor dashboards are not shaped for shell automation, and local CLIs expose different windows, resets, and auth sources.
 
-quota-axi reports local Claude, Codex, Cursor, GitHub Copilot, and Grok quota windows in one [AXI](https://axi.md)-shaped call.
+quota-axi reports local Claude, Codex, Cursor, GitHub Copilot, Grok, and Kimi quota windows in one [AXI](https://axi.md)-shaped call.
 It is data only: it never routes, recommends, proxies, intercepts, logs in, imports browser cookies, or mutates provider state.
 
 - **Official sources** - quota-axi reads local provider auth sources and calls the first-party quota, usage, billing, or entitlement endpoints used by the local agents, with a read-only Codex app-server probe as fallback.
@@ -35,13 +35,14 @@ $ npx -y quota-axi
 bin: ~/.npm/_npx/.../quota-axi
 description: Report local agent-provider quota windows for routing-aware agents
 generatedAt: "2026-03-15T16:42:00.000Z"
-providers[5]{provider,plan,source,status,refreshedAt}:
+providers[6]{provider,plan,source,status,refreshedAt}:
   claude,pro,oauth,fresh,"2026-03-15T16:41:55.000Z"
   codex,plus,cli-rpc,fresh,"2026-03-15T16:41:58.000Z"
   cursor,pro,api,fresh,"2026-03-15T16:41:59.000Z"
   copilot,individual,api,fresh,"2026-03-15T16:42:00.000Z"
   grok,unknown,web,fresh,"2026-03-15T16:42:00.000Z"
-windows[13]{provider,id,label,percentRemaining,resetsAt,state}:
+  kimi,unknown,api,fresh,"2026-03-15T16:42:00.000Z"
+windows[15]{provider,id,label,percentRemaining,resetsAt,state}:
   claude,five_hour,session,82,"2026-03-15T21:15:00.000Z",fresh
   claude,seven_day,week,64,"2026-03-19T15:00:00.000Z",fresh
   claude,seven_day_opus,opus week,93,"2026-03-20T09:30:00.000Z",fresh
@@ -55,6 +56,8 @@ windows[13]{provider,id,label,percentRemaining,resetsAt,state}:
   copilot,chat,chat,84,"2026-04-01T00:00:00.000Z",fresh
   copilot,premium_interactions,premium interactions,53,"2026-04-01T00:00:00.000Z",fresh
   grok,credits,credits,67,"2026-04-01T00:00:00.000Z",fresh
+  kimi,weekly,week,74,"2026-03-19T09:00:00.000Z",fresh
+  kimi,five_hour,session,88,"2026-03-15T21:42:00.000Z",fresh
 help[3]:
   Run `quota-axi --provider claude --json` for JSON output
   Run `quota-axi --full` to include account and source-attempt details
@@ -107,7 +110,7 @@ $ quota-axi --provider claude --json
 $ quota-axi auth
 bin: ~/.npm/_npx/.../quota-axi
 description: Inspect local quota auth sources without printing secret values
-auth[7]{provider,source,path,status,error}:
+auth[8]{provider,source,path,status,error}:
   claude,oauth-file,~/.claude/.credentials.json,available,none
   claude,keychain,none,skipped,keychain_prompt_required
   codex,auth-json,~/.codex/auth.json,available,none
@@ -115,13 +118,14 @@ auth[7]{provider,source,path,status,error}:
   cursor,state-vscdb,~/Library/Application Support/Cursor/User/globalStorage/state.vscdb,available,none
   copilot,apps-json,~/.config/github-copilot/apps.json,available,none
   grok,auth-json,~/.grok/auth.json,available,none
+  kimi,pi:kimi-coding,none,available,none
 help[1]:
   Run `quota-axi --allow-keychain-prompt auth` to permit macOS Keychain access
 ```
 
 ## Install
 
-quota-axi requires Node.js 20 or newer.
+quota-axi requires Node.js 22.19 or newer.
 
 **Agent skill (recommended)**
 
@@ -204,14 +208,14 @@ It is generated from `src/skill.ts`; update it with `pnpm run build:skill` and v
 
 ### Flags
 
-| Flag                                          | Description                                            |
-| --------------------------------------------- | ------------------------------------------------------ |
-| `--provider claude,codex,cursor,copilot,grok` | Scope providers                                        |
-| `--json`                                      | Emit normalized JSON instead of TOON for quota or auth |
-| `--full`                                      | Include quota account identity and source attempts     |
-| `--allow-keychain-prompt`                     | Permit macOS Claude Keychain access that could prompt  |
-| `-h`, `--help`                                | Print terse [AXI](https://axi.md) help                 |
-| `-v`, `-V`, `--version`                       | Print version                                          |
+| Flag                                               | Description                                            |
+| -------------------------------------------------- | ------------------------------------------------------ |
+| `--provider claude,codex,cursor,copilot,grok,kimi` | Scope providers                                        |
+| `--json`                                           | Emit normalized JSON instead of TOON for quota or auth |
+| `--full`                                           | Include quota account identity and source attempts     |
+| `--allow-keychain-prompt`                          | Permit macOS Claude Keychain access that could prompt  |
+| `-h`, `--help`                                     | Print terse [AXI](https://axi.md) help                 |
+| `-v`, `-V`, `--version`                            | Print version                                          |
 
 ## Output Model
 
@@ -275,6 +279,7 @@ Source attempts can include `credentialPresent` when a non-secret probe confirms
 | GitHub Copilot         | Can report quota snapshot windows such as `chat`, `completions`, and `premium_interactions`; when the first-party endpoint exposes entitlement but no numeric quota windows, quota-axi reports a fresh provider state with an empty `windows` list rather than inventing percentages.           |
 | Grok                   | Reports the shared `credits` window, optional product-scoped `product:<slug>` windows, the current-period reset, and optional prepaid credit balance from the consumer Usage-page operation.                                                                                                    |
 | Grok proto3 zero       | For the exact consumer operation only, an omitted usage float is the official proto3 zero when a valid weekly or monthly current period proves the config is present; quota-axi reports `0` used and `100` remaining rather than deriving usage from money.                                     |
+| Kimi                   | Reports the principal `weekly` subscription window plus every valid self-described limit in wire order. Only a limit whose normalized duration is exactly 18,000 seconds is identified as `five_hour`; future limits remain `limit:<index>` unknown windows.                                    |
 
 ### `auth --json` shape
 
@@ -286,10 +291,10 @@ Source attempts can include `credentialPresent` when a non-secret probe confirms
 
 Auth source entries can include `credentialPresent` when a non-secret probe confirms a credential item exists.
 
-| Name                 | Values                                                                                       |
-| -------------------- | -------------------------------------------------------------------------------------------- |
-| Auth source statuses | `available`, `missing`, `invalid`, `expired`, or `skipped`                                   |
-| Auth source names    | `oauth-file`, `keychain`, `auth-json`, `auth-env`, `apps-json`, `state-vscdb`, and `cli-rpc` |
+| Name                 | Values                                                                                                         |
+| -------------------- | -------------------------------------------------------------------------------------------------------------- |
+| Auth source statuses | `available`, `missing`, `invalid`, `expired`, or `skipped`                                                     |
+| Auth source names    | `oauth-file`, `keychain`, `auth-json`, `auth-env`, `apps-json`, `state-vscdb`, `cli-rpc`, and `pi:kimi-coding` |
 
 ## Security Posture
 
@@ -302,6 +307,7 @@ Auth source entries can include `credentialPresent` when a non-secret probe conf
 | Cursor         | `$CURSOR_STATE_DB` when set or the platform Cursor state database path                                                                                                                                                                                           |
 | GitHub Copilot | `$GITHUB_COPILOT_APPS_JSON` when set or the local Copilot apps auth file                                                                                                                                                                                         |
 | Grok           | `$GROK_AUTH_JSON`, inline `$GROK_AUTH`, `$GROK_AUTH_PATH`, or `$GROK_HOME/auth.json` / `~/.grok/auth.json`                                                                                                                                                       |
+| Kimi           | Pi's supported credential API for the exact `kimi-coding` provider; quota-axi never accepts an auth path or reads Pi credential files or environment variables directly                                                                                          |
 
 ### Provider notes
 
@@ -334,13 +340,20 @@ Auth source entries can include `credentialPresent` when a non-secret probe conf
 - Session-scoped Grok auth includes web/session scopes and OIDC records scoped to `auth.x.ai` with `auth_mode` or `authMode` set to `oidc`, including scope keys with `::<client id>` suffixes.
 - It does not send browser cookies, launch the Grok CLI, refresh credentials, perform OAuth, retain raw response bodies, or derive usage from monetary fields.
 
+**Kimi**
+
+- It asks Pi's supported credential API to resolve only `kimi-coding`, rejects stored non-API-key credential types before resolution, and ignores any resolver-provided origin or headers.
+- It sends one redirect-disabled `GET` to the fixed `https://api.kimi.com/coding/v1/usages` endpoint with a 15 second total deadline and a 262,144-byte decoded-body cap.
+- It never launches Pi or Kimi, makes a model request, refreshes credentials, imports cookies, sends device identity, retains raw responses, or exposes account, plan, token, or fingerprint data.
+- Definitive credential absence or rejection retires Kimi cache data. Transient fallback drops reset-expired windows and applies five-hour or seven-day age bounds to windows without resets.
+
 ### Safety guarantees
 
 - Quota and auth HTTP requests go only to first-party provider usage, quota, billing, or entitlement endpoints with the user's local credentials.
 - The user-initiated `update` command is the only non-provider network surface, and it is not part of quota measurement.
 - It sends credential values only to the first-party provider request they authenticate.
 - It never prints, logs, or caches credential values.
-- It never launches the Claude or Grok CLIs, so it cannot spend quota or mutate provider credentials while measuring them.
+- It never launches the Claude, Grok, Pi, or Kimi CLIs, so it cannot spend quota or mutate provider credentials while measuring them.
 
 ### Cache
 
