@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.8](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.7...quota-axi-v0.1.8) (2026-07-20)
+
+
+### Bug Fixes
+
+* **providers:** report authoritative Grok quota percentages ([#27](https://github.com/kunchenguid/quota-axi/issues/27)) ([17c4bd3](https://github.com/kunchenguid/quota-axi/commit/17c4bd38d258e63313586ac5bc1c0f9ce46fca36))
+
 ## [0.1.7](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.6...quota-axi-v0.1.7) (2026-07-18)
 
 
