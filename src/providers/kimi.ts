@@ -13,13 +13,19 @@ import type {
 } from "../types.js";
 import { VERSION } from "../version.js";
 import {
+  createKimiCodeCliCredentialSource,
+  KIMI_CODE_CLI_CREDENTIAL_SOURCE,
+  type KimiCodeCliCredentialResolution,
+  type KimiCodeCliCredentialSource,
+} from "./kimi-code-cli-credential.js";
+import {
   createPiKimiCredentialBroker,
   type KimiCredentialBroker,
   type KimiCredentialResolution,
 } from "./pi-kimi-credential.js";
 
 const KIMI_QUOTA_URL = "https://api.kimi.com/coding/v1/usages";
-const KIMI_CREDENTIAL_SOURCE = "pi:kimi-coding";
+const PI_KIMI_CREDENTIAL_SOURCE = "pi:kimi-coding";
 const OPERATION_DEADLINE_MS = 15_000;
 const RESPONSE_LIMIT_BYTES = 262_144;
 const FIVE_HOURS_SECONDS = 18_000;
@@ -44,6 +50,7 @@ export type NormalizedKimiPayload = {
 
 type KimiDependencies = {
   broker: KimiCredentialBroker;
+  cliCredentialSource: KimiCodeCliCredentialSource;
   fetch: typeof globalThis.fetch;
   readCachedProvider: typeof readCachedProviderFromDisk;
   deleteCachedProvider: typeof deleteCachedProviderFromDisk;
@@ -69,6 +76,7 @@ export function createKimiAdapter(
 ): ProviderAdapter {
   const dependencies: KimiDependencies = {
     broker: createPiKimiCredentialBroker(),
+    cliCredentialSource: createKimiCodeCliCredentialSource(),
     fetch: globalThis.fetch,
     readCachedProvider: readCachedProviderFromDisk,
     deleteCachedProvider: deleteCachedProviderFromDisk,
@@ -90,31 +98,49 @@ export function createKimiAdapter(
       return acquisition;
     },
     async inspectAuth(_options: ProviderOptions): Promise<AuthProviderReport> {
-      let inspection;
+      let piInspection;
       try {
-        inspection = await dependencies.broker.inspect();
+        piInspection = await dependencies.broker.inspect();
       } catch {
-        inspection = "error" as const;
+        piInspection = "error" as const;
       }
-      if (inspection === "available") {
-        return {
-          provider: "kimi",
-          sources: [{ source: KIMI_CREDENTIAL_SOURCE, status: "available" }],
-        };
-      }
-      const error =
-        inspection === "unsupported"
+      const piError =
+        piInspection === "unsupported"
           ? "unsupported_credential_type"
-          : inspection === "error"
+          : piInspection === "error"
             ? "credential_resolution_failed"
             : undefined;
+
+      let cliInspection;
+      try {
+        cliInspection = await dependencies.cliCredentialSource.inspect();
+      } catch {
+        cliInspection = "invalid" as const;
+      }
+      const cliError =
+        cliInspection === "invalid"
+          ? "kimi_code_cli_credential_invalid"
+          : cliInspection === "expired"
+            ? "kimi_code_cli_credential_expired"
+            : undefined;
+
       return {
         provider: "kimi",
         sources: [
           {
-            source: KIMI_CREDENTIAL_SOURCE,
-            status: error ? "invalid" : "missing",
-            ...(error ? { error } : {}),
+            source: PI_KIMI_CREDENTIAL_SOURCE,
+            status:
+              piInspection === "available"
+                ? "available"
+                : piError
+                  ? "invalid"
+                  : "missing",
+            ...(piError ? { error: piError } : {}),
+          },
+          {
+            source: KIMI_CODE_CLI_CREDENTIAL_SOURCE,
+            status: cliInspection,
+            ...(cliError ? { error: cliError } : {}),
           },
         ],
       };
@@ -135,33 +161,67 @@ async function acquireKimiQuota(
   let attempts: SourceAttempt[] = [];
 
   try {
-    const resolution = await resolveCredential(
+    const piResolution = await resolveCredential(
       dependencies.broker,
       controller.signal,
     );
-    if (resolution.status !== "available") {
-      const credentialFailure = credentialFailureFor(resolution);
+    let credential: string;
+    let credentialSource: string;
+
+    if (piResolution.status === "available") {
+      credential = piResolution.apiKey;
+      credentialSource = PI_KIMI_CREDENTIAL_SOURCE;
+      attempts = [{ source: credentialSource, status: "failed" }];
+    } else {
+      const piFailure = credentialFailureFor(piResolution);
       attempts = [
         {
-          source: KIMI_CREDENTIAL_SOURCE,
-          status: resolution.status === "error" ? "failed" : "skipped",
-          error: credentialFailure.code,
+          source: PI_KIMI_CREDENTIAL_SOURCE,
+          status: piResolution.status === "error" ? "failed" : "skipped",
+          error: piFailure.code,
         },
       ];
-      return failureReport(credentialFailure, attempts, dependencies);
+      if (piResolution.status === "error") {
+        return failureReport(piFailure, attempts, dependencies);
+      }
+
+      attempts.push({
+        source: KIMI_CODE_CLI_CREDENTIAL_SOURCE,
+        status: "failed",
+      });
+      const cliResolution = await resolveCliCredential(
+        dependencies.cliCredentialSource,
+        controller.signal,
+      );
+      if (cliResolution.status !== "available") {
+        const cliFailure = cliCredentialFailureFor(cliResolution);
+        attempts[attempts.length - 1] = {
+          source: KIMI_CODE_CLI_CREDENTIAL_SOURCE,
+          status: "skipped",
+          error: cliFailure.code,
+        };
+        return failureReport(
+          cliResolution.status === "missing" ? piFailure : cliFailure,
+          attempts,
+          dependencies,
+        );
+      }
+      credential = cliResolution.accessToken;
+      credentialSource = KIMI_CODE_CLI_CREDENTIAL_SOURCE;
     }
 
-    const apiKey = resolution.apiKey;
-    attempts = [{ source: KIMI_CREDENTIAL_SOURCE, status: "failed" }];
     const payload = await requestKimiQuota(
-      apiKey,
+      credential,
       controller.signal,
       dependencies.fetch,
       dependencies.now,
     );
     const normalized = normalizeKimiPayload(payload);
     const refreshedAt = new Date(dependencies.now()).toISOString();
-    attempts[0] = { source: KIMI_CREDENTIAL_SOURCE, status: "success" };
+    attempts[attempts.length - 1] = {
+      source: credentialSource,
+      status: "success",
+    };
     return {
       provider: "kimi",
       label: "Kimi",
@@ -171,7 +231,7 @@ async function acquireKimiQuota(
         status: "fresh",
         stale: false,
         refreshedAt,
-        sourcesTried: [KIMI_CREDENTIAL_SOURCE],
+        sourcesTried: attempts.map(({ source }) => source),
       },
       attempts,
     };
@@ -185,14 +245,14 @@ async function acquireKimiQuota(
     if (attempts.length === 0) {
       attempts = [
         {
-          source: KIMI_CREDENTIAL_SOURCE,
+          source: PI_KIMI_CREDENTIAL_SOURCE,
           status: "failed",
           error: failure.code,
         },
       ];
     } else {
       attempts[attempts.length - 1] = {
-        source: KIMI_CREDENTIAL_SOURCE,
+        source: attempts[attempts.length - 1].source,
         status: "failed",
         error: failure.code,
       };
@@ -209,6 +269,20 @@ async function resolveCredential(
 ): Promise<KimiCredentialResolution> {
   try {
     return await waitForDeadline(broker.resolve(), signal);
+  } catch (error) {
+    if (error instanceof KimiFailure) throw error;
+    throw new KimiFailure("credential_resolution_failed", {
+      staleEligible: true,
+    });
+  }
+}
+
+async function resolveCliCredential(
+  source: KimiCodeCliCredentialSource,
+  signal: AbortSignal,
+): Promise<KimiCodeCliCredentialResolution> {
+  try {
+    return await waitForDeadline(source.resolve(), signal);
   } catch (error) {
     if (error instanceof KimiFailure) throw error;
     throw new KimiFailure("credential_resolution_failed", {
@@ -239,6 +313,27 @@ function credentialFailureFor(
   }
   return new KimiFailure("credential_resolution_failed", {
     staleEligible: true,
+  });
+}
+
+function cliCredentialFailureFor(
+  resolution: Exclude<KimiCodeCliCredentialResolution, { status: "available" }>,
+): KimiFailure {
+  if (resolution.status === "missing") {
+    return new KimiFailure("kimi_code_cli_credential_unavailable", {
+      status: "auth_required",
+      definitiveAuth: true,
+    });
+  }
+  if (resolution.status === "expired") {
+    return new KimiFailure("kimi_code_cli_credential_expired", {
+      status: "auth_required",
+      definitiveAuth: true,
+    });
+  }
+  return new KimiFailure("kimi_code_cli_credential_invalid", {
+    status: "auth_required",
+    definitiveAuth: true,
   });
 }
 
@@ -283,7 +378,7 @@ function failureReport(
       stale: false,
       error: failure.code,
       ...(failure.retryAfter ? { retryAfter: failure.retryAfter } : {}),
-      sourcesTried: [KIMI_CREDENTIAL_SOURCE],
+      sourcesTried: attempts.map(({ source }) => source),
     },
     attempts,
   };
@@ -329,7 +424,7 @@ function staleKimiReport(
       refreshedAt: cached.state.refreshedAt,
       error,
       ...(retryAfter ? { retryAfter } : {}),
-      sourcesTried: [KIMI_CREDENTIAL_SOURCE, "cache"],
+      sourcesTried: [...attempts.map(({ source }) => source), "cache"],
     },
     attempts,
   };

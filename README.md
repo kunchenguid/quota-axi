@@ -110,7 +110,7 @@ $ quota-axi --provider claude --json
 $ quota-axi auth
 bin: ~/.npm/_npx/.../quota-axi
 description: Inspect local quota auth sources without printing secret values
-auth[8]{provider,source,path,status,error}:
+auth[9]{provider,source,path,status,error}:
   claude,oauth-file,~/.claude/.credentials.json,available,none
   claude,keychain,none,skipped,keychain_prompt_required
   codex,auth-json,~/.codex/auth.json,available,none
@@ -119,6 +119,7 @@ auth[8]{provider,source,path,status,error}:
   copilot,apps-json,~/.config/github-copilot/apps.json,available,none
   grok,auth-json,~/.grok/auth.json,available,none
   kimi,pi:kimi-coding,none,available,none
+  kimi,kimi-code-cli,none,available,none
 help[1]:
   Run `quota-axi --allow-keychain-prompt auth` to permit macOS Keychain access
 ```
@@ -183,8 +184,8 @@ It is generated from `src/skill.ts`; update it with `pnpm run build:skill` and v
 └─────┬─────────┘       └──────┬───────┘
       ▼                        ▼
 ┌───────────────┐       ┌──────────────┐
-│ codex-only    │ ───▶  │ normalized   │
-│ CLI fallback  │       │ quota model  │
+│ read-only     │ ───▶  │ normalized   │
+│ fallbacks     │       │ quota model  │
 └─────┬─────────┘       └──────┬───────┘
       ▼                        ▼
 ┌───────────────┐       ┌──────────────┐
@@ -291,10 +292,10 @@ Source attempts can include `credentialPresent` when a non-secret probe confirms
 
 Auth source entries can include `credentialPresent` when a non-secret probe confirms a credential item exists.
 
-| Name                 | Values                                                                                                         |
-| -------------------- | -------------------------------------------------------------------------------------------------------------- |
-| Auth source statuses | `available`, `missing`, `invalid`, `expired`, or `skipped`                                                     |
-| Auth source names    | `oauth-file`, `keychain`, `auth-json`, `auth-env`, `apps-json`, `state-vscdb`, `cli-rpc`, and `pi:kimi-coding` |
+| Name                 | Values                                                                                                                          |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| Auth source statuses | `available`, `missing`, `invalid`, `expired`, or `skipped`                                                                      |
+| Auth source names    | `oauth-file`, `keychain`, `auth-json`, `auth-env`, `apps-json`, `state-vscdb`, `cli-rpc`, `pi:kimi-coding`, and `kimi-code-cli` |
 
 ## Security Posture
 
@@ -307,7 +308,7 @@ Auth source entries can include `credentialPresent` when a non-secret probe conf
 | Cursor         | `$CURSOR_STATE_DB` when set or the platform Cursor state database path                                                                                                                                                                                           |
 | GitHub Copilot | `$GITHUB_COPILOT_APPS_JSON` when set or the local Copilot apps auth file                                                                                                                                                                                         |
 | Grok           | `$GROK_AUTH_JSON`, inline `$GROK_AUTH`, `$GROK_AUTH_PATH`, or `$GROK_HOME/auth.json` / `~/.grok/auth.json`                                                                                                                                                       |
-| Kimi           | Pi's supported credential API for the exact `kimi-coding` provider; quota-axi never accepts an auth path or reads Pi credential files or environment variables directly                                                                                          |
+| Kimi           | Pi's supported credential API for the exact `kimi-coding` provider first, then a fresh official Kimi Code CLI access token from `$KIMI_CODE_HOME/credentials/kimi-code.json` (default `$HOME/.kimi-code/credentials/kimi-code.json`)                             |
 
 ### Provider notes
 
@@ -343,8 +344,10 @@ Auth source entries can include `credentialPresent` when a non-secret probe conf
 **Kimi**
 
 - It asks Pi's supported credential API to resolve only `kimi-coding`, rejects stored non-API-key credential types before resolution, and ignores any resolver-provided origin or headers.
+- If Pi has no supported credential, it reads the official Kimi Code CLI credential at `$KIMI_CODE_HOME/credentials/kimi-code.json`, defaulting to `$HOME/.kimi-code/credentials/kimi-code.json`. It accepts only a non-empty `access_token` whose Unix-seconds `expires_at` (a JSON number or numeric string) is more than 60 seconds in the future.
+- The Pi source always has priority. Transport, decoding, timeout, cancellation, and server failures do not trigger credential switching.
 - It sends one redirect-disabled `GET` to the fixed `https://api.kimi.com/coding/v1/usages` endpoint with a 15 second total deadline and a 262,144-byte decoded-body cap.
-- It never launches Pi or Kimi, makes a model request, refreshes credentials, imports cookies, sends device identity, retains raw responses, or exposes account, plan, token, or fingerprint data.
+- It never uses `refresh_token`, accepts a custom Kimi origin, launches Pi or Kimi, makes a model request, refreshes or writes credentials, creates a device ID, imports cookies, sends device identity, retains raw responses, or exposes account, plan, token, or fingerprint data.
 - Definitive credential absence or rejection retires Kimi cache data. Transient fallback drops reset-expired windows and applies five-hour or seven-day age bounds to windows without resets.
 
 ### Safety guarantees
