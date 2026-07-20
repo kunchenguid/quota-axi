@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.9](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.8...quota-axi-v0.1.9) (2026-07-20)
+
+
+### Features
+
+* **providers:** add Kimi Code quota reporting ([#29](https://github.com/kunchenguid/quota-axi/issues/29)) ([659a2eb](https://github.com/kunchenguid/quota-axi/commit/659a2eb4148418ada055bad831114e31cd6b1ff1))
+
 ## [0.1.8](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.7...quota-axi-v0.1.8) (2026-07-20)
 
 
