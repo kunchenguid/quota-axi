@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.10](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.9...quota-axi-v0.1.10) (2026-07-20)
+
+
+### Features
+
+* **providers:** add Kimi Code CLI quota fallback ([#31](https://github.com/kunchenguid/quota-axi/issues/31)) ([e21241f](https://github.com/kunchenguid/quota-axi/commit/e21241f43c2e5ccae051f6dce6e7c8901fa27046))
+
 ## [0.1.9](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.8...quota-axi-v0.1.9) (2026-07-20)
 
 
