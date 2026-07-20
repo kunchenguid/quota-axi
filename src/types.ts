@@ -49,6 +49,8 @@ export type SourceAttempt = {
 export type ProviderQuota = {
   provider: ProviderId;
   label: string;
+  /** Stable, non-secret Claude config label; present only in multi-seat output. */
+  seat?: string;
   source: ProviderSource;
   plan?: string;
   account?: {
@@ -85,6 +87,8 @@ export type QuotaAxiResponse = {
 
 export type ProviderOptions = {
   allowKeychainPrompt: boolean;
+  /** Explicit Claude config override. Other provider adapters ignore it. */
+  claudeConfigDir?: string;
 };
 
 export type ProviderAdapter = {
@@ -104,5 +108,7 @@ export type AuthSourceReport = {
 
 export type AuthProviderReport = {
   provider: ProviderId;
+  /** Stable, non-secret Claude config label; present only in multi-seat output. */
+  seat?: string;
   sources: AuthSourceReport[];
 };

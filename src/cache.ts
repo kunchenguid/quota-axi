@@ -34,10 +34,32 @@ const WINDOW_KINDS = [
   "unknown",
 ] as const satisfies readonly QuotaWindow["kind"][];
 
+const PROVIDER_CACHE_KEY = Symbol("quota-axi-provider-cache-key");
+type CacheTaggedProvider = ProviderQuota & {
+  [PROVIDER_CACHE_KEY]?: string;
+};
+
+export function tagProviderCacheKey<T extends ProviderQuota>(
+  provider: T,
+  cacheKey: string | undefined,
+): T {
+  if (cacheKey) {
+    Object.defineProperty(provider, PROVIDER_CACHE_KEY, {
+      configurable: false,
+      enumerable: true,
+      value: cacheKey,
+    });
+  }
+  return provider;
+}
+
 export function readCachedProvider(
   provider: ProviderId,
+  cacheKey?: string,
 ): ProviderQuota | undefined {
-  return readCacheProviders().find((item) => item.provider === provider);
+  return readCacheProviders().find(
+    (item) => item.provider === provider && providerCacheKey(item) === cacheKey,
+  );
 }
 
 export function writeCachedProviders(providers: ProviderQuota[]): void {
@@ -47,33 +69,41 @@ export function writeCachedProviders(providers: ProviderQuota[]): void {
         (provider) =>
           provider.state.status === "fresh" && provider.windows.length === 0,
       )
-      .map((provider) => provider.provider),
+      .map(providerCacheIdentity),
   );
   const cacheable = providers
     .map(toCacheProvider)
     .filter((provider): provider is ProviderQuota => Boolean(provider));
 
   const file = cacheFilePath();
-  const byProvider = new Map<ProviderId, ProviderQuota>();
+  const byProvider = new Map<string, ProviderQuota>();
   let clearedExisting = false;
   for (const provider of readCacheProviders()) {
-    if (clearProviders.has(provider.provider)) {
+    const identity = providerCacheIdentity(provider);
+    if (clearProviders.has(identity)) {
       clearedExisting = true;
       continue;
     }
-    byProvider.set(provider.provider, provider);
+    byProvider.set(identity, provider);
   }
   if (cacheable.length === 0 && !clearedExisting) return;
-  for (const provider of cacheable) byProvider.set(provider.provider, provider);
-  const merged = PROVIDER_IDS.map((provider) =>
-    byProvider.get(provider),
-  ).filter((provider): provider is ProviderQuota => Boolean(provider));
+  for (const provider of cacheable)
+    byProvider.set(providerCacheIdentity(provider), provider);
+  const merged = [...byProvider.values()].sort(compareCachedProviders);
 
   ensurePrivateParent(file);
   const temp = `${file}.${process.pid}.tmp`;
   writeFileSync(
     temp,
-    `${JSON.stringify({ generatedAt: new Date().toISOString(), schemaVersion: 1, providers: merged }, null, 2)}\n`,
+    `${JSON.stringify(
+      {
+        generatedAt: new Date().toISOString(),
+        schemaVersion: 2,
+        providers: merged.map(serializeCachedProvider),
+      },
+      null,
+      2,
+    )}\n`,
     { mode: 0o600 },
   );
   chmodSync(temp, 0o600);
@@ -86,7 +116,7 @@ function readCacheProviders(): ProviderQuota[] {
   const payload = objectValue(raw);
   if (
     !payload ||
-    payload.schemaVersion !== 1 ||
+    (payload.schemaVersion !== 1 && payload.schemaVersion !== 2) ||
     !Array.isArray(payload.providers)
   )
     return [];
@@ -98,9 +128,11 @@ function readCacheProviders(): ProviderQuota[] {
 function toCacheProvider(provider: ProviderQuota): ProviderQuota | undefined {
   if (provider.state.status !== "fresh" || provider.windows.length === 0)
     return undefined;
-  return normalizeCachedProvider({
+  const normalized = normalizeCachedProvider({
     provider: provider.provider,
-    label: provider.label,
+    // Multi-seat display metadata is added at the command boundary and must
+    // not change the canonical cached provider label.
+    label: provider.provider === "claude" ? "Claude" : provider.label,
     source: provider.source,
     plan: provider.plan,
     windows: provider.windows,
@@ -112,6 +144,9 @@ function toCacheProvider(provider: ProviderQuota): ProviderQuota | undefined {
       sourcesTried: provider.state.sourcesTried,
     },
   });
+  return normalized
+    ? tagProviderCacheKey(normalized, providerCacheKey(provider))
+    : undefined;
 }
 
 function normalizeCachedProvider(raw: unknown): ProviderQuota | undefined {
@@ -156,7 +191,32 @@ function normalizeCachedProvider(raw: unknown): ProviderQuota | undefined {
   if (plan) result.plan = plan;
   if (refreshedAt) result.state.refreshedAt = refreshedAt;
   if (credits) result.credits = credits;
-  return result;
+  return tagProviderCacheKey(result, stringValue(data.cacheKey));
+}
+
+function providerCacheKey(provider: ProviderQuota): string | undefined {
+  return (provider as CacheTaggedProvider)[PROVIDER_CACHE_KEY];
+}
+
+function providerCacheIdentity(provider: ProviderQuota): string {
+  return `${provider.provider}\u0000${providerCacheKey(provider) ?? ""}`;
+}
+
+function compareCachedProviders(
+  left: ProviderQuota,
+  right: ProviderQuota,
+): number {
+  const providerOrder =
+    PROVIDER_IDS.indexOf(left.provider) - PROVIDER_IDS.indexOf(right.provider);
+  if (providerOrder !== 0) return providerOrder;
+  return (providerCacheKey(left) ?? "").localeCompare(
+    providerCacheKey(right) ?? "",
+  );
+}
+
+function serializeCachedProvider(provider: ProviderQuota): object {
+  const cacheKey = providerCacheKey(provider);
+  return cacheKey ? { ...provider, cacheKey } : provider;
 }
 
 function normalizeCachedWindow(raw: unknown): QuotaWindow | undefined {

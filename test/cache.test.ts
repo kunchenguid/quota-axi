@@ -8,7 +8,11 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { readCachedProvider, writeCachedProviders } from "../src/cache.js";
+import {
+  readCachedProvider,
+  tagProviderCacheKey,
+  writeCachedProviders,
+} from "../src/cache.js";
 import { cacheFilePath } from "../src/lib/fs.js";
 import type { ProviderId, ProviderQuota } from "../src/types.js";
 
@@ -77,6 +81,26 @@ describe("quota cache", () => {
       "claude",
     ]);
     expect(readCachedProvider("copilot")).toBeUndefined();
+  });
+
+  it("isolates Claude snapshots by non-secret profile cache key", () => {
+    useTempCache();
+    writeCachedProviders([
+      tagProviderCacheKey(quota("claude", 10), "profile-arcs"),
+      tagProviderCacheKey(quota("claude", 20), "profile-jr"),
+      quota("codex", 30),
+    ]);
+
+    expect(
+      readCachedProvider("claude", "profile-arcs")?.windows[0].percentUsed,
+    ).toBe(10);
+    expect(
+      readCachedProvider("claude", "profile-jr")?.windows[0].percentUsed,
+    ).toBe(20);
+    expect(readCachedProvider("claude")).toBeUndefined();
+    const text = readFileSync(cacheFilePath(), "utf8");
+    expect(text).toContain('"cacheKey": "profile-arcs"');
+    expect(text).not.toContain('"seat"');
   });
 });
 

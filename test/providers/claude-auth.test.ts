@@ -14,12 +14,15 @@ const originalHome = process.env.HOME;
 const originalUserProfile = process.env.USERPROFILE;
 const originalXdgCacheHome = process.env.XDG_CACHE_HOME;
 const originalClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
+const originalClaudeConfigDirs = process.env.CLAUDE_CONFIG_DIRS;
 const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
 let tempDir: string | undefined;
 
 beforeEach(() => {
   vi.resetModules();
   usePlatform("linux");
+  delete process.env.CLAUDE_CONFIG_DIR;
+  delete process.env.CLAUDE_CONFIG_DIRS;
 });
 
 afterEach(() => {
@@ -37,6 +40,9 @@ afterEach(() => {
   if (originalClaudeConfigDir === undefined)
     delete process.env.CLAUDE_CONFIG_DIR;
   else process.env.CLAUDE_CONFIG_DIR = originalClaudeConfigDir;
+  if (originalClaudeConfigDirs === undefined)
+    delete process.env.CLAUDE_CONFIG_DIRS;
+  else process.env.CLAUDE_CONFIG_DIRS = originalClaudeConfigDirs;
   if (tempDir) rmSync(tempDir, { recursive: true, force: true });
   tempDir = undefined;
 });
@@ -92,6 +98,36 @@ describe("Claude credential-state reporting", () => {
       status: "available",
     });
     expect(result.state.status).toBe("fresh");
+  });
+
+  it("uses an explicit read-only config override without mutating the singular environment", async () => {
+    const home = useTempHome();
+    const legacyConfigDir = join(home, "legacy-claude");
+    const selectedConfigDir = join(home, "selected-claude");
+    process.env.CLAUDE_CONFIG_DIR = legacyConfigDir;
+    mkdirSync(selectedConfigDir, { recursive: true });
+    writeFileSync(
+      join(selectedConfigDir, ".credentials.json"),
+      JSON.stringify({
+        claudeAiOauth: {
+          accessToken: "fresh-token",
+          expiresAt: "2035-01-01T00:00:00.000Z",
+        },
+      }),
+    );
+
+    const { inspectAuth } = await import("../../src/providers/claude.js");
+    const auth = await inspectAuth({
+      allowKeychainPrompt: false,
+      claudeConfigDir: selectedConfigDir,
+    });
+
+    expect(auth.sources[0]).toMatchObject({
+      path: join(selectedConfigDir, ".credentials.json"),
+      status: "available",
+    });
+    expect(process.env.CLAUDE_CONFIG_DIR).toBe(legacyConfigDir);
+    expect(existsSync(legacyConfigDir)).toBe(false);
   });
 
   it("derives the custom-config Keychain service from the literal config path", async () => {

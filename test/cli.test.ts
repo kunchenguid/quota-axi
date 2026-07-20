@@ -1,8 +1,8 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { parseFlags } from "../src/args.js";
+import { parseFlags, selectClaudeConfigDirs } from "../src/args.js";
 import { main, normalizeArgv } from "../src/cli.js";
 import { PROVIDERS } from "../src/providers/index.js";
 import { redactedResponse } from "../src/render.js";
@@ -61,13 +61,61 @@ describe("CLI flag parsing", () => {
   });
 
   it("collects the boolean flags", () => {
-    expect(parseFlags(["--json", "--full", "--allow-keychain-prompt"])).toEqual(
+    expect(
+      parseFlags(["--json", "--full", "--allow-keychain-prompt"], {}),
+    ).toEqual({
+      providers: ["claude", "codex", "cursor", "copilot", "grok"],
+      json: true,
+      full: true,
+      allowKeychainPrompt: true,
+    });
+  });
+
+  it("selects repeated Claude config flags in first-seen order and deduplicates normalized paths", () => {
+    const flags = parseFlags(
+      [
+        "--claude-config-dir",
+        "./fixtures/../arcs",
+        "--claude-config-dir=./jr",
+        "--claude-config-dir",
+        "./arcs",
+      ],
       {
-        providers: ["claude", "codex", "cursor", "copilot", "grok"],
-        json: true,
-        full: true,
-        allowKeychainPrompt: true,
+        CLAUDE_CONFIG_DIRS: ["/env/ra", "/env/yfz"].join(delimiter),
+        CLAUDE_CONFIG_DIR: "/legacy",
       },
+    );
+
+    expect(flags.claudeConfigDirs).toEqual([resolve("arcs"), resolve("jr")]);
+  });
+
+  it("uses plural, singular, then default Claude config sources deterministically", () => {
+    expect(
+      selectClaudeConfigDirs([], {
+        CLAUDE_CONFIG_DIRS: ["/env/arcs", "/env/jr", "/env/arcs"].join(
+          delimiter,
+        ),
+        CLAUDE_CONFIG_DIR: "/legacy",
+      }),
+    ).toEqual({
+      source: "CLAUDE_CONFIG_DIRS",
+      directories: [resolve("/env/arcs"), resolve("/env/jr")],
+    });
+    expect(
+      selectClaudeConfigDirs([], { CLAUDE_CONFIG_DIR: "/legacy" }),
+    ).toEqual({ source: "CLAUDE_CONFIG_DIR" });
+    expect(selectClaudeConfigDirs([], {})).toEqual({ source: "default" });
+  });
+
+  it("rejects a missing Claude config directory value", () => {
+    expect(() => parseFlags(["--claude-config-dir"])).toThrow(
+      "--claude-config-dir requires a directory path",
+    );
+    expect(() => parseFlags(["--claude-config-dir="])).toThrow(
+      "--claude-config-dir requires a directory path",
+    );
+    expect(() => parseFlags(["--claude-config-dir", "   "])).toThrow(
+      "--claude-config-dir requires a directory path",
     );
   });
 
@@ -93,6 +141,12 @@ describe("argv normalization", () => {
       "quota",
       "--provider",
       "claude",
+    ]);
+    expect(normalizeArgv(["--claude-config-dir", "auth", "--json"])).toEqual([
+      "quota",
+      "--claude-config-dir",
+      "auth",
+      "--json",
     ]);
   });
 
@@ -350,6 +404,133 @@ describe("CLI quota rendering", () => {
         .reason,
     ).toBeUndefined();
   });
+
+  it("preserves the single-seat JSON and human schemas for one explicit config", async () => {
+    useTempCache();
+    let receivedConfigDir: string | undefined;
+    PROVIDERS.claude = {
+      ...providerWithQuota(freshClaudeQuota()),
+      async fetchQuota(options) {
+        receivedConfigDir = options.claudeConfigDir;
+        return freshClaudeQuota();
+      },
+    };
+    const configDir = resolve("/private/configs/arcs");
+
+    const json = JSON.parse(
+      await capture([
+        "--provider",
+        "claude",
+        "--claude-config-dir",
+        configDir,
+        "--json",
+      ]),
+    ) as QuotaAxiResponse;
+    const human = await capture([
+      "--provider",
+      "claude",
+      "--claude-config-dir",
+      configDir,
+    ]);
+
+    expect(receivedConfigDir).toBe(configDir);
+    expect(json.providers).toHaveLength(1);
+    expect(json.providers[0].label).toBe("Claude");
+    expect(json.providers[0].seat).toBeUndefined();
+    expect(human).toContain(
+      "providers[1]{provider,plan,source,status,refreshedAt}:",
+    );
+    expect(human).not.toContain("{provider,seat,");
+  });
+
+  it("renders deterministic mixed Claude seats with Codex and Grok in JSON without private paths", async () => {
+    useTempCache();
+    const [arcs, jr] = useMixedProviderFixtures();
+
+    const text = await capture([
+      "--provider",
+      "claude,codex,grok",
+      "--claude-config-dir",
+      arcs,
+      "--claude-config-dir",
+      jr,
+      "--json",
+    ]);
+    const output = JSON.parse(text) as QuotaAxiResponse;
+
+    expect(
+      output.providers.map((provider) => ({
+        provider: provider.provider,
+        seat: provider.seat,
+        status: provider.state.status,
+      })),
+    ).toEqual([
+      { provider: "claude", seat: "arcs", status: "fresh" },
+      { provider: "claude", seat: "jr", status: "auth_required" },
+      { provider: "codex", seat: undefined, status: "fresh" },
+      { provider: "grok", seat: undefined, status: "fresh" },
+    ]);
+    expect(output.providers[0].label).toBe("Claude (arcs)");
+    expect(text).not.toContain("/private/customer/configs");
+    expect(text).not.toContain("fixture-secret-token");
+    expect(text).not.toContain("person@example.invalid");
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("distinguishes Claude seats in one human view with Codex and Grok", async () => {
+    useTempCache();
+    const [arcs, jr] = useMixedProviderFixtures();
+
+    const output = await capture([
+      "--provider",
+      "claude,codex,grok",
+      "--claude-config-dir",
+      arcs,
+      "--claude-config-dir",
+      jr,
+    ]);
+
+    expect(output).toContain(
+      "providers[4]{provider,seat,plan,source,status,refreshedAt}:",
+    );
+    expect(output).toContain("claude,arcs,pro,oauth,fresh");
+    expect(output).toContain("claude,jr,unknown,unavailable,auth_required");
+    expect(output).toContain("codex,none,pro,cli-rpc,fresh");
+    expect(output).toContain("grok,none,supergrok,api,fresh");
+    expect(output).toContain(
+      "windows[3]{provider,seat,id,label,percentRemaining,resetsAt,state}:",
+    );
+    expect(output).not.toContain("/private/customer/configs");
+    expect(output).not.toContain("fixture-secret-token");
+  });
+
+  it("labels multi-seat auth reports without exposing config paths", async () => {
+    const [arcs, jr] = useMixedProviderFixtures();
+
+    const text = await capture([
+      "auth",
+      "--provider",
+      "claude",
+      "--claude-config-dir",
+      arcs,
+      "--claude-config-dir",
+      jr,
+      "--json",
+    ]);
+    const output = JSON.parse(text) as {
+      auth: Array<{
+        provider: string;
+        seat?: string;
+        sources: Array<{ path?: string }>;
+      }>;
+    };
+
+    expect(output.auth.map((report) => report.seat)).toEqual(["arcs", "jr"]);
+    expect(output.auth.flatMap((report) => report.sources)).not.toContainEqual(
+      expect.objectContaining({ path: expect.any(String) }),
+    );
+    expect(text).not.toContain("/private/customer/configs");
+  });
 });
 
 describe("CLI plumbing via the axi SDK", () => {
@@ -484,6 +665,63 @@ function useTempCache(): void {
   process.env.XDG_CACHE_HOME = tempDir;
 }
 
+function useMixedProviderFixtures(): [string, string] {
+  const arcs = resolve("/private/customer/configs/arcs");
+  const jr = resolve("/private/customer/configs/jr");
+  PROVIDERS.claude = {
+    id: "claude",
+    label: "Claude",
+    async fetchQuota(options) {
+      if (options.claudeConfigDir === arcs) {
+        return {
+          ...freshClaudeQuota(),
+          account: {
+            email: "person@example.invalid",
+            accountId: "fixture-secret-token",
+          },
+        };
+      }
+      return {
+        provider: "claude",
+        label: "Claude",
+        source: "unavailable",
+        windows: [],
+        state: {
+          status: "auth_required",
+          stale: false,
+          error: "Claude sign-in required",
+          sourcesTried: ["oauth-file"],
+        },
+        attempts: [
+          {
+            source: "oauth-file",
+            status: "skipped",
+            error: "credentials_missing",
+          },
+        ],
+      };
+    },
+    async inspectAuth(options) {
+      return {
+        provider: "claude",
+        sources: [
+          {
+            source: "oauth-file",
+            path: join(
+              options.claudeConfigDir ?? "unexpected",
+              ".credentials.json",
+            ),
+            status: options.claudeConfigDir === arcs ? "available" : "missing",
+          },
+        ],
+      };
+    },
+  };
+  PROVIDERS.codex = providerWithQuota(freshCodexQuota());
+  PROVIDERS.grok = providerWithQuota(freshGrokQuota());
+  return [arcs, jr];
+}
+
 function freshClaudeQuota(): ProviderQuota {
   return {
     provider: "claude",
@@ -533,6 +771,31 @@ function staleClaudeQuota(): ProviderQuota {
         credentialPresent: true,
       },
     ],
+  };
+}
+
+function freshGrokQuota(): ProviderQuota {
+  return {
+    provider: "grok",
+    label: "Grok",
+    source: "api",
+    plan: "supergrok",
+    windows: [
+      {
+        id: "credits",
+        label: "credits",
+        kind: "credits",
+        percentUsed: 20,
+        percentRemaining: 80,
+      },
+    ],
+    state: {
+      status: "fresh",
+      stale: false,
+      refreshedAt: "2026-07-06T18:10:00Z",
+      sourcesTried: ["api"],
+    },
+    attempts: [{ source: "api", status: "success" }],
   };
 }
 

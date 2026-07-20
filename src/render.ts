@@ -17,8 +17,10 @@ export function renderQuotaToon(
   binPath: string,
   full: boolean,
 ): string {
+  const hasSeats = response.providers.some((provider) => provider.seat);
   const providers = response.providers.map((provider) => ({
     provider: provider.provider,
+    ...(hasSeats ? { seat: provider.seat ?? "none" } : {}),
     plan: provider.plan ?? "unknown",
     source: provider.source,
     status: provider.state.status,
@@ -27,6 +29,7 @@ export function renderQuotaToon(
   const windows = response.providers.flatMap((provider) =>
     provider.windows.map((window) => ({
       provider: provider.provider,
+      ...(hasSeats ? { seat: provider.seat ?? "none" } : {}),
       id: window.id,
       label: window.label,
       percentRemaining: window.percentRemaining ?? "unknown",
@@ -48,6 +51,7 @@ export function renderQuotaToon(
     .filter((provider) => provider.state.reason && provider.state.remedyCommand)
     .map((provider) => ({
       provider: provider.provider,
+      ...(hasSeats ? { seat: provider.seat ?? "none" } : {}),
       reason: provider.state.reason,
       remedyCommand: provider.state.remedyCommand,
     }));
@@ -56,13 +60,16 @@ export function renderQuotaToon(
   if (full) {
     const accounts = response.providers.map((provider) => ({
       provider: provider.provider,
+      ...(hasSeats ? { seat: provider.seat ?? "none" } : {}),
       email: provider.account?.email ?? "hidden",
       organization: provider.account?.organization ?? "none",
       accountId: provider.account?.accountId ?? "none",
       identityStatus: provider.account?.identityStatus ?? "unknown",
     }));
     const attempts = response.providers.flatMap((provider) =>
-      (provider.attempts ?? []).map((attempt) => attemptRow(provider, attempt)),
+      (provider.attempts ?? []).map((attempt) =>
+        attemptRow(provider, attempt, hasSeats),
+      ),
     );
     blocks.push(encode({ accounts }));
     blocks.push(encode({ attempts }));
@@ -76,9 +83,11 @@ export function renderAuthToon(
   reports: AuthProviderReport[],
   binPath: string,
 ): string {
+  const hasSeats = reports.some((report) => report.seat);
   const sources = reports.flatMap((report) =>
     report.sources.map((source) => ({
       provider: report.provider,
+      ...(hasSeats ? { seat: report.seat ?? "none" } : {}),
       source: source.source,
       path: source.path ? collapseHome(source.path) : "none",
       status: source.status,
@@ -113,9 +122,14 @@ export function redactedResponse(
   };
 }
 
-function attemptRow(provider: ProviderQuota, attempt: SourceAttempt) {
+function attemptRow(
+  provider: ProviderQuota,
+  attempt: SourceAttempt,
+  hasSeats: boolean,
+) {
   return {
     provider: provider.provider,
+    ...(hasSeats ? { seat: provider.seat ?? "none" } : {}),
     source: attempt.source,
     status: attempt.status,
     error: attempt.error ?? "none",
