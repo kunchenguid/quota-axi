@@ -332,7 +332,7 @@ Auth source entries can include `credentialPresent` when a non-secret probe conf
 
 - It selects session-scoped auth instead of API-key entries and sends a read-only gRPC-web request to Grok's consumer `grok_api_v2.GrokBuildBilling.GetGrokCreditsConfig` operation.
 - Session-scoped Grok auth includes web/session scopes and OIDC records scoped to `auth.x.ai` with `auth_mode` or `authMode` set to `oidc`, including scope keys with `::<client id>` suffixes.
-- It does not send browser cookies, launch the Grok CLI, refresh credentials, or derive usage from monetary fields.
+- It does not send browser cookies, launch the Grok CLI, refresh credentials, perform OAuth, retain raw response bodies, or derive usage from monetary fields.
 
 ### Safety guarantees
 
