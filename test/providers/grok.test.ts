@@ -478,6 +478,9 @@ describe("Grok consumer quota acquisition", () => {
   it.each([
     ["trailer", "OAuth access token expired"],
     ["header", "invalid credentials"],
+    ["trailer", "bad-credentials"],
+    ["header", "oauth2 credential could not be validated"],
+    ["trailer", "access token could not be validated"],
   ])(
     "classifies credential-related gRPC permission denial in the %s as auth required",
     async (location, diagnostic) => {

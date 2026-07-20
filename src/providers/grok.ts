@@ -396,6 +396,10 @@ function grpcMessageIndicatesAuthFailure(value: string | null): boolean {
     /\b(?:unauthenticated|authentication required|sign[ -]?in required)\b/i.test(
       message,
     ) ||
+    /\bbad[ -]credentials\b/i.test(message) ||
+    /\b(?:oauth2|access token)\b[\s\S]{0,128}\bcould not be validated\b/i.test(
+      message,
+    ) ||
     /\b(?:invalid|expired|missing|revoked)\s+(?:(?:oauth|access|auth(?:entication)?|bearer)\s+)*(?:token|credentials?|jwt)\b/i.test(
       message,
     ) ||
