@@ -514,9 +514,7 @@ describe("CLI quota rendering", () => {
     expect(output).toContain(
       "windows[3]{provider,seat,id,label,percentRemaining,resetsAt,state}:",
     );
-    expect(output.split("help[")[0]).not.toContain(
-      "/private/customer/configs",
-    );
+    expect(output.split("help[")[0]).not.toContain("/private/customer/configs");
     expect(output).toContain(
       "--claude-config-dir='/private/customer/configs/arcs'",
     );

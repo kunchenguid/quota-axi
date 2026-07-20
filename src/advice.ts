@@ -63,14 +63,8 @@ export function quotaHelpLines(
     "quota-axi --provider claude --json",
     claudeConfigs,
   );
-  const fullCommand = withClaudeConfigFlags(
-    "quota-axi --full",
-    claudeConfigs,
-  );
-  const authCommand = withClaudeConfigFlags(
-    "quota-axi auth",
-    claudeConfigs,
-  );
+  const fullCommand = withClaudeConfigFlags("quota-axi --full", claudeConfigs);
+  const authCommand = withClaudeConfigFlags("quota-axi auth", claudeConfigs);
   return [
     ...(response.help ?? []),
     `Run \`${jsonCommand}\` for JSON output`,

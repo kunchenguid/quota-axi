@@ -147,7 +147,7 @@ $env:CLAUDE_CONFIG_DIRS = "$HOME\.claude-work;$HOME\.claude-personal"
 quota-axi --provider claude,codex,grok
 ```
 
-Precedence is deterministic: repeated CLI values (in argument order), then `CLAUDE_CONFIG_DIRS`, then the existing singular `CLAUDE_CONFIG_DIR`, then `~/.claude`. Lexically normalized duplicate directories keep their first position. Selected directories remain separate rows even when they resolve to the same account identity. Multi-seat output uses stable non-secret labels made from the directory basename and a short profile hash, such as `.claude-work-a1b2c3`; provider rows never include full config paths, but copy-pasteable next-step and Keychain remedy commands preserve selected profiles. See the [Output Model](#output-model) for conditional seat metadata.
+Selection is deterministic and sources are not merged: repeated CLI values (in argument order) take precedence over `CLAUDE_CONFIG_DIRS`, then the existing singular `CLAUDE_CONFIG_DIR`, then `~/.claude`. Lexically normalized duplicate directories keep their first position. Selected directories remain separate rows even when they resolve to the same account identity. Multi-seat output uses stable labels made from the directory basename and a short profile hash, such as `.claude-work-a1b2c3`; provider and auth rows never include full config paths, but copy-pasteable next-step and Keychain remedy commands preserve selected profiles. See the [Output Model](#output-model) for conditional seat metadata.
 
 All config and provider access is read-only: quota-axi reads credentials and calls first-party usage endpoints but never writes config directories or changes provider auth/state.
 
@@ -220,7 +220,7 @@ It is generated from `src/skill.ts`; update it with `pnpm run build:skill` and v
 └───────────────┘       └──────────────┘
 ```
 
-- **Live first** - direct provider HTTP calls use 15 second request timeouts, Codex JSON-RPC reads use short per-call timeouts, and stale cache fallback is per provider.
+- **Live first** - direct provider HTTP calls use 15 second request timeouts, Codex JSON-RPC reads use short per-call timeouts, and stale cache fallback is per provider or Claude seat.
 - **No first-run Keychain prompt** - macOS Claude Keychain value reads are skipped on plain calls until `--allow-keychain-prompt` succeeds once, then future plain calls reuse that existing grant.
 - **Partial success is success** - one provider or Claude seat can fail while another returns fresh or stale data, and the process still exits 0. The top-level `summary.availability` reports `ok` (every row usable), `partial` (some usable), or `unavailable` (none usable) so an agent reads the aggregate verdict without scanning every row, and a single seat's 429 can never read as all-Claude-down. Exit code 0 covers both full and partial availability; exit code 1 means every row failed (complete unavailability); exit code 2 means a usage error.
 - **No token equivalence** - quota-axi does not claim that one provider percentage equals another provider percentage.
@@ -319,7 +319,7 @@ Source attempts can include `credentialPresent` when a non-secret probe confirms
 | Provider auth report | `provider`, `sources`, and optional multi-seat `seat`     |
 | Auth source entry    | `source`, optional `path`, `status`, and optional `error` |
 
-Auth source entries can include `credentialPresent` when a non-secret probe confirms a credential item exists.
+Auth source entries can include `credentialPresent` when a non-secret probe confirms a credential item exists. Multi-seat auth reports omit config paths and use `seat` to distinguish subscriptions.
 
 | Name                 | Values                                                                                       |
 | -------------------- | -------------------------------------------------------------------------------------------- |
@@ -344,7 +344,7 @@ Auth source entries can include `credentialPresent` when a non-secret probe conf
 
 - Multiple selected config directories are queried independently and concurrently. When `--allow-keychain-prompt` is present, prompt-capable Claude reads are serialized while other provider reads remain concurrent. Live failures and stale-cache fallbacks remain bounded to their seat and do not suppress other Claude seats or providers.
 - Selected config directories are read only and never created, rewritten, or used to mutate Claude state.
-- Relative profile values retain their literal normalized identity for Claude Code's Keychain service while filesystem and quota-cache access uses the resolved directory.
+- Relative profile values selected through `--claude-config-dir` or `CLAUDE_CONFIG_DIRS` retain their literal normalized identity for Claude Code's Keychain service while filesystem and quota-cache access uses the resolved directory.
 - quota-axi records the non-secret access marker after any successful Keychain value read.
 - When that marker exists, plain calls read the Keychain value again so an already-approved "Always Allow" grant keeps live Claude quota fresh.
 - Without the flag or marker, quota-axi may perform a non-secret Keychain item presence check so it only suggests Keychain access when a Claude credential item exists.
@@ -388,7 +388,7 @@ Auth source entries can include `credentialPresent` when a non-secret probe conf
 | Quota cache permissions                | Uses `0600` file permissions.                                                                                                                                                                                                                                                                                             |
 | Quota cache contents                   | Stores normalized non-secret snapshots only.                                                                                                                                                                                                                                                                              |
 | Claude Keychain access marker          | Lives alongside the quota cache as `claude-keychain-access-granted` for the default profile or with an eight-character path-hash suffix for a selected config-directory profile (`--claude-config-dir`, `CLAUDE_CONFIG_DIRS`, or `$CLAUDE_CONFIG_DIR`); uses `0600` file permissions and contains no credential material. |
-| Cached reports                         | Only fresh provider snapshots with windows are cached; explicit Claude profiles are isolated by a non-secret path hash.                                                                                                                                                                                                   |
+| Cached reports                         | Only fresh provider snapshots with windows are cached; Claude profiles selected through `--claude-config-dir` or `CLAUDE_CONFIG_DIRS` are isolated by a non-secret path hash.                                                                                                                                             |
 | Fresh provider reports with no windows | Clear the matching provider or Claude-profile snapshot, so entitlement-only reports do not leave stale quota windows behind.                                                                                                                                                                                              |
 | Reports and details not cached         | Failed providers, stale providers, account identity, and source attempts are not cached.                                                                                                                                                                                                                                  |
 
