@@ -84,6 +84,10 @@ or when comparing supported local provider headroom side by side.
 7. For a managed Codex installation, set \`QUOTA_AXI_CODEX_BINARY\` to its absolute executable
    path. quota-axi uses that exact executable for auth inspection and the read-only app-server
    fallback, and fails closed if the override is invalid.
+8. For Kimi, quota-axi prefers Pi's supported \`kimi-coding\` source. If it is unavailable,
+   quota-axi may reuse a fresh official Kimi Code CLI access token from
+   \`$KIMI_CODE_HOME/credentials/kimi-code.json\` (default
+   \`$HOME/.kimi-code/credentials/kimi-code.json\`) without refreshing or writing credentials.
 
 ## Usage
 

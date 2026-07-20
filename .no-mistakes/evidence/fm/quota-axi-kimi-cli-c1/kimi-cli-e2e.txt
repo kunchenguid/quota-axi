@@ -1,0 +1,71 @@
+$ quota-axi --provider kimi --json --full
+{
+  "generatedAt": "2026-07-20T23:49:16.412Z",
+  "schemaVersion": 2,
+  "providers": [
+    {
+      "provider": "kimi",
+      "label": "Kimi",
+      "source": "api",
+      "windows": [
+        {
+          "id": "weekly",
+          "label": "week",
+          "kind": "weekly",
+          "percentUsed": 32.5,
+          "percentRemaining": 67.5,
+          "resetsAt": "2027-02-08T17:00:00.000Z"
+        },
+        {
+          "id": "five_hour",
+          "label": "session",
+          "kind": "session",
+          "percentUsed": 15,
+          "percentRemaining": 85,
+          "resetsAt": "2027-02-03T09:05:06.000Z",
+          "windowSeconds": 18000
+        }
+      ],
+      "state": {
+        "status": "fresh",
+        "stale": false,
+        "refreshedAt": "2027-02-03T04:05:06.000Z",
+        "sourcesTried": [
+          "pi:kimi-coding",
+          "kimi-code-cli"
+        ]
+      },
+      "attempts": [
+        {
+          "source": "pi:kimi-coding",
+          "status": "skipped",
+          "error": "kimi_credential_unavailable"
+        },
+        {
+          "source": "kimi-code-cli",
+          "status": "success"
+        }
+      ]
+    }
+  ]
+}
+
+Observed provider request:
+[
+  {
+    "url": "https://api.kimi.com/coding/v1/usages",
+    "method": "GET",
+    "redirect": "manual",
+    "credentials": "omit",
+    "authorization": "Bearer <redacted expected access_token>",
+    "cookie": null,
+    "sensitiveHeaders": []
+  }
+]
+
+Secret values present in CLI output: false
+Credential storage unchanged after quota read: true
+Provider requests made: 1
+Pi credential result simulated: definitively missing
+Kimi Code credential source: real bounded filesystem reader
+Provider response: deterministic mocked first-party usage payload

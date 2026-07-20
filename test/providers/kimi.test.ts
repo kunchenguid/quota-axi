@@ -5,6 +5,11 @@ import {
   normalizeRetryAfter,
 } from "../../src/providers/kimi.js";
 import type {
+  KimiCodeCliCredentialInspection,
+  KimiCodeCliCredentialResolution,
+  KimiCodeCliCredentialSource,
+} from "../../src/providers/kimi-code-cli-credential.js";
+import type {
   KimiCredentialBroker,
   KimiCredentialInspection,
   KimiCredentialResolution,
@@ -44,7 +49,14 @@ describe("Kimi request transport", () => {
       async (_input: RequestInfo | URL, _init?: RequestInit) =>
         jsonResponse(SUCCESS_PAYLOAD),
     );
-    const adapter = testAdapter({ fetch: request });
+    const cliSource = cliCredentialSource({
+      status: "available",
+      accessToken: "lower-priority-cli-token",
+    });
+    const adapter = testAdapter({
+      cliCredentialSource: cliSource,
+      fetch: request,
+    });
 
     const report = await adapter.fetchQuota(OPTIONS);
 
@@ -93,6 +105,86 @@ describe("Kimi request transport", () => {
     expect(report.account).toBeUndefined();
     expect(report.plan).toBeUndefined();
     expect(report.credits).toBeUndefined();
+    expect(cliSource.resolve).not.toHaveBeenCalled();
+  });
+
+  it.each(["missing", "unsupported"] as const)(
+    "uses a fresh CLI credential after Pi reports %s",
+    async (piStatus) => {
+      const cliToken = "synthetic-cli-token-529";
+      const request = vi.fn(
+        async (_input: RequestInfo | URL, _init?: RequestInit) =>
+          jsonResponse(SUCCESS_PAYLOAD),
+      );
+      const adapter = testAdapter({
+        broker: broker({ status: piStatus }),
+        cliCredentialSource: cliCredentialSource({
+          status: "available",
+          accessToken: cliToken,
+        }),
+        fetch: request,
+      });
+
+      const report = await adapter.fetchQuota(OPTIONS);
+
+      expect(request).toHaveBeenCalledOnce();
+      const [input, init] = request.mock.calls[0];
+      expect(String(input)).toBe("https://api.kimi.com/coding/v1/usages");
+      expect(init).toMatchObject({
+        method: "GET",
+        credentials: "omit",
+        redirect: "manual",
+      });
+      expect(new Headers(init?.headers).get("authorization")).toBe(
+        `Bearer ${cliToken}`,
+      );
+      expect(report.state.sourcesTried).toEqual([
+        "pi:kimi-coding",
+        "kimi-code-cli",
+      ]);
+      expect(report.attempts).toEqual([
+        {
+          source: "pi:kimi-coding",
+          status: "skipped",
+          error:
+            piStatus === "missing"
+              ? "kimi_credential_unavailable"
+              : "unsupported_credential_type",
+        },
+        { source: "kimi-code-cli", status: "success" },
+      ]);
+      expect(JSON.stringify(report)).not.toContain(cliToken);
+    },
+  );
+
+  it("does not hide transport, decoding, or server failures by switching credentials", async () => {
+    const failures: Array<() => Promise<Response>> = [
+      async () => {
+        throw new Error("transport fixture");
+      },
+      async () =>
+        new Response("{broken", {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      async () => new Response(null, { status: 503 }),
+      async () => new Response(null, { status: 401 }),
+    ];
+
+    for (const requestFailure of failures) {
+      const cliSource = cliCredentialSource({
+        status: "available",
+        accessToken: "must-not-be-tried",
+      });
+      const report = await testAdapter({
+        cliCredentialSource: cliSource,
+        fetch: vi.fn(requestFailure),
+      }).fetchQuota(OPTIONS);
+
+      expect(report.state.status).not.toBe("fresh");
+      expect(cliSource.resolve).not.toHaveBeenCalled();
+      expect(report.state.sourcesTried).toEqual(["pi:kimi-coding"]);
+    }
   });
 
   it("coalesces concurrent acquisitions into one provider request", async () => {
@@ -140,14 +232,20 @@ describe("Kimi request transport", () => {
       resolve: async () => new Promise<KimiCredentialResolution>(() => {}),
       inspect: async () => "available",
     };
+    const cliSource = cliCredentialSource({
+      status: "available",
+      accessToken: "must-not-be-tried-after-timeout",
+    });
     const report = await testAdapter({
       broker,
+      cliCredentialSource: cliSource,
       fetch: request,
       deadlineMs: 5,
     }).fetchQuota(OPTIONS);
 
     expect(report.state.error).toBe("request_timeout");
     expect(request).not.toHaveBeenCalled();
+    expect(cliSource.resolve).not.toHaveBeenCalled();
   });
 
   it("enforces the deadline when a fetch implementation does not honor abort", async () => {
@@ -737,12 +835,98 @@ describe("Kimi credential outcomes and cache policy", () => {
       }).inspectAuth(OPTIONS);
       expect(report).toEqual({
         provider: "kimi",
-        sources: [{ source: "pi:kimi-coding", ...expected }],
+        sources: [
+          { source: "pi:kimi-coding", ...expected },
+          { source: "kimi-code-cli", status: "missing" },
+        ],
       });
       expect(JSON.stringify(report)).not.toMatch(
         /path|apiKey|token|fingerprint/i,
       );
     }
+  });
+
+  it.each([
+    ["available", "available", undefined],
+    ["missing", "missing", undefined],
+    ["invalid", "invalid", "kimi_code_cli_credential_invalid"],
+    ["expired", "expired", "kimi_code_cli_credential_expired"],
+    ["error", "invalid", "credential_resolution_failed"],
+  ] as const)(
+    "reports CLI credential state %s without a path or value",
+    async (inspection, expectedStatus, error) => {
+      const report = await testAdapter({
+        cliCredentialSource: cliCredentialSource(
+          { status: "missing" },
+          inspection,
+        ),
+      }).inspectAuth(OPTIONS);
+
+      expect(report.sources[1]).toEqual({
+        source: "kimi-code-cli",
+        status: expectedStatus,
+        ...(error ? { error } : {}),
+      });
+      expect(report.sources[1].path).toBeUndefined();
+    },
+  );
+
+  it.each([
+    ["invalid", "kimi_code_cli_credential_invalid"],
+    ["expired", "kimi_code_cli_credential_expired"],
+  ] as const)(
+    "fails closed for a %s CLI credential after Pi is unavailable",
+    async (status, error) => {
+      const request = vi.fn();
+      const remove = vi.fn();
+      const report = await testAdapter({
+        broker: broker({ status: "missing" }),
+        cliCredentialSource: cliCredentialSource({ status }),
+        fetch: request,
+        deleteCachedProvider: remove,
+      }).fetchQuota(OPTIONS);
+
+      expect(request).not.toHaveBeenCalled();
+      expect(remove).toHaveBeenCalledWith("kimi");
+      expect(report.state).toMatchObject({
+        status: "auth_required",
+        stale: false,
+        error,
+        sourcesTried: ["pi:kimi-coding", "kimi-code-cli"],
+      });
+    },
+  );
+
+  it("preserves stale cache after a CLI credential read failure", async () => {
+    const remove = vi.fn();
+    const report = await testAdapter({
+      broker: broker({ status: "missing" }),
+      cliCredentialSource: cliCredentialSource({ status: "error" }),
+      readCachedProvider: () => cachedQuota(),
+      deleteCachedProvider: remove,
+    }).fetchQuota(OPTIONS);
+
+    expect(remove).not.toHaveBeenCalled();
+    expect(report).toMatchObject({
+      source: "cache",
+      state: {
+        status: "stale",
+        error: "credential_resolution_failed",
+        sourcesTried: ["pi:kimi-coding", "kimi-code-cli", "cache"],
+      },
+      attempts: [
+        {
+          source: "pi:kimi-coding",
+          status: "skipped",
+          error: "kimi_credential_unavailable",
+        },
+        {
+          source: "kimi-code-cli",
+          status: "failed",
+          error: "credential_resolution_failed",
+        },
+      ],
+    });
   });
 
   it("never exposes a sentinel credential through reports or attempts", async () => {
@@ -774,6 +958,7 @@ function testAdapter(
       status: "available",
       apiKey: "synthetic-kimi-key-741",
     }),
+    cliCredentialSource: cliCredentialSource({ status: "missing" }),
     fetch: vi.fn(async () =>
       jsonResponse(SUCCESS_PAYLOAD),
     ) as unknown as typeof fetch,
@@ -790,6 +975,16 @@ function broker(
     ? "available"
     : resolution.status,
 ): KimiCredentialBroker {
+  return {
+    resolve: vi.fn(async () => resolution),
+    inspect: vi.fn(async () => inspection),
+  };
+}
+
+function cliCredentialSource(
+  resolution: KimiCodeCliCredentialResolution,
+  inspection: KimiCodeCliCredentialInspection = resolution.status,
+): KimiCodeCliCredentialSource {
   return {
     resolve: vi.fn(async () => resolution),
     inspect: vi.fn(async () => inspection),
