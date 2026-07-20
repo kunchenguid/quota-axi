@@ -105,8 +105,10 @@ export type QuotaAxiResponse = {
 
 export type ProviderOptions = {
   allowKeychainPrompt: boolean;
-  /** Explicit Claude config override. Other provider adapters ignore it. */
+  /** Resolved Claude config directory. Other provider adapters ignore it. */
   claudeConfigDir?: string;
+  /** Literal normalized profile identity used by Claude Code's Keychain item. */
+  claudeKeychainIdentity?: string;
 };
 
 export type ProviderAdapter = {

@@ -16,11 +16,16 @@ const BLOCKED_CREDENTIAL_ERRORS = new Set([
 
 export function annotateQuotaAdvice(
   response: Omit<QuotaAxiResponse, "schemaVersion" | "summary">,
+  keychainAccessRemedyCommand = KEYCHAIN_ACCESS_REMEDY_COMMAND,
 ): QuotaAxiResponse {
-  const providers = response.providers.map(annotateProviderAdvice);
-  const help = providers
-    .filter(hasKeychainAccessAdvice)
-    .map(keychainAccessHelpLine);
+  const providers = response.providers.map((provider) =>
+    annotateProviderAdvice(provider, keychainAccessRemedyCommand),
+  );
+  const help = [
+    ...new Set(
+      providers.filter(hasKeychainAccessAdvice).map(keychainAccessHelpLine),
+    ),
+  ];
   return {
     generatedAt: response.generatedAt,
     schemaVersion: 2,
@@ -57,14 +62,17 @@ export function quotaHelpLines(response: QuotaAxiResponse): string[] {
   ];
 }
 
-function annotateProviderAdvice(provider: ProviderQuota): ProviderQuota {
+function annotateProviderAdvice(
+  provider: ProviderQuota,
+  remedyCommand: string,
+): ProviderQuota {
   if (!needsKeychainAccessAdvice(provider)) return provider;
   return {
     ...provider,
     state: {
       ...provider.state,
       reason: KEYCHAIN_ACCESS_REASON,
-      remedyCommand: KEYCHAIN_ACCESS_REMEDY_COMMAND,
+      remedyCommand,
     },
   };
 }
@@ -99,10 +107,10 @@ function isPromptBlockedKeychainAttempt(attempt: SourceAttempt): boolean {
 function hasKeychainAccessAdvice(provider: ProviderQuota): boolean {
   return (
     provider.state.reason === KEYCHAIN_ACCESS_REASON &&
-    provider.state.remedyCommand === KEYCHAIN_ACCESS_REMEDY_COMMAND
+    Boolean(provider.state.remedyCommand)
   );
 }
 
 function keychainAccessHelpLine(provider: ProviderQuota): string {
-  return `Tell your user: run \`${KEYCHAIN_ACCESS_REMEDY_COMMAND}\` once and approve Keychain access ("Always Allow") so quota-axi can read ${provider.provider}'s live quota.`;
+  return `Tell your user: run \`${provider.state.remedyCommand}\` once and approve Keychain access ("Always Allow") so quota-axi can read ${provider.provider}'s live quota.`;
 }

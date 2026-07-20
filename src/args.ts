@@ -9,12 +9,17 @@ export type ClaudeConfigSource =
   | "CLAUDE_CONFIG_DIR"
   | "default";
 
+export type ClaudeConfigSelection = {
+  directory?: string;
+  keychainIdentity: string;
+};
+
 export type QuotaFlags = {
   providers: ProviderId[];
   json: boolean;
   full: boolean;
   allowKeychainPrompt: boolean;
-  claudeConfigDirs?: string[];
+  claudeConfigs?: ClaudeConfigSelection[];
 };
 
 /**
@@ -95,24 +100,22 @@ export function parseFlags(
     ]);
   }
 
-  const claudeConfig = selectClaudeConfigDirs(cliClaudeConfigDirs, env);
+  const claudeConfig = selectClaudeConfigs(cliClaudeConfigDirs, env);
   return {
     providers: parseProviderScope(providerValue),
     json,
     full,
     allowKeychainPrompt,
-    ...(claudeConfig.directories
-      ? { claudeConfigDirs: claudeConfig.directories }
-      : {}),
+    ...(claudeConfig.configs ? { claudeConfigs: claudeConfig.configs } : {}),
   };
 }
 
-export function selectClaudeConfigDirs(
+export function selectClaudeConfigs(
   cliValues: string[],
   env: NodeJS.ProcessEnv = process.env,
-): { directories?: string[]; source: ClaudeConfigSource } {
+): { configs?: ClaudeConfigSelection[]; source: ClaudeConfigSource } {
   if (cliValues.length > 0) {
-    return { directories: normalizeDirectories(cliValues), source: "cli" };
+    return { configs: normalizeConfigs(cliValues), source: "cli" };
   }
 
   const pluralValues = (env.CLAUDE_CONFIG_DIRS ?? "")
@@ -121,31 +124,33 @@ export function selectClaudeConfigDirs(
     .filter(Boolean);
   if (pluralValues.length > 0) {
     return {
-      directories: normalizeDirectories(pluralValues),
+      configs: normalizeConfigs(pluralValues),
       source: "CLAUDE_CONFIG_DIRS",
     };
   }
 
-  // Leave the legacy singular and default cases to the Claude adapter so their
-  // path handling, cache identity, and output remain exactly as before.
-  return {
-    source:
-      env.CLAUDE_CONFIG_DIR !== undefined ? "CLAUDE_CONFIG_DIR" : "default",
-  };
+  if (env.CLAUDE_CONFIG_DIR !== undefined) {
+    return {
+      configs: [{ keychainIdentity: env.CLAUDE_CONFIG_DIR.normalize("NFC") }],
+      source: "CLAUDE_CONFIG_DIR",
+    };
+  }
+  return { source: "default" };
 }
 
-function normalizeDirectories(values: string[]): string[] {
-  const directories: string[] = [];
+function normalizeConfigs(values: string[]): ClaudeConfigSelection[] {
+  const configs: ClaudeConfigSelection[] = [];
   const seen = new Set<string>();
   for (const value of values) {
-    const directory = resolve(value.trim()).normalize("NFC");
+    const keychainIdentity = value.trim().normalize("NFC");
+    const directory = resolve(keychainIdentity).normalize("NFC");
     const key =
       process.platform === "win32" ? directory.toLowerCase() : directory;
     if (seen.has(key)) continue;
     seen.add(key);
-    directories.push(directory);
+    configs.push({ directory, keychainIdentity });
   }
-  return directories;
+  return configs;
 }
 
 function parseProviderScope(value: string | undefined): ProviderId[] {

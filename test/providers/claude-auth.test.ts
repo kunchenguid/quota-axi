@@ -152,6 +152,36 @@ describe("Claude credential-state reporting", () => {
     );
   });
 
+  it("keeps relative Keychain identity separate from the resolved credential path", async () => {
+    usePlatform("darwin");
+    useTempHome();
+    const configDir = join(process.cwd(), "profiles", "work");
+    const keychainIdentity = "./profiles/../profiles/work";
+    const suffix = createHash("sha256")
+      .update(keychainIdentity)
+      .digest("hex")
+      .slice(0, 8);
+    const execFileText = vi.fn(async () => "");
+    vi.doMock("../../src/lib/process.js", () => ({ execFileText }));
+
+    const { inspectAuth } = await import("../../src/providers/claude.js");
+    const auth = await inspectAuth({
+      allowKeychainPrompt: false,
+      claudeConfigDir: configDir,
+      claudeKeychainIdentity: keychainIdentity,
+    });
+
+    expect(auth.sources[0]).toMatchObject({
+      path: join(configDir, ".credentials.json"),
+      status: "missing",
+    });
+    expect(execFileText).toHaveBeenCalledWith(
+      "security",
+      ["find-generic-password", "-s", `Claude Code-credentials-${suffix}`],
+      expect.any(Number),
+    );
+  });
+
   it("preserves an empty-present CLAUDE_CONFIG_DIR across profile derivations", async () => {
     usePlatform("darwin");
     const home = useTempHome();

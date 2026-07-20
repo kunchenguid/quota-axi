@@ -1,8 +1,9 @@
+import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, delimiter, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { parseFlags, selectClaudeConfigDirs } from "../src/args.js";
+import { parseFlags, selectClaudeConfigs } from "../src/args.js";
 import { main, normalizeArgv } from "../src/cli.js";
 import { PROVIDERS } from "../src/providers/index.js";
 import { redactedResponse } from "../src/render.js";
@@ -86,12 +87,18 @@ describe("CLI flag parsing", () => {
       },
     );
 
-    expect(flags.claudeConfigDirs).toEqual([resolve("arcs"), resolve("jr")]);
+    expect(flags.claudeConfigs).toEqual([
+      {
+        directory: resolve("arcs"),
+        keychainIdentity: "./fixtures/../arcs",
+      },
+      { directory: resolve("jr"), keychainIdentity: "./jr" },
+    ]);
   });
 
   it("uses plural, singular, then default Claude config sources deterministically", () => {
     expect(
-      selectClaudeConfigDirs([], {
+      selectClaudeConfigs([], {
         CLAUDE_CONFIG_DIRS: ["/env/arcs", "/env/jr", "/env/arcs"].join(
           delimiter,
         ),
@@ -99,12 +106,16 @@ describe("CLI flag parsing", () => {
       }),
     ).toEqual({
       source: "CLAUDE_CONFIG_DIRS",
-      directories: [resolve("/env/arcs"), resolve("/env/jr")],
+      configs: [
+        { directory: resolve("/env/arcs"), keychainIdentity: "/env/arcs" },
+        { directory: resolve("/env/jr"), keychainIdentity: "/env/jr" },
+      ],
     });
-    expect(
-      selectClaudeConfigDirs([], { CLAUDE_CONFIG_DIR: "/legacy" }),
-    ).toEqual({ source: "CLAUDE_CONFIG_DIR" });
-    expect(selectClaudeConfigDirs([], {})).toEqual({ source: "default" });
+    expect(selectClaudeConfigs([], { CLAUDE_CONFIG_DIR: "./legacy" })).toEqual({
+      source: "CLAUDE_CONFIG_DIR",
+      configs: [{ keychainIdentity: "./legacy" }],
+    });
+    expect(selectClaudeConfigs([], {})).toEqual({ source: "default" });
   });
 
   it("rejects a missing Claude config directory value", () => {
@@ -465,12 +476,12 @@ describe("CLI quota rendering", () => {
         status: provider.state.status,
       })),
     ).toEqual([
-      { provider: "claude", seat: "arcs", status: "fresh" },
-      { provider: "claude", seat: "jr", status: "auth_required" },
+      { provider: "claude", seat: seatId(arcs), status: "fresh" },
+      { provider: "claude", seat: seatId(jr), status: "auth_required" },
       { provider: "codex", seat: undefined, status: "fresh" },
       { provider: "grok", seat: undefined, status: "fresh" },
     ]);
-    expect(output.providers[0].label).toBe("Claude (arcs)");
+    expect(output.providers[0].label).toBe(`Claude (${seatId(arcs)})`);
     expect(text).not.toContain("/private/customer/configs");
     expect(text).not.toContain("fixture-secret-token");
     expect(text).not.toContain("person@example.invalid");
@@ -493,8 +504,10 @@ describe("CLI quota rendering", () => {
     expect(output).toContain(
       "providers[4]{provider,seat,plan,source,status,refreshedAt}:",
     );
-    expect(output).toContain("claude,arcs,pro,oauth,fresh");
-    expect(output).toContain("claude,jr,unknown,unavailable,auth_required");
+    expect(output).toContain(`claude,${seatId(arcs)},pro,oauth,fresh`);
+    expect(output).toContain(
+      `claude,${seatId(jr)},unknown,unavailable,auth_required`,
+    );
     expect(output).toContain("codex,none,pro,cli-rpc,fresh");
     expect(output).toContain("grok,none,supergrok,api,fresh");
     expect(output).toContain(
@@ -525,11 +538,147 @@ describe("CLI quota rendering", () => {
       }>;
     };
 
-    expect(output.auth.map((report) => report.seat)).toEqual(["arcs", "jr"]);
+    expect(output.auth.map((report) => report.seat)).toEqual([
+      seatId(arcs),
+      seatId(jr),
+    ]);
     expect(output.auth.flatMap((report) => report.sources)).not.toContainEqual(
       expect.objectContaining({ path: expect.any(String) }),
     );
     expect(text).not.toContain("/private/customer/configs");
+  });
+
+  it("keeps seat identifiers stable when the selected set changes", async () => {
+    useTempCache();
+    const arcs = resolve("/private/configs/arcs");
+    const firstPeer = resolve("/private/configs/first");
+    const secondPeer = resolve("/private/configs/second");
+    installClaudeSeatRouter({
+      arcs: freshClaudeQuota,
+      first: freshClaudeQuota,
+      second: freshClaudeQuota,
+    });
+
+    const first = JSON.parse(
+      await capture([
+        "--provider",
+        "claude",
+        "--claude-config-dir",
+        arcs,
+        "--claude-config-dir",
+        firstPeer,
+        "--json",
+      ]),
+    ) as QuotaAxiResponse;
+    const second = JSON.parse(
+      await capture([
+        "--provider",
+        "claude",
+        "--claude-config-dir",
+        arcs,
+        "--claude-config-dir",
+        secondPeer,
+        "--json",
+      ]),
+    ) as QuotaAxiResponse;
+
+    expect(first.providers[0].seat).toBe(seatId(arcs));
+    expect(second.providers[0].seat).toBe(seatId(arcs));
+  });
+
+  it("preserves every selected profile in keychain remediation", async () => {
+    useTempCache();
+    const keychainIdentities: Array<string | undefined> = [];
+    PROVIDERS.claude = {
+      ...providerWithQuota(staleClaudeQuota()),
+      async fetchQuota(options) {
+        keychainIdentities.push(options.claudeKeychainIdentity);
+        return staleClaudeQuota();
+      },
+    };
+
+    const output = JSON.parse(
+      await capture([
+        "--provider",
+        "claude",
+        "--claude-config-dir",
+        "./team-a",
+        "--claude-config-dir",
+        "../team-b",
+        "--json",
+      ]),
+    ) as QuotaAxiResponse;
+    const remedy =
+      "quota-axi --allow-keychain-prompt --provider claude " +
+      "--claude-config-dir='./team-a' --claude-config-dir='../team-b'";
+
+    expect(keychainIdentities).toEqual(["./team-a", "../team-b"]);
+    expect(
+      output.providers.map((provider) => provider.state.remedyCommand),
+    ).toEqual([remedy, remedy]);
+    expect(output.help).toEqual([
+      `Tell your user: run \`${remedy}\` once and approve Keychain access ("Always Allow") so quota-axi can read claude's live quota.`,
+    ]);
+  });
+
+  it("serializes prompt-capable Claude reads without blocking other providers", async () => {
+    useTempCache();
+    const first = resolve("/private/configs/first");
+    const second = resolve("/private/configs/second");
+    let releaseFirst!: () => void;
+    let markFirstStarted!: () => void;
+    let markSecondStarted!: () => void;
+    let markCodexStarted!: () => void;
+    const firstGate = new Promise<void>((resolveGate) => {
+      releaseFirst = resolveGate;
+    });
+    const firstStarted = new Promise<void>((resolveStarted) => {
+      markFirstStarted = resolveStarted;
+    });
+    const secondStarted = new Promise<void>((resolveStarted) => {
+      markSecondStarted = resolveStarted;
+    });
+    const codexStarted = new Promise<void>((resolveStarted) => {
+      markCodexStarted = resolveStarted;
+    });
+    PROVIDERS.claude = {
+      ...providerWithQuota(freshClaudeQuota()),
+      async fetchQuota(options) {
+        if (options.claudeConfigDir === first) {
+          markFirstStarted();
+          await firstGate;
+        } else {
+          markSecondStarted();
+        }
+        return freshClaudeQuota();
+      },
+    };
+    PROVIDERS.codex = {
+      ...providerWithQuota(freshCodexQuota()),
+      async fetchQuota() {
+        markCodexStarted();
+        return freshCodexQuota();
+      },
+    };
+
+    let secondWasStarted = false;
+    void secondStarted.then(() => {
+      secondWasStarted = true;
+    });
+    const command = capture([
+      "--provider",
+      "claude,codex",
+      "--claude-config-dir",
+      first,
+      "--claude-config-dir",
+      second,
+      "--allow-keychain-prompt",
+      "--json",
+    ]);
+    await Promise.all([firstStarted, codexStarted]);
+    expect(secondWasStarted).toBe(false);
+    releaseFirst();
+    await Promise.all([secondStarted, command]);
   });
 });
 
@@ -636,25 +785,22 @@ describe("aggregate availability summary", () => {
       unavailable: 2,
       total: 5,
     });
-    expect(output.providers.map((provider) => provider.seat)).toEqual([
-      "arcs",
-      "jr",
-      "nyu",
-      "ra",
-      "yfz",
-    ]);
+    expect(output.providers.map((provider) => provider.seat)).toEqual(
+      dirs.map(seatId),
+    );
     const bySeat = Object.fromEntries(
       output.providers.map((provider) => [provider.seat, provider]),
     );
+    const [arcs, jr, nyu, ra, yfz] = dirs.map(seatId);
     // The single 429 stays bounded to its own seat...
-    expect(bySeat.jr.state.status).toBe("rate_limited");
-    expect(bySeat.jr.state.retryAfter).toBe("2026-07-20T18:45:51Z");
+    expect(bySeat[jr].state.status).toBe("rate_limited");
+    expect(bySeat[jr].state.retryAfter).toBe("2026-07-20T18:45:51Z");
     // ...and does not erase successful windows from the healthy seats.
-    expect(bySeat.arcs.windows.length).toBeGreaterThan(0);
-    expect(bySeat.nyu.state.status).toBe("stale");
-    expect(bySeat.nyu.windows.length).toBeGreaterThan(0);
-    expect(bySeat.yfz.windows.length).toBeGreaterThan(0);
-    expect(bySeat.ra.state.status).toBe("auth_required");
+    expect(bySeat[arcs].windows.length).toBeGreaterThan(0);
+    expect(bySeat[nyu].state.status).toBe("stale");
+    expect(bySeat[nyu].windows.length).toBeGreaterThan(0);
+    expect(bySeat[yfz].windows.length).toBeGreaterThan(0);
+    expect(bySeat[ra].state.status).toBe("auth_required");
     // Duplicate account identity (arcs and yfz share an accountId) never
     // collapses two config dirs into one row.
     expect(
@@ -719,7 +865,8 @@ describe("aggregate availability summary", () => {
     expect(grok?.windows.length).toBeGreaterThan(0);
     // --full carries per-source attempts for the healthy Claude seat.
     expect(
-      output.providers.find((provider) => provider.seat === "arcs")?.attempts,
+      output.providers.find((provider) => provider.seat === seatId(dirs[0]))
+        ?.attempts,
     ).toBeDefined();
   });
 
@@ -770,6 +917,13 @@ describe("aggregate availability summary", () => {
     expect(process.exitCode).toBeUndefined();
   });
 });
+
+function seatId(directory: string): string {
+  return `${basename(directory) || "root"}-${createHash("sha256")
+    .update(directory)
+    .digest("hex")
+    .slice(0, 6)}`;
+}
 
 const FIVE_SEAT_NAMES = ["arcs", "jr", "nyu", "ra", "yfz"] as const;
 

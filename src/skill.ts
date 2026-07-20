@@ -73,16 +73,16 @@ or when comparing supported local provider headroom side by side.
 2. Scope to one provider with \`--provider claude\` or to a subset with \`--provider cursor,copilot,grok\`.
 3. For multiple Claude subscriptions, repeat \`--claude-config-dir <path>\` or set the quoted,
    platform-delimited \`CLAUDE_CONFIG_DIRS\` environment variable. Every selected seat is read only
-   and appears under a non-secret basename label.
+   and appears under a stable non-secret basename-plus-hash label.
 4. Pass \`--json\` for the normalized machine-readable model instead of TOON.
 5. Pass \`--full\` to include account identity and per-source attempt details.
 6. Run \`npx -y quota-axi auth\` to check local auth-source availability without printing
    secret values.
 7. On macOS, Claude Keychain value reads are skipped by default until the user grants access once.
-   If quota output reports \`reason: keychain_access_required\`, tell your user to run
-   \`quota-axi --allow-keychain-prompt\` once and approve Keychain access ("Always Allow").
-   After that successful grant, plain \`quota-axi\` calls reuse the existing Keychain access
-   marker to refresh live Claude quota without requiring the flag.
+   If quota output reports \`reason: keychain_access_required\`, tell your user to run the exact
+   \`remedyCommand\` once and approve Keychain access ("Always Allow"). The command preserves any
+   selected Claude profiles. After that successful grant, plain \`quota-axi\` calls reuse the
+   existing Keychain access marker to refresh live Claude quota without requiring the flag.
 8. For a managed Codex installation, set \`QUOTA_AXI_CODEX_BINARY\` to its absolute executable
    path. quota-axi uses that exact executable for auth inspection and the read-only app-server
    fallback, and fails closed if the override is invalid.

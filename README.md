@@ -147,7 +147,7 @@ $env:CLAUDE_CONFIG_DIRS = "$HOME\.claude-work;$HOME\.claude-personal"
 quota-axi --provider claude,codex,grok
 ```
 
-Precedence is deterministic: repeated CLI values (in argument order), then `CLAUDE_CONFIG_DIRS`, then the existing singular `CLAUDE_CONFIG_DIR`, then `~/.claude`. Lexically normalized duplicate directories keep their first position. Selected directories remain separate rows even when they resolve to the same account identity. Multi-seat output uses non-secret directory basenames such as `.claude-work` and `.claude-personal`; normal output never includes the full config paths. See the [Output Model](#output-model) for conditional seat metadata.
+Precedence is deterministic: repeated CLI values (in argument order), then `CLAUDE_CONFIG_DIRS`, then the existing singular `CLAUDE_CONFIG_DIR`, then `~/.claude`. Lexically normalized duplicate directories keep their first position. Selected directories remain separate rows even when they resolve to the same account identity. Multi-seat output uses stable non-secret labels made from the directory basename and a short profile hash, such as `.claude-work-a1b2c3`; normal output never includes the full config paths except when an actionable Keychain remedy must preserve them. See the [Output Model](#output-model) for conditional seat metadata.
 
 All config and provider access is read-only: quota-axi reads credentials and calls first-party usage endpoints but never writes config directories or changes provider auth/state.
 
@@ -261,7 +261,7 @@ It is generated from `src/skill.ts`; update it with `pnpm run build:skill` and v
 | Account identity (`--full`)   | Optional `email`, `organization`, `accountId`, and `identityStatus`                                  |
 
 Account identity and per-source `attempts` are omitted unless `--full` is passed.
-`seat` appears only when two or more Claude config directories are selected and contains a stable non-secret basename label; selecting zero or one directory does not add seat metadata.
+`seat` appears only when two or more Claude config directories are selected and contains a composition-independent, non-secret basename-plus-hash label; selecting zero or one directory does not add seat metadata.
 Claude `identityStatus` is `verified` only when Anthropic returns an authoritative account identifier; `email` and `organization` are display-only and must not be used for duplicate detection.
 
 ### Provider `state`
@@ -277,7 +277,7 @@ Claude `identityStatus` is `verified` only when Anthropic returns an authoritati
 | `reason`        | Optional reason                      |
 | `remedyCommand` | Optional remedy command              |
 
-When stale or unavailable quota is likely fixable by a one-time macOS Keychain grant, `state.reason` is `keychain_access_required`, `state.remedyCommand` is `quota-axi --allow-keychain-prompt`, and JSON includes an agent-directed `help` entry.
+When stale or unavailable quota is likely fixable by a one-time macOS Keychain grant, `state.reason` is `keychain_access_required`, `state.remedyCommand` contains an actionable `quota-axi --allow-keychain-prompt` invocation, and JSON includes an agent-directed `help` entry. For explicitly selected profiles, the command repeats their literal normalized `--claude-config-dir` values so it reaches the same Keychain items even when selection came from an inline environment assignment.
 Default TOON output includes the same condition in an `advice` block with `provider`, `reason`, and `remedyCommand`, plus the agent-directed help line.
 
 ### Quota windows
@@ -342,8 +342,9 @@ Auth source entries can include `credentialPresent` when a non-secret probe conf
 
 **Claude**
 
-- Multiple selected config directories are queried independently and concurrently. Live failures and stale-cache fallbacks remain bounded to their seat and do not suppress other Claude seats or providers.
+- Multiple selected config directories are queried independently and concurrently. When `--allow-keychain-prompt` is present, prompt-capable Claude reads are serialized while other provider reads remain concurrent. Live failures and stale-cache fallbacks remain bounded to their seat and do not suppress other Claude seats or providers.
 - Selected config directories are read only and never created, rewritten, or used to mutate Claude state.
+- Relative profile values retain their literal normalized identity for Claude Code's Keychain service while filesystem and quota-cache access uses the resolved directory.
 - quota-axi records the non-secret access marker after any successful Keychain value read.
 - When that marker exists, plain calls read the Keychain value again so an already-approved "Always Allow" grant keeps live Claude quota fresh.
 - Without the flag or marker, quota-axi may perform a non-secret Keychain item presence check so it only suggests Keychain access when a Claude credential item exists.

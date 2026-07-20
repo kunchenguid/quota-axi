@@ -219,7 +219,10 @@ export async function fetchQuota(
 export async function inspectAuth(
   options: ProviderOptions,
 ): Promise<AuthProviderReport> {
-  const locations = resolveClaudeProfileLocations(options.claudeConfigDir);
+  const locations = resolveClaudeProfileLocations(
+    options.claudeConfigDir,
+    options.claudeKeychainIdentity,
+  );
   const states = await readCredentialStates(options, locations);
   const sources = states.map((state): AuthSourceReport => {
     if (state.status === "available") {
@@ -368,7 +371,10 @@ function slugify(value: string): string {
 
 async function readCredentialStates(
   options: ProviderOptions,
-  locations = resolveClaudeProfileLocations(options.claudeConfigDir),
+  locations = resolveClaudeProfileLocations(
+    options.claudeConfigDir,
+    options.claudeKeychainIdentity,
+  ),
 ): Promise<CredentialState[]> {
   const states: CredentialState[] = [];
 
@@ -497,12 +503,15 @@ export function claudeKeychainService(): string {
 
 function resolveClaudeProfileLocations(
   configDirOverride?: string,
+  keychainIdentityOverride?: string,
 ): ClaudeProfileLocations {
   const configuredDir = configDirOverride ?? process.env.CLAUDE_CONFIG_DIR;
   const configDir = (configuredDir ?? join(homedir(), ".claude")).normalize(
     "NFC",
   );
-  const keychainConfigDir = configuredDir ? configDir : undefined;
+  const keychainConfigDir = configuredDir
+    ? (keychainIdentityOverride ?? configDir).normalize("NFC")
+    : undefined;
   return {
     credentialFile: join(configDir, ".credentials.json"),
     keychainService: keychainServiceForConfigDir(keychainConfigDir),

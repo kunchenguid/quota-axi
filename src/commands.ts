@@ -1,7 +1,10 @@
 import { createHash } from "node:crypto";
 import { basename } from "node:path";
-import { annotateQuotaAdvice } from "./advice.js";
-import { parseFlags } from "./args.js";
+import {
+  annotateQuotaAdvice,
+  KEYCHAIN_ACCESS_REMEDY_COMMAND,
+} from "./advice.js";
+import { parseFlags, type ClaudeConfigSelection } from "./args.js";
 import { writeCachedProviders } from "./cache.js";
 import { nowIso } from "./lib/time.js";
 import { failedProvider } from "./providers/common.js";
@@ -38,7 +41,7 @@ export async function quotaCommand(
   const response = await fetchQuota(
     flags.providers,
     options,
-    flags.claudeConfigDirs,
+    flags.claudeConfigs,
   );
   const redacted = redactedResponse(response, flags.full);
 
@@ -68,7 +71,7 @@ export async function authCommand(
   const reports = await inspectAuth(
     flags.providers,
     options,
-    flags.claudeConfigDirs,
+    flags.claudeConfigs,
   );
   return flags.json
     ? JSON.stringify(
@@ -82,99 +85,141 @@ export async function authCommand(
 async function fetchQuota(
   providers: ProviderId[],
   options: ProviderOptions,
-  claudeConfigDirs?: string[],
+  claudeConfigs?: ClaudeConfigSelection[],
 ): Promise<QuotaAxiResponse> {
-  const requests = providerRequests(providers, options, claudeConfigDirs);
-  const results = await Promise.all(
-    requests.map(async (request) => {
-      let quota: ProviderQuota;
-      try {
-        quota = await PROVIDERS[request.provider].fetchQuota(request.options);
-      } catch (error) {
-        // Existing adapters return normalized failures. This guard keeps an
-        // unexpected failure in one explicitly selected Claude seat isolated.
-        if (!request.options.claudeConfigDir) throw error;
-        quota = failedProvider({
-          provider: "claude",
-          label: "Claude",
-          status: "error",
-          error: "Claude quota unavailable",
-          sourcesTried: [],
-        });
-      }
-      return request.seat ? withQuotaSeat(quota, request.seat) : quota;
-    }),
-  );
-  return annotateQuotaAdvice({
-    generatedAt: nowIso(),
-    providers: results,
+  const requests = providerRequests(providers, options, claudeConfigs);
+  const results = await runProviderRequests(requests, async (request) => {
+    let quota: ProviderQuota;
+    try {
+      quota = await PROVIDERS[request.provider].fetchQuota(request.options);
+    } catch (error) {
+      // Existing adapters return normalized failures. This guard keeps an
+      // unexpected failure in one explicitly selected Claude seat isolated.
+      if (!request.options.claudeConfigDir) throw error;
+      quota = failedProvider({
+        provider: "claude",
+        label: "Claude",
+        status: "error",
+        error: "Claude quota unavailable",
+        sourcesTried: [],
+      });
+    }
+    return request.seat ? withQuotaSeat(quota, request.seat) : quota;
   });
+  return annotateQuotaAdvice(
+    {
+      generatedAt: nowIso(),
+      providers: results,
+    },
+    keychainRemedyCommand(claudeConfigs),
+  );
 }
 
 async function inspectAuth(
   providers: ProviderId[],
   options: ProviderOptions,
-  claudeConfigDirs?: string[],
+  claudeConfigs?: ClaudeConfigSelection[],
 ): Promise<AuthProviderReport[]> {
-  const requests = providerRequests(providers, options, claudeConfigDirs);
-  return Promise.all(
-    requests.map(async (request) => {
-      let report: AuthProviderReport;
-      try {
-        report = await PROVIDERS[request.provider].inspectAuth(request.options);
-      } catch (error) {
-        if (!request.options.claudeConfigDir) throw error;
-        report = {
-          provider: "claude",
-          sources: [
-            {
-              source: "oauth-file",
-              status: "invalid",
-              error: "inspection_failed",
-            },
-          ],
-        };
-      }
-      return request.seat ? withAuthSeat(report, request.seat) : report;
-    }),
-  );
+  const requests = providerRequests(providers, options, claudeConfigs);
+  return runProviderRequests(requests, async (request) => {
+    let report: AuthProviderReport;
+    try {
+      report = await PROVIDERS[request.provider].inspectAuth(request.options);
+    } catch (error) {
+      if (!request.options.claudeConfigDir) throw error;
+      report = {
+        provider: "claude",
+        sources: [
+          {
+            source: "oauth-file",
+            status: "invalid",
+            error: "inspection_failed",
+          },
+        ],
+      };
+    }
+    return request.seat ? withAuthSeat(report, request.seat) : report;
+  });
 }
 
 function providerRequests(
   providers: ProviderId[],
   options: ProviderOptions,
-  claudeConfigDirs?: string[],
+  claudeConfigs?: ClaudeConfigSelection[],
 ): ProviderRequest[] {
   const seats =
-    claudeConfigDirs && claudeConfigDirs.length > 1
-      ? claudeSeatLabels(claudeConfigDirs)
+    claudeConfigs && claudeConfigs.length > 1
+      ? claudeSeatLabels(claudeConfigs)
       : undefined;
   return providers.flatMap((provider) => {
-    if (provider !== "claude" || !claudeConfigDirs) {
+    if (provider !== "claude" || !claudeConfigs) {
       return [{ provider, options }];
     }
-    return claudeConfigDirs.map((claudeConfigDir, index) => ({
+    return claudeConfigs.map((config, index) => ({
       provider,
-      options: { ...options, claudeConfigDir },
+      options: {
+        ...options,
+        ...(config.directory ? { claudeConfigDir: config.directory } : {}),
+        claudeKeychainIdentity: config.keychainIdentity,
+      },
       ...(seats ? { seat: seats[index] } : {}),
     }));
   });
 }
 
-function claudeSeatLabels(directories: string[]): string[] {
-  const basenames = directories.map((directory) =>
-    (basename(directory) || "root").replace(/\p{Cc}/gu, "_"),
+function claudeSeatLabels(configs: ClaudeConfigSelection[]): string[] {
+  return configs.map((config) => {
+    const identity = config.directory ?? config.keychainIdentity;
+    const name = (basename(identity) || "root").replace(/\p{Cc}/gu, "_");
+    const suffix = createHash("sha256")
+      .update(identity)
+      .digest("hex")
+      .slice(0, 6);
+    return `${name}-${suffix}`;
+  });
+}
+
+function runProviderRequests<T>(
+  requests: ProviderRequest[],
+  run: (request: ProviderRequest) => Promise<T>,
+): Promise<T[]> {
+  let promptQueue = Promise.resolve();
+  return Promise.all(
+    requests.map((request) => {
+      if (
+        request.provider !== "claude" ||
+        !request.options.allowKeychainPrompt
+      ) {
+        return run(request);
+      }
+      const result = promptQueue.then(() => run(request));
+      promptQueue = result.then(
+        () => undefined,
+        () => undefined,
+      );
+      return result;
+    }),
   );
-  const counts = new Map<string, number>();
-  for (const name of basenames) counts.set(name, (counts.get(name) ?? 0) + 1);
-  return basenames.map((name, index) =>
-    counts.get(name) === 1
-      ? name
-      : `${name}-${createHash("sha256")
-          .update(directories[index])
-          .digest("hex")
-          .slice(0, 6)}`,
-  );
+}
+
+function keychainRemedyCommand(
+  configs: ClaudeConfigSelection[] | undefined,
+): string {
+  const identities = configs
+    ?.map((config) => config.keychainIdentity)
+    .filter(Boolean);
+  if (!identities || identities.length === 0)
+    return KEYCHAIN_ACCESS_REMEDY_COMMAND;
+  const configFlags = identities
+    .map((identity) => `--claude-config-dir=${quoteCommandArgument(identity)}`)
+    .join(" ");
+  return `${KEYCHAIN_ACCESS_REMEDY_COMMAND} --provider claude ${configFlags}`;
+}
+
+function quoteCommandArgument(value: string): string {
+  return process.platform === "win32"
+    ? `'${value.replaceAll("'", "''")}'`
+    : `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
 function withQuotaSeat(quota: ProviderQuota, seat: string): ProviderQuota {
