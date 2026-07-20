@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { open } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -9,7 +9,7 @@ const MINIMUM_FRESHNESS_SECONDS = 60;
 
 export type KimiCodeCliCredentialResolution =
   | { status: "available"; accessToken: string }
-  | { status: "missing" | "invalid" | "expired" };
+  | { status: "missing" | "invalid" | "expired" | "error" };
 
 export type KimiCodeCliCredentialInspection =
   KimiCodeCliCredentialResolution["status"];
@@ -23,7 +23,7 @@ type CredentialSourceDependencies = {
   environment: Readonly<Record<string, string | undefined>>;
   homeDirectory: () => string;
   now: () => number;
-  readTextFile: (path: string) => Promise<string>;
+  readFile: (path: string, maxBytes: number) => Promise<Buffer>;
 };
 
 export function createKimiCodeCliCredentialSource(
@@ -33,7 +33,7 @@ export function createKimiCodeCliCredentialSource(
     environment: process.env,
     homeDirectory: homedir,
     now: Date.now,
-    readTextFile: (path) => readFile(path, "utf8"),
+    readFile: readBoundedFile,
     ...overrides,
   };
 
@@ -50,21 +50,21 @@ async function resolveCredential(
   dependencies: CredentialSourceDependencies,
 ): Promise<KimiCodeCliCredentialResolution> {
   const path = credentialPath(dependencies);
-  let raw: string;
+  let contents: Buffer;
   try {
-    raw = await dependencies.readTextFile(path);
+    contents = await dependencies.readFile(path, CREDENTIAL_FILE_LIMIT_BYTES);
   } catch (error) {
     return errorCode(error) === "ENOENT"
       ? { status: "missing" }
-      : { status: "invalid" };
+      : { status: "error" };
   }
-  if (Buffer.byteLength(raw, "utf8") > CREDENTIAL_FILE_LIMIT_BYTES) {
+  if (contents.byteLength > CREDENTIAL_FILE_LIMIT_BYTES) {
     return { status: "invalid" };
   }
 
   let parsed: unknown;
   try {
-    parsed = JSON.parse(raw) as unknown;
+    parsed = JSON.parse(contents.toString("utf8")) as unknown;
   } catch {
     return { status: "invalid" };
   }
@@ -82,11 +82,38 @@ async function resolveCredential(
 }
 
 function credentialPath(dependencies: CredentialSourceDependencies): string {
+  const configuredHome = nonempty(dependencies.environment.KIMI_CODE_HOME);
   const codeHome =
-    nonempty(dependencies.environment.KIMI_CODE_HOME) ??
-    nonempty(dependencies.environment.HOME) ??
-    dependencies.homeDirectory();
+    configuredHome ??
+    join(
+      nonempty(dependencies.environment.HOME) ?? dependencies.homeDirectory(),
+      ".kimi-code",
+    );
   return join(codeHome, "credentials", "kimi-code.json");
+}
+
+async function readBoundedFile(
+  path: string,
+  maxBytes: number,
+): Promise<Buffer> {
+  const file = await open(path, "r");
+  try {
+    const contents = Buffer.allocUnsafe(maxBytes + 1);
+    let offset = 0;
+    while (offset < contents.byteLength) {
+      const { bytesRead } = await file.read(
+        contents,
+        offset,
+        contents.byteLength - offset,
+        null,
+      );
+      if (bytesRead === 0) break;
+      offset += bytesRead;
+    }
+    return contents.subarray(0, offset);
+  } finally {
+    await file.close();
+  }
 }
 
 function expirySeconds(value: unknown): number | undefined {

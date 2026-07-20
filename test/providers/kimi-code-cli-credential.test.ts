@@ -25,7 +25,7 @@ afterEach(() => {
 describe("Kimi Code CLI credential discovery", () => {
   it("reads the official default location under HOME", async () => {
     const home = temporaryDirectory();
-    writeCredential(home, {
+    writeCredential(join(home, ".kimi-code"), {
       access_token: "default-home-token",
       refresh_token: "ignored-refresh-token",
       expires_at: NOW / 1_000 + 3_600,
@@ -45,7 +45,7 @@ describe("Kimi Code CLI credential discovery", () => {
   it("prefers KIMI_CODE_HOME over the default home", async () => {
     const home = temporaryDirectory();
     const override = temporaryDirectory();
-    writeCredential(home, {
+    writeCredential(join(home, ".kimi-code"), {
       access_token: "wrong-default-token",
       expires_at: NOW / 1_000 + 3_600,
     });
@@ -118,12 +118,14 @@ describe("Kimi Code CLI credential discovery", () => {
     const source = createKimiCodeCliCredentialSource({
       environment: { HOME: "/synthetic-home" },
       now: () => NOW,
-      readTextFile: vi.fn(async () =>
-        JSON.stringify({
-          access_token: "fresh-token",
-          refresh_token: { deliberately: "not consumed" },
-          expires_at: expiresAt,
-        }),
+      readFile: vi.fn(async () =>
+        Buffer.from(
+          JSON.stringify({
+            access_token: "fresh-token",
+            refresh_token: { deliberately: "not consumed" },
+            expires_at: expiresAt,
+          }),
+        ),
       ),
     });
 
@@ -173,16 +175,36 @@ describe("Kimi Code CLI credential discovery", () => {
 
   it("bounds malformed credential files without returning their contents", async () => {
     const sentinel = "CLI-CREDENTIAL-SENTINEL-938475";
+    const readFile = vi.fn(async (_path: string, maxBytes: number) =>
+      Buffer.alloc(maxBytes + 1, sentinel),
+    );
     const source = createKimiCodeCliCredentialSource({
       environment: { HOME: "/synthetic-home" },
       now: () => NOW,
-      readTextFile: vi.fn(async () => sentinel.repeat(3_000)),
+      readFile,
     });
 
     const resolution = await source.resolve();
 
     expect(resolution).toEqual({ status: "invalid" });
     expect(JSON.stringify(resolution)).not.toContain(sentinel);
+    expect(readFile).toHaveBeenCalledWith(
+      "/synthetic-home/.kimi-code/credentials/kimi-code.json",
+      64 * 1_024,
+    );
+  });
+
+  it("distinguishes credential I/O failures from invalid credentials", async () => {
+    const source = createKimiCodeCliCredentialSource({
+      environment: { KIMI_CODE_HOME: "/synthetic-home" },
+      now: () => NOW,
+      readFile: vi.fn(async () => {
+        throw Object.assign(new Error("read failed"), { code: "EACCES" });
+      }),
+    });
+
+    await expect(source.resolve()).resolves.toEqual({ status: "error" });
+    await expect(source.inspect()).resolves.toBe("error");
   });
 });
 

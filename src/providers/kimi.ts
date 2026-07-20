@@ -115,14 +115,16 @@ export function createKimiAdapter(
       try {
         cliInspection = await dependencies.cliCredentialSource.inspect();
       } catch {
-        cliInspection = "invalid" as const;
+        cliInspection = "error" as const;
       }
       const cliError =
-        cliInspection === "invalid"
-          ? "kimi_code_cli_credential_invalid"
-          : cliInspection === "expired"
-            ? "kimi_code_cli_credential_expired"
-            : undefined;
+        cliInspection === "error"
+          ? "credential_resolution_failed"
+          : cliInspection === "invalid"
+            ? "kimi_code_cli_credential_invalid"
+            : cliInspection === "expired"
+              ? "kimi_code_cli_credential_expired"
+              : undefined;
 
       return {
         provider: "kimi",
@@ -139,7 +141,7 @@ export function createKimiAdapter(
           },
           {
             source: KIMI_CODE_CLI_CREDENTIAL_SOURCE,
-            status: cliInspection,
+            status: cliInspection === "error" ? "invalid" : cliInspection,
             ...(cliError ? { error: cliError } : {}),
           },
         ],
@@ -197,7 +199,7 @@ async function acquireKimiQuota(
         const cliFailure = cliCredentialFailureFor(cliResolution);
         attempts[attempts.length - 1] = {
           source: KIMI_CODE_CLI_CREDENTIAL_SOURCE,
-          status: "skipped",
+          status: cliResolution.status === "error" ? "failed" : "skipped",
           error: cliFailure.code,
         };
         return failureReport(
@@ -329,6 +331,11 @@ function cliCredentialFailureFor(
     return new KimiFailure("kimi_code_cli_credential_expired", {
       status: "auth_required",
       definitiveAuth: true,
+    });
+  }
+  if (resolution.status === "error") {
+    return new KimiFailure("credential_resolution_failed", {
+      staleEligible: true,
     });
   }
   return new KimiFailure("kimi_code_cli_credential_invalid", {

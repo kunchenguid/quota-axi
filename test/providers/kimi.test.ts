@@ -851,6 +851,7 @@ describe("Kimi credential outcomes and cache policy", () => {
     ["missing", "missing", undefined],
     ["invalid", "invalid", "kimi_code_cli_credential_invalid"],
     ["expired", "expired", "kimi_code_cli_credential_expired"],
+    ["error", "invalid", "credential_resolution_failed"],
   ] as const)(
     "reports CLI credential state %s without a path or value",
     async (inspection, expectedStatus, error) => {
@@ -895,6 +896,38 @@ describe("Kimi credential outcomes and cache policy", () => {
       });
     },
   );
+
+  it("preserves stale cache after a CLI credential read failure", async () => {
+    const remove = vi.fn();
+    const report = await testAdapter({
+      broker: broker({ status: "missing" }),
+      cliCredentialSource: cliCredentialSource({ status: "error" }),
+      readCachedProvider: () => cachedQuota(),
+      deleteCachedProvider: remove,
+    }).fetchQuota(OPTIONS);
+
+    expect(remove).not.toHaveBeenCalled();
+    expect(report).toMatchObject({
+      source: "cache",
+      state: {
+        status: "stale",
+        error: "credential_resolution_failed",
+        sourcesTried: ["pi:kimi-coding", "kimi-code-cli", "cache"],
+      },
+      attempts: [
+        {
+          source: "pi:kimi-coding",
+          status: "skipped",
+          error: "kimi_credential_unavailable",
+        },
+        {
+          source: "kimi-code-cli",
+          status: "failed",
+          error: "credential_resolution_failed",
+        },
+      ],
+    });
+  });
 
   it("never exposes a sentinel credential through reports or attempts", async () => {
     const sentinel = "KIMI-SENTINEL-DO-NOT-LEAK-938475";
