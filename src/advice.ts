@@ -1,3 +1,5 @@
+import type { ClaudeConfigSelection } from "./args.js";
+import { withClaudeConfigFlags } from "./command-context.js";
 import type {
   ProviderQuota,
   QuotaAxiResponse,
@@ -53,12 +55,27 @@ function summarizeProviders(providers: ProviderQuota[]): QuotaSummary {
   return { availability, ok, unavailable, total };
 }
 
-export function quotaHelpLines(response: QuotaAxiResponse): string[] {
+export function quotaHelpLines(
+  response: QuotaAxiResponse,
+  claudeConfigs?: ClaudeConfigSelection[],
+): string[] {
+  const jsonCommand = withClaudeConfigFlags(
+    "quota-axi --provider claude --json",
+    claudeConfigs,
+  );
+  const fullCommand = withClaudeConfigFlags(
+    "quota-axi --full",
+    claudeConfigs,
+  );
+  const authCommand = withClaudeConfigFlags(
+    "quota-axi auth",
+    claudeConfigs,
+  );
   return [
     ...(response.help ?? []),
-    "Run `quota-axi --provider claude --json` for JSON output",
-    "Run `quota-axi --full` to include account and source-attempt details",
-    "Run `quota-axi auth` to inspect local auth source availability without printing secrets",
+    `Run \`${jsonCommand}\` for JSON output`,
+    `Run \`${fullCommand}\` to include account and source-attempt details`,
+    `Run \`${authCommand}\` to inspect local auth source availability without printing secrets`,
   ];
 }
 

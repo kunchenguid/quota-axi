@@ -6,6 +6,7 @@ import {
 } from "./advice.js";
 import { parseFlags, type ClaudeConfigSelection } from "./args.js";
 import { writeCachedProviders } from "./cache.js";
+import { withClaudeConfigFlags } from "./command-context.js";
 import { nowIso } from "./lib/time.js";
 import { failedProvider } from "./providers/common.js";
 import { PROVIDERS } from "./providers/index.js";
@@ -55,7 +56,7 @@ export async function quotaCommand(
 
   return flags.json
     ? JSON.stringify(redacted, null, 2)
-    : renderQuotaToon(redacted, binPath, flags.full);
+    : renderQuotaToon(redacted, binPath, flags.full, flags.claudeConfigs);
 }
 
 export async function authCommand(
@@ -79,7 +80,7 @@ export async function authCommand(
         null,
         2,
       )
-    : renderAuthToon(reports, binPath);
+    : renderAuthToon(reports, binPath, flags.claudeConfigs);
 }
 
 async function fetchQuota(
@@ -187,6 +188,7 @@ function runProviderRequests<T>(
   return Promise.all(
     requests.map((request) => {
       if (
+        process.platform !== "darwin" ||
         request.provider !== "claude" ||
         !request.options.allowKeychainPrompt
       ) {
@@ -205,21 +207,13 @@ function runProviderRequests<T>(
 function keychainRemedyCommand(
   configs: ClaudeConfigSelection[] | undefined,
 ): string {
-  const identities = configs
-    ?.map((config) => config.keychainIdentity)
-    .filter(Boolean);
-  if (!identities || identities.length === 0)
+  if (!configs?.some((config) => config.keychainIdentity)) {
     return KEYCHAIN_ACCESS_REMEDY_COMMAND;
-  const configFlags = identities
-    .map((identity) => `--claude-config-dir=${quoteCommandArgument(identity)}`)
-    .join(" ");
-  return `${KEYCHAIN_ACCESS_REMEDY_COMMAND} --provider claude ${configFlags}`;
-}
-
-function quoteCommandArgument(value: string): string {
-  return process.platform === "win32"
-    ? `'${value.replaceAll("'", "''")}'`
-    : `'${value.replaceAll("'", `'\\''`)}'`;
+  }
+  return withClaudeConfigFlags(
+    `${KEYCHAIN_ACCESS_REMEDY_COMMAND} --provider claude`,
+    configs,
+  );
 }
 
 function withQuotaSeat(quota: ProviderQuota, seat: string): ProviderQuota {

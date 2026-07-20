@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, delimiter, join, resolve } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { parseFlags, selectClaudeConfigs } from "../src/args.js";
 import { main, normalizeArgv } from "../src/cli.js";
 import { PROVIDERS } from "../src/providers/index.js";
@@ -22,6 +22,7 @@ const originalXdgCacheHome = process.env.XDG_CACHE_HOME;
 let tempDir: string | undefined;
 
 afterEach(() => {
+  vi.restoreAllMocks();
   PROVIDERS.claude = originalClaudeProvider;
   PROVIDERS.codex = originalCodexProvider;
   PROVIDERS.cursor = originalCursorProvider;
@@ -513,7 +514,12 @@ describe("CLI quota rendering", () => {
     expect(output).toContain(
       "windows[3]{provider,seat,id,label,percentRemaining,resetsAt,state}:",
     );
-    expect(output).not.toContain("/private/customer/configs");
+    expect(output.split("help[")[0]).not.toContain(
+      "/private/customer/configs",
+    );
+    expect(output).toContain(
+      "--claude-config-dir='/private/customer/configs/arcs'",
+    );
     expect(output).not.toContain("fixture-secret-token");
   });
 
@@ -621,7 +627,54 @@ describe("CLI quota rendering", () => {
     ]);
   });
 
+  it("preserves selected profiles in contextual quota commands", async () => {
+    useTempCache();
+    PROVIDERS.claude = providerWithQuota(freshClaudeQuota());
+    const configFlags =
+      "--claude-config-dir='./team-a' --claude-config-dir='../team-b'";
+
+    const output = await capture([
+      "--provider",
+      "claude",
+      "--claude-config-dir",
+      "./team-a",
+      "--claude-config-dir",
+      "../team-b",
+    ]);
+
+    expect(output).toContain(
+      `Run \`quota-axi --provider claude --json ${configFlags}\` for JSON output`,
+    );
+    expect(output).toContain(
+      `Run \`quota-axi --full ${configFlags}\` to include account and source-attempt details`,
+    );
+    expect(output).toContain(
+      `Run \`quota-axi auth ${configFlags}\` to inspect local auth source availability without printing secrets`,
+    );
+  });
+
+  it("preserves selected profiles in the auth Keychain remedy", async () => {
+    PROVIDERS.claude = providerWithAuth("claude", "Claude");
+    const configFlags =
+      "--claude-config-dir='./team-a' --claude-config-dir='../team-b'";
+
+    const output = await capture([
+      "auth",
+      "--provider",
+      "claude",
+      "--claude-config-dir",
+      "./team-a",
+      "--claude-config-dir",
+      "../team-b",
+    ]);
+
+    expect(output).toContain(
+      `Run \`quota-axi --allow-keychain-prompt auth ${configFlags}\` to permit macOS Keychain access`,
+    );
+  });
+
   it("serializes prompt-capable Claude reads without blocking other providers", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
     useTempCache();
     const first = resolve("/private/configs/first");
     const second = resolve("/private/configs/second");
@@ -679,6 +732,52 @@ describe("CLI quota rendering", () => {
     expect(secondWasStarted).toBe(false);
     releaseFirst();
     await Promise.all([secondStarted, command]);
+  });
+
+  it("keeps prompt-enabled Claude reads concurrent outside macOS", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    useTempCache();
+    const first = resolve("/private/configs/first");
+    const second = resolve("/private/configs/second");
+    let releaseReads!: () => void;
+    let markBothStarted!: () => void;
+    let started = 0;
+    const readGate = new Promise<void>((resolveGate) => {
+      releaseReads = resolveGate;
+    });
+    const bothStarted = new Promise<void>((resolveStarted) => {
+      markBothStarted = resolveStarted;
+    });
+    PROVIDERS.claude = {
+      ...providerWithQuota(freshClaudeQuota()),
+      async fetchQuota() {
+        started++;
+        if (started === 2) markBothStarted();
+        await readGate;
+        return freshClaudeQuota();
+      },
+    };
+
+    const command = capture([
+      "--provider",
+      "claude",
+      "--claude-config-dir",
+      first,
+      "--claude-config-dir",
+      second,
+      "--allow-keychain-prompt",
+      "--json",
+    ]);
+    const concurrent = await Promise.race([
+      bothStarted.then(() => true),
+      new Promise<false>((resolveTimeout) =>
+        setTimeout(() => resolveTimeout(false), 100),
+      ),
+    ]);
+    releaseReads();
+    await command;
+
+    expect(concurrent).toBe(true);
   });
 });
 

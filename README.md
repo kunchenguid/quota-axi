@@ -147,7 +147,7 @@ $env:CLAUDE_CONFIG_DIRS = "$HOME\.claude-work;$HOME\.claude-personal"
 quota-axi --provider claude,codex,grok
 ```
 
-Precedence is deterministic: repeated CLI values (in argument order), then `CLAUDE_CONFIG_DIRS`, then the existing singular `CLAUDE_CONFIG_DIR`, then `~/.claude`. Lexically normalized duplicate directories keep their first position. Selected directories remain separate rows even when they resolve to the same account identity. Multi-seat output uses stable non-secret labels made from the directory basename and a short profile hash, such as `.claude-work-a1b2c3`; normal output never includes the full config paths except when an actionable Keychain remedy must preserve them. See the [Output Model](#output-model) for conditional seat metadata.
+Precedence is deterministic: repeated CLI values (in argument order), then `CLAUDE_CONFIG_DIRS`, then the existing singular `CLAUDE_CONFIG_DIR`, then `~/.claude`. Lexically normalized duplicate directories keep their first position. Selected directories remain separate rows even when they resolve to the same account identity. Multi-seat output uses stable non-secret labels made from the directory basename and a short profile hash, such as `.claude-work-a1b2c3`; provider rows never include full config paths, but copy-pasteable next-step and Keychain remedy commands preserve selected profiles. See the [Output Model](#output-model) for conditional seat metadata.
 
 All config and provider access is read-only: quota-axi reads credentials and calls first-party usage endpoints but never writes config directories or changes provider auth/state.
 

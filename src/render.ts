@@ -1,5 +1,7 @@
 import { encode } from "@toon-format/toon";
 import { quotaHelpLines } from "./advice.js";
+import type { ClaudeConfigSelection } from "./args.js";
+import { withClaudeConfigFlags } from "./command-context.js";
 import { collapseHome } from "./lib/fs.js";
 import type {
   AuthProviderReport,
@@ -16,6 +18,7 @@ export function renderQuotaToon(
   response: QuotaAxiResponse,
   binPath: string,
   full: boolean,
+  claudeConfigs?: ClaudeConfigSelection[],
 ): string {
   const hasSeats = response.providers.some((provider) => provider.seat);
   const providers = response.providers.map((provider) => ({
@@ -78,13 +81,14 @@ export function renderQuotaToon(
     blocks.push(encode({ attempts }));
   }
 
-  blocks.push(renderHelp(quotaHelpLines(response)));
+  blocks.push(renderHelp(quotaHelpLines(response, claudeConfigs)));
   return blocks.filter(Boolean).join("\n");
 }
 
 export function renderAuthToon(
   reports: AuthProviderReport[],
   binPath: string,
+  claudeConfigs?: ClaudeConfigSelection[],
 ): string {
   const hasSeats = reports.some((report) => report.seat);
   const sources = reports.flatMap((report) =>
@@ -105,7 +109,10 @@ export function renderAuthToon(
     }),
     encode({ auth: sources }),
     renderHelp([
-      "Run `quota-axi --allow-keychain-prompt auth` to permit macOS Keychain access",
+      `Run \`${withClaudeConfigFlags(
+        "quota-axi --allow-keychain-prompt auth",
+        claudeConfigs,
+      )}\` to permit macOS Keychain access`,
     ]),
   ].join("\n");
 }
