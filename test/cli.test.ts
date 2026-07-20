@@ -1,6 +1,6 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, join, resolve } from "node:path";
+import { basename, delimiter, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { parseFlags, selectClaudeConfigDirs } from "../src/args.js";
 import { main, normalizeArgv } from "../src/cli.js";
@@ -588,6 +588,7 @@ describe("response redaction", () => {
     const response: QuotaAxiResponse = {
       generatedAt: "2026-07-06T18:10:00Z",
       schemaVersion: 2,
+      summary: { availability: "ok", ok: 1, unavailable: 0, total: 1 },
       providers: [
         {
           provider: "claude",
@@ -610,8 +611,273 @@ describe("response redaction", () => {
     expect(redactedResponse(response, true).providers[0].account?.email).toBe(
       "person@example.invalid",
     );
+    // The aggregate is non-secret and survives redaction in both views.
+    expect(redactedResponse(response, false).summary).toEqual(response.summary);
+    expect(redactedResponse(response, true).summary).toEqual(response.summary);
   });
 });
+
+describe("aggregate availability summary", () => {
+  it("bounds one 429 seat and reports partial availability without erasing others", async () => {
+    useTempCache();
+    const dirs = useFiveSeatFixtures();
+
+    const text = await capture([
+      "--provider",
+      "claude",
+      ...dirs.flatMap((dir) => ["--claude-config-dir", dir]),
+      "--json",
+    ]);
+    const output = JSON.parse(text) as QuotaAxiResponse;
+
+    expect(output.summary).toEqual({
+      availability: "partial",
+      ok: 3,
+      unavailable: 2,
+      total: 5,
+    });
+    expect(output.providers.map((provider) => provider.seat)).toEqual([
+      "arcs",
+      "jr",
+      "nyu",
+      "ra",
+      "yfz",
+    ]);
+    const bySeat = Object.fromEntries(
+      output.providers.map((provider) => [provider.seat, provider]),
+    );
+    // The single 429 stays bounded to its own seat...
+    expect(bySeat.jr.state.status).toBe("rate_limited");
+    expect(bySeat.jr.state.retryAfter).toBe("2026-07-20T18:45:51Z");
+    // ...and does not erase successful windows from the healthy seats.
+    expect(bySeat.arcs.windows.length).toBeGreaterThan(0);
+    expect(bySeat.nyu.state.status).toBe("stale");
+    expect(bySeat.nyu.windows.length).toBeGreaterThan(0);
+    expect(bySeat.yfz.windows.length).toBeGreaterThan(0);
+    expect(bySeat.ra.state.status).toBe("auth_required");
+    // Duplicate account identity (arcs and yfz share an accountId) never
+    // collapses two config dirs into one row.
+    expect(
+      output.providers.filter((provider) => provider.provider === "claude"),
+    ).toHaveLength(5);
+    // Partial availability is usable data → exit 0.
+    expect(process.exitCode).toBeUndefined();
+    // The shared account id is redacted from default output.
+    expect(text).not.toContain("acct-shared");
+  });
+
+  it("renders the partial verdict in the human TOON headline", async () => {
+    useTempCache();
+    const dirs = useFiveSeatFixtures();
+
+    const output = await capture([
+      "--provider",
+      "claude",
+      ...dirs.flatMap((dir) => ["--claude-config-dir", dir]),
+    ]);
+
+    expect(output).toContain("summary:");
+    expect(output).toContain("availability: partial");
+    expect(output).toContain("ok: 3");
+    expect(output).toContain("unavailable: 2");
+    expect(output).toContain("total: 5");
+  });
+
+  it("includes every Claude seat under --full alongside Codex and Grok", async () => {
+    useTempCache();
+    const dirs = useFiveSeatFixtures();
+    PROVIDERS.codex = providerWithQuota(freshCodexQuota());
+    PROVIDERS.grok = providerWithQuota(freshGrokQuota());
+
+    const output = JSON.parse(
+      await capture([
+        "--provider",
+        "claude,codex,grok",
+        ...dirs.flatMap((dir) => ["--claude-config-dir", dir]),
+        "--full",
+        "--json",
+      ]),
+    ) as QuotaAxiResponse;
+
+    expect(output.providers).toHaveLength(7);
+    expect(output.summary).toEqual({
+      availability: "partial",
+      ok: 5,
+      unavailable: 2,
+      total: 7,
+    });
+    // Codex and Grok are not regressed by the multi-seat Claude fan-out.
+    const codex = output.providers.find(
+      (provider) => provider.provider === "codex",
+    );
+    const grok = output.providers.find(
+      (provider) => provider.provider === "grok",
+    );
+    expect(codex?.state.status).toBe("fresh");
+    expect(codex?.windows.length).toBeGreaterThan(0);
+    expect(grok?.state.status).toBe("fresh");
+    expect(grok?.windows.length).toBeGreaterThan(0);
+    // --full carries per-source attempts for the healthy Claude seat.
+    expect(
+      output.providers.find((provider) => provider.seat === "arcs")?.attempts,
+    ).toBeDefined();
+  });
+
+  it("reports complete unavailability and exits 1 when every seat fails", async () => {
+    useTempCache();
+    const dirs = useAllFailingSeatFixtures();
+
+    const output = JSON.parse(
+      await capture([
+        "--provider",
+        "claude",
+        ...dirs.flatMap((dir) => ["--claude-config-dir", dir]),
+        "--json",
+      ]),
+    ) as QuotaAxiResponse;
+
+    expect(output.summary).toEqual({
+      availability: "unavailable",
+      ok: 0,
+      unavailable: 5,
+      total: 5,
+    });
+    expect(
+      output.providers.every((provider) => provider.windows.length === 0),
+    ).toBe(true);
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("reports full availability and exits 0 when every seat is fresh", async () => {
+    useTempCache();
+    const dirs = useAllFreshSeatFixtures();
+
+    const output = JSON.parse(
+      await capture([
+        "--provider",
+        "claude",
+        ...dirs.flatMap((dir) => ["--claude-config-dir", dir]),
+        "--json",
+      ]),
+    ) as QuotaAxiResponse;
+
+    expect(output.summary).toEqual({
+      availability: "ok",
+      ok: 5,
+      unavailable: 0,
+      total: 5,
+    });
+    expect(process.exitCode).toBeUndefined();
+  });
+});
+
+const FIVE_SEAT_NAMES = ["arcs", "jr", "nyu", "ra", "yfz"] as const;
+
+function fiveSeatDirs(): string[] {
+  return FIVE_SEAT_NAMES.map((name) => resolve(`/fake/seats/${name}`));
+}
+
+function failedClaudeSeat(
+  status: ProviderQuota["state"]["status"],
+  error: string,
+  extra: { retryAfter?: string } = {},
+): ProviderQuota {
+  return {
+    provider: "claude",
+    label: "Claude",
+    source: "unavailable",
+    windows: [],
+    state: {
+      status,
+      stale: false,
+      error,
+      sourcesTried: ["oauth"],
+      ...(extra.retryAfter ? { retryAfter: extra.retryAfter } : {}),
+    },
+    attempts: [{ source: "oauth", status: "failed", error }],
+  };
+}
+
+function installClaudeSeatRouter(
+  byName: Record<string, () => ProviderQuota>,
+): void {
+  PROVIDERS.claude = {
+    id: "claude",
+    label: "Claude",
+    async fetchQuota(options) {
+      const name = basename(options.claudeConfigDir ?? "");
+      const build = byName[name];
+      if (!build) throw new Error(`unexpected seat fixture: ${name}`);
+      return build();
+    },
+    async inspectAuth() {
+      return { provider: "claude", sources: [] };
+    },
+  };
+}
+
+function useFiveSeatFixtures(): string[] {
+  const dirs = fiveSeatDirs();
+  const sharedIdentity = {
+    accountId: "acct-shared",
+    identityStatus: "verified" as const,
+  };
+  installClaudeSeatRouter({
+    // Healthy seat with live windows and an account identity.
+    arcs: () => ({ ...freshClaudeQuota(), account: { ...sharedIdentity } }),
+    // One seat rate-limited (HTTP 429) — bounded to itself.
+    jr: () =>
+      failedClaudeSeat("rate_limited", "Claude quota endpoint rate limited", {
+        retryAfter: "2026-07-20T18:45:51Z",
+      }),
+    // Stale cached data still counts as usable.
+    nyu: () => ({
+      ...freshClaudeQuota(),
+      source: "cache",
+      state: {
+        status: "stale",
+        stale: true,
+        refreshedAt: "2026-07-06T18:10:00Z",
+        error: "Claude quota endpoint rate limited",
+        sourcesTried: ["oauth", "cache"],
+      },
+    }),
+    // Unavailable auth.
+    ra: () => failedClaudeSeat("auth_required", "Claude sign-in required"),
+    // Duplicate account identity of arcs — must still render as its own seat.
+    yfz: () => ({ ...freshClaudeQuota(), account: { ...sharedIdentity } }),
+  });
+  return dirs;
+}
+
+function useAllFailingSeatFixtures(): string[] {
+  const dirs = fiveSeatDirs();
+  installClaudeSeatRouter({
+    arcs: () =>
+      failedClaudeSeat("rate_limited", "Claude quota endpoint rate limited", {
+        retryAfter: "2026-07-20T18:45:51Z",
+      }),
+    jr: () =>
+      failedClaudeSeat("rate_limited", "Claude quota endpoint rate limited", {
+        retryAfter: "2026-07-20T18:44:00Z",
+      }),
+    nyu: () => failedClaudeSeat("auth_required", "Claude sign-in required"),
+    ra: () => failedClaudeSeat("error", "Claude quota unavailable"),
+    yfz: () =>
+      failedClaudeSeat("unavailable", "Claude quota endpoint unavailable"),
+  });
+  return dirs;
+}
+
+function useAllFreshSeatFixtures(): string[] {
+  const dirs = fiveSeatDirs();
+  installClaudeSeatRouter(
+    Object.fromEntries(
+      FIVE_SEAT_NAMES.map((name) => [name, () => freshClaudeQuota()]),
+    ),
+  );
+  return dirs;
+}
 
 async function capture(argv: string[]): Promise<string> {
   const chunks: string[] = [];

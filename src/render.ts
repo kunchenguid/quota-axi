@@ -44,6 +44,9 @@ export function renderQuotaToon(
         "Report local agent-provider quota windows for routing-aware agents",
       generatedAt: response.generatedAt,
     }),
+    // Headline aggregate first: an agent reads full/partial/unavailable without
+    // scanning every provider row (AXI pre-computed field).
+    encode({ summary: response.summary }),
     encode({ providers }),
     encode({ windows }),
   ];

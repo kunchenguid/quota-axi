@@ -42,7 +42,10 @@ export async function quotaCommand(
   );
   const redacted = redactedResponse(response, flags.full);
 
-  if (response.providers.every(isFailed)) {
+  // Deterministic exit: complete failure (no usable row) exits 1; full and
+  // partial availability both exit 0 because partial data is still usable. The
+  // full-vs-partial distinction lives in `summary.availability`, not the code.
+  if (response.summary.availability === "unavailable") {
     process.exitCode = 1;
   }
   writeCachedProvidersBestEffort(response.providers);
@@ -193,10 +196,6 @@ function withAuthSeat(
     // output while retaining source availability and error state.
     sources: report.sources.map(({ path: _path, ...source }) => source),
   };
-}
-
-function isFailed(provider: ProviderQuota): boolean {
-  return !["fresh", "stale"].includes(provider.state.status);
 }
 
 function writeCachedProvidersBestEffort(providers: ProviderQuota[]): void {

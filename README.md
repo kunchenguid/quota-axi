@@ -35,6 +35,11 @@ $ npx -y quota-axi
 bin: ~/.npm/_npx/.../quota-axi
 description: Report local agent-provider quota windows for routing-aware agents
 generatedAt: "2026-03-15T16:42:00.000Z"
+summary:
+  availability: ok
+  ok: 5
+  unavailable: 0
+  total: 5
 providers[5]{provider,plan,source,status,refreshedAt}:
   claude,pro,oauth,fresh,"2026-03-15T16:41:55.000Z"
   codex,plus,cli-rpc,fresh,"2026-03-15T16:41:58.000Z"
@@ -68,6 +73,7 @@ $ quota-axi --provider claude --json
 {
   "generatedAt": "2026-03-15T16:42:03.000Z",
   "schemaVersion": 2,
+  "summary": { "availability": "ok", "ok": 1, "unavailable": 0, "total": 1 },
   "providers": [
     {
       "provider": "claude",
@@ -216,7 +222,7 @@ It is generated from `src/skill.ts`; update it with `pnpm run build:skill` and v
 
 - **Live first** - direct provider HTTP calls use 15 second request timeouts, Codex JSON-RPC reads use short per-call timeouts, and stale cache fallback is per provider.
 - **No first-run Keychain prompt** - macOS Claude Keychain value reads are skipped on plain calls until `--allow-keychain-prompt` succeeds once, then future plain calls reuse that existing grant.
-- **Partial success is success** - one provider can fail while another returns fresh or stale data, and the process still exits 0. Exit code 1 means every provider failed, and 2 means a usage error.
+- **Partial success is success** - one provider or Claude seat can fail while another returns fresh or stale data, and the process still exits 0. The top-level `summary.availability` reports `ok` (every row usable), `partial` (some usable), or `unavailable` (none usable) so an agent reads the aggregate verdict without scanning every row, and a single seat's 429 can never read as all-Claude-down. Exit code 0 covers both full and partial availability; exit code 1 means every row failed (complete unavailability); exit code 2 means a usage error.
 - **No token equivalence** - quota-axi does not claim that one provider percentage equals another provider percentage.
 
 ## CLI Reference
@@ -248,7 +254,8 @@ It is generated from `src/skill.ts`; update it with `pnpm run build:skill` and v
 
 | Object                        | Fields                                                                                               |
 | ----------------------------- | ---------------------------------------------------------------------------------------------------- |
-| Quota report                  | `providers`                                                                                          |
+| Quota report                  | `summary` and `providers`                                                                            |
+| Aggregate `summary`           | `availability` (`ok`, `partial`, or `unavailable`), plus `ok`, `unavailable`, and `total` row counts |
 | Provider report               | `provider`, `label`, `source`, `windows`, `state`, optional `plan`, `credits`, and multi-seat `seat` |
 | Provider report with `--full` | Optional `account` identity and per-source `attempts`                                                |
 | Account identity (`--full`)   | Optional `email`, `organization`, `accountId`, and `identityStatus`                                  |

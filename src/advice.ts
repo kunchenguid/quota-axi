@@ -1,6 +1,7 @@
 import type {
   ProviderQuota,
   QuotaAxiResponse,
+  QuotaSummary,
   SourceAttempt,
 } from "./types.js";
 
@@ -14,7 +15,7 @@ const BLOCKED_CREDENTIAL_ERRORS = new Set([
 ]);
 
 export function annotateQuotaAdvice(
-  response: Omit<QuotaAxiResponse, "schemaVersion">,
+  response: Omit<QuotaAxiResponse, "schemaVersion" | "summary">,
 ): QuotaAxiResponse {
   const providers = response.providers.map(annotateProviderAdvice);
   const help = providers
@@ -23,9 +24,28 @@ export function annotateQuotaAdvice(
   return {
     generatedAt: response.generatedAt,
     schemaVersion: 2,
+    summary: summarizeProviders(providers),
     providers,
     ...(help.length > 0 ? { help } : {}),
   };
+}
+
+/** A provider row is usable when it carries live or cached quota data. */
+export function isUsableProvider(provider: ProviderQuota): boolean {
+  return provider.state.status === "fresh" || provider.state.status === "stale";
+}
+
+/**
+ * Reduce per-provider (per-seat) rows to one aggregate verdict so a single
+ * seat's failure never masquerades as the whole fleet's state.
+ */
+function summarizeProviders(providers: ProviderQuota[]): QuotaSummary {
+  const total = providers.length;
+  const ok = providers.filter(isUsableProvider).length;
+  const unavailable = total - ok;
+  const availability =
+    total > 0 && ok === total ? "ok" : ok === 0 ? "unavailable" : "partial";
+  return { availability, ok, unavailable, total };
 }
 
 export function quotaHelpLines(response: QuotaAxiResponse): string[] {

@@ -97,8 +97,13 @@ ${TOP_HELP.trimEnd()}
 
 - Output is TOON-encoded and token-efficient by default; pass \`--json\` only when you need
   the normalized schema.
-- Exit code 0 means at least one provider returned data (fresh or stale); exit code 1 means
-  every provider failed; exit code 2 means a usage error.
+- Every quota report carries a top-level \`summary\` - \`availability\` is \`ok\` (every row usable),
+  \`partial\` (some usable), or \`unavailable\` (none usable), alongside \`ok\`, \`unavailable\`, and
+  \`total\` row counts. Read it to get the aggregate verdict without scanning every provider or
+  Claude seat; a single seat's 429 never reads as all-Claude-down.
+- Exit code 0 covers full and partial availability (at least one provider or seat returned fresh
+  or stale data); exit code 1 means every row failed (\`summary.availability\` is \`unavailable\`);
+  exit code 2 means a usage error.
 - Repeated Claude config flags take precedence over \`CLAUDE_CONFIG_DIRS\`, then the existing
   singular \`CLAUDE_CONFIG_DIR\`, then the default. Normalized duplicates keep their first position;
   zero or one selected config preserves the existing single-seat output schema.
