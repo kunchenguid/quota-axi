@@ -10,11 +10,12 @@ export const DESCRIPTION =
 export const TOP_HELP = `usage: quota-axi [auth] [flags]
 commands[2]:
   (none)=quota, auth
-flags[6]:
-  --provider <claude,codex,cursor,copilot,grok>, --json, --full, --allow-keychain-prompt, --help, -v/--version
+flags[7]:
+  --provider <claude,codex,cursor,copilot,grok>, --claude-config-dir <path> (repeatable), --json, --full, --allow-keychain-prompt, --help, -v/--version
 examples:
   quota-axi
   quota-axi --provider claude
+  quota-axi --provider claude,codex --claude-config-dir ~/.claude-work --claude-config-dir ~/.claude-personal
   quota-axi --provider cursor,copilot,grok
   quota-axi --json
   quota-axi --full
@@ -103,7 +104,7 @@ function findLegacyFlag(
 ): number {
   for (let index = 0; index < raw.length; index++) {
     const arg = raw[index];
-    if (arg === "--provider") {
+    if (takesValue(arg)) {
       index++;
       continue;
     }
@@ -115,13 +116,17 @@ function findLegacyFlag(
 function findCommand(raw: string[]): number {
   for (let index = 0; index < raw.length; index++) {
     const arg = raw[index];
-    if (arg === "--provider") {
+    if (takesValue(arg)) {
       index++;
       continue;
     }
     if (arg === "quota" || arg === "auth" || arg === "update") return index;
   }
   return -1;
+}
+
+function takesValue(flag: string): boolean {
+  return flag === "--provider" || flag === "--claude-config-dir";
 }
 
 function readPackageVersion(): string {

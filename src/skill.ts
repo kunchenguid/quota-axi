@@ -71,16 +71,19 @@ or when comparing supported local provider headroom side by side.
 
 1. Run \`npx -y quota-axi\` for compact TOON output covering supported providers' quota windows.
 2. Scope to one provider with \`--provider claude\` or to a subset with \`--provider cursor,copilot,grok\`.
-3. Pass \`--json\` for the normalized machine-readable model instead of TOON.
-4. Pass \`--full\` to include account identity and per-source attempt details.
-5. Run \`npx -y quota-axi auth\` to check local auth-source availability without printing
+3. For multiple Claude subscriptions, repeat \`--claude-config-dir <path>\` or set the quoted,
+   platform-delimited \`CLAUDE_CONFIG_DIRS\` environment variable. Every selected seat is read only
+   and appears under a stable non-secret basename-plus-hash label.
+4. Pass \`--json\` for the normalized machine-readable model instead of TOON.
+5. Pass \`--full\` to include account identity and per-source attempt details.
+6. Run \`npx -y quota-axi auth\` to check local auth-source availability without printing
    secret values.
-6. On macOS, Claude Keychain value reads are skipped by default until the user grants access once.
-   If quota output reports \`reason: keychain_access_required\`, tell your user to run
-   \`quota-axi --allow-keychain-prompt\` once and approve Keychain access ("Always Allow").
-   After that successful grant, plain \`quota-axi\` calls reuse the existing Keychain access
-   marker to refresh live Claude quota without requiring the flag.
-7. For a managed Codex installation, set \`QUOTA_AXI_CODEX_BINARY\` to its absolute executable
+7. On macOS, Claude Keychain value reads are skipped by default until the user grants access once.
+   If quota output reports \`reason: keychain_access_required\`, tell your user to run the exact
+   \`remedyCommand\` once and approve Keychain access ("Always Allow"). The command preserves any
+   selected Claude profiles. After that successful grant, plain \`quota-axi\` calls reuse the
+   existing Keychain access marker to refresh live Claude quota without requiring the flag.
+8. For a managed Codex installation, set \`QUOTA_AXI_CODEX_BINARY\` to its absolute executable
    path. quota-axi uses that exact executable for auth inspection and the read-only app-server
    fallback, and fails closed if the override is invalid.
 
@@ -94,17 +97,22 @@ ${TOP_HELP.trimEnd()}
 
 - Output is TOON-encoded and token-efficient by default; pass \`--json\` only when you need
   the normalized schema.
-- Exit code 0 means at least one provider returned data (fresh or stale); exit code 1 means
-  every provider failed; exit code 2 means a usage error.
+- Every quota report carries a top-level \`summary\` - \`availability\` is \`ok\` (every row usable),
+  \`partial\` (some usable), or \`unavailable\` (none usable), alongside \`ok\`, \`unavailable\`, and
+  \`total\` row counts. Read it to get the aggregate verdict without scanning every provider or
+  Claude seat; a single seat's 429 never reads as all-Claude-down.
+- Exit code 0 covers full and partial availability (at least one provider or seat returned fresh
+  or stale data); exit code 1 means every row failed (\`summary.availability\` is \`unavailable\`);
+  exit code 2 means a usage error.
+- Repeated Claude config flags take precedence over \`CLAUDE_CONFIG_DIRS\`, then the existing
+  singular \`CLAUDE_CONFIG_DIR\`, then the default. Normalized duplicates keep their first position.
 - Percentages are not comparable across providers - quota-axi never claims one provider's
   percentage equals another's.
 - Claude \`--full\` output exposes the authoritative OAuth profile \`account.uuid\` as
   \`account.accountId\` when Anthropic returns one; otherwise the account identity is explicitly
   marked unverified rather than inferred.
 - The quota cache at \`~/.cache/quota-axi/quotas.json\` only ever holds normalized
-  non-secret snapshots.
-  Fresh provider reports with no windows clear stale provider snapshots instead of caching
-  empty quota.
-  The Claude Keychain access marker lives alongside it and contains no credential values.
+  non-secret snapshots. The Claude Keychain access marker lives alongside it and contains no
+  credential values; see the README Security Posture for detailed cache behavior.
 `;
 }

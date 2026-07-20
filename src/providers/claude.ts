@@ -2,7 +2,7 @@ import { chmodSync, existsSync, renameSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { readCachedProvider } from "../cache.js";
+import { readCachedProvider, tagProviderCacheKey } from "../cache.js";
 import {
   claudeKeychainAccessMarkerPath,
   ensurePrivateParent,
@@ -106,6 +106,11 @@ export const claudeAdapter: ProviderAdapter = {
 export async function fetchQuota(
   options: ProviderOptions,
 ): Promise<ProviderQuota> {
+  const cacheKey = options.claudeConfigDir
+    ? claudeProfileCacheKey(options.claudeConfigDir)
+    : undefined;
+  const finish = (quota: ProviderQuota): ProviderQuota =>
+    tagProviderCacheKey(quota, cacheKey);
   const attempts: SourceAttempt[] = [];
   let finalError = "Claude quota unavailable";
   let retryAfter: string | undefined;
@@ -162,17 +167,19 @@ export async function fetchQuota(
               }
             : { source: "oauth-profile", status: "success" },
         );
-        return successProvider({
-          provider: "claude",
-          label: "Claude",
-          source: "oauth",
-          plan: quota.plan,
-          account: quota.account,
-          windows: quota.windows,
-          refreshedAt: quota.refreshedAt,
-          sourcesTried: sourceNames(attempts),
-          attempts,
-        });
+        return finish(
+          successProvider({
+            provider: "claude",
+            label: "Claude",
+            source: "oauth",
+            plan: quota.plan,
+            account: quota.account,
+            windows: quota.windows,
+            refreshedAt: quota.refreshedAt,
+            sourcesTried: sourceNames(attempts),
+            attempts,
+          }),
+        );
       } catch (error) {
         const message = errorMessage(error);
         attempts[attempts.length - 1] = {
@@ -189,26 +196,33 @@ export async function fetchQuota(
     }
   }
 
-  const cached = readCachedProvider("claude");
+  const cached = readCachedProvider("claude", cacheKey);
   if (cached) {
-    return staleFromCache(cached, finalError, sourceNames(attempts), attempts);
+    return finish(
+      staleFromCache(cached, finalError, sourceNames(attempts), attempts),
+    );
   }
 
-  return failedProvider({
-    provider: "claude",
-    label: "Claude",
-    status: retryAfter ? "rate_limited" : statusFromError(finalError),
-    error: finalError,
-    retryAfter,
-    sourcesTried: sourceNames(attempts),
-    attempts,
-  });
+  return finish(
+    failedProvider({
+      provider: "claude",
+      label: "Claude",
+      status: retryAfter ? "rate_limited" : statusFromError(finalError),
+      error: finalError,
+      retryAfter,
+      sourcesTried: sourceNames(attempts),
+      attempts,
+    }),
+  );
 }
 
 export async function inspectAuth(
   options: ProviderOptions,
 ): Promise<AuthProviderReport> {
-  const locations = resolveClaudeProfileLocations();
+  const locations = resolveClaudeProfileLocations(
+    options.claudeConfigDir,
+    options.claudeKeychainIdentity,
+  );
   const states = await readCredentialStates(options, locations);
   const sources = states.map((state): AuthSourceReport => {
     if (state.status === "available") {
@@ -357,7 +371,10 @@ function slugify(value: string): string {
 
 async function readCredentialStates(
   options: ProviderOptions,
-  locations = resolveClaudeProfileLocations(),
+  locations = resolveClaudeProfileLocations(
+    options.claudeConfigDir,
+    options.claudeKeychainIdentity,
+  ),
 ): Promise<CredentialState[]> {
   const states: CredentialState[] = [];
 
@@ -484,12 +501,17 @@ export function claudeKeychainService(): string {
   return resolveClaudeProfileLocations().keychainService;
 }
 
-function resolveClaudeProfileLocations(): ClaudeProfileLocations {
-  const configuredDir = process.env.CLAUDE_CONFIG_DIR;
+function resolveClaudeProfileLocations(
+  configDirOverride?: string,
+  keychainIdentityOverride?: string,
+): ClaudeProfileLocations {
+  const configuredDir = configDirOverride ?? process.env.CLAUDE_CONFIG_DIR;
   const configDir = (configuredDir ?? join(homedir(), ".claude")).normalize(
     "NFC",
   );
-  const keychainConfigDir = configuredDir ? configDir : undefined;
+  const keychainConfigDir = configuredDir
+    ? (keychainIdentityOverride ?? configDir).normalize("NFC")
+    : undefined;
   return {
     credentialFile: join(configDir, ".credentials.json"),
     keychainService: keychainServiceForConfigDir(keychainConfigDir),
@@ -499,11 +521,11 @@ function resolveClaudeProfileLocations(): ClaudeProfileLocations {
 
 function keychainServiceForConfigDir(configDir?: string): string {
   if (!configDir) return DEFAULT_KEYCHAIN_SERVICE;
-  const suffix = createHash("sha256")
-    .update(configDir)
-    .digest("hex")
-    .slice(0, 8);
-  return `${DEFAULT_KEYCHAIN_SERVICE}-${suffix}`;
+  return `${DEFAULT_KEYCHAIN_SERVICE}-${claudeProfileCacheKey(configDir).slice(0, 8)}`;
+}
+
+function claudeProfileCacheKey(configDir: string): string {
+  return createHash("sha256").update(configDir).digest("hex").slice(0, 16);
 }
 
 function isKeychainItemNotFound(error: unknown): boolean {
