@@ -1,0 +1,38 @@
+{
+  "generatedAt": "2026-07-20T22:28:51.949Z",
+  "schemaVersion": 1,
+  "providers": [
+    {
+      "provider": "kimi",
+      "label": "Kimi",
+      "source": "api",
+      "windows": [
+        {
+          "id": "weekly",
+          "label": "week",
+          "kind": "weekly",
+          "percentUsed": 92,
+          "percentRemaining": 8,
+          "resetsAt": "2026-07-24T17:09:41.053Z"
+        },
+        {
+          "id": "five_hour",
+          "label": "session",
+          "kind": "session",
+          "percentUsed": 0,
+          "percentRemaining": 100,
+          "resetsAt": "2026-07-21T01:09:41.053Z",
+          "windowSeconds": 18000
+        }
+      ],
+      "state": {
+        "status": "fresh",
+        "stale": false,
+        "sourcesTried": [
+          "pi:kimi-coding"
+        ],
+        "refreshedAt": "2026-07-20T22:28:51.948Z"
+      }
+    }
+  ]
+}

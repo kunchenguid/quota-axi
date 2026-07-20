@@ -3,12 +3,17 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { readCachedProvider, writeCachedProviders } from "../src/cache.js";
+import {
+  deleteCachedProvider,
+  readCachedProvider,
+  writeCachedProviders,
+} from "../src/cache.js";
 import { cacheFilePath } from "../src/lib/fs.js";
 import type { ProviderId, ProviderQuota } from "../src/types.js";
 
@@ -62,6 +67,46 @@ describe("quota cache", () => {
         ?.windows[0].percentUsed,
     ).toBe(20);
     expect(payload.providers.every((provider) => !provider.account)).toBe(true);
+  });
+
+  it("writes normalized cache data with mode 0600 and no attempts or sentinel secret", () => {
+    useTempCache();
+    const sentinel = "CACHE-SENTINEL-KIMI-612704";
+    const kimi = {
+      ...quota("kimi", 37.5),
+      source: "api" as const,
+      state: {
+        ...quota("kimi", 37.5).state,
+        sourcesTried: ["pi:kimi-coding"],
+      },
+      attempts: [
+        {
+          source: "pi:kimi-coding",
+          status: "success" as const,
+          error: sentinel,
+        },
+      ],
+    };
+
+    writeCachedProviders([kimi]);
+
+    const bytes = readFileSync(cacheFilePath(), "utf8");
+    expect(statSync(cacheFilePath()).mode & 0o777).toBe(0o600);
+    expect(bytes).not.toContain(sentinel);
+    expect(bytes).not.toContain("attempts");
+    expect(bytes).not.toContain("account");
+    expect(readCachedProvider("kimi")?.windows[0].percentUsed).toBe(37.5);
+  });
+
+  it("deletes a definitive-auth provider while retaining other snapshots", () => {
+    useTempCache();
+    writeCachedProviders([quota("claude", 10), quota("kimi", 20)]);
+
+    deleteCachedProvider("kimi");
+
+    expect(readCachedProvider("kimi")).toBeUndefined();
+    expect(readCachedProvider("claude")?.windows[0].percentUsed).toBe(10);
+    expect(statSync(cacheFilePath()).mode & 0o777).toBe(0o600);
   });
 
   it("clears a stale snapshot after a fresh no-window report", () => {
@@ -120,5 +165,6 @@ function providerLabel(provider: ProviderId): string {
   if (provider === "codex") return "Codex";
   if (provider === "cursor") return "Cursor";
   if (provider === "copilot") return "GitHub Copilot";
-  return "Grok";
+  if (provider === "grok") return "Grok";
+  return "Kimi";
 }

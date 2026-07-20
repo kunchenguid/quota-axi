@@ -1,8 +1,6 @@
-import { existsSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { runAxiCli } from "axi-sdk-js";
 import { authCommand, quotaCommand, type QuotaContext } from "./commands.js";
+import { VERSION } from "./version.js";
 
 export const DESCRIPTION =
   "Report local agent-provider quota windows for routing-aware agents.";
@@ -11,17 +9,15 @@ export const TOP_HELP = `usage: quota-axi [auth] [flags]
 commands[2]:
   (none)=quota, auth
 flags[6]:
-  --provider <claude,codex,cursor,copilot,grok>, --json, --full, --allow-keychain-prompt, --help, -v/--version
+  --provider <claude,codex,cursor,copilot,grok,kimi>, --json, --full, --allow-keychain-prompt, --help, -v/--version
 examples:
   quota-axi
   quota-axi --provider claude
-  quota-axi --provider cursor,copilot,grok
+  quota-axi --provider cursor,copilot,grok,kimi
   quota-axi --json
   quota-axi --full
   quota-axi auth
 `;
-
-const VERSION = readPackageVersion();
 
 type MainOptions = {
   argv?: string[];
@@ -122,20 +118,4 @@ function findCommand(raw: string[]): number {
     if (arg === "quota" || arg === "auth" || arg === "update") return index;
   }
   return -1;
-}
-
-function readPackageVersion(): string {
-  const here = dirname(fileURLToPath(import.meta.url));
-  for (const candidate of [
-    join(here, "..", "package.json"),
-    join(here, "..", "..", "package.json"),
-  ]) {
-    if (!existsSync(candidate)) continue;
-    const parsed = JSON.parse(readFileSync(candidate, "utf-8")) as {
-      version?: unknown;
-    };
-    if (typeof parsed.version === "string" && parsed.version.length > 0)
-      return parsed.version;
-  }
-  return "0.0.0";
 }

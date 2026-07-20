@@ -1,0 +1,849 @@
+import { describe, expect, it, vi } from "vitest";
+import {
+  createKimiAdapter,
+  normalizeKimiPayload,
+  normalizeRetryAfter,
+} from "../../src/providers/kimi.js";
+import type {
+  KimiCredentialBroker,
+  KimiCredentialInspection,
+  KimiCredentialResolution,
+} from "../../src/providers/pi-kimi-credential.js";
+import type {
+  ProviderAdapter,
+  ProviderQuota,
+  QuotaWindow,
+} from "../../src/types.js";
+
+const NOW = Date.parse("2027-02-03T04:05:06.000Z");
+const OPTIONS = { allowKeychainPrompt: false };
+
+const PRINCIPAL = {
+  limit: 640,
+  used: 208,
+  resetTime: "2027-02-08T17:00:00Z",
+};
+
+const SUCCESS_PAYLOAD = {
+  usage: PRINCIPAL,
+  limits: [
+    {
+      window: { duration: 300, timeUnit: "TIME_UNIT_MINUTE" },
+      detail: {
+        limit: 80,
+        remaining: 68,
+        reset_at: "2027-02-03T09:05:06+00:00",
+      },
+    },
+  ],
+};
+
+describe("Kimi request transport", () => {
+  it("makes one fixed-origin read-only request with only the Pi-resolved key", async () => {
+    const request = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        jsonResponse(SUCCESS_PAYLOAD),
+    );
+    const adapter = testAdapter({ fetch: request });
+
+    const report = await adapter.fetchQuota(OPTIONS);
+
+    expect(request).toHaveBeenCalledTimes(1);
+    const [input, init] = request.mock.calls[0];
+    const url = new URL(String(input));
+    expect({
+      protocol: url.protocol,
+      hostname: url.hostname,
+      port: url.port || "443",
+      pathname: url.pathname,
+      search: url.search,
+      hash: url.hash,
+    }).toEqual({
+      protocol: "https:",
+      hostname: "api.kimi.com",
+      port: "443",
+      pathname: "/coding/v1/usages",
+      search: "",
+      hash: "",
+    });
+    expect(init?.method).toBe("GET");
+    expect(init?.redirect).toBe("manual");
+    expect(init?.credentials).toBe("omit");
+    const headers = new Headers(init?.headers);
+    expect(headers.get("authorization")).toBe("Bearer synthetic-kimi-key-741");
+    expect(headers.get("accept")).toBe("application/json");
+    expect(headers.get("user-agent")).toMatch(/^quota-axi\/\d+\.\d+\.\d+$/);
+    expect(headers.get("cookie")).toBeNull();
+    expect(
+      [...headers.keys()].some((name) =>
+        /device|fingerprint|account|session/i.test(name),
+      ),
+    ).toBe(false);
+    expect(report).toMatchObject({
+      provider: "kimi",
+      label: "Kimi",
+      source: "api",
+      state: {
+        status: "fresh",
+        stale: false,
+        sourcesTried: ["pi:kimi-coding"],
+      },
+      attempts: [{ source: "pi:kimi-coding", status: "success" }],
+    });
+    expect(report.account).toBeUndefined();
+    expect(report.plan).toBeUndefined();
+    expect(report.credits).toBeUndefined();
+  });
+
+  it("coalesces concurrent acquisitions into one provider request", async () => {
+    let finish: ((response: Response) => void) | undefined;
+    const request = vi.fn(
+      async () =>
+        new Promise<Response>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const adapter = testAdapter({ fetch: request });
+
+    const first = adapter.fetchQuota(OPTIONS);
+    const second = adapter.fetchQuota(OPTIONS);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+    finish?.(jsonResponse(SUCCESS_PAYLOAD));
+
+    const [firstReport, secondReport] = await Promise.all([first, second]);
+    expect(firstReport).toBe(secondReport);
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects every redirect without a follow-up request", async () => {
+    for (const status of [300, 301, 302, 303, 307, 308]) {
+      const request = vi.fn(
+        async () =>
+          new Response("redirect payload", {
+            status,
+            headers: { location: "https://elsewhere.invalid/secret" },
+          }),
+      );
+      const report = await testAdapter({ fetch: request }).fetchQuota(OPTIONS);
+      expect(request).toHaveBeenCalledTimes(1);
+      expect(report.state).toMatchObject({
+        status: "error",
+        stale: false,
+        error: "redirect_rejected",
+      });
+    }
+  });
+
+  it("enforces the total deadline while credential resolution is pending", async () => {
+    const request = vi.fn();
+    const broker: KimiCredentialBroker = {
+      resolve: async () => new Promise<KimiCredentialResolution>(() => {}),
+      inspect: async () => "available",
+    };
+    const report = await testAdapter({
+      broker,
+      fetch: request,
+      deadlineMs: 5,
+    }).fetchQuota(OPTIONS);
+
+    expect(report.state.error).toBe("request_timeout");
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("enforces the deadline when a fetch implementation does not honor abort", async () => {
+    const report = await testAdapter({
+      fetch: vi.fn(async () => new Promise<Response>(() => {})),
+      deadlineMs: 5,
+    }).fetchQuota(OPTIONS);
+
+    expect(report.state.error).toBe("request_timeout");
+  });
+
+  it("cancels a pending response body at the total deadline", async () => {
+    const cancel = vi.fn();
+    const stream = new ReadableStream<Uint8Array>({
+      pull: async () => new Promise<void>(() => {}),
+      cancel,
+    });
+    const report = await testAdapter({
+      fetch: vi.fn(
+        async () =>
+          new Response(stream, {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+      ),
+      deadlineMs: 5,
+    }).fetchQuota(OPTIONS);
+
+    expect(report.state.error).toBe("request_timeout");
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  it("rejects declared and streamed bodies over 262144 bytes", async () => {
+    const declaredCancel = vi.fn();
+    const declaredBody = new ReadableStream<Uint8Array>({
+      pull: vi.fn(),
+      cancel: declaredCancel,
+    });
+    const declared = await testAdapter({
+      fetch: vi.fn(
+        async () =>
+          new Response(declaredBody, {
+            status: 200,
+            headers: {
+              "content-type": "application/json",
+              "content-length": "262145",
+            },
+          }),
+      ),
+    }).fetchQuota(OPTIONS);
+    expect(declared.state.error).toBe("response_too_large");
+    expect(declaredCancel).toHaveBeenCalledOnce();
+
+    const cancel = vi.fn();
+    const streamedBody = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(262_145));
+      },
+      cancel,
+    });
+    const streamed = await testAdapter({
+      fetch: vi.fn(
+        async () =>
+          new Response(streamedBody, {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+      ),
+    }).fetchQuota(OPTIONS);
+    expect(streamed.state.error).toBe("response_too_large");
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  it("rejects wrong content type, invalid UTF-8, malformed JSON, and invalid schema", async () => {
+    const cases: Array<[Response, string]> = [
+      [
+        new Response(JSON.stringify(SUCCESS_PAYLOAD), {
+          status: 200,
+          headers: { "content-type": "text/plain" },
+        }),
+        "unexpected_content_type",
+      ],
+      [
+        new Response(Uint8Array.from([0xc3, 0x28]), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+        "response_invalid_utf8",
+      ],
+      [
+        new Response("{unfinished", {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+        "malformed_json",
+      ],
+      [jsonResponse({ usage: { limit: 0, used: 0 } }), "schema_invalid"],
+    ];
+
+    for (const [response, code] of cases) {
+      const report = await testAdapter({
+        fetch: vi.fn(async () => response),
+      }).fetchQuota(OPTIONS);
+      expect(report.state.error).toBe(code);
+    }
+  });
+
+  it.each([
+    [401, "auth_required", "provider_auth_rejected"],
+    [403, "auth_required", "provider_auth_rejected"],
+    [408, "error", "provider_timeout"],
+    [429, "rate_limited", "provider_rate_limited"],
+    [503, "error", "provider_unavailable"],
+    [418, "error", "provider_request_rejected"],
+  ])(
+    "maps HTTP %i to bounded status and error",
+    async (status, expectedStatus, code) => {
+      const report = await testAdapter({
+        fetch: vi.fn(
+          async () => new Response("sensitive provider text", { status }),
+        ),
+      }).fetchQuota(OPTIONS);
+
+      expect(report.state.status).toBe(expectedStatus);
+      expect(report.state.error).toBe(code);
+      expect(JSON.stringify(report)).not.toContain("sensitive provider text");
+    },
+  );
+
+  it("normalizes integer and HTTP-date Retry-After and ignores invalid values", async () => {
+    const now = () => NOW;
+    for (const [value, expected] of [
+      ["91", "2027-02-03T04:06:37.000Z"],
+      ["Wed, 03 Feb 2027 05:06:07 GMT", "2027-02-03T05:06:07.000Z"],
+      ["Wednesday, 03-Feb-27 05:06:07 GMT", "2027-02-03T05:06:07.000Z"],
+      ["Wed Feb  3 05:06:07 2027", "2027-02-03T05:06:07.000Z"],
+      ["Thursday, 03-Feb-27 05:06:07 GMT", undefined],
+      ["1.5", undefined],
+      ["soon", undefined],
+    ] as const) {
+      const report = await testAdapter({
+        now,
+        fetch: vi.fn(
+          async () =>
+            new Response(null, {
+              status: 429,
+              headers: { "retry-after": value },
+            }),
+        ),
+      }).fetchQuota(OPTIONS);
+      expect(report.state.retryAfter).toBe(expected);
+    }
+    expect(normalizeRetryAfter("-1", NOW)).toBeUndefined();
+  });
+
+  it("maps local failures without exposing error text", async () => {
+    const consoleSpies = [
+      vi.spyOn(console, "log").mockImplementation(() => undefined),
+      vi.spyOn(console, "warn").mockImplementation(() => undefined),
+      vi.spyOn(console, "error").mockImplementation(() => undefined),
+    ];
+    try {
+      const sentinel = "SENTINEL-transport-secret-628159";
+      const network = await testAdapter({
+        fetch: vi.fn(async () => {
+          throw new Error(sentinel);
+        }),
+      }).fetchQuota(OPTIONS);
+      const tls = await testAdapter({
+        fetch: vi.fn(async () => {
+          throw { cause: { code: "CERT_SIGNATURE_FAILURE" }, sentinel };
+        }),
+      }).fetchQuota(OPTIONS);
+
+      expect(network.state.error).toBe("network_unavailable");
+      expect(tls.state.error).toBe("tls_failed");
+      expect(JSON.stringify([network, tls])).not.toContain(sentinel);
+      expect(consoleSpies.every((spy) => spy.mock.calls.length === 0)).toBe(
+        true,
+      );
+    } finally {
+      for (const spy of consoleSpies) spy.mockRestore();
+    }
+  });
+});
+
+describe("Kimi payload normalization", () => {
+  it("normalizes a principal weekly detail by itself", () => {
+    expect(normalizeKimiPayload({ usage: { limit: 250, used: 55 } })).toEqual({
+      windows: [
+        {
+          id: "weekly",
+          label: "week",
+          kind: "weekly",
+          percentUsed: 22,
+          percentRemaining: 78,
+        },
+      ],
+      diagnostics: [],
+    });
+  });
+
+  it.each([
+    [300, "TIME_UNIT_MINUTE"],
+    [18_000, "TIME_UNIT_SECOND"],
+    [5, "TIME_UNIT_HOUR"],
+  ])(
+    "identifies only an actual five-hour duration (%s %s)",
+    (duration, timeUnit) => {
+      const normalized = normalizeKimiPayload({
+        usage: { limit: 900, remaining: 603 },
+        limits: [
+          {
+            window: { duration, timeUnit },
+            detail: { limit: 72, used: 9 },
+          },
+        ],
+      });
+
+      expect(normalized.windows[1]).toMatchObject({
+        id: "five_hour",
+        label: "session",
+        kind: "session",
+        windowSeconds: 18_000,
+        percentUsed: 12.5,
+        percentRemaining: 87.5,
+      });
+    },
+  );
+
+  it("accepts finite JSON numbers and strict numeric strings", () => {
+    const normalized = normalizeKimiPayload({
+      usage: { limit: " 8.0e2\n", used: 136 },
+      limits: [
+        {
+          window: {
+            duration: "5e0",
+            timeUnit: "TIME_UNIT_HOUR",
+          },
+          detail: { limit: "64", remaining: "48.0" },
+        },
+      ],
+    });
+    expect(normalized.windows.map((window) => window.percentUsed)).toEqual([
+      17, 25,
+    ]);
+  });
+
+  it("derives used from remaining and gives explicit used precedence", () => {
+    const remainingOnly = normalizeKimiPayload({
+      usage: { limit: 700, remaining: 511 },
+    }).windows[0];
+    const inconsistent = normalizeKimiPayload({
+      usage: { limit: 700, used: 119, remaining: 1 },
+    }).windows[0];
+
+    expect(remainingOnly.percentUsed).toBe(27);
+    expect(inconsistent.percentUsed).toBe(17);
+  });
+
+  it("clamps percentages and derives the complement from the normalized used value", () => {
+    const above = normalizeKimiPayload({
+      usage: { limit: 40, used: 73 },
+    }).windows[0];
+    const below = normalizeKimiPayload({
+      usage: { limit: 40, remaining: 99 },
+    }).windows[0];
+
+    expect([above.percentUsed, above.percentRemaining]).toEqual([100, 0]);
+    expect([below.percentUsed, below.percentRemaining]).toEqual([0, 100]);
+  });
+
+  it.each([
+    [{ used: 1 }, "missing limit"],
+    [{ limit: 0, used: 0 }, "zero limit"],
+    [{ limit: -8, used: 1 }, "negative limit"],
+    [{ limit: "Infinity", used: 1 }, "nonfinite text"],
+    [{ limit: "0x40", used: 1 }, "hex text"],
+    [{ limit: "01", used: 1 }, "leading zero text"],
+    [{ limit: 40, used: -1 }, "negative used"],
+    [{ limit: 40, used: true }, "boolean used"],
+    [{ limit: 40, used: [] }, "array used"],
+  ])("rejects invalid principal numeric fields: %s", (detail) => {
+    expect(() => normalizeKimiPayload({ usage: detail })).toThrow(
+      "schema_invalid",
+    );
+  });
+
+  it("uses the first valid reset alias and normalizes offsets and long fractions", () => {
+    const aliases = ["resetTime", "resetAt", "reset_time", "reset_at"];
+    for (const alias of aliases) {
+      const normalized = normalizeKimiPayload({
+        usage: {
+          limit: 90,
+          used: 18,
+          [alias]: "2027-04-05T18:07:08.987654321+02:30",
+        },
+      });
+      expect(normalized.windows[0].resetsAt).toBe("2027-04-05T15:37:08.987Z");
+    }
+
+    const fallback = normalizeKimiPayload({
+      usage: {
+        limit: 90,
+        used: 18,
+        resetTime: "not-a-time",
+        resetAt: "2027-04-05T18:07:08Z",
+      },
+    });
+    expect(fallback.windows[0].resetsAt).toBe("2027-04-05T18:07:08.000Z");
+    expect(
+      normalizeKimiPayload({
+        usage: { limit: 90, used: 18, resetTime: "2027-02-30T00:00:00Z" },
+      }).windows[0].resetsAt,
+    ).toBeUndefined();
+  });
+
+  it("treats omitted, null, and empty limits as empty and diagnoses non-arrays", () => {
+    for (const limits of [undefined, null, []]) {
+      const payload: Record<string, unknown> = {
+        usage: { limit: 44, used: 11 },
+      };
+      if (limits !== undefined) payload.limits = limits;
+      const normalized = normalizeKimiPayload(payload);
+      expect(normalized.windows).toHaveLength(1);
+      expect(normalized.diagnostics).toEqual([]);
+    }
+
+    const invalid = normalizeKimiPayload({
+      usage: { limit: 44, used: 11 },
+      limits: { future: true },
+    });
+    expect(invalid.windows).toHaveLength(1);
+    expect(invalid.diagnostics).toEqual([{ code: "limits_invalid" }]);
+  });
+
+  it("preserves wire order for unknown limits, malformed entries, and duplicate five-hour entries", () => {
+    const normalized = normalizeKimiPayload({
+      usage: { limit: 100, used: 29, futureField: "ignored" },
+      limits: [
+        {
+          window: { duration: 5, timeUnit: "TIME_UNIT_HOUR" },
+          detail: { limit: 50, used: 5 },
+          extra: { ignored: true },
+        },
+        { detail: { limit: 0, used: 0 } },
+        {
+          window: { duration: 5, timeUnit: "TIME_UNIT_FORTNIGHT" },
+          detail: { limit: 50, used: 10 },
+        },
+        {
+          window: { duration: 18_000, timeUnit: "TIME_UNIT_SECOND" },
+          detail: { limit: 50, used: 15 },
+        },
+      ],
+    });
+
+    expect(normalized.windows.map(({ id }) => id)).toEqual([
+      "weekly",
+      "five_hour",
+      "limit:3",
+      "limit:4",
+    ]);
+    expect(normalized.windows[2].windowSeconds).toBeUndefined();
+    expect(normalized.windows[3]).toMatchObject({
+      kind: "unknown",
+      label: "limit 4",
+      windowSeconds: 18_000,
+    });
+    expect(normalized.diagnostics).toEqual([
+      { code: "detail_invalid", index: 2 },
+    ]);
+  });
+
+  it("skips only invalid additional details", () => {
+    const normalized = normalizeKimiPayload({
+      usage: { limit: 120, used: 24 },
+      limits: [
+        null,
+        { detail: { limit: "NaN", used: 1 } },
+        { detail: { limit: 30, remaining: 21 } },
+      ],
+    });
+    expect(normalized.windows.map(({ id }) => id)).toEqual([
+      "weekly",
+      "limit:3",
+    ]);
+    expect(normalized.diagnostics).toEqual([
+      { code: "detail_invalid", index: 1 },
+      { code: "detail_invalid", index: 2 },
+    ]);
+  });
+
+  it("never projects account, plan, monthly, extra-usage, or model fields", () => {
+    const normalized = normalizeKimiPayload({
+      account: { email: "private@example.invalid" },
+      plan: "private-plan",
+      monthly: { limit: 1, used: 1 },
+      extraUsage: { limit: 1, used: 1 },
+      models: [{ name: "private-model" }],
+      usage: { limit: 70, used: 7 },
+    });
+    const serialized = JSON.stringify(normalized);
+    for (const prohibited of [
+      "private@example.invalid",
+      "private-plan",
+      "monthly",
+      "extraUsage",
+      "private-model",
+    ]) {
+      expect(serialized).not.toContain(prohibited);
+    }
+  });
+});
+
+describe("Kimi credential outcomes and cache policy", () => {
+  it.each([
+    ["missing", "kimi_credential_unavailable"],
+    ["unsupported", "unsupported_credential_type"],
+  ] as const)(
+    "makes no request for %s credentials and retires cache",
+    async (status, code) => {
+      const request = vi.fn();
+      const remove = vi.fn();
+      const report = await testAdapter({
+        broker: broker({ status }),
+        fetch: request,
+        deleteCachedProvider: remove,
+        readCachedProvider: () => cachedQuota(),
+      }).fetchQuota(OPTIONS);
+
+      expect(request).not.toHaveBeenCalled();
+      expect(remove).toHaveBeenCalledWith("kimi");
+      expect(report.state).toMatchObject({
+        status: "auth_required",
+        stale: false,
+        error: code,
+      });
+      expect(report.windows).toEqual([]);
+    },
+  );
+
+  it("uses eligible cached windows after an unexpected resolver failure", async () => {
+    const cached = cachedQuota();
+    const report = await testAdapter({
+      broker: broker({ status: "error" }),
+      readCachedProvider: () => cached,
+    }).fetchQuota(OPTIONS);
+
+    expect(report).toMatchObject({
+      source: "cache",
+      windows: cached.windows,
+      state: {
+        status: "stale",
+        stale: true,
+        error: "credential_resolution_failed",
+        refreshedAt: cached.state.refreshedAt,
+        sourcesTried: ["pi:kimi-coding", "cache"],
+      },
+    });
+  });
+
+  it("uses stale cache for transient HTTP and parser failures", async () => {
+    for (const response of [
+      new Response(null, { status: 408 }),
+      new Response(null, { status: 502 }),
+      new Response("broken", {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+      jsonResponse({ usage: { limit: 0, used: 0 } }),
+    ]) {
+      const report = await testAdapter({
+        fetch: vi.fn(async () => response),
+        readCachedProvider: () => cachedQuota(),
+      }).fetchQuota(OPTIONS);
+      expect(report.state.status).toBe("stale");
+      expect(report.source).toBe("cache");
+    }
+  });
+
+  it("preserves Retry-After on a stale rate-limited report", async () => {
+    const report = await testAdapter({
+      fetch: vi.fn(
+        async () =>
+          new Response(null, {
+            status: 429,
+            headers: { "retry-after": "120" },
+          }),
+      ),
+      readCachedProvider: () => cachedQuota(),
+    }).fetchQuota(OPTIONS);
+
+    expect(report.state).toMatchObject({
+      status: "stale",
+      error: "provider_rate_limited",
+      retryAfter: "2027-02-03T04:07:06.000Z",
+    });
+  });
+
+  it("drops passed reset windows but preserves other eligible windows", async () => {
+    const cached = cachedQuota([
+      quotaWindow("five_hour", "session", "2027-02-03T04:05:06.000Z"),
+      quotaWindow("weekly", "weekly", "2027-02-04T04:05:06.000Z"),
+      quotaWindow("limit:3", "unknown", "2027-02-03T04:05:05.999Z"),
+    ]);
+    const report = await transientWithCache(cached);
+
+    expect(report.windows.map(({ id }) => id)).toEqual(["weekly"]);
+  });
+
+  it("expires no-reset session and weekly windows at their exact age limits", async () => {
+    const windows = [
+      quotaWindow("five_hour", "session"),
+      quotaWindow("weekly", "weekly"),
+      quotaWindow("limit:2", "unknown"),
+    ];
+    const justBeforeFiveHours = await transientWithCache(
+      cachedQuota(windows, NOW - 18_000_000 + 1),
+    );
+    expect(justBeforeFiveHours.windows.map(({ id }) => id)).toEqual([
+      "five_hour",
+      "weekly",
+      "limit:2",
+    ]);
+
+    const atFiveHours = await transientWithCache(
+      cachedQuota(windows, NOW - 18_000_000),
+    );
+    expect(atFiveHours.windows.map(({ id }) => id)).toEqual(["weekly"]);
+
+    const atSevenDays = await transientWithCache(
+      cachedQuota(windows, NOW - 7 * 24 * 60 * 60 * 1_000),
+    );
+    expect(atSevenDays.state.status).toBe("error");
+    expect(atSevenDays.windows).toEqual([]);
+  });
+
+  it("returns the current failure when no stale window survives", async () => {
+    const report = await transientWithCache(
+      cachedQuota(
+        [quotaWindow("weekly", "weekly", "2027-02-03T04:05:05.000Z")],
+        NOW - 1_000,
+      ),
+    );
+    expect(report).toMatchObject({
+      source: "unavailable",
+      windows: [],
+      state: { status: "error", stale: false, error: "provider_unavailable" },
+    });
+  });
+
+  it("retires cache after provider auth rejection", async () => {
+    const remove = vi.fn();
+    const report = await testAdapter({
+      fetch: vi.fn(async () => new Response(null, { status: 403 })),
+      deleteCachedProvider: remove,
+      readCachedProvider: () => cachedQuota(),
+    }).fetchQuota(OPTIONS);
+
+    expect(remove).toHaveBeenCalledWith("kimi");
+    expect(report.state.status).toBe("auth_required");
+    expect(report.source).toBe("unavailable");
+  });
+
+  it("does not use cache from an untrusted provenance", async () => {
+    const report = await testAdapter({
+      fetch: vi.fn(async () => new Response(null, { status: 503 })),
+      readCachedProvider: () => ({ ...cachedQuota(), source: "web" }),
+    }).fetchQuota(OPTIONS);
+    expect(report.state.status).toBe("error");
+    expect(report.source).toBe("unavailable");
+  });
+
+  it("reports auth availability without a path or credential", async () => {
+    for (const [inspection, expected] of [
+      ["available", { status: "available" }],
+      ["missing", { status: "missing" }],
+      [
+        "unsupported",
+        { status: "invalid", error: "unsupported_credential_type" },
+      ],
+      ["error", { status: "invalid", error: "credential_resolution_failed" }],
+    ] as const) {
+      const report = await testAdapter({
+        broker: broker({ status: "missing" }, inspection),
+      }).inspectAuth(OPTIONS);
+      expect(report).toEqual({
+        provider: "kimi",
+        sources: [{ source: "pi:kimi-coding", ...expected }],
+      });
+      expect(JSON.stringify(report)).not.toMatch(
+        /path|apiKey|token|fingerprint/i,
+      );
+    }
+  });
+
+  it("never exposes a sentinel credential through reports or attempts", async () => {
+    const sentinel = "KIMI-SENTINEL-DO-NOT-LEAK-938475";
+    const report = await testAdapter({
+      broker: broker({ status: "available", apiKey: sentinel }),
+      fetch: vi.fn(
+        async () =>
+          new Response(`provider body includes ${sentinel}`, { status: 500 }),
+      ),
+    }).fetchQuota(OPTIONS);
+
+    expect(JSON.stringify(report)).not.toContain(sentinel);
+    expect(report.attempts).toEqual([
+      {
+        source: "pi:kimi-coding",
+        status: "failed",
+        error: "provider_unavailable",
+      },
+    ]);
+  });
+});
+
+function testAdapter(
+  overrides: Parameters<typeof createKimiAdapter>[0] = {},
+): ProviderAdapter {
+  return createKimiAdapter({
+    broker: broker({
+      status: "available",
+      apiKey: "synthetic-kimi-key-741",
+    }),
+    fetch: vi.fn(async () =>
+      jsonResponse(SUCCESS_PAYLOAD),
+    ) as unknown as typeof fetch,
+    readCachedProvider: () => undefined,
+    deleteCachedProvider: () => undefined,
+    now: () => NOW,
+    ...overrides,
+  });
+}
+
+function broker(
+  resolution: KimiCredentialResolution,
+  inspection: KimiCredentialInspection = resolution.status === "available"
+    ? "available"
+    : resolution.status,
+): KimiCredentialBroker {
+  return {
+    resolve: vi.fn(async () => resolution),
+    inspect: vi.fn(async () => inspection),
+  };
+}
+
+function jsonResponse(payload: unknown): Response {
+  return new Response(JSON.stringify(payload), {
+    status: 200,
+    headers: { "content-type": "application/json; charset=utf-8" },
+  });
+}
+
+function cachedQuota(
+  windows: QuotaWindow[] = [
+    quotaWindow("five_hour", "session", "2027-02-03T09:05:06.000Z"),
+    quotaWindow("weekly", "weekly", "2027-02-08T04:05:06.000Z"),
+  ],
+  refreshedAt = NOW - 60_000,
+): ProviderQuota {
+  return {
+    provider: "kimi",
+    label: "Kimi",
+    source: "api",
+    windows,
+    state: {
+      status: "fresh",
+      stale: false,
+      refreshedAt: new Date(refreshedAt).toISOString(),
+      sourcesTried: ["pi:kimi-coding"],
+    },
+  };
+}
+
+function quotaWindow(
+  id: string,
+  kind: QuotaWindow["kind"],
+  resetsAt?: string,
+): QuotaWindow {
+  return {
+    id,
+    label: id,
+    kind,
+    percentUsed: 31.25,
+    percentRemaining: 68.75,
+    ...(resetsAt ? { resetsAt } : {}),
+  };
+}
+
+async function transientWithCache(
+  cached: ProviderQuota,
+): Promise<ProviderQuota> {
+  return testAdapter({
+    fetch: vi.fn(async () => new Response(null, { status: 503 })),
+    readCachedProvider: () => cached,
+  }).fetchQuota(OPTIONS);
+}

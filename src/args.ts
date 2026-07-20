@@ -74,7 +74,7 @@ function parseProviderScope(value: string | undefined): ProviderId[] {
     throw new AxiError(
       error instanceof Error ? error.message : "unsupported provider",
       "VALIDATION_ERROR",
-      ["Supported providers: claude, codex, cursor, copilot, grok"],
+      ["Supported providers: claude, codex, cursor, copilot, grok, kimi"],
     );
   }
 }

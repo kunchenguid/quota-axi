@@ -17,6 +17,7 @@ const originalCodexProvider = PROVIDERS.codex;
 const originalCursorProvider = PROVIDERS.cursor;
 const originalCopilotProvider = PROVIDERS.copilot;
 const originalGrokProvider = PROVIDERS.grok;
+const originalKimiProvider = PROVIDERS.kimi;
 const originalXdgCacheHome = process.env.XDG_CACHE_HOME;
 let tempDir: string | undefined;
 
@@ -26,6 +27,7 @@ afterEach(() => {
   PROVIDERS.cursor = originalCursorProvider;
   PROVIDERS.copilot = originalCopilotProvider;
   PROVIDERS.grok = originalGrokProvider;
+  PROVIDERS.kimi = originalKimiProvider;
   if (originalXdgCacheHome === undefined) delete process.env.XDG_CACHE_HOME;
   else process.env.XDG_CACHE_HOME = originalXdgCacheHome;
   if (tempDir) rmSync(tempDir, { recursive: true, force: true });
@@ -41,16 +43,15 @@ describe("CLI flag parsing", () => {
       "cursor",
       "copilot",
       "grok",
+      "kimi",
     ]);
   });
 
   it("scopes comma-separated providers", () => {
     expect(parseFlags(["--provider", "claude"]).providers).toEqual(["claude"]);
-    expect(parseFlags(["--provider=cursor,copilot,grok"]).providers).toEqual([
-      "cursor",
-      "copilot",
-      "grok",
-    ]);
+    expect(
+      parseFlags(["--provider=cursor,copilot,grok,kimi"]).providers,
+    ).toEqual(["cursor", "copilot", "grok", "kimi"]);
   });
 
   it("ignores a standalone argument separator", () => {
@@ -63,7 +64,7 @@ describe("CLI flag parsing", () => {
   it("collects the boolean flags", () => {
     expect(parseFlags(["--json", "--full", "--allow-keychain-prompt"])).toEqual(
       {
-        providers: ["claude", "codex", "cursor", "copilot", "grok"],
+        providers: ["claude", "codex", "cursor", "copilot", "grok", "kimi"],
         json: true,
         full: true,
         allowKeychainPrompt: true,
@@ -350,6 +351,36 @@ describe("CLI quota rendering", () => {
         .reason,
     ).toBeUndefined();
   });
+
+  it("renders Kimi remaining quota in compact TOON and normalized JSON", async () => {
+    useTempCache();
+    PROVIDERS.kimi = providerWithQuota(freshKimiQuota());
+
+    const toon = await capture(["--provider", "kimi"]);
+    expect(toon).toContain("kimi,unknown,api,fresh");
+    expect(toon).toContain(
+      'kimi,five_hour,session,81.25,"2027-02-03T09:05:06.000Z",fresh',
+    );
+    expect(toon).toContain(
+      'kimi,weekly,week,67.5,"2027-02-08T04:05:06.000Z",fresh',
+    );
+    expect(toon).not.toContain("synthetic-kimi-key");
+
+    const json = JSON.parse(
+      await capture(["--provider", "kimi", "--json"]),
+    ) as QuotaAxiResponse;
+    expect(json.providers).toEqual([
+      expect.objectContaining({
+        provider: "kimi",
+        label: "Kimi",
+        source: "api",
+        windows: freshKimiQuota().windows,
+        state: expect.objectContaining({ status: "fresh", stale: false }),
+      }),
+    ]);
+    expect(json.providers[0].account).toBeUndefined();
+    expect(json.providers[0].attempts).toBeUndefined();
+  });
 });
 
 describe("CLI plumbing via the axi SDK", () => {
@@ -379,6 +410,7 @@ describe("CLI plumbing via the axi SDK", () => {
     PROVIDERS.cursor = providerWithAuth("cursor", "Cursor");
     PROVIDERS.copilot = providerWithAuth("copilot", "GitHub Copilot");
     PROVIDERS.grok = providerWithAuth("grok", "Grok");
+    PROVIDERS.kimi = providerWithAuth("kimi", "Kimi");
 
     const output = await capture(["--allow-keychain-prompt", "auth"]);
     expect(output).toContain(
@@ -533,6 +565,40 @@ function staleClaudeQuota(): ProviderQuota {
         credentialPresent: true,
       },
     ],
+  };
+}
+
+function freshKimiQuota(): ProviderQuota {
+  return {
+    provider: "kimi",
+    label: "Kimi",
+    source: "api",
+    windows: [
+      {
+        id: "weekly",
+        label: "week",
+        kind: "weekly",
+        percentUsed: 32.5,
+        percentRemaining: 67.5,
+        resetsAt: "2027-02-08T04:05:06.000Z",
+      },
+      {
+        id: "five_hour",
+        label: "session",
+        kind: "session",
+        percentUsed: 18.75,
+        percentRemaining: 81.25,
+        resetsAt: "2027-02-03T09:05:06.000Z",
+        windowSeconds: 18_000,
+      },
+    ],
+    state: {
+      status: "fresh",
+      stale: false,
+      refreshedAt: "2027-02-03T04:05:06.000Z",
+      sourcesTried: ["pi:kimi-coding"],
+    },
+    attempts: [{ source: "pi:kimi-coding", status: "success" }],
   };
 }
 

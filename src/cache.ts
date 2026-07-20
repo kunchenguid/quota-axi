@@ -69,11 +69,24 @@ export function writeCachedProviders(providers: ProviderQuota[]): void {
     byProvider.get(provider),
   ).filter((provider): provider is ProviderQuota => Boolean(provider));
 
+  writeCacheFile(file, merged);
+}
+
+export function deleteCachedProvider(provider: ProviderId): void {
+  const existing = readCacheProviders();
+  if (!existing.some((item) => item.provider === provider)) return;
+  writeCacheFile(
+    cacheFilePath(),
+    existing.filter((item) => item.provider !== provider),
+  );
+}
+
+function writeCacheFile(file: string, providers: ProviderQuota[]): void {
   ensurePrivateParent(file);
   const temp = `${file}.${process.pid}.tmp`;
   writeFileSync(
     temp,
-    `${JSON.stringify({ generatedAt: new Date().toISOString(), schemaVersion: 1, providers: merged }, null, 2)}\n`,
+    `${JSON.stringify({ generatedAt: new Date().toISOString(), schemaVersion: 1, providers }, null, 2)}\n`,
     { mode: 0o600 },
   );
   chmodSync(temp, 0o600);

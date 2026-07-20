@@ -3,7 +3,7 @@ import { DESCRIPTION, TOP_HELP } from "./cli.js";
 // Trigger string Claude Code (and other agents) match against to auto-load the skill.
 // Kept terse and outcome-focused so it fires on "check quota/rate limits" intents.
 export const SKILL_DESCRIPTION =
-  "Report local Claude, Codex, Cursor, GitHub Copilot, and Grok quota windows via the quota-axi CLI - remaining " +
+  "Report local Claude, Codex, Cursor, GitHub Copilot, Grok, and Kimi quota windows via the quota-axi CLI - remaining " +
   "percentages, reset times, and provider status read from local auth sources, with no " +
   "routing, recommendation, or provider mutation. Use before deciding whether it is safe " +
   "to keep spending a provider's quota, when the user asks about usage, rate limits, or " +
@@ -22,6 +22,7 @@ export const HERMES_TAGS = [
   "cursor",
   "copilot",
   "grok",
+  "kimi",
   "cli",
 ];
 export const HERMES_CATEGORY = "observability";
@@ -59,7 +60,7 @@ You do not need quota-axi installed globally - invoke it with \`npx -y quota-axi
 quota-axi is data only: it never routes, recommends, proxies, intercepts, logs in, imports
 browser cookies, or mutates provider state. It reads local provider auth sources and calls
 first-party provider quota, usage, billing, or entitlement endpoints; it never launches the
-Claude CLI, so it cannot spend the quota it measures.
+Claude, Grok, Pi, or Kimi CLIs, so it cannot spend the quota it measures.
 
 ## When to use
 
@@ -70,7 +71,7 @@ or when comparing supported local provider headroom side by side.
 ## Workflow
 
 1. Run \`npx -y quota-axi\` for compact TOON output covering supported providers' quota windows.
-2. Scope to one provider with \`--provider claude\` or to a subset with \`--provider cursor,copilot,grok\`.
+2. Scope to one provider with \`--provider claude\` or to a subset with \`--provider cursor,copilot,grok,kimi\`.
 3. Pass \`--json\` for the normalized machine-readable model instead of TOON.
 4. Pass \`--full\` to include account identity and per-source attempt details.
 5. Run \`npx -y quota-axi auth\` to check local auth-source availability without printing
