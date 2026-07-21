@@ -1,3 +1,7 @@
+import type { Credential, CredentialStore } from "@earendil-works/pi-ai";
+import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
+
 const PI_PROVIDER_ID = "kimi-coding";
 
 export type KimiCredentialResolution =
@@ -86,11 +90,39 @@ async function loadPiRuntime(): Promise<PiModelRuntime> {
   const credentials = new InMemoryCredentialStore();
   const storedCredential = readStoredCredential(PI_PROVIDER_ID);
   if (storedCredential !== undefined) {
-    await credentials.modify(PI_PROVIDER_ID, async () => storedCredential);
+    const { AuthStorage } = await loadPiAuthStorage();
+    return ModelRuntime.create({
+      credentials: AuthStorage.inMemory({
+        [PI_PROVIDER_ID]: storedCredential,
+      }),
+      allowModelNetwork: false,
+      modelsPath: null,
+    });
   }
   return ModelRuntime.create({
     credentials,
     allowModelNetwork: false,
     modelsPath: null,
   });
+}
+
+async function loadPiAuthStorage(): Promise<{
+  AuthStorage: {
+    inMemory(data: Record<string, Credential>): CredentialStore;
+  };
+}> {
+  const entryUrl =
+    typeof import.meta.resolve === "function"
+      ? import.meta.resolve("@earendil-works/pi-coding-agent")
+      : pathToFileURL(
+          resolve(
+            "node_modules",
+            "@earendil-works",
+            "pi-coding-agent",
+            "dist",
+            "index.js",
+          ),
+        ).href;
+  const moduleUrl = new URL("./core/auth-storage.js", entryUrl);
+  return import(/* @vite-ignore */ moduleUrl.href);
 }

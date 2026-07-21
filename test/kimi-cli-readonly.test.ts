@@ -3,6 +3,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -144,6 +145,66 @@ globalThis.fetch = async (input, init) => {
       ],
     });
   });
+
+  it("resolves a Pi environment reference without exposing credential data", () => {
+    const fixture = isolatedFixture();
+    const authPath = join(fixture.home, ".pi", "agent", "auth.json");
+    mkdirSync(dirname(authPath), { recursive: true, mode: 0o700 });
+    writeFileSync(
+      authPath,
+      JSON.stringify({
+        "kimi-coding": { type: "api_key", key: "$KIMI_API_KEY" },
+      }),
+      { mode: 0o600 },
+    );
+    const preload = join(fixture.root, "mock-pi-reference-fetch.mjs");
+    writeFileSync(
+      preload,
+      `globalThis.fetch = async (input, init) => {
+  if (String(input) !== "https://api.kimi.com/coding/v1/usages") {
+    throw new Error("Unexpected Kimi request origin");
+  }
+  if (new Headers(init?.headers).get("authorization") !== "Bearer pi-reference-fixture-key-628") {
+    throw new Error("Pi reference was not resolved at request time");
+  }
+  return new Response(JSON.stringify({
+    usage: { limit: 100, used: 15, resetTime: "2099-01-08T00:00:00Z" },
+  }), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+};
+`,
+      { mode: 0o600 },
+    );
+    const before = readFileSync(authPath, "utf8");
+
+    const result = runCli(
+      fixture,
+      ["--provider", "kimi", "--json", "--full"],
+      preload,
+      { KIMI_API_KEY: "pi-reference-fixture-key-628" },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).not.toContain("pi-reference-fixture-key-628");
+    expect(result.stdout).not.toContain("$KIMI_API_KEY");
+    expect(readFileSync(authPath, "utf8")).toBe(before);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      providers: [
+        {
+          provider: "kimi",
+          source: "api",
+          windows: [{ id: "weekly", percentRemaining: 85 }],
+          state: {
+            status: "fresh",
+            sourcesTried: ["pi:kimi-coding"],
+          },
+        },
+      ],
+    });
+  });
 });
 
 type IsolatedFixture = {
@@ -170,6 +231,7 @@ function runCli(
   fixture: IsolatedFixture,
   args: string[],
   preload?: string,
+  extraEnv: Record<string, string> = {},
 ): { status: number | null; stdout: string; stderr: string } {
   const imports = ["tsx", ...(preload ? [pathToFileURL(preload).href] : [])];
   const result = spawnSync(
@@ -187,6 +249,7 @@ function runCli(
         XDG_CACHE_HOME: fixture.cacheHome,
         KIMI_CODE_HOME: fixture.kimiCodeHome,
         PATH: process.env.PATH ?? "",
+        ...extraEnv,
       },
     },
   );
