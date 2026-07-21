@@ -1,3 +1,5 @@
+import { createServer, type Server } from "node:http";
+import type { AddressInfo, Socket } from "node:net";
 import { describe, expect, it, vi } from "vitest";
 import {
   createKimiAdapter,
@@ -226,6 +228,69 @@ describe("Kimi request transport", () => {
     }
   });
 
+  it.each([
+    [503, "application/json", "provider_unavailable"],
+    [200, "text/plain", "unexpected_content_type"],
+  ] as const)(
+    "awaits exactly one response cleanup for HTTP %i with %s",
+    async (status, contentType, expectedError) => {
+      let finishCleanup: (() => void) | undefined;
+      const cancel = vi.fn(
+        async () =>
+          new Promise<void>((resolve) => {
+            finishCleanup = resolve;
+          }),
+      );
+      const response = new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode("synthetic body"));
+          },
+          cancel,
+        }),
+        { status, headers: { "content-type": contentType } },
+      );
+      const reportPromise = testAdapter({
+        fetch: vi.fn(async () => response),
+      }).fetchQuota(OPTIONS);
+
+      await vi.waitFor(() => expect(cancel).toHaveBeenCalledOnce());
+      let settled = false;
+      void reportPromise.then(() => {
+        settled = true;
+      });
+      await Promise.resolve();
+      expect(settled).toBe(false);
+
+      finishCleanup?.();
+      const report = await reportPromise;
+
+      expect(report.state.error).toBe(expectedError);
+      expect(cancel).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each([
+    [503, "application/json", "provider_unavailable"],
+    [200, "text/plain", "unexpected_content_type"],
+  ] as const)(
+    "closes a loopback streaming response and socket for HTTP %i with %s",
+    async (status, contentType, expectedError) => {
+      const fixture = await streamingServer(status, contentType);
+      try {
+        const report = await testAdapter({
+          fetch: fixture.transport,
+        }).fetchQuota(OPTIONS);
+
+        expect(report.state.error).toBe(expectedError);
+        await settlesWithin(fixture.responseClosed, "response close");
+        await settlesWithin(fixture.socketClosed, "request socket close");
+      } finally {
+        await fixture.close();
+      }
+    },
+  );
+
   it("enforces the total deadline while credential resolution is pending", async () => {
     const request = vi.fn();
     const broker: KimiCredentialBroker = {
@@ -254,6 +319,29 @@ describe("Kimi request transport", () => {
       deadlineMs: 5,
     }).fetchQuota(OPTIONS);
 
+    expect(report.state.error).toBe("request_timeout");
+  });
+
+  it("propagates deadline cancellation to the transport signal", async () => {
+    let transportAborted = false;
+    const report = await testAdapter({
+      fetch: vi.fn(
+        async (_input: RequestInfo | URL, init?: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener(
+              "abort",
+              () => {
+                transportAborted = true;
+                reject(new DOMException("aborted", "AbortError"));
+              },
+              { once: true },
+            );
+          }),
+      ),
+      deadlineMs: 5,
+    }).fetchQuota(OPTIONS);
+
+    expect(transportAborted).toBe(true);
     expect(report.state.error).toBe("request_timeout");
   });
 
@@ -1041,4 +1129,97 @@ async function transientWithCache(
     fetch: vi.fn(async () => new Response(null, { status: 503 })),
     readCachedProvider: () => cached,
   }).fetchQuota(OPTIONS);
+}
+
+type StreamingServerFixture = {
+  transport: typeof globalThis.fetch;
+  responseClosed: Promise<void>;
+  socketClosed: Promise<void>;
+  close(): Promise<void>;
+};
+
+async function streamingServer(
+  status: number,
+  contentType: string,
+): Promise<StreamingServerFixture> {
+  const responseClose = deferred();
+  const socketClose = deferred();
+  const sockets = new Set<Socket>();
+  const server = createServer((_request, response) => {
+    response.once("close", responseClose.resolve);
+    response.socket?.once("close", socketClose.resolve);
+    response.writeHead(status, { "content-type": contentType });
+    response.write("synthetic streaming response");
+  });
+  server.on("connection", (socket) => {
+    sockets.add(socket);
+    socket.once("close", () => {
+      sockets.delete(socket);
+    });
+  });
+  await listen(server);
+  const address = server.address() as AddressInfo;
+  const loopbackUrl = `http://127.0.0.1:${address.port}/usage`;
+
+  return {
+    transport: async (input, init) => {
+      expect(String(input)).toBe("https://api.kimi.com/coding/v1/usages");
+      expect(init).toMatchObject({
+        method: "GET",
+        redirect: "manual",
+        credentials: "omit",
+      });
+      return globalThis.fetch(loopbackUrl, init);
+    },
+    responseClosed: responseClose.promise,
+    socketClosed: socketClose.promise,
+    async close() {
+      server.closeAllConnections();
+      if (!server.listening) return;
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => {
+          if (error) reject(error);
+          else resolve();
+        });
+      });
+    },
+  };
+}
+
+function deferred(): { promise: Promise<void>; resolve(): void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
+async function listen(server: Server): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+}
+
+async function settlesWithin(
+  promise: Promise<void>,
+  description: string,
+): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`${description} did not settle`)),
+          2_000,
+        );
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
