@@ -71,6 +71,11 @@ type NormalizedDetail = {
   resetsAt?: string;
 };
 
+type ResponseBodyLifetime = {
+  markConsumed(): void;
+  cancel(action?: () => Promise<unknown> | undefined): Promise<void>;
+};
+
 export function createKimiAdapter(
   overrides: Partial<KimiDependencies> = {},
 ): ProviderAdapter {
@@ -468,40 +473,46 @@ async function requestKimiQuota(
     });
   }
 
-  const receivedAt = now();
-  rejectHttpFailure(response, receivedAt);
-  const mediaType = response.headers
-    .get("content-type")
-    ?.split(";", 1)[0]
-    ?.trim()
-    .toLowerCase();
-  if (mediaType !== "application/json") {
-    throw new KimiFailure("unexpected_content_type", {
-      staleEligible: true,
-    });
-  }
-
-  let bytes: Uint8Array;
+  const lifetime = createResponseBodyLifetime(response);
   try {
-    bytes = await readBoundedBody(response, signal);
-  } catch (error) {
-    if (error instanceof KimiFailure) throw error;
-    if (signal.aborted || isAbortError(error)) {
-      throw new KimiFailure("request_timeout", { staleEligible: true });
+    const receivedAt = now();
+    rejectHttpFailure(response, receivedAt);
+    const mediaType = response.headers
+      .get("content-type")
+      ?.split(";", 1)[0]
+      ?.trim()
+      .toLowerCase();
+    if (mediaType !== "application/json") {
+      throw new KimiFailure("unexpected_content_type", {
+        staleEligible: true,
+      });
     }
-    throw new KimiFailure("network_unavailable", { staleEligible: true });
-  }
 
-  let text: string;
-  try {
-    text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-  } catch {
-    throw new KimiFailure("response_invalid_utf8", { staleEligible: true });
-  }
-  try {
-    return JSON.parse(text) as unknown;
-  } catch {
-    throw new KimiFailure("malformed_json", { staleEligible: true });
+    let bytes: Uint8Array;
+    try {
+      bytes = await readBoundedBody(response, signal, lifetime);
+      lifetime.markConsumed();
+    } catch (error) {
+      if (error instanceof KimiFailure) throw error;
+      if (signal.aborted || isAbortError(error)) {
+        throw new KimiFailure("request_timeout", { staleEligible: true });
+      }
+      throw new KimiFailure("network_unavailable", { staleEligible: true });
+    }
+
+    let text: string;
+    try {
+      text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    } catch {
+      throw new KimiFailure("response_invalid_utf8", { staleEligible: true });
+    }
+    try {
+      return JSON.parse(text) as unknown;
+    } catch {
+      throw new KimiFailure("malformed_json", { staleEligible: true });
+    }
+  } finally {
+    await lifetime.cancel();
   }
 }
 
@@ -539,11 +550,11 @@ function rejectHttpFailure(response: Response, receivedAt: number): void {
 async function readBoundedBody(
   response: Response,
   signal: AbortSignal,
+  lifetime: ResponseBodyLifetime,
 ): Promise<Uint8Array> {
   const declaredLength = response.headers.get("content-length")?.trim();
   if (declaredLength && /^\d+$/.test(declaredLength)) {
     if (BigInt(declaredLength) > BigInt(RESPONSE_LIMIT_BYTES)) {
-      void response.body?.cancel().catch(() => undefined);
       throw new KimiFailure("response_too_large", { staleEligible: true });
     }
   }
@@ -554,11 +565,10 @@ async function readBoundedBody(
   let length = 0;
   try {
     while (true) {
-      const { done, value } = await readBodyChunk(reader, signal);
+      const { done, value } = await readBodyChunk(reader, signal, lifetime);
       if (done) break;
       length += value.length;
       if (length > RESPONSE_LIMIT_BYTES) {
-        void reader.cancel().catch(() => undefined);
         throw new KimiFailure("response_too_large", { staleEligible: true });
       }
       chunks.push(value);
@@ -576,33 +586,57 @@ async function readBoundedBody(
   return bytes;
 }
 
-function readBodyChunk(
+async function readBodyChunk(
   reader: ReadableStreamDefaultReader<Uint8Array>,
   signal: AbortSignal,
+  lifetime: ResponseBodyLifetime,
 ): Promise<ReadableStreamReadResult<Uint8Array>> {
+  const cancelReader = () => lifetime.cancel(() => reader.cancel());
   if (signal.aborted) {
-    void reader.cancel().catch(() => undefined);
-    return Promise.reject(
-      new KimiFailure("request_timeout", { staleEligible: true }),
-    );
+    await cancelReader();
+    throw new KimiFailure("request_timeout", { staleEligible: true });
   }
   return new Promise((resolve, reject) => {
+    let aborted = false;
     const abort = () => {
-      void reader.cancel().catch(() => undefined);
-      reject(new KimiFailure("request_timeout", { staleEligible: true }));
+      aborted = true;
+      cancelReader().then(() => {
+        reject(new KimiFailure("request_timeout", { staleEligible: true }));
+      });
     };
     signal.addEventListener("abort", abort, { once: true });
     reader.read().then(
       (result) => {
+        if (aborted) return;
         signal.removeEventListener("abort", abort);
         resolve(result);
       },
       (error: unknown) => {
+        if (aborted) return;
         signal.removeEventListener("abort", abort);
         reject(error);
       },
     );
   });
+}
+
+function createResponseBodyLifetime(response: Response): ResponseBodyLifetime {
+  let consumed = false;
+  let cancellation: Promise<void> | undefined;
+
+  return {
+    markConsumed() {
+      if (!cancellation) consumed = true;
+    },
+    async cancel(action = () => response.body?.cancel()) {
+      if (consumed) return;
+      cancellation ??= Promise.resolve()
+        .then(action)
+        .then(() => undefined)
+        .catch(() => undefined);
+      await cancellation;
+    },
+  };
 }
 
 export function normalizeKimiPayload(payload: unknown): NormalizedKimiPayload {
