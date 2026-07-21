@@ -1,0 +1,12 @@
+Command: quota-axi --provider kimi --json --full
+Fixture: Pi $KIMI_API_KEY reference, ambient key, and synthetic Kimi CLI fallback
+Exit status: 0
+Provider status: fresh
+Sources tried: pi:kimi-coding -> kimi-code-cli
+Attempts: pi:kimi-coding skipped, kimi-code-cli success
+Weekly percent remaining: 75
+Reference handling: Pi environment reference rejected without resolution
+Ambient KIMI_API_KEY handling: ignored
+Fallback handling: official Kimi Code CLI token selected
+Secret redaction: ambient and fallback keys absent from CLI output
+Auth file unchanged: bytes=yes mode=600 mtime=yes
