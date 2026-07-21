@@ -1,8 +1,15 @@
-import type { Credential, CredentialStore } from "@earendil-works/pi-ai";
-import { resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import type { Credential } from "@earendil-works/pi-ai";
+import { execSync } from "node:child_process";
+import { closeSync, constants, fstatSync, openSync, readSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 
 const PI_PROVIDER_ID = "kimi-coding";
+const PI_AUTH_READ_LIMIT_BYTES = 1_048_576;
+const COMMAND_OUTPUT_LIMIT_BYTES = 16_384;
+const UNRESOLVED_CREDENTIAL = "\0";
+const ENV_REFERENCE = /^\$([A-Za-z_][A-Za-z0-9_]*)$/;
+const BRACED_ENV_REFERENCE = /^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$/;
 
 export type KimiCredentialResolution =
   | { status: "available"; apiKey: string }
@@ -28,7 +35,6 @@ type PiModelRuntime = {
       }
     | undefined
   >;
-  checkAuth(providerId: string): Promise<{ type: string } | undefined>;
 };
 
 type BrokerDependencies = {
@@ -47,8 +53,8 @@ export function createPiKimiCredentialBroker(
           return { status: "unsupported" };
         }
         const resolved = await runtime.getAuth(PI_PROVIDER_ID);
-        const apiKey = resolved?.auth.apiKey;
-        return typeof apiKey === "string" && apiKey.trim().length > 0
+        const apiKey = usableApiKey(resolved?.auth.apiKey);
+        return apiKey !== undefined
           ? { status: "available", apiKey }
           : { status: "missing" };
       } catch {
@@ -63,9 +69,10 @@ export function createPiKimiCredentialBroker(
         if (storedType !== undefined && storedType !== "api_key") {
           return "unsupported";
         }
-        return (await runtime.checkAuth(PI_PROVIDER_ID))
-          ? "available"
-          : "missing";
+        const resolved = await runtime.getAuth(PI_PROVIDER_ID);
+        return usableApiKey(resolved?.auth.apiKey) === undefined
+          ? "missing"
+          : "available";
       } catch {
         return "error";
       }
@@ -82,22 +89,14 @@ async function storedCredentialType(
 }
 
 async function loadPiRuntime(): Promise<PiModelRuntime> {
-  const [{ ModelRuntime, readStoredCredential }, { InMemoryCredentialStore }] =
-    await Promise.all([
-      import("@earendil-works/pi-coding-agent"),
-      import("@earendil-works/pi-ai"),
-    ]);
+  const [{ ModelRuntime }, { InMemoryCredentialStore }] = await Promise.all([
+    import("@earendil-works/pi-coding-agent"),
+    import("@earendil-works/pi-ai"),
+  ]);
   const credentials = new InMemoryCredentialStore();
-  const storedCredential = readStoredCredential(PI_PROVIDER_ID);
+  const storedCredential = readKimiCredential();
   if (storedCredential !== undefined) {
-    const { AuthStorage } = await loadPiAuthStorage();
-    return ModelRuntime.create({
-      credentials: AuthStorage.inMemory({
-        [PI_PROVIDER_ID]: storedCredential,
-      }),
-      allowModelNetwork: false,
-      modelsPath: null,
-    });
+    await credentials.modify(PI_PROVIDER_ID, async () => storedCredential);
   }
   return ModelRuntime.create({
     credentials,
@@ -106,23 +105,170 @@ async function loadPiRuntime(): Promise<PiModelRuntime> {
   });
 }
 
-async function loadPiAuthStorage(): Promise<{
-  AuthStorage: {
-    inMemory(data: Record<string, Credential>): CredentialStore;
-  };
-}> {
-  const entryUrl =
-    typeof import.meta.resolve === "function"
-      ? import.meta.resolve("@earendil-works/pi-coding-agent")
-      : pathToFileURL(
-          resolve(
-            "node_modules",
-            "@earendil-works",
-            "pi-coding-agent",
-            "dist",
-            "index.js",
-          ),
-        ).href;
-  const moduleUrl = new URL("./core/auth-storage.js", entryUrl);
-  return import(/* @vite-ignore */ moduleUrl.href);
+function readKimiCredential(): Credential | undefined {
+  const authPath = join(piAgentDirectory(), "auth.json");
+  let content: string | undefined;
+  try {
+    content = readBoundedUtf8File(authPath);
+  } catch {
+    return blockedCredential();
+  }
+  if (content === undefined) return undefined;
+
+  let data: unknown;
+  try {
+    data = JSON.parse(content);
+  } catch {
+    return blockedCredential();
+  }
+  if (!isRecord(data)) return blockedCredential();
+  if (!Object.prototype.hasOwnProperty.call(data, PI_PROVIDER_ID)) {
+    return undefined;
+  }
+
+  const credential = data[PI_PROVIDER_ID];
+  if (!isRecord(credential) || typeof credential.type !== "string") {
+    return blockedCredential();
+  }
+  if (credential.type !== "api_key") {
+    return unsupportedCredential();
+  }
+  if (credential.key !== undefined && typeof credential.key !== "string") {
+    return blockedCredential();
+  }
+  const environment = credentialEnvironment(credential.env);
+  if (credential.env !== undefined && environment === undefined) {
+    return blockedCredential();
+  }
+  if (credential.key === undefined) {
+    return { type: "api_key", ...(environment ? { env: environment } : {}) };
+  }
+
+  const key = resolveCredentialValue(credential.key, environment);
+  return key === undefined
+    ? blockedCredential()
+    : {
+        type: "api_key",
+        key,
+        ...(environment ? { env: environment } : {}),
+      };
+}
+
+function readBoundedUtf8File(path: string): string | undefined {
+  let descriptor: number;
+  try {
+    descriptor = openSync(path, constants.O_RDONLY);
+  } catch (error) {
+    if (isNodeError(error) && error.code === "ENOENT") return undefined;
+    throw error;
+  }
+
+  try {
+    const metadata = fstatSync(descriptor);
+    if (!metadata.isFile() || metadata.size > PI_AUTH_READ_LIMIT_BYTES) {
+      throw new Error("auth_invalid");
+    }
+    const buffer = Buffer.allocUnsafe(PI_AUTH_READ_LIMIT_BYTES + 1);
+    let offset = 0;
+    while (offset < buffer.length) {
+      const bytesRead = readSync(
+        descriptor,
+        buffer,
+        offset,
+        buffer.length - offset,
+        null,
+      );
+      if (bytesRead === 0) break;
+      offset += bytesRead;
+    }
+    if (offset > PI_AUTH_READ_LIMIT_BYTES) throw new Error("auth_too_large");
+    return new TextDecoder("utf-8", { fatal: true }).decode(
+      buffer.subarray(0, offset),
+    );
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
+function resolveCredentialValue(
+  value: string,
+  environment: Record<string, string> | undefined,
+): string | undefined {
+  const envName =
+    ENV_REFERENCE.exec(value)?.[1] ?? BRACED_ENV_REFERENCE.exec(value)?.[1];
+  if (envName !== undefined) {
+    return usableApiKey(environment?.[envName] || process.env[envName]);
+  }
+  if (value.startsWith("!")) {
+    const command = value.slice(1).trim();
+    if (command.length === 0) return undefined;
+    try {
+      return usableApiKey(
+        execSync(command, {
+          encoding: "utf8",
+          maxBuffer: COMMAND_OUTPUT_LIMIT_BYTES,
+          stdio: ["ignore", "pipe", "ignore"],
+          timeout: 10_000,
+        }),
+      );
+    } catch {
+      return undefined;
+    }
+  }
+  if (value.includes("$")) return undefined;
+  return usableApiKey(value);
+}
+
+function usableApiKey(value: unknown): string | undefined {
+  if (
+    typeof value !== "string" ||
+    value === UNRESOLVED_CREDENTIAL ||
+    value.trim().length === 0 ||
+    value.startsWith("!") ||
+    value.includes("$") ||
+    /[\0-\x1f\x7f]/.test(value)
+  ) {
+    return undefined;
+  }
+  return value;
+}
+
+function credentialEnvironment(
+  value: unknown,
+): Record<string, string> | undefined {
+  if (value === undefined) return {};
+  if (!isRecord(value)) return undefined;
+  const entries = Object.entries(value);
+  if (entries.some(([, entry]) => typeof entry !== "string")) {
+    return undefined;
+  }
+  return Object.fromEntries(entries) as Record<string, string>;
+}
+
+function piAgentDirectory(): string {
+  const configured = process.env.PI_CODING_AGENT_DIR;
+  if (configured === undefined || configured.length === 0) {
+    return join(homedir(), ".pi", "agent");
+  }
+  if (configured === "~") return homedir();
+  if (configured.startsWith("~/")) {
+    return join(homedir(), configured.slice(2));
+  }
+  return configured;
+}
+
+function blockedCredential(): Credential {
+  return { type: "api_key", key: UNRESOLVED_CREDENTIAL };
+}
+
+function unsupportedCredential(): Credential {
+  return { type: "oauth", access: "", refresh: "", expires: 0 };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isNodeError(error: unknown): error is NodeJS.ErrnoException {
+  return error instanceof Error;
 }

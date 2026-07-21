@@ -205,6 +205,90 @@ globalThis.fetch = async (input, init) => {
       ],
     });
   });
+
+  it("falls back to Kimi Code CLI for an unresolved Pi reference", () => {
+    const fixture = isolatedFixture();
+    const authPath = join(fixture.home, ".pi", "agent", "auth.json");
+    mkdirSync(dirname(authPath), { recursive: true, mode: 0o700 });
+    writeFileSync(
+      authPath,
+      JSON.stringify({
+        "kimi-coding": {
+          type: "api_key",
+          key: "$MISSING_PI_KIMI_REFERENCE_462",
+        },
+      }),
+      { mode: 0o600 },
+    );
+    const credentialPath = join(
+      fixture.kimiCodeHome,
+      "credentials",
+      "kimi-code.json",
+    );
+    mkdirSync(dirname(credentialPath), { recursive: true, mode: 0o700 });
+    writeFileSync(
+      credentialPath,
+      JSON.stringify({
+        access_token: "fallback-cli-token-714",
+        refresh_token: "ignored-fallback-refresh-221",
+        expires_at: 4_102_444_800,
+      }),
+      { mode: 0o600 },
+    );
+    const preload = join(fixture.root, "mock-unresolved-reference-fetch.mjs");
+    writeFileSync(
+      preload,
+      `globalThis.fetch = async (input, init) => {
+  if (String(input) !== "https://api.kimi.com/coding/v1/usages") {
+    throw new Error("Unexpected Kimi request origin");
+  }
+  if (new Headers(init?.headers).get("authorization") !== "Bearer fallback-cli-token-714") {
+    throw new Error("Unresolved Pi reference did not fall back safely");
+  }
+  return new Response(JSON.stringify({
+    usage: { limit: 100, used: 10, resetTime: "2099-01-08T00:00:00Z" },
+  }), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+};
+`,
+      { mode: 0o600 },
+    );
+    const before = readFileSync(authPath, "utf8");
+
+    const result = runCli(
+      fixture,
+      ["--provider", "kimi", "--json", "--full"],
+      preload,
+      { KIMI_API_KEY: "ambient-key-must-not-win-558" },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).not.toContain("MISSING_PI_KIMI_REFERENCE_462");
+    expect(result.stdout).not.toContain("fallback-cli-token-714");
+    expect(result.stdout).not.toContain("ignored-fallback-refresh-221");
+    expect(result.stdout).not.toContain("ambient-key-must-not-win-558");
+    expect(readFileSync(authPath, "utf8")).toBe(before);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      providers: [
+        {
+          provider: "kimi",
+          source: "api",
+          windows: [{ id: "weekly", percentRemaining: 90 }],
+          state: {
+            status: "fresh",
+            sourcesTried: ["pi:kimi-coding", "kimi-code-cli"],
+          },
+          attempts: [
+            { source: "pi:kimi-coding", status: "skipped" },
+            { source: "kimi-code-cli", status: "success" },
+          ],
+        },
+      ],
+    });
+  });
 });
 
 type IsolatedFixture = {

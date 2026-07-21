@@ -93,7 +93,38 @@ describe("Pi Kimi credential broker", () => {
     expect(readdirSync(dirname(authPath))).toEqual(["auth.json"]);
   });
 
-  it("resolves a stored environment reference through Pi without exposing the reference", async () => {
+  it("does not resolve credentials for unrelated Pi providers", async () => {
+    const home = temporaryDirectory();
+    const markerPath = join(home, "unrelated-command-ran");
+    const authPath = join(home, ".pi", "agent", "auth.json");
+    mkdirSync(dirname(authPath), { recursive: true, mode: 0o700 });
+    writeFileSync(
+      authPath,
+      JSON.stringify({
+        unrelated: {
+          type: "api_key",
+          key: `!${JSON.stringify(process.execPath)} -e ${JSON.stringify(
+            `require("node:fs").writeFileSync(${JSON.stringify(markerPath)}, "bad")`,
+          )}`,
+        },
+        "kimi-coding": {
+          type: "api_key",
+          key: "exact-provider-fixture-key-615",
+        },
+      }),
+      { mode: 0o600 },
+    );
+    process.env.HOME = home;
+    process.env.PI_CODING_AGENT_DIR = dirname(authPath);
+
+    await expect(createPiKimiCredentialBroker().resolve()).resolves.toEqual({
+      status: "available",
+      apiKey: "exact-provider-fixture-key-615",
+    });
+    expect(() => statSync(markerPath)).toThrow();
+  });
+
+  it("resolves a stored environment reference without exposing the reference", async () => {
     const fixture = piAuthFixture("$KIMI_API_KEY");
     process.env.KIMI_API_KEY = "environment-reference-fixture-key-742";
     const broker = createPiKimiCredentialBroker();
@@ -123,7 +154,16 @@ describe("Pi Kimi credential broker", () => {
     expectPiAuthUnchanged(fixture);
   });
 
-  it("resolves a supported stored command reference through Pi", async () => {
+  it("rejects an environment value that is still a reference", async () => {
+    const fixture = piAuthFixture("$KIMI_API_KEY");
+    process.env.KIMI_API_KEY = "$STILL_UNRESOLVED_KIMI_KEY";
+    const broker = createPiKimiCredentialBroker();
+
+    await expect(broker.resolve()).resolves.toEqual({ status: "missing" });
+    expectPiAuthUnchanged(fixture);
+  });
+
+  it("resolves a supported stored command reference", async () => {
     const home = temporaryDirectory();
     const scriptPath = join(home, "credential-command.mjs");
     writeFileSync(
@@ -142,6 +182,34 @@ describe("Pi Kimi credential broker", () => {
       apiKey: "command-reference-fixture-key-419",
     });
     expectPiAuthUnchanged(fixture, ["auth.json"]);
+  });
+
+  it.each([
+    ["unknown template", "prefix-$KIMI_API_KEY"],
+    ["malformed reference", "${KIMI_API_KEY"],
+    ["empty command", "!   "],
+    [
+      "failing command",
+      `!${JSON.stringify(process.execPath)} -e ${JSON.stringify("process.exit(1)")}`,
+    ],
+  ])("rejects a %s without exposing it", async (_label, key) => {
+    const fixture = piAuthFixture(key);
+    process.env.KIMI_API_KEY = "ambient-key-must-not-replace-bad-reference";
+    const broker = createPiKimiCredentialBroker();
+
+    const resolution = await broker.resolve();
+
+    expect(resolution).toEqual({ status: "missing" });
+    expect(JSON.stringify(resolution)).not.toContain(key);
+    expectPiAuthUnchanged(fixture);
+  });
+
+  it("rejects an oversized Pi auth file without reading beyond the bound", async () => {
+    const fixture = piAuthFixture("x".repeat(1_048_576));
+    const broker = createPiKimiCredentialBroker();
+
+    await expect(broker.resolve()).resolves.toEqual({ status: "missing" });
+    expectPiAuthUnchanged(fixture);
   });
 
   it("resolves a managed API key through the real network-disabled Pi runtime", async () => {
@@ -230,17 +298,17 @@ describe("Pi Kimi credential broker", () => {
     expect(readdirSync(home)).toEqual([]);
   });
 
-  it("uses only Pi's supported one-off read and in-memory credential APIs", () => {
+  it("uses a bounded direct read and only Pi's public runtime APIs", () => {
     const implementation = readFileSync(
       new URL("../../src/providers/pi-kimi-credential.ts", import.meta.url),
       "utf8",
     );
 
-    expect(implementation).toContain("readStoredCredential(PI_PROVIDER_ID)");
     expect(implementation).toContain("new InMemoryCredentialStore()");
-    expect(implementation).toContain("AuthStorage.inMemory");
+    expect(implementation).toContain("PI_AUTH_READ_LIMIT_BYTES + 1");
+    expect(implementation).toContain("readSync(");
     expect(implementation).not.toMatch(
-      /node:fs|auth\.json|readFile|JSON\.parse|writeFile|mkdir|rename|unlink/,
+      /dist\/core|AuthStorage|import\.meta\.resolve|readStoredCredential/,
     );
   });
 
@@ -314,7 +382,7 @@ describe("Pi Kimi credential broker", () => {
   });
 
   it("inspects only availability and credential type", async () => {
-    const available = fakeRuntime({ authAvailable: true });
+    const available = fakeRuntime({ apiKey: "inspection-fixture-key-907" });
     const missing = fakeRuntime({ authAvailable: false });
     const unsupported = fakeRuntime({
       credentials: [{ providerId: "kimi-coding", type: "oauth" }],
@@ -335,9 +403,9 @@ describe("Pi Kimi credential broker", () => {
         loadRuntime: async () => unsupported,
       }).inspect(),
     ).resolves.toBe("unsupported");
-    expect(available.getAuth).not.toHaveBeenCalled();
-    expect(available.checkAuth).toHaveBeenCalledExactlyOnceWith("kimi-coding");
-    expect(unsupported.checkAuth).not.toHaveBeenCalled();
+    expect(available.getAuth).toHaveBeenCalledExactlyOnceWith("kimi-coding");
+    expect(available.checkAuth).not.toHaveBeenCalled();
+    expect(unsupported.getAuth).not.toHaveBeenCalled();
     expectNoModelActivity(available);
   });
 });
