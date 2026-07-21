@@ -1,0 +1,48 @@
+$ node --import <synthetic-503-fetch> dist/bin/quota-axi.js --provider kimi --json --full
+exitCode: 1
+stderr: <empty>
+stdout:
+{
+  "generatedAt": "2026-07-21T02:29:27.198Z",
+  "schemaVersion": 2,
+  "providers": [
+    {
+      "provider": "kimi",
+      "label": "Kimi",
+      "source": "unavailable",
+      "windows": [],
+      "state": {
+        "status": "error",
+        "stale": false,
+        "error": "provider_unavailable",
+        "sourcesTried": [
+          "pi:kimi-coding"
+        ]
+      },
+      "attempts": [
+        {
+          "source": "pi:kimi-coding",
+          "status": "failed",
+          "error": "provider_unavailable"
+        }
+      ]
+    }
+  ]
+}
+responseCleanup:
+{
+  "cancelCount": 1,
+  "request": {
+    "url": "https://api.kimi.com/coding/v1/usages",
+    "method": "GET",
+    "redirect": "manual",
+    "credentials": "omit",
+    "authorizationMatches": true
+  },
+  "cleanupCompleted": true
+}
+credentialStateUnchanged: true
+cacheEntries: []
+syntheticSecretRedacted: true
+externalNetworkContact: false (global fetch was replaced before CLI startup)
+result: PASS

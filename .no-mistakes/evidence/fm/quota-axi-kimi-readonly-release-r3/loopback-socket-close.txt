@@ -1,0 +1,33 @@
+$ node reproduce-loopback-socket-close.mjs
+[
+  {
+    "status": 503,
+    "contentType": "application/json",
+    "mappedError": "provider_unavailable",
+    "requestContract": {
+      "url": "https://api.kimi.com/coding/v1/usages",
+      "method": "GET",
+      "redirect": "manual",
+      "credentials": "omit"
+    },
+    "streamingResponseClosed": true,
+    "requestSocketClosed": true,
+    "closeBoundMs": 2000
+  },
+  {
+    "status": 200,
+    "contentType": "text/plain",
+    "mappedError": "unexpected_content_type",
+    "requestContract": {
+      "url": "https://api.kimi.com/coding/v1/usages",
+      "method": "GET",
+      "redirect": "manual",
+      "credentials": "omit"
+    },
+    "streamingResponseClosed": true,
+    "requestSocketClosed": true,
+    "closeBoundMs": 2000
+  }
+]
+externalNetworkContact: false (the injected transport rewrote the fixed Kimi URL to 127.0.0.1)
+result: PASS
