@@ -1,0 +1,199 @@
+import { spawnSync } from "node:child_process";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
+import { afterEach, describe, expect, it } from "vitest";
+
+const CLI_ENTRYPOINT = resolve("bin/quota-axi.ts");
+let temporaryDirectories: string[] = [];
+
+afterEach(() => {
+  for (const directory of temporaryDirectories) {
+    rmSync(directory, { recursive: true, force: true });
+  }
+  temporaryDirectories = [];
+});
+
+describe("Kimi CLI credential inspection is read-only", () => {
+  it("does not create Pi auth state while inspecting auth in an empty home", () => {
+    const fixture = isolatedFixture();
+
+    const result = runCli(fixture, [
+      "auth",
+      "--provider",
+      "kimi",
+      "--json",
+      "--full",
+    ]);
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(existsSync(join(fixture.home, ".pi"))).toBe(false);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      auth: [
+        {
+          provider: "kimi",
+          sources: [
+            { source: "pi:kimi-coding", status: "missing" },
+            { source: "kimi-code-cli", status: "missing" },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("does not create Pi auth state while inspecting quota in an empty home", () => {
+    const fixture = isolatedFixture();
+
+    const result = runCli(fixture, ["--provider", "kimi", "--json", "--full"]);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toBe("");
+    expect(existsSync(join(fixture.home, ".pi"))).toBe(false);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      providers: [
+        {
+          provider: "kimi",
+          source: "unavailable",
+          state: {
+            status: "auth_required",
+            sourcesTried: ["pi:kimi-coding", "kimi-code-cli"],
+          },
+        },
+      ],
+    });
+  });
+
+  it("reaches a Kimi Code CLI fallback before any Pi state exists", () => {
+    const fixture = isolatedFixture();
+    const credentialPath = join(
+      fixture.kimiCodeHome,
+      "credentials",
+      "kimi-code.json",
+    );
+    mkdirSync(dirname(credentialPath), { recursive: true, mode: 0o700 });
+    writeFileSync(
+      credentialPath,
+      JSON.stringify({
+        access_token: "synthetic-cli-token-836",
+        refresh_token: "ignored-refresh-token-219",
+        expires_at: 4_102_444_800,
+      }),
+      { mode: 0o600 },
+    );
+    const preload = join(fixture.root, "mock-kimi-fetch.mjs");
+    writeFileSync(
+      preload,
+      `import { existsSync } from "node:fs";
+import { join } from "node:path";
+
+globalThis.fetch = async (input, init) => {
+  if (existsSync(join(process.env.HOME, ".pi"))) {
+    throw new Error("Pi state existed before Kimi Code CLI fallback");
+  }
+  if (String(input) !== "https://api.kimi.com/coding/v1/usages") {
+    throw new Error("Unexpected Kimi request origin");
+  }
+  if (init?.method !== "GET" || init?.redirect !== "manual" || init?.credentials !== "omit") {
+    throw new Error("Unexpected Kimi request options");
+  }
+  return new Response(JSON.stringify({
+    usage: { limit: 100, used: 20, resetTime: "2099-01-08T00:00:00Z" },
+  }), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+};
+`,
+      { mode: 0o600 },
+    );
+
+    const result = runCli(
+      fixture,
+      ["--provider", "kimi", "--json", "--full"],
+      preload,
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(existsSync(join(fixture.home, ".pi"))).toBe(false);
+    expect(result.stdout).not.toContain("synthetic-cli-token-836");
+    expect(result.stdout).not.toContain("ignored-refresh-token-219");
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      providers: [
+        {
+          provider: "kimi",
+          source: "api",
+          windows: [{ id: "weekly", percentRemaining: 80 }],
+          state: {
+            status: "fresh",
+            sourcesTried: ["pi:kimi-coding", "kimi-code-cli"],
+          },
+          attempts: [
+            { source: "pi:kimi-coding", status: "skipped" },
+            { source: "kimi-code-cli", status: "success" },
+          ],
+        },
+      ],
+    });
+  });
+});
+
+type IsolatedFixture = {
+  root: string;
+  home: string;
+  cacheHome: string;
+  kimiCodeHome: string;
+};
+
+function isolatedFixture(): IsolatedFixture {
+  const root = mkdtempSync(join(tmpdir(), "quota-axi-kimi-cli-readonly-"));
+  temporaryDirectories.push(root);
+  const fixture = {
+    root,
+    home: join(root, "home"),
+    cacheHome: join(root, "cache"),
+    kimiCodeHome: join(root, "kimi-code"),
+  };
+  mkdirSync(fixture.home, { mode: 0o700 });
+  return fixture;
+}
+
+function runCli(
+  fixture: IsolatedFixture,
+  args: string[],
+  preload?: string,
+): { status: number | null; stdout: string; stderr: string } {
+  const imports = ["tsx", ...(preload ? [pathToFileURL(preload).href] : [])];
+  const result = spawnSync(
+    process.execPath,
+    [
+      ...imports.flatMap((specifier) => ["--import", specifier]),
+      CLI_ENTRYPOINT,
+      ...args,
+    ],
+    {
+      encoding: "utf8",
+      timeout: 15_000,
+      env: {
+        HOME: fixture.home,
+        XDG_CACHE_HOME: fixture.cacheHome,
+        KIMI_CODE_HOME: fixture.kimiCodeHome,
+        PATH: process.env.PATH ?? "",
+      },
+    },
+  );
+  if (result.error) throw result.error;
+  return {
+    status: result.status,
+    stdout: result.stdout,
+    stderr: result.stderr,
+  };
+}

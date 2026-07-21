@@ -78,8 +78,18 @@ async function storedCredentialType(
 }
 
 async function loadPiRuntime(): Promise<PiModelRuntime> {
-  const { ModelRuntime } = await import("@earendil-works/pi-coding-agent");
+  const [{ ModelRuntime, readStoredCredential }, { InMemoryCredentialStore }] =
+    await Promise.all([
+      import("@earendil-works/pi-coding-agent"),
+      import("@earendil-works/pi-ai"),
+    ]);
+  const credentials = new InMemoryCredentialStore();
+  const storedCredential = readStoredCredential(PI_PROVIDER_ID);
+  if (storedCredential !== undefined) {
+    await credentials.modify(PI_PROVIDER_ID, async () => storedCredential);
+  }
   return ModelRuntime.create({
+    credentials,
     allowModelNetwork: false,
     modelsPath: null,
   });

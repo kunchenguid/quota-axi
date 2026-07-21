@@ -1,6 +1,35 @@
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createPiKimiCredentialBroker } from "../../src/providers/pi-kimi-credential.js";
+
+const originalHome = process.env.HOME;
+const originalPiAgentDir = process.env.PI_CODING_AGENT_DIR;
+const originalKimiApiKey = process.env.KIMI_API_KEY;
+let temporaryDirectories: string[] = [];
+
+afterEach(() => {
+  if (originalHome === undefined) delete process.env.HOME;
+  else process.env.HOME = originalHome;
+  if (originalPiAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+  else process.env.PI_CODING_AGENT_DIR = originalPiAgentDir;
+  if (originalKimiApiKey === undefined) delete process.env.KIMI_API_KEY;
+  else process.env.KIMI_API_KEY = originalKimiApiKey;
+  for (const directory of temporaryDirectories) {
+    rmSync(directory, { recursive: true, force: true });
+  }
+  temporaryDirectories = [];
+});
 
 type FakeRuntime = {
   listCredentials: ReturnType<typeof vi.fn>;
@@ -30,10 +59,40 @@ describe("Pi Kimi credential broker", () => {
     expectNoModelActivity(runtime);
   });
 
+  it("resolves a synthetic Pi-managed API key without changing Pi auth state", async () => {
+    const home = temporaryDirectory();
+    const authPath = join(home, ".pi", "agent", "auth.json");
+    mkdirSync(dirname(authPath), { recursive: true, mode: 0o700 });
+    writeFileSync(
+      authPath,
+      JSON.stringify({
+        "kimi-coding": {
+          type: "api_key",
+          key: "runtime-managed-fixture-key-264",
+        },
+      }),
+      { mode: 0o600 },
+    );
+    process.env.HOME = home;
+    process.env.PI_CODING_AGENT_DIR = dirname(authPath);
+    delete process.env.KIMI_API_KEY;
+    const before = readFileSync(authPath, "utf8");
+    const broker = createPiKimiCredentialBroker();
+
+    await expect(broker.resolve()).resolves.toEqual({
+      status: "available",
+      apiKey: "runtime-managed-fixture-key-264",
+    });
+    expect(readFileSync(authPath, "utf8")).toBe(before);
+    expect(statSync(authPath).mode & 0o777).toBe(0o600);
+    expect(readdirSync(home)).toEqual([".pi"]);
+    expect(readdirSync(dirname(authPath))).toEqual(["auth.json"]);
+  });
+
   it("resolves a managed API key through the real network-disabled Pi runtime", async () => {
     const credential = {
       type: "api_key" as const,
-      key: "runtime-managed-fixture-key-264",
+      key: "runtime-managed-fixture-key-691",
     };
     const credentials = {
       read: vi.fn(async (providerId: string) =>
@@ -56,7 +115,7 @@ describe("Pi Kimi credential broker", () => {
 
     await expect(broker.resolve()).resolves.toEqual({
       status: "available",
-      apiKey: "runtime-managed-fixture-key-264",
+      apiKey: "runtime-managed-fixture-key-691",
     });
     expect(credentials.modify).not.toHaveBeenCalled();
     expect(credentials.delete).not.toHaveBeenCalled();
@@ -78,7 +137,6 @@ describe("Pi Kimi credential broker", () => {
   });
 
   it("resolves an environment API key through the real Pi runtime", async () => {
-    const original = process.env.KIMI_API_KEY;
     process.env.KIMI_API_KEY = "runtime-environment-fixture-key-851";
     const credentials = {
       read: vi.fn(async () => undefined),
@@ -86,26 +144,48 @@ describe("Pi Kimi credential broker", () => {
       modify: vi.fn(async () => undefined),
       delete: vi.fn(async () => undefined),
     };
-    try {
-      const broker = createPiKimiCredentialBroker({
-        loadRuntime: async () =>
-          ModelRuntime.create({
-            credentials,
-            allowModelNetwork: false,
-            modelsPath: null,
-          }),
-      });
+    const broker = createPiKimiCredentialBroker({
+      loadRuntime: async () =>
+        ModelRuntime.create({
+          credentials,
+          allowModelNetwork: false,
+          modelsPath: null,
+        }),
+    });
 
-      await expect(broker.resolve()).resolves.toEqual({
-        status: "available",
-        apiKey: "runtime-environment-fixture-key-851",
-      });
-      expect(credentials.modify).not.toHaveBeenCalled();
-      expect(credentials.delete).not.toHaveBeenCalled();
-    } finally {
-      if (original === undefined) delete process.env.KIMI_API_KEY;
-      else process.env.KIMI_API_KEY = original;
-    }
+    await expect(broker.resolve()).resolves.toEqual({
+      status: "available",
+      apiKey: "runtime-environment-fixture-key-851",
+    });
+    expect(credentials.modify).not.toHaveBeenCalled();
+    expect(credentials.delete).not.toHaveBeenCalled();
+  });
+
+  it("uses Pi's environment resolution without creating Pi auth state", async () => {
+    const home = temporaryDirectory();
+    process.env.HOME = home;
+    process.env.PI_CODING_AGENT_DIR = join(home, ".pi", "agent");
+    process.env.KIMI_API_KEY = "runtime-environment-fixture-key-357";
+    const broker = createPiKimiCredentialBroker();
+
+    await expect(broker.resolve()).resolves.toEqual({
+      status: "available",
+      apiKey: "runtime-environment-fixture-key-357",
+    });
+    expect(readdirSync(home)).toEqual([]);
+  });
+
+  it("uses only Pi's supported one-off read and in-memory credential APIs", () => {
+    const implementation = readFileSync(
+      new URL("../../src/providers/pi-kimi-credential.ts", import.meta.url),
+      "utf8",
+    );
+
+    expect(implementation).toContain("readStoredCredential(PI_PROVIDER_ID)");
+    expect(implementation).toContain("new InMemoryCredentialStore()");
+    expect(implementation).not.toMatch(
+      /node:fs|auth\.json|readFile|JSON\.parse|writeFile|mkdir|rename|unlink/,
+    );
   });
 
   it("ignores resolver-provided base URLs and arbitrary headers", async () => {
@@ -205,6 +285,12 @@ describe("Pi Kimi credential broker", () => {
     expectNoModelActivity(available);
   });
 });
+
+function temporaryDirectory(): string {
+  const directory = mkdtempSync(join(tmpdir(), "quota-axi-pi-kimi-"));
+  temporaryDirectories.push(directory);
+  return directory;
+}
 
 function fakeRuntime(options: {
   credentials?: Array<{ providerId: string; type: string }>;
