@@ -251,7 +251,10 @@ function piAgentDirectory(): string {
     return join(homedir(), ".pi", "agent");
   }
   if (configured === "~") return homedir();
-  if (configured.startsWith("~/")) {
+  if (
+    configured.startsWith("~/") ||
+    (process.platform === "win32" && configured.startsWith("~\\"))
+  ) {
     return join(homedir(), configured.slice(2));
   }
   return configured;

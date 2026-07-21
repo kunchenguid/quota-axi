@@ -298,6 +298,39 @@ describe("Pi Kimi credential broker", () => {
     expect(readdirSync(home)).toEqual([]);
   });
 
+  it("expands a Windows tilde Pi agent directory", async () => {
+    const home = temporaryDirectory();
+    const agentDirectory = join(home, ".pi\\agent");
+    const authPath = join(agentDirectory, "auth.json");
+    mkdirSync(agentDirectory, { recursive: true, mode: 0o700 });
+    writeFileSync(
+      authPath,
+      JSON.stringify({
+        "kimi-coding": {
+          type: "api_key",
+          key: "windows-tilde-fixture-key-326",
+        },
+      }),
+      { mode: 0o600 },
+    );
+    process.env.HOME = home;
+    process.env.PI_CODING_AGENT_DIR = "~\\.pi\\agent";
+    const before = readFileSync(authPath, "utf8");
+    const platform = vi
+      .spyOn(process, "platform", "get")
+      .mockReturnValue("win32");
+
+    try {
+      await expect(createPiKimiCredentialBroker().resolve()).resolves.toEqual({
+        status: "available",
+        apiKey: "windows-tilde-fixture-key-326",
+      });
+      expect(readFileSync(authPath, "utf8")).toBe(before);
+    } finally {
+      platform.mockRestore();
+    }
+  });
+
   it("uses a bounded direct read and only Pi's public runtime APIs", () => {
     const implementation = readFileSync(
       new URL("../../src/providers/pi-kimi-credential.ts", import.meta.url),
