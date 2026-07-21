@@ -209,7 +209,7 @@ function resolveCredentialValue(
           maxBuffer: COMMAND_OUTPUT_LIMIT_BYTES,
           stdio: ["ignore", "pipe", "ignore"],
           timeout: 10_000,
-        }),
+        }).trim(),
       );
     } catch {
       return undefined;

@@ -206,6 +206,72 @@ globalThis.fetch = async (input, init) => {
     });
   });
 
+  it("trims and redacts newline-terminated Pi command output", () => {
+    const fixture = isolatedFixture();
+    const commandPath = join(fixture.root, "newline-credential-command.mjs");
+    writeFileSync(
+      commandPath,
+      'process.stdout.write("newline-command-fixture-key-573\\n");\n',
+      { mode: 0o600 },
+    );
+    const command = `!${JSON.stringify(process.execPath)} ${JSON.stringify(commandPath)}`;
+    const authPath = join(fixture.home, ".pi", "agent", "auth.json");
+    mkdirSync(dirname(authPath), { recursive: true, mode: 0o700 });
+    writeFileSync(
+      authPath,
+      JSON.stringify({
+        "kimi-coding": { type: "api_key", key: command },
+      }),
+      { mode: 0o600 },
+    );
+    const preload = join(fixture.root, "mock-command-reference-fetch.mjs");
+    writeFileSync(
+      preload,
+      `globalThis.fetch = async (input, init) => {
+  if (String(input) !== "https://api.kimi.com/coding/v1/usages") {
+    throw new Error("Unexpected Kimi request origin");
+  }
+  if (new Headers(init?.headers).get("authorization") !== "Bearer newline-command-fixture-key-573") {
+    throw new Error("Pi command output was not trimmed");
+  }
+  return new Response(JSON.stringify({
+    usage: { limit: 100, used: 5, resetTime: "2099-01-08T00:00:00Z" },
+  }), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+};
+`,
+      { mode: 0o600 },
+    );
+    const before = readFileSync(authPath, "utf8");
+
+    const result = runCli(
+      fixture,
+      ["--provider", "kimi", "--json", "--full"],
+      preload,
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).not.toContain("newline-command-fixture-key-573");
+    expect(result.stdout).not.toContain(command);
+    expect(readFileSync(authPath, "utf8")).toBe(before);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      providers: [
+        {
+          provider: "kimi",
+          source: "api",
+          windows: [{ id: "weekly", percentRemaining: 95 }],
+          state: {
+            status: "fresh",
+            sourcesTried: ["pi:kimi-coding"],
+          },
+        },
+      ],
+    });
+  });
+
   it("falls back to Kimi Code CLI for an unresolved Pi reference", () => {
     const fixture = isolatedFixture();
     const authPath = join(fixture.home, ".pi", "agent", "auth.json");

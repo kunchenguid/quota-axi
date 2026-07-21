@@ -168,7 +168,7 @@ describe("Pi Kimi credential broker", () => {
     const scriptPath = join(home, "credential-command.mjs");
     writeFileSync(
       scriptPath,
-      'process.stdout.write("command-reference-fixture-key-419");\n',
+      'process.stdout.write("command-reference-fixture-key-419\\n");\n',
       { mode: 0o600 },
     );
     const fixture = piAuthFixture(
