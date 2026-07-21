@@ -343,7 +343,7 @@ Auth source entries can include `credentialPresent` when a non-secret probe conf
 
 **Kimi**
 
-- It asks Pi's supported credential API to resolve only `kimi-coding`, rejects stored non-API-key credential types before resolution, and ignores any resolver-provided origin or headers.
+- It uses Pi's supported one-off credential access with non-persisting storage to resolve only `kimi-coding`, rejects stored non-API-key credential types before resolution, and ignores any resolver-provided origin or headers. Auth and quota inspection do not initialize or write Pi provider state.
 - If Pi has no supported credential, it reads the official Kimi Code CLI credential at `$KIMI_CODE_HOME/credentials/kimi-code.json`, defaulting to `$HOME/.kimi-code/credentials/kimi-code.json`. It accepts only a non-empty `access_token` whose Unix-seconds `expires_at` (a JSON number or numeric string) is more than 60 seconds in the future.
 - The Pi source always has priority. Transport, decoding, timeout, cancellation, and server failures do not trigger credential switching.
 - It sends one redirect-disabled `GET` to the fixed `https://api.kimi.com/coding/v1/usages` endpoint with a 15 second total deadline and a 262,144-byte decoded-body cap.

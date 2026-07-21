@@ -109,7 +109,10 @@ function usableApiKey(value: unknown): string | undefined {
     value.trim().length === 0 ||
     value.startsWith("!") ||
     value.includes("$") ||
-    /[\0-\x1f\x7f]/.test(value)
+    [...value].some((character) => {
+      const code = character.charCodeAt(0);
+      return code <= 0x1f || code === 0x7f;
+    })
   ) {
     return undefined;
   }

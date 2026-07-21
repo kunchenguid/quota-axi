@@ -1,0 +1,60 @@
+$ node dist/bin/quota-axi.js auth --provider kimi --json --full
+{
+  "generatedAt": "2026-07-21T01:31:52.333Z",
+  "schemaVersion": 1,
+  "auth": [
+    {
+      "provider": "kimi",
+      "sources": [
+        {
+          "source": "pi:kimi-coding",
+          "status": "missing"
+        },
+        {
+          "source": "kimi-code-cli",
+          "status": "missing"
+        }
+      ]
+    }
+  ]
+}
+auth_exit=0
+
+$ node dist/bin/quota-axi.js --provider kimi --json --full
+{
+  "generatedAt": "2026-07-21T01:31:52.716Z",
+  "schemaVersion": 2,
+  "providers": [
+    {
+      "provider": "kimi",
+      "label": "Kimi",
+      "source": "unavailable",
+      "windows": [],
+      "state": {
+        "status": "auth_required",
+        "stale": false,
+        "error": "kimi_credential_unavailable",
+        "sourcesTried": [
+          "pi:kimi-coding",
+          "kimi-code-cli"
+        ]
+      },
+      "attempts": [
+        {
+          "source": "pi:kimi-coding",
+          "status": "skipped",
+          "error": "kimi_credential_unavailable"
+        },
+        {
+          "source": "kimi-code-cli",
+          "status": "skipped",
+          "error": "kimi_code_cli_credential_unavailable"
+        }
+      ]
+    }
+  ]
+}
+quota_exit=1
+
+$ find isolated-home -mindepth 1 -print
+pi_state_exists=no
