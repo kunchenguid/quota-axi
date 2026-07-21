@@ -146,17 +146,8 @@ globalThis.fetch = async (input, init) => {
     });
   });
 
-  it("resolves a Pi environment reference without exposing credential data", () => {
+  it("resolves KIMI_API_KEY through Pi without creating Pi state", () => {
     const fixture = isolatedFixture();
-    const authPath = join(fixture.home, ".pi", "agent", "auth.json");
-    mkdirSync(dirname(authPath), { recursive: true, mode: 0o700 });
-    writeFileSync(
-      authPath,
-      JSON.stringify({
-        "kimi-coding": { type: "api_key", key: "$KIMI_API_KEY" },
-      }),
-      { mode: 0o600 },
-    );
     const preload = join(fixture.root, "mock-pi-reference-fetch.mjs");
     writeFileSync(
       preload,
@@ -177,7 +168,6 @@ globalThis.fetch = async (input, init) => {
 `,
       { mode: 0o600 },
     );
-    const before = readFileSync(authPath, "utf8");
 
     const result = runCli(
       fixture,
@@ -189,8 +179,7 @@ globalThis.fetch = async (input, init) => {
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
     expect(result.stdout).not.toContain("pi-reference-fixture-key-628");
-    expect(result.stdout).not.toContain("$KIMI_API_KEY");
-    expect(readFileSync(authPath, "utf8")).toBe(before);
+    expect(existsSync(join(fixture.home, ".pi"))).toBe(false);
     expect(JSON.parse(result.stdout)).toMatchObject({
       providers: [
         {
@@ -206,21 +195,17 @@ globalThis.fetch = async (input, init) => {
     });
   });
 
-  it("trims and redacts newline-terminated Pi command output", () => {
+  it("uses a Pi-managed credential without changing Pi auth state", () => {
     const fixture = isolatedFixture();
-    const commandPath = join(fixture.root, "newline-credential-command.mjs");
-    writeFileSync(
-      commandPath,
-      'process.stdout.write("newline-command-fixture-key-573\\n");\n',
-      { mode: 0o600 },
-    );
-    const command = `!${JSON.stringify(process.execPath)} ${JSON.stringify(commandPath)}`;
     const authPath = join(fixture.home, ".pi", "agent", "auth.json");
     mkdirSync(dirname(authPath), { recursive: true, mode: 0o700 });
     writeFileSync(
       authPath,
       JSON.stringify({
-        "kimi-coding": { type: "api_key", key: command },
+        "kimi-coding": {
+          type: "api_key",
+          key: "pi-managed-fixture-key-573",
+        },
       }),
       { mode: 0o600 },
     );
@@ -231,8 +216,8 @@ globalThis.fetch = async (input, init) => {
   if (String(input) !== "https://api.kimi.com/coding/v1/usages") {
     throw new Error("Unexpected Kimi request origin");
   }
-  if (new Headers(init?.headers).get("authorization") !== "Bearer newline-command-fixture-key-573") {
-    throw new Error("Pi command output was not trimmed");
+  if (new Headers(init?.headers).get("authorization") !== "Bearer pi-managed-fixture-key-573") {
+    throw new Error("Pi-managed credential was not used");
   }
   return new Response(JSON.stringify({
     usage: { limit: 100, used: 5, resetTime: "2099-01-08T00:00:00Z" },
@@ -254,8 +239,7 @@ globalThis.fetch = async (input, init) => {
 
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
-    expect(result.stdout).not.toContain("newline-command-fixture-key-573");
-    expect(result.stdout).not.toContain(command);
+    expect(result.stdout).not.toContain("pi-managed-fixture-key-573");
     expect(readFileSync(authPath, "utf8")).toBe(before);
     expect(JSON.parse(result.stdout)).toMatchObject({
       providers: [

@@ -124,8 +124,10 @@ describe("Pi Kimi credential broker", () => {
     expect(() => statSync(markerPath)).toThrow();
   });
 
-  it("resolves a stored environment reference without exposing the reference", async () => {
-    const fixture = piAuthFixture("$KIMI_API_KEY");
+  it("resolves the official environment API key through Pi", async () => {
+    const home = temporaryDirectory();
+    process.env.HOME = home;
+    process.env.PI_CODING_AGENT_DIR = join(home, ".pi", "agent");
     process.env.KIMI_API_KEY = "environment-reference-fixture-key-742";
     const broker = createPiKimiCredentialBroker();
 
@@ -136,7 +138,7 @@ describe("Pi Kimi credential broker", () => {
       apiKey: "environment-reference-fixture-key-742",
     });
     expect(JSON.stringify(resolution)).not.toContain("$KIMI_API_KEY");
-    expectPiAuthUnchanged(fixture);
+    expect(readdirSync(home)).toEqual([]);
   });
 
   it("reports a missing stored environment reference without transmitting it", async () => {
@@ -163,12 +165,13 @@ describe("Pi Kimi credential broker", () => {
     expectPiAuthUnchanged(fixture);
   });
 
-  it("resolves a supported stored command reference", async () => {
+  it("does not execute a stored command reference itself", async () => {
     const home = temporaryDirectory();
     const scriptPath = join(home, "credential-command.mjs");
+    const markerPath = join(home, "credential-command-ran");
     writeFileSync(
       scriptPath,
-      'process.stdout.write("command-reference-fixture-key-419\\n");\n',
+      `import { writeFileSync } from "node:fs";\nwriteFileSync(${JSON.stringify(markerPath)}, "bad");\n`,
       { mode: 0o600 },
     );
     const fixture = piAuthFixture(
@@ -177,10 +180,8 @@ describe("Pi Kimi credential broker", () => {
     );
     const broker = createPiKimiCredentialBroker();
 
-    await expect(broker.resolve()).resolves.toEqual({
-      status: "available",
-      apiKey: "command-reference-fixture-key-419",
-    });
+    await expect(broker.resolve()).resolves.toEqual({ status: "missing" });
+    expect(() => statSync(markerPath)).toThrow();
     expectPiAuthUnchanged(fixture, ["auth.json"]);
   });
 
@@ -204,8 +205,14 @@ describe("Pi Kimi credential broker", () => {
     expectPiAuthUnchanged(fixture);
   });
 
-  it("rejects an oversized Pi auth file without reading beyond the bound", async () => {
-    const fixture = piAuthFixture("x".repeat(1_048_576));
+  it("reports malformed Pi auth state as missing without changing it", async () => {
+    const home = temporaryDirectory();
+    const authPath = join(home, ".pi", "agent", "auth.json");
+    mkdirSync(dirname(authPath), { recursive: true, mode: 0o700 });
+    writeFileSync(authPath, "{ malformed", { mode: 0o600 });
+    process.env.HOME = home;
+    process.env.PI_CODING_AGENT_DIR = dirname(authPath);
+    const fixture = { authPath, before: readFileSync(authPath, "utf8") };
     const broker = createPiKimiCredentialBroker();
 
     await expect(broker.resolve()).resolves.toEqual({ status: "missing" });
@@ -331,17 +338,16 @@ describe("Pi Kimi credential broker", () => {
     }
   });
 
-  it("uses a bounded direct read and only Pi's public runtime APIs", () => {
+  it("uses Pi's supported one-off read and public runtime APIs", () => {
     const implementation = readFileSync(
       new URL("../../src/providers/pi-kimi-credential.ts", import.meta.url),
       "utf8",
     );
 
     expect(implementation).toContain("new InMemoryCredentialStore()");
-    expect(implementation).toContain("PI_AUTH_READ_LIMIT_BYTES + 1");
-    expect(implementation).toContain("readSync(");
+    expect(implementation).toContain("readStoredCredential(");
     expect(implementation).not.toMatch(
-      /dist\/core|AuthStorage|import\.meta\.resolve|readStoredCredential/,
+      /dist\/core|AuthStorage|import\.meta\.resolve|JSON\.parse|readFileSync/,
     );
   });
 
