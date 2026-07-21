@@ -51,8 +51,6 @@
     "node": ">=22.19"
   },
   "dependencies": {
-    "@earendil-works/pi-ai": "0.80.10",
-    "@earendil-works/pi-coding-agent": "0.80.10",
     "@toon-format/toon": "2.1.0",
     "axi-sdk-js": "^0.1.7"
   },
