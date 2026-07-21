@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.1.11](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.10...quota-axi-v0.1.11) (2026-07-21)
+
+
+### Bug Fixes
+
+* **providers:** clean up unread Kimi responses ([#36](https://github.com/kunchenguid/quota-axi/issues/36)) ([b106f0f](https://github.com/kunchenguid/quota-axi/commit/b106f0f2e9f167e9adf2091be25b845b4d6d71b1))
+* **providers:** keep Kimi credential inspection read-only ([#33](https://github.com/kunchenguid/quota-axi/issues/33)) ([17eadc9](https://github.com/kunchenguid/quota-axi/commit/17eadc9f3366fb6ba7f027481fbd8d14755220c8))
+* **providers:** parse Pi Kimi credentials directly ([#35](https://github.com/kunchenguid/quota-axi/issues/35)) ([272a7bc](https://github.com/kunchenguid/quota-axi/commit/272a7bc1e6c5edce2f689e51e337762b46160b36))
+
 ## [0.1.10](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.9...quota-axi-v0.1.10) (2026-07-20)
 
 
