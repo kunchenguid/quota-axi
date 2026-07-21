@@ -1,8 +1,9 @@
+import { open } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
 const PI_PROVIDER_ID = "kimi-coding";
-const UNRESOLVED_CREDENTIAL = "\0";
+const AUTH_FILE_LIMIT_BYTES = 64 * 1024;
 
 export type KimiCredentialResolution =
   | { status: "available"; apiKey: string }
@@ -19,96 +20,103 @@ export type KimiCredentialBroker = {
   inspect(): Promise<KimiCredentialInspection>;
 };
 
-type PiModelRuntime = {
-  listCredentials(): Promise<readonly { providerId: string; type: string }[]>;
-  getAuth(providerId: string): Promise<
-    | {
-        auth: { apiKey?: string; headers?: unknown; baseUrl?: unknown };
-        source?: unknown;
-      }
-    | undefined
-  >;
-};
-
 type BrokerDependencies = {
-  loadRuntime: () => Promise<PiModelRuntime>;
+  environment: Readonly<Record<string, string | undefined>>;
+  homeDirectory: () => string;
+  readFile: (path: string, maxBytes: number) => Promise<Buffer>;
 };
 
 export function createPiKimiCredentialBroker(
-  dependencies: BrokerDependencies = { loadRuntime: loadPiRuntime },
+  overrides: Partial<BrokerDependencies> = {},
 ): KimiCredentialBroker {
-  return {
-    async resolve(): Promise<KimiCredentialResolution> {
-      try {
-        const runtime = await dependencies.loadRuntime();
-        const storedType = await storedCredentialType(runtime);
-        if (storedType !== undefined && storedType !== "api_key") {
-          return { status: "unsupported" };
-        }
-        const resolved = await runtime.getAuth(PI_PROVIDER_ID);
-        const apiKey = usableApiKey(resolved?.auth.apiKey);
-        return apiKey !== undefined
-          ? { status: "available", apiKey }
-          : { status: "missing" };
-      } catch {
-        return { status: "error" };
-      }
-    },
+  const dependencies: BrokerDependencies = {
+    environment: process.env,
+    homeDirectory: homedir,
+    readFile: readBoundedFile,
+    ...overrides,
+  };
 
-    async inspect(): Promise<KimiCredentialInspection> {
-      try {
-        const runtime = await dependencies.loadRuntime();
-        const storedType = await storedCredentialType(runtime);
-        if (storedType !== undefined && storedType !== "api_key") {
-          return "unsupported";
-        }
-        const resolved = await runtime.getAuth(PI_PROVIDER_ID);
-        return usableApiKey(resolved?.auth.apiKey) === undefined
-          ? "missing"
-          : "available";
-      } catch {
-        return "error";
-      }
-    },
+  const inspect = async (): Promise<KimiCredentialInspection> =>
+    (await resolveCredential(dependencies)).status;
+
+  return {
+    resolve: () => resolveCredential(dependencies),
+    inspect,
   };
 }
 
-async function storedCredentialType(
-  runtime: PiModelRuntime,
-): Promise<string | undefined> {
-  return (await runtime.listCredentials()).find(
-    (credential) => credential.providerId === PI_PROVIDER_ID,
-  )?.type;
+async function resolveCredential(
+  dependencies: BrokerDependencies,
+): Promise<KimiCredentialResolution> {
+  const path = authFilePath(dependencies);
+  let contents: Buffer;
+  try {
+    contents = await dependencies.readFile(path, AUTH_FILE_LIMIT_BYTES);
+  } catch (error) {
+    return errorCode(error) === "ENOENT"
+      ? { status: "missing" }
+      : { status: "error" };
+  }
+  if (contents.byteLength > AUTH_FILE_LIMIT_BYTES) {
+    return { status: "missing" };
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(contents.toString("utf8")) as unknown;
+  } catch {
+    return { status: "missing" };
+  }
+
+  const root = objectValue(parsed);
+  if (!root) return { status: "missing" };
+
+  const entry = objectValue(root[PI_PROVIDER_ID]);
+  if (!entry) return { status: "missing" };
+
+  if (typeof entry.type === "string" && entry.type !== "api_key") {
+    return { status: "unsupported" };
+  }
+  if (entry.type !== "api_key") {
+    return { status: "missing" };
+  }
+
+  const apiKey = usableApiKey(entry.key);
+  return apiKey !== undefined
+    ? { status: "available", apiKey }
+    : { status: "missing" };
 }
 
-async function loadPiRuntime(): Promise<PiModelRuntime> {
-  const [{ ModelRuntime, readStoredCredential }, { InMemoryCredentialStore }] =
-    await Promise.all([
-      import("@earendil-works/pi-coding-agent"),
-      import("@earendil-works/pi-ai"),
-    ]);
-  const credentials = new InMemoryCredentialStore();
-  const storedCredential = readStoredCredential(
-    PI_PROVIDER_ID,
-    join(piAgentDirectory(), "auth.json"),
-  );
-  if (storedCredential !== undefined) {
-    await credentials.modify(PI_PROVIDER_ID, async () => storedCredential);
+function authFilePath(dependencies: BrokerDependencies): string {
+  return join(piAgentDirectory(dependencies), "auth.json");
+}
+
+function piAgentDirectory(dependencies: BrokerDependencies): string {
+  const home = () =>
+    nonempty(dependencies.environment.HOME) ?? dependencies.homeDirectory();
+  const configured = nonempty(dependencies.environment.PI_CODING_AGENT_DIR);
+  if (configured === undefined) {
+    return join(home(), ".pi", "agent");
   }
-  return ModelRuntime.create({
-    credentials,
-    allowModelNetwork: false,
-    modelsPath: null,
-  });
+  if (configured === "~") return home();
+  if (
+    configured.startsWith("~/") ||
+    (process.platform === "win32" && configured.startsWith("~\\"))
+  ) {
+    return join(home(), configured.slice(2));
+  }
+  return configured;
 }
 
 function usableApiKey(value: unknown): string | undefined {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    return undefined;
+  }
+  // Reject environment, template, and command references without resolving them.
+  if (value.startsWith("!") || value.includes("$")) {
+    return undefined;
+  }
   if (
-    typeof value !== "string" ||
-    value === UNRESOLVED_CREDENTIAL ||
-    value.trim().length === 0 ||
-    value.startsWith("!") ||
-    value.includes("$") ||
     [...value].some((character) => {
       const code = character.charCodeAt(0);
       return code <= 0x1f || code === 0x7f;
@@ -119,17 +127,45 @@ function usableApiKey(value: unknown): string | undefined {
   return value;
 }
 
-function piAgentDirectory(): string {
-  const configured = process.env.PI_CODING_AGENT_DIR;
-  if (configured === undefined || configured.length === 0) {
-    return join(homedir(), ".pi", "agent");
+async function readBoundedFile(
+  path: string,
+  maxBytes: number,
+): Promise<Buffer> {
+  const file = await open(path, "r");
+  try {
+    const contents = new Uint8Array(maxBytes + 1);
+    let offset = 0;
+    while (offset < contents.byteLength) {
+      const { bytesRead } = await file.read(
+        contents,
+        offset,
+        contents.byteLength - offset,
+        null,
+      );
+      if (bytesRead === 0) break;
+      offset += bytesRead;
+    }
+    return Buffer.from(contents.buffer, contents.byteOffset, offset);
+  } finally {
+    await file.close();
   }
-  if (configured === "~") return homedir();
-  if (
-    configured.startsWith("~/") ||
-    (process.platform === "win32" && configured.startsWith("~\\"))
-  ) {
-    return join(homedir(), configured.slice(2));
-  }
-  return configured;
+}
+
+function nonempty(value: string | undefined): string | undefined {
+  return value && value.length > 0 ? value : undefined;
+}
+
+function objectValue(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function errorCode(error: unknown): string | undefined {
+  return error !== null &&
+    typeof error === "object" &&
+    "code" in error &&
+    typeof error.code === "string"
+    ? error.code
+    : undefined;
 }
