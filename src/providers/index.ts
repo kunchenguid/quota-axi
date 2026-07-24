@@ -1,9 +1,16 @@
 import { claudeAdapter } from "./claude.js";
 import { codexAdapter } from "./codex.js";
-import { copilotAdapter } from "./copilot.js";
 import { cursorAdapter } from "./cursor.js";
-import { grokAdapter } from "./grok.js";
-import { kimiAdapter } from "./kimi.js";
+import { tokenrouterAdapter } from "./tokenrouter.js";
+import { openrouterAdapter } from "./openrouter.js";
+import { pioneerAdapter } from "./pioneer.js";
+import { commandcodeAdapter } from "./commandcode.js";
+import { runpodAdapter } from "./runpod.js";
+import { fireworksAdapter } from "./fireworks.js";
+import { daytonaAdapter } from "./daytona.js";
+import { inferenceAdapter } from "./inference.js";
+import { nvidiaAdapter } from "./nvidia.js";
+import { antigravityAdapter } from "./antigravity.js";
 import {
   PROVIDER_IDS,
   type ProviderAdapter,
@@ -14,9 +21,16 @@ export const PROVIDERS: Record<ProviderId, ProviderAdapter> = {
   claude: claudeAdapter,
   codex: codexAdapter,
   cursor: cursorAdapter,
-  copilot: copilotAdapter,
-  grok: grokAdapter,
-  kimi: kimiAdapter,
+  tokenrouter: tokenrouterAdapter,
+  openrouter: openrouterAdapter,
+  pioneer: pioneerAdapter,
+  commandcode: commandcodeAdapter,
+  runpod: runpodAdapter,
+  fireworks: fireworksAdapter,
+  daytona: daytonaAdapter,
+  "inference.net": inferenceAdapter,
+  nvidia: nvidiaAdapter,
+  antigravity: antigravityAdapter,
 };
 
 export function parseProviders(value: string | undefined): ProviderId[] {

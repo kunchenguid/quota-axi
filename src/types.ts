@@ -2,22 +2,38 @@ export type ProviderId =
   | "claude"
   | "codex"
   | "cursor"
-  | "copilot"
-  | "grok"
-  | "kimi";
+  | "tokenrouter"
+  | "openrouter"
+  | "pioneer"
+  | "commandcode"
+  | "runpod"
+  | "fireworks"
+  | "daytona"
+  | "inference.net"
+  | "nvidia"
+  | "antigravity";
 
 export const PROVIDER_IDS = [
   "claude",
   "codex",
   "cursor",
-  "copilot",
-  "grok",
-  "kimi",
+  "tokenrouter",
+  "openrouter",
+  "pioneer",
+  "commandcode",
+  "runpod",
+  "fireworks",
+  "daytona",
+  "inference.net",
+  "nvidia",
+  "antigravity",
 ] as const satisfies readonly ProviderId[];
 
 export type ProviderSource =
   | "oauth"
   | "cli-rpc"
+  | "official-cli"
+  | "local-diagnostic"
   | "api"
   | "web"
   | "cache"
@@ -67,6 +83,7 @@ export type ProviderQuota = {
   windows: QuotaWindow[];
   credits?: {
     remaining?: number;
+    spent?: number;
     unlimited?: boolean;
     unit?: "usd" | "credits";
   };
