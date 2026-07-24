@@ -15,7 +15,7 @@ Quota CLI for agents - designed with [AXI](https://axi.md) (Agent eXperience Int
 Agents need quota state before they choose where work can safely run.
 Vendor dashboards are not shaped for shell automation, and local CLIs expose different windows, resets, and auth sources.
 
-quota-axi reports local Claude, Codex, Cursor, GitHub Copilot, Grok, Kimi, and TokenRouter quota windows in one [AXI](https://axi.md)-shaped call.
+quota-axi reports local Claude, Codex, Cursor, TokenRouter, OpenRouter, Pioneer, and Command Code quota windows in one [AXI](https://axi.md)-shaped call.
 It is data only: it never routes, recommends, proxies, intercepts, logs in, imports browser cookies, or mutates provider state.
 
 - **Official sources** - quota-axi reads local provider auth sources and calls the first-party quota, usage, billing, or entitlement endpoints used by the local agents, with a read-only Codex app-server probe as fallback.
@@ -39,9 +39,9 @@ providers[6]{provider,plan,source,status,refreshedAt}:
   claude,pro,oauth,fresh,"2026-03-15T16:41:55.000Z"
   codex,plus,cli-rpc,fresh,"2026-03-15T16:41:58.000Z"
   cursor,pro,api,fresh,"2026-03-15T16:41:59.000Z"
-  copilot,individual,api,fresh,"2026-03-15T16:42:00.000Z"
-  grok,unknown,web,fresh,"2026-03-15T16:42:00.000Z"
-  kimi,unknown,api,fresh,"2026-03-15T16:42:00.000Z"
+  tokenrouter,managed,api,fresh,"2026-03-15T16:42:00.000Z"
+  openrouter,credits,api,fresh,"2026-03-15T16:42:00.000Z"
+  pioneer,credits,api,fresh,"2026-03-15T16:42:00.000Z"
 windows[15]{provider,id,label,percentRemaining,resetsAt,state}:
   claude,five_hour,session,82,"2026-03-15T21:15:00.000Z",fresh
   claude,seven_day,week,64,"2026-03-19T15:00:00.000Z",fresh
@@ -53,11 +53,7 @@ windows[15]{provider,id,label,percentRemaining,resetsAt,state}:
   cursor,included_usage,included usage,72,"2026-04-01T00:00:00.000Z",fresh
   cursor,auto_usage,auto usage,91,"2026-04-01T00:00:00.000Z",fresh
   cursor,api_usage,API usage,100,"2026-04-01T00:00:00.000Z",fresh
-  copilot,chat,chat,84,"2026-04-01T00:00:00.000Z",fresh
-  copilot,premium_interactions,premium interactions,53,"2026-04-01T00:00:00.000Z",fresh
-  grok,credits,credits,67,"2026-04-01T00:00:00.000Z",fresh
-  kimi,weekly,week,74,"2026-03-19T09:00:00.000Z",fresh
-  kimi,five_hour,session,88,"2026-03-15T21:42:00.000Z",fresh
+  tokenrouter,credit_pool,credit pool,40,"2026-04-01T00:00:00.000Z",fresh
 help[3]:
   Run `quota-axi --provider claude --json` for JSON output
   Run `quota-axi --full` to include account and source-attempt details
@@ -116,10 +112,7 @@ auth[9]{provider,source,path,status,error}:
   codex,auth-json,~/.codex/auth.json,available,none
   codex,cli-rpc,~/.local/bin/codex,available,none
   cursor,state-vscdb,~/Library/Application Support/Cursor/User/globalStorage/state.vscdb,available,none
-  copilot,apps-json,~/.config/github-copilot/apps.json,available,none
-  grok,auth-json,~/.grok/auth.json,available,none
-  kimi,pi:kimi-coding,none,available,none
-  kimi,kimi-code-cli,none,available,none
+  tokenrouter,env,none,available,none
 help[1]:
   Run `quota-axi --allow-keychain-prompt auth` to permit macOS Keychain access
 ```
@@ -209,14 +202,14 @@ It is generated from `src/skill.ts`; update it with `pnpm run build:skill` and v
 
 ### Flags
 
-| Flag                                               | Description                                            |
-| -------------------------------------------------- | ------------------------------------------------------ |
-| `--provider claude,codex,cursor,copilot,grok,kimi` | Scope providers                                        |
-| `--json`                                           | Emit normalized JSON instead of TOON for quota or auth |
-| `--full`                                           | Include quota account identity and source attempts     |
-| `--allow-keychain-prompt`                          | Permit macOS Claude Keychain access that could prompt  |
-| `-h`, `--help`                                     | Print terse [AXI](https://axi.md) help                 |
-| `-v`, `-V`, `--version`                            | Print version                                          |
+| Flag                                                                        | Description                                            |
+| --------------------------------------------------------------------------- | ------------------------------------------------------ |
+| `--provider claude,codex,cursor,tokenrouter,openrouter,pioneer,commandcode` | Scope providers                                        |
+| `--json`                                                                    | Emit normalized JSON instead of TOON for quota or auth |
+| `--full`                                                                    | Include quota account identity and source attempts     |
+| `--allow-keychain-prompt`                                                   | Permit macOS Claude Keychain access that could prompt  |
+| `-h`, `--help`                                                              | Print terse [AXI](https://axi.md) help                 |
+| `-v`, `-V`, `--version`                                                     | Print version                                          |
 
 ## Output Model
 
@@ -277,11 +270,10 @@ Source attempts can include `credentialPresent` when a non-secret probe confirms
 | Claude scoped `limits` | When the account's usage response includes a scoped `limits` list, quota-axi surfaces every active window it describes instead, including model-scoped ones (e.g. Fable) as a `model:<slug>` window.                                                                                                                                                                                                                                                                                                                                                                   |
 | Codex                  | Identifies exact 18,000-second and 604,800-second periods as `five_hour` and `weekly`, regardless of source slot; periods without a duration retain their positional identity. Additional model- or feature-scoped limits use `model:<id>:5h` / `model:<id>:7d`, and code-review limits use `code_review_five_hour` / `code_review_weekly`. Unfamiliar durations remain honest `<hours>h` windows instead of being classified as known periods. Duplicate derived IDs are preserved with `_2`, `_3`, and later suffixes. Optional credit balance data can also appear. |
 | Cursor                 | Can report `included_usage`, `auto_usage`, `api_usage`, and optional `spend_limit` windows.                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| GitHub Copilot         | Can report quota snapshot windows such as `chat`, `completions`, and `premium_interactions`; when the first-party endpoint exposes entitlement but no numeric quota windows, quota-axi reports a fresh provider state with an empty `windows` list rather than inventing percentages.                                                                                                                                                                                                                                                                                  |
-| Grok                   | Reports the shared `credits` window, optional product-scoped `product:<slug>` windows, the current-period reset, and optional prepaid credit balance from the consumer Usage-page operation.                                                                                                                                                                                                                                                                                                                                                                           |
-| Grok proto3 zero       | For the exact consumer operation only, an omitted usage float is the official proto3 zero when a valid weekly or monthly current period proves the config is present; quota-axi reports `0` used and `100` remaining rather than deriving usage from money.                                                                                                                                                                                                                                                                                                            |
-| Kimi                   | Reports the principal `weekly` subscription window plus every valid self-described limit in wire order. Only a limit whose normalized duration is exactly 18,000 seconds is identified as `five_hour`; future limits remain `limit:<index>` unknown windows.                                                                                                                                                                                                                                                                                                           |
 | TokenRouter            | Reads the management wallet from `TOKENROUTER_MGMT_KEY` and reports USD balance plus a `credit_pool` usage window from the read-only management endpoint.                                                                                                                                                                                                                                                                                                                                                                                                              |
+| OpenRouter             | Reads the read-only credits endpoint and reports the current USD balance and usage.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| Pioneer                | Reads the read-only billing endpoint and reports the current credit pool.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| Command Code           | Reads the read-only billing credits endpoint and reports the current credit pool.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 
 ### `auth --json` shape
 
@@ -293,23 +285,24 @@ Source attempts can include `credentialPresent` when a non-secret probe confirms
 
 Auth source entries can include `credentialPresent` when a non-secret probe confirms a credential item exists.
 
-| Name                 | Values                                                                                                                          |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| Auth source statuses | `available`, `missing`, `invalid`, `expired`, or `skipped`                                                                      |
-| Auth source names    | `oauth-file`, `keychain`, `auth-json`, `auth-env`, `apps-json`, `state-vscdb`, `cli-rpc`, `pi:kimi-coding`, and `kimi-code-cli` |
+| Name                 | Values                                                                                            |
+| -------------------- | ------------------------------------------------------------------------------------------------- |
+| Auth source statuses | `available`, `missing`, `invalid`, `expired`, or `skipped`                                        |
+| Auth source names    | `oauth-file`, `keychain`, `auth-json`, `auth-env`, `state-vscdb`, `cli-rpc`, and `management-api` |
 
 ## Security Posture
 
 ### Provider credential sources
 
-| Provider       | Credential sources read                                                                                                                                                                                                                                                       |
-| -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Claude         | `$CLAUDE_CONFIG_DIR/.credentials.json` or `~/.claude/.credentials.json`; on macOS, the corresponding default or path-hashed Claude Code Keychain value with `--allow-keychain-prompt` or, after a profile-scoped non-secret access marker exists, on plain calls              |
-| Codex          | `$CODEX_HOME/auth.json` or `~/.codex/auth.json` before the read-only CLI fallback; `$QUOTA_AXI_CODEX_BINARY` can pin that fallback to an absolute executable path                                                                                                             |
-| Cursor         | `$CURSOR_STATE_DB` when set or the platform Cursor state database path                                                                                                                                                                                                        |
-| GitHub Copilot | `$GITHUB_COPILOT_APPS_JSON` when set or the local Copilot apps auth file                                                                                                                                                                                                      |
-| Grok           | `$GROK_AUTH_JSON`, inline `$GROK_AUTH`, `$GROK_AUTH_PATH`, or `$GROK_HOME/auth.json` / `~/.grok/auth.json`                                                                                                                                                                    |
-| Kimi           | Pi's `$PI_CODING_AGENT_DIR/auth.json` (default `~/.pi/agent/auth.json`) for a literal `kimi-coding` API key first, then a fresh official Kimi Code CLI access token from `$KIMI_CODE_HOME/credentials/kimi-code.json` (default `$HOME/.kimi-code/credentials/kimi-code.json`) |
+| Provider     | Credential sources read                                                                                                                                                                                                                                          |
+| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Claude       | `$CLAUDE_CONFIG_DIR/.credentials.json` or `~/.claude/.credentials.json`; on macOS, the corresponding default or path-hashed Claude Code Keychain value with `--allow-keychain-prompt` or, after a profile-scoped non-secret access marker exists, on plain calls |
+| Codex        | `$CODEX_HOME/auth.json` or `~/.codex/auth.json` before the read-only CLI fallback; `$QUOTA_AXI_CODEX_BINARY` can pin that fallback to an absolute executable path                                                                                                |
+| Cursor       | `$CURSOR_STATE_DB` when set or the platform Cursor state database path                                                                                                                                                                                           |
+| TokenRouter  | `TOKENROUTER_MGMT_KEY` or the approved local Keychain entry                                                                                                                                                                                                      |
+| OpenRouter   | `OPENROUTER_API_KEY` or the approved local Keychain entry                                                                                                                                                                                                        |
+| Pioneer      | `PIONEER_API_KEY` or the approved local Keychain entry                                                                                                                                                                                                           |
+| Command Code | `COMMANDCODE_API_KEY` or the approved local Keychain entry                                                                                                                                                                                                       |
 
 ### Provider notes
 
@@ -331,33 +324,13 @@ Auth source entries can include `credentialPresent` when a non-secret probe conf
 - It uses `sqlite3 -readonly` to read `cursorAuth` values and calls Cursor's first-party dashboard usage endpoint.
 - If `sqlite3` is unavailable, Cursor auth is reported as skipped with `sqlite3_unavailable`.
 
-**GitHub Copilot**
-
-- It calls GitHub's first-party Copilot user endpoint.
-- It only sends tokens associated with public GitHub hosts to that public endpoint; host-specific GitHub Enterprise tokens are treated as unavailable there.
-
-**Grok**
-
-- It selects session-scoped auth instead of API-key entries and sends a read-only gRPC-web request to Grok's consumer `grok_api_v2.GrokBuildBilling.GetGrokCreditsConfig` operation.
-- Session-scoped Grok auth includes web/session scopes and OIDC records scoped to `auth.x.ai` with `auth_mode` or `authMode` set to `oidc`, including scope keys with `::<client id>` suffixes.
-- It does not send browser cookies, launch the Grok CLI, refresh credentials, perform OAuth, retain raw response bodies, or derive usage from monetary fields.
-
-**Kimi**
-
-- It opens Pi's `$PI_CODING_AGENT_DIR/auth.json` (default `~/.pi/agent/auth.json`) read-only with a strict 64 KiB cap and guaranteed descriptor cleanup. It accepts only the exact `kimi-coding` entry with `type: "api_key"` and a nonempty, control-byte-free literal string `key`; malformed or oversized files, unsafe shapes, and environment, template, or command references are unavailable without resolving or executing their values. Auth and quota inspection do not create, rewrite, or otherwise manage Pi provider state.
-- If Pi has no supported credential, it reads the official Kimi Code CLI credential at `$KIMI_CODE_HOME/credentials/kimi-code.json`, defaulting to `$HOME/.kimi-code/credentials/kimi-code.json`. It accepts only a non-empty `access_token` whose Unix-seconds `expires_at` (a JSON number or numeric string) is more than 60 seconds in the future.
-- The Pi source always has priority. Ambient API-key environment variables are not a credential source. Transport, decoding, timeout, cancellation, and server failures do not trigger credential switching.
-- It sends one redirect-disabled `GET` to the fixed `https://api.kimi.com/coding/v1/usages` endpoint with a 15 second total deadline and a 262,144-byte decoded-body cap.
-- It never uses `refresh_token`, accepts a custom Kimi origin, launches Pi or Kimi, makes a model request, refreshes or writes credentials, creates a device ID, imports cookies, sends device identity, retains raw responses, or exposes account, plan, token, or fingerprint data.
-- Definitive credential absence or rejection retires Kimi cache data. Transient fallback drops reset-expired windows and applies five-hour or seven-day age bounds to windows without resets.
-
 ### Safety guarantees
 
 - Quota and auth HTTP requests go only to first-party provider usage, quota, billing, or entitlement endpoints with the user's local credentials.
 - The user-initiated `update` command is the only non-provider network surface, and it is not part of quota measurement.
 - It sends credential values only to the first-party provider request they authenticate.
 - It never prints, logs, or caches credential values.
-- It never launches the Claude, Grok, Pi, or Kimi CLIs, so it cannot spend quota or mutate provider credentials while measuring them.
+- It never launches provider CLIs, so it cannot spend quota or mutate provider credentials while measuring them.
 
 ### Cache
 
@@ -371,7 +344,6 @@ Auth source entries can include `credentialPresent` when a non-secret probe conf
 | Fresh provider reports with no windows | Clear any cached snapshot for that provider, so entitlement-only reports do not leave stale quota windows behind.                                                                                                                             |
 | Reports and details not cached         | Failed providers, stale providers, account identity, and source attempts are not cached.                                                                                                                                                      |
 | Codex cache identities                 | Cached Codex windows are accepted only when ID, label, kind, duration, and duplicate suffix order agree; stale snapshots with mismatched identities are rejected.                                                                             |
-| Grok cache provenance                  | Only snapshots produced by the current `web` consumer operation can be used as Grok stale fallback; legacy `api` billing-proxy snapshots are rejected.                                                                                        |
 
 ## Development
 

@@ -1,6 +1,6 @@
 ---
 name: quota-axi
-description: "Report local Claude, Codex, Cursor, GitHub Copilot, Grok, Kimi, and TokenRouter quota windows via the quota-axi CLI - remaining percentages, reset times, and provider status read from local auth sources, with no routing, recommendation, or provider mutation. Use before deciding whether it is safe to keep spending a provider's quota, when the user asks about usage, rate limits, or remaining quota, or when comparing local provider headroom."
+description: "Report local Claude, Codex, Cursor, TokenRouter, OpenRouter, Pioneer, and Command Code quota windows via the quota-axi CLI - remaining percentages, reset times, and provider status read from local auth sources, with no routing, recommendation, or provider mutation. Use before deciding whether it is safe to keep spending a provider's quota, when the user asks about usage, rate limits, or remaining quota, or when comparing local provider headroom."
 user-invocable: false
 author: Kun Chen (kunchenguid)
 metadata:
@@ -12,10 +12,10 @@ metadata:
         claude,
         codex,
         cursor,
-        copilot,
-        grok,
-        kimi,
         tokenrouter,
+        openrouter,
+        pioneer,
+        commandcode,
         cli,
       ]
     category: observability
@@ -29,8 +29,8 @@ You do not need quota-axi installed globally - invoke it with `npx -y quota-axi`
 
 quota-axi is data only: it never routes, recommends, proxies, intercepts, logs in, imports
 browser cookies, or mutates provider state. It reads local provider auth sources and calls
-first-party provider quota, usage, billing, or entitlement endpoints; it never launches the
-Claude, Grok, Pi, or Kimi CLIs, so it cannot spend the quota it measures.
+first-party provider quota, usage, billing, or entitlement endpoints; it never launches provider
+CLIs, so it cannot spend the quota it measures.
 
 ## When to use
 
@@ -41,7 +41,7 @@ or when comparing supported local provider headroom side by side.
 ## Workflow
 
 1. Run `npx -y quota-axi` for compact TOON output covering supported providers' quota windows.
-2. Scope to one provider with `--provider claude` or to a subset with `--provider cursor,copilot,grok,kimi,tokenrouter`.
+2. Scope to one provider with `--provider claude` or to a subset with `--provider cursor,tokenrouter`.
 3. Pass `--json` for the normalized machine-readable model instead of TOON.
 4. Pass `--full` to include account identity and per-source attempt details.
 5. Run `npx -y quota-axi auth` to check local auth-source availability without printing
@@ -54,12 +54,7 @@ or when comparing supported local provider headroom side by side.
 7. For a managed Codex installation, set `QUOTA_AXI_CODEX_BINARY` to its absolute executable
    path. quota-axi uses that exact executable for auth inspection and the read-only app-server
    fallback, and fails closed if the override is invalid.
-8. For Kimi, quota-axi prefers a literal Pi-managed `kimi-coding` API key from
-   `$PI_CODING_AGENT_DIR/auth.json` (default `~/.pi/agent/auth.json`). If it is
-   unavailable, quota-axi may reuse a fresh official Kimi Code CLI access token from
-   `$KIMI_CODE_HOME/credentials/kimi-code.json` (default
-   `$HOME/.kimi-code/credentials/kimi-code.json`) without refreshing or writing credentials.
-9. For TokenRouter, set `TOKENROUTER_MGMT_KEY` in the process environment. quota-axi calls only
+8. For TokenRouter, set `TOKENROUTER_MGMT_KEY` in the process environment. quota-axi calls only
    the read-only management wallet endpoint and never routes requests or exposes the key.
 
 ## Usage
@@ -69,11 +64,11 @@ usage: quota-axi [auth] [flags]
 commands[2]:
   (none)=quota, auth
 flags[6]:
-  --provider <claude,codex,cursor,copilot,grok,kimi>, --json, --full, --allow-keychain-prompt, --help, -v/--version
+  --provider <claude,codex,cursor,tokenrouter,openrouter,pioneer,commandcode>, --json, --full, --allow-keychain-prompt, --help, -v/--version
 examples:
   quota-axi
   quota-axi --provider claude
-  quota-axi --provider cursor,copilot,grok,kimi
+  quota-axi --provider cursor,tokenrouter
   quota-axi --json
   quota-axi --full
   quota-axi auth

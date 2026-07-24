@@ -126,68 +126,6 @@ export const SOURCE_CATALOG: Record<
       30,
     ),
   ],
-  copilot: [
-    source(
-      "copilot",
-      "first-party-api",
-      "authoritative",
-      "GitHub local auth",
-      "test/providers/copilot.test.ts",
-      10,
-    ),
-    source(
-      "copilot",
-      "local-store",
-      "verified",
-      "apps.json",
-      "test/providers/copilot.test.ts",
-      20,
-    ),
-  ],
-  grok: [
-    source(
-      "grok",
-      "first-party-api",
-      "authoritative",
-      "local session auth",
-      "test/providers/grok.test.ts",
-      10,
-    ),
-    source(
-      "grok",
-      "browser-cdp",
-      "fallback",
-      "browser session",
-      "test/providers/grok.test.ts",
-      20,
-    ),
-  ],
-  kimi: [
-    source(
-      "kimi",
-      "first-party-api",
-      "authoritative",
-      "Pi/Kimi local auth",
-      "test/providers/kimi.test.ts",
-      10,
-    ),
-    source(
-      "kimi",
-      "local-store",
-      "verified",
-      "Kimi CLI credentials",
-      "test/providers/kimi-code-cli-credential.test.ts",
-      20,
-    ),
-    source(
-      "kimi",
-      "browser-cdp",
-      "fallback",
-      "browser session",
-      "test/providers/kimi.test.ts",
-      30,
-    ),
-  ],
   tokenrouter: [
     source(
       "tokenrouter",

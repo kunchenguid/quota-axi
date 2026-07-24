@@ -2,9 +2,6 @@ export type ProviderId =
   | "claude"
   | "codex"
   | "cursor"
-  | "copilot"
-  | "grok"
-  | "kimi"
   | "tokenrouter"
   | "openrouter"
   | "pioneer"
@@ -14,9 +11,6 @@ export const PROVIDER_IDS = [
   "claude",
   "codex",
   "cursor",
-  "copilot",
-  "grok",
-  "kimi",
   "tokenrouter",
   "openrouter",
   "pioneer",

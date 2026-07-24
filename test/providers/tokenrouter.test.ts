@@ -1,12 +1,25 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fetchQuota, inspectAuth } from "../../src/providers/tokenrouter.js";
 
 const originalKey = process.env.TOKENROUTER_MGMT_KEY;
+const originalCacheHome = process.env.XDG_CACHE_HOME;
+let cacheHome: string;
+
+beforeEach(() => {
+  cacheHome = mkdtempSync(join(tmpdir(), "quota-axi-tokenrouter-test-"));
+  process.env.XDG_CACHE_HOME = cacheHome;
+});
 
 afterEach(() => {
   vi.unstubAllGlobals();
   if (originalKey === undefined) delete process.env.TOKENROUTER_MGMT_KEY;
   else process.env.TOKENROUTER_MGMT_KEY = originalKey;
+  if (originalCacheHome === undefined) delete process.env.XDG_CACHE_HOME;
+  else process.env.XDG_CACHE_HOME = originalCacheHome;
+  rmSync(cacheHome, { recursive: true, force: true });
 });
 
 describe("TokenRouter provider", () => {

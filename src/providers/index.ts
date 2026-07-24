@@ -1,9 +1,6 @@
 import { claudeAdapter } from "./claude.js";
 import { codexAdapter } from "./codex.js";
-import { copilotAdapter } from "./copilot.js";
 import { cursorAdapter } from "./cursor.js";
-import { grokAdapter } from "./grok.js";
-import { kimiAdapter } from "./kimi.js";
 import { tokenrouterAdapter } from "./tokenrouter.js";
 import { openrouterAdapter } from "./openrouter.js";
 import { pioneerAdapter } from "./pioneer.js";
@@ -18,9 +15,6 @@ export const PROVIDERS: Record<ProviderId, ProviderAdapter> = {
   claude: claudeAdapter,
   codex: codexAdapter,
   cursor: cursorAdapter,
-  copilot: copilotAdapter,
-  grok: grokAdapter,
-  kimi: kimiAdapter,
   tokenrouter: tokenrouterAdapter,
   openrouter: openrouterAdapter,
   pioneer: pioneerAdapter,
