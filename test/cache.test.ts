@@ -45,43 +45,87 @@ describe("quota cache", () => {
     expect(readCachedProvider("claude")).toBeUndefined();
   });
 
-  it("invalidates contradictory legacy Codex window identities", () => {
+  it("invalidates Codex identities that do not exactly match duration", () => {
     useTempCache();
     const file = cacheFilePath();
     mkdirSync(dirname(file), { recursive: true });
-    writeFileSync(
-      file,
-      JSON.stringify({
-        schemaVersion: 1,
-        providers: [
-          {
-            ...quota("codex", 20),
-            windows: [
-              {
-                id: "five_hour",
-                label: "session",
-                kind: "session",
-                windowSeconds: 604_800,
-              },
-            ],
-          },
-        ],
-      }),
-    );
+    const invalidWindows = [
+      {
+        id: "seven_day",
+        label: "week",
+        kind: "weekly",
+        windowSeconds: 604_800,
+      },
+      {
+        id: "five_hour",
+        label: "session",
+        kind: "session",
+        windowSeconds: 600_000,
+      },
+      {
+        id: "model:preview:7d",
+        label: "Preview week",
+        kind: "model",
+        windowSeconds: 18_000,
+      },
+      {
+        id: "weekly_2",
+        label: "week",
+        kind: "weekly",
+        windowSeconds: 604_800,
+      },
+    ];
 
-    expect(readCachedProvider("codex")).toBeUndefined();
+    for (const window of invalidWindows) {
+      writeFileSync(
+        file,
+        JSON.stringify({
+          schemaVersion: 1,
+          providers: [{ ...quota("codex", 20), windows: [window] }],
+        }),
+      );
+
+      expect(readCachedProvider("codex")).toBeUndefined();
+    }
   });
 
-  it("retains consistent known-duration Codex cache entries", () => {
+  it("retains exact known and unfamiliar Codex cache identities", () => {
     useTempCache();
     const codex = quota("codex", 20);
-    codex.windows[0].windowSeconds = 18_000;
+    codex.windows = [
+      {
+        id: "five_hour",
+        label: "session",
+        kind: "session",
+        windowSeconds: 18_000,
+      },
+      {
+        id: "weekly",
+        label: "week",
+        kind: "weekly",
+        windowSeconds: 604_800,
+      },
+      {
+        id: "weekly_2",
+        label: "week",
+        kind: "weekly",
+        windowSeconds: 604_800,
+      },
+      {
+        id: "model:preview:window:166.67h",
+        label: "Preview 166.67h window",
+        kind: "model",
+        windowSeconds: 600_000,
+      },
+    ];
     writeCachedProviders([codex]);
 
-    expect(readCachedProvider("codex")?.windows[0]).toMatchObject({
-      id: "five_hour",
-      windowSeconds: 18_000,
-    });
+    expect(readCachedProvider("codex")?.windows.map(({ id }) => id)).toEqual([
+      "five_hour",
+      "weekly",
+      "weekly_2",
+      "model:preview:window:166.67h",
+    ]);
   });
 
   it("merges fresh provider snapshots into existing cache", () => {
