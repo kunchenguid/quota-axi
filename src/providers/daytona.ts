@@ -19,8 +19,8 @@ import {
   successProvider,
 } from "./common.js";
 
-const KEY = "DAYTONA_API_TOKEN";
-const API_KEY = "DAYTONA_API_KEY";
+const KEY = "DAYTONA_API_KEY";
+const LEGACY_KEY = "DAYTONA_API_TOKEN";
 const URL = "https://app.daytona.io/api/sandbox";
 export const daytonaAdapter: ProviderAdapter = {
   id: "daytona",
@@ -37,12 +37,12 @@ export async function fetchQuota(
     KEY,
     options.allowKeychainPrompt,
   );
-  const apiKeyCredential = credential
+  const legacyCredential = credential
     ? undefined
-    : await readProviderCredential(API_KEY, options.allowKeychainPrompt);
+    : await readProviderCredential(LEGACY_KEY, options.allowKeychainPrompt);
   const configToken =
-    credential || apiKeyCredential ? undefined : await readDaytonaConfigToken();
-  const token = credential?.value ?? apiKeyCredential?.value ?? configToken;
+    credential || legacyCredential ? undefined : await readDaytonaConfigToken();
+  const token = credential?.value ?? legacyCredential?.value ?? configToken;
   if (!token) {
     attempts.push({
       source: "env/keychain",
@@ -112,11 +112,18 @@ export async function inspectAuth(
     KEY,
     options.allowKeychainPrompt,
   );
+  const legacyCredential = credential
+    ? undefined
+    : await readProviderCredential(LEGACY_KEY, options.allowKeychainPrompt);
   return {
     provider: "daytona",
     sources: [
       credentialSource(KEY, credential, options.allowKeychainPrompt),
-      credentialSource(API_KEY, credential, options.allowKeychainPrompt),
+      credentialSource(
+        LEGACY_KEY,
+        legacyCredential,
+        options.allowKeychainPrompt,
+      ),
       {
         source: "daytona-cli-config",
         path: "~/Library/Application Support/daytona/config.json",
