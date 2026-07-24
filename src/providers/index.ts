@@ -4,6 +4,7 @@ import { copilotAdapter } from "./copilot.js";
 import { cursorAdapter } from "./cursor.js";
 import { grokAdapter } from "./grok.js";
 import { kimiAdapter } from "./kimi.js";
+import { tokenrouterAdapter } from "./tokenrouter.js";
 import {
   PROVIDER_IDS,
   type ProviderAdapter,
@@ -17,6 +18,7 @@ export const PROVIDERS: Record<ProviderId, ProviderAdapter> = {
   copilot: copilotAdapter,
   grok: grokAdapter,
   kimi: kimiAdapter,
+  tokenrouter: tokenrouterAdapter,
 };
 
 export function parseProviders(value: string | undefined): ProviderId[] {

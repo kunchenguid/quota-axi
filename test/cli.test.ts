@@ -18,6 +18,7 @@ const originalCursorProvider = PROVIDERS.cursor;
 const originalCopilotProvider = PROVIDERS.copilot;
 const originalGrokProvider = PROVIDERS.grok;
 const originalKimiProvider = PROVIDERS.kimi;
+const originalTokenRouterProvider = PROVIDERS.tokenrouter;
 const originalXdgCacheHome = process.env.XDG_CACHE_HOME;
 let tempDir: string | undefined;
 
@@ -28,6 +29,7 @@ afterEach(() => {
   PROVIDERS.copilot = originalCopilotProvider;
   PROVIDERS.grok = originalGrokProvider;
   PROVIDERS.kimi = originalKimiProvider;
+  PROVIDERS.tokenrouter = originalTokenRouterProvider;
   if (originalXdgCacheHome === undefined) delete process.env.XDG_CACHE_HOME;
   else process.env.XDG_CACHE_HOME = originalXdgCacheHome;
   if (tempDir) rmSync(tempDir, { recursive: true, force: true });
@@ -44,6 +46,7 @@ describe("CLI flag parsing", () => {
       "copilot",
       "grok",
       "kimi",
+      "tokenrouter",
     ]);
   });
 
@@ -64,7 +67,15 @@ describe("CLI flag parsing", () => {
   it("collects the boolean flags", () => {
     expect(parseFlags(["--json", "--full", "--allow-keychain-prompt"])).toEqual(
       {
-        providers: ["claude", "codex", "cursor", "copilot", "grok", "kimi"],
+        providers: [
+          "claude",
+          "codex",
+          "cursor",
+          "copilot",
+          "grok",
+          "kimi",
+          "tokenrouter",
+        ],
         json: true,
         full: true,
         allowKeychainPrompt: true,
