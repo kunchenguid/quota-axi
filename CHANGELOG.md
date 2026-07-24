@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.1.12](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.11...quota-axi-v0.1.12) (2026-07-24)
+
+
+### Bug Fixes
+
+* **codex:** classify quota windows by exact duration ([1591c58](https://github.com/kunchenguid/quota-axi/commit/1591c585384fe69ac23e822d68f6b6662f6abe62))
+* **codex:** derive window id/label/kind from actual window duration ([47db504](https://github.com/kunchenguid/quota-axi/commit/47db504dab7bf7f623b9e17728caaa0df4c55251))
+* **codex:** identify quota windows by exact duration ([a24b1ff](https://github.com/kunchenguid/quota-axi/commit/a24b1ff246f7b958782da64fb75e07465bd5f28c))
+* execute every PR body compliance event ([#37](https://github.com/kunchenguid/quota-axi/issues/37)) ([e85fdbc](https://github.com/kunchenguid/quota-axi/commit/e85fdbc0b100a1042f50935e467c0c301542e595))
+
 ## [0.1.11](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.10...quota-axi-v0.1.11) (2026-07-21)
 
 
