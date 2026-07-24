@@ -10,7 +10,8 @@ export type ProviderId =
   | "fireworks"
   | "daytona"
   | "inference.net"
-  | "nvidia";
+  | "nvidia"
+  | "antigravity";
 
 export const PROVIDER_IDS = [
   "claude",
@@ -25,6 +26,7 @@ export const PROVIDER_IDS = [
   "daytona",
   "inference.net",
   "nvidia",
+  "antigravity",
 ] as const satisfies readonly ProviderId[];
 
 export type ProviderSource =

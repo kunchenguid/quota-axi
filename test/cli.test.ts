@@ -46,6 +46,7 @@ describe("CLI flag parsing", () => {
       "daytona",
       "inference.net",
       "nvidia",
+      "antigravity",
     ]);
   });
 
@@ -80,6 +81,7 @@ describe("CLI flag parsing", () => {
           "daytona",
           "inference.net",
           "nvidia",
+          "antigravity",
         ],
         json: true,
         full: true,

@@ -224,6 +224,16 @@ export const SOURCE_CATALOG: Record<
       10,
     ),
   ],
+  antigravity: [
+    source(
+      "antigravity",
+      "official-cli",
+      "authoritative",
+      "agy CLI via bounded tmux /usage probe",
+      "test/providers/antigravity.test.ts",
+      10,
+    ),
+  ],
 };
 
 export function preferredSources(

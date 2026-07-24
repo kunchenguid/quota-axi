@@ -10,6 +10,7 @@ import { fireworksAdapter } from "./fireworks.js";
 import { daytonaAdapter } from "./daytona.js";
 import { inferenceAdapter } from "./inference.js";
 import { nvidiaAdapter } from "./nvidia.js";
+import { antigravityAdapter } from "./antigravity.js";
 import {
   PROVIDER_IDS,
   type ProviderAdapter,
@@ -29,6 +30,7 @@ export const PROVIDERS: Record<ProviderId, ProviderAdapter> = {
   daytona: daytonaAdapter,
   "inference.net": inferenceAdapter,
   nvidia: nvidiaAdapter,
+  antigravity: antigravityAdapter,
 };
 
 export function parseProviders(value: string | undefined): ProviderId[] {

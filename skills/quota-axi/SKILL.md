@@ -19,6 +19,7 @@ metadata:
         runpod,
         fireworks,
         daytona,
+        antigravity,
         cli,
       ]
     category: observability
@@ -32,8 +33,8 @@ You do not need quota-axi installed globally - invoke it with `npx -y quota-axi`
 
 quota-axi is data only: it never routes, recommends, proxies, intercepts, logs in, imports
 browser cookies, or mutates provider state. It reads local provider auth sources and calls
-first-party provider quota, usage, billing, or entitlement endpoints; it never launches provider
-CLIs, so it cannot spend the quota it measures.
+first-party provider quota, usage, billing, or entitlement endpoints. The Antigravity adapter
+may launch a bounded tmux `/usage` probe, but never sends a model request or mutates credentials.
 
 ## When to use
 
@@ -67,7 +68,7 @@ usage: quota-axi [auth] [flags]
 commands[2]:
   (none)=quota, auth
 flags[6]:
-  --provider <claude,codex,cursor,tokenrouter,openrouter,pioneer,commandcode,runpod,fireworks,daytona>, --json, --full, --allow-keychain-prompt, --help, -v/--version
+  --provider <claude,codex,cursor,tokenrouter,openrouter,pioneer,commandcode,runpod,fireworks,daytona,inference.net,nvidia,antigravity>, --json, --full, --allow-keychain-prompt, --help, -v/--version
 examples:
   quota-axi
   quota-axi --provider claude

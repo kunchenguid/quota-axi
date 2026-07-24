@@ -75,7 +75,7 @@ function parseProviderScope(value: string | undefined): ProviderId[] {
       error instanceof Error ? error.message : "unsupported provider",
       "VALIDATION_ERROR",
       [
-        "Supported providers: claude, codex, cursor, tokenrouter, openrouter, pioneer, commandcode, runpod, fireworks, daytona",
+        "Supported providers: claude, codex, cursor, tokenrouter, openrouter, pioneer, commandcode, runpod, fireworks, daytona, inference.net, nvidia, antigravity",
       ],
     );
   }

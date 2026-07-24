@@ -27,6 +27,7 @@ export const HERMES_TAGS = [
   "runpod",
   "fireworks",
   "daytona",
+  "antigravity",
   "cli",
 ];
 export const HERMES_CATEGORY = "observability";
@@ -63,8 +64,8 @@ You do not need quota-axi installed globally - invoke it with \`npx -y quota-axi
 
 quota-axi is data only: it never routes, recommends, proxies, intercepts, logs in, imports
 browser cookies, or mutates provider state. It reads local provider auth sources and calls
-first-party provider quota, usage, billing, or entitlement endpoints; it never launches provider
-CLIs, so it cannot spend the quota it measures.
+first-party provider quota, usage, billing, or entitlement endpoints. The Antigravity adapter
+may launch a bounded tmux \`/usage\` probe, but never sends a model request or mutates credentials.
 
 ## When to use
 
