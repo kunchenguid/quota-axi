@@ -45,6 +45,45 @@ describe("quota cache", () => {
     expect(readCachedProvider("claude")).toBeUndefined();
   });
 
+  it("invalidates contradictory legacy Codex window identities", () => {
+    useTempCache();
+    const file = cacheFilePath();
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(
+      file,
+      JSON.stringify({
+        schemaVersion: 1,
+        providers: [
+          {
+            ...quota("codex", 20),
+            windows: [
+              {
+                id: "five_hour",
+                label: "session",
+                kind: "session",
+                windowSeconds: 604_800,
+              },
+            ],
+          },
+        ],
+      }),
+    );
+
+    expect(readCachedProvider("codex")).toBeUndefined();
+  });
+
+  it("retains consistent known-duration Codex cache entries", () => {
+    useTempCache();
+    const codex = quota("codex", 20);
+    codex.windows[0].windowSeconds = 18_000;
+    writeCachedProviders([codex]);
+
+    expect(readCachedProvider("codex")?.windows[0]).toMatchObject({
+      id: "five_hour",
+      windowSeconds: 18_000,
+    });
+  });
+
   it("merges fresh provider snapshots into existing cache", () => {
     useTempCache();
     writeCachedProviders([quota("claude", 10), quota("codex", 20)]);

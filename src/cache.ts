@@ -148,7 +148,8 @@ function normalizeCachedProvider(raw: unknown): ProviderQuota | undefined {
     !state ||
     !status ||
     !sourcesTried ||
-    windows.length === 0
+    windows.length === 0 ||
+    (provider === "codex" && windows.some(isContradictoryCodexWindow))
   )
     return undefined;
 
@@ -170,6 +171,24 @@ function normalizeCachedProvider(raw: unknown): ProviderQuota | undefined {
   if (refreshedAt) result.state.refreshedAt = refreshedAt;
   if (credits) result.credits = credits;
   return result;
+}
+
+function isContradictoryCodexWindow(window: QuotaWindow): boolean {
+  if (window.windowSeconds === 604_800) {
+    return (
+      window.id === "five_hour" ||
+      window.id === "code_review_five_hour" ||
+      window.id.endsWith(":5h")
+    );
+  }
+  if (window.windowSeconds === 18_000) {
+    return (
+      window.id === "weekly" ||
+      window.id === "code_review_weekly" ||
+      window.id.endsWith(":7d")
+    );
+  }
+  return false;
 }
 
 function normalizeCachedWindow(raw: unknown): QuotaWindow | undefined {

@@ -245,6 +245,14 @@ function resolveRateLimitContainer(
   );
 }
 
+type WindowIdentity = Pick<QuotaWindow, "id" | "label" | "kind">;
+
+type WindowIdentitySet = {
+  session: WindowIdentity;
+  weekly: WindowIdentity;
+  unfamiliar(windowSeconds: number): WindowIdentity;
+};
+
 function windowPairFromContainer(
   container: Record<string, unknown> | undefined,
   primaryId: string,
@@ -255,18 +263,30 @@ function windowPairFromContainer(
   secondaryKind: QuotaWindow["kind"],
 ): QuotaWindow[] {
   if (!container) return [];
+  const identities: WindowIdentitySet = {
+    session: { id: primaryId, label: primaryLabel, kind: primaryKind },
+    weekly: { id: secondaryId, label: secondaryLabel, kind: secondaryKind },
+    unfamiliar(windowSeconds) {
+      const duration = readableWindowDuration(windowSeconds);
+      const prefix =
+        primaryId === "five_hour" ? "window" : "code_review_window";
+      return {
+        id: `${prefix}:${duration}`,
+        label: `${duration} window`,
+        kind: "unknown",
+      };
+    },
+  };
   return [
     normalizeWindow(
       container.primary_window ?? container.primary,
-      primaryId,
-      primaryLabel,
-      primaryKind,
+      identities.session,
+      identities,
     ),
     normalizeWindow(
       container.secondary_window ?? container.secondary,
-      secondaryId,
-      secondaryLabel,
-      secondaryKind,
+      identities.weekly,
+      identities,
     ),
   ].filter((window): window is QuotaWindow => Boolean(window));
 }
@@ -315,20 +335,36 @@ function namedLimitWindows(
   label: string,
   container: Record<string, unknown>,
 ): QuotaWindow[] {
+  const identities: WindowIdentitySet = {
+    session: {
+      id: `model:${id}:5h`,
+      label: `${label} session`,
+      kind: "model",
+    },
+    weekly: {
+      id: `model:${id}:7d`,
+      label: `${label} week`,
+      kind: "model",
+    },
+    unfamiliar(windowSeconds) {
+      const duration = readableWindowDuration(windowSeconds);
+      return {
+        id: `model:${id}:window:${duration}`,
+        label: `${label} ${duration} window`,
+        kind: "model",
+      };
+    },
+  };
   return [
     normalizeWindow(
       container.primary_window ?? container.primary,
-      `model:${id}:5h`,
-      `${label} session`,
-      "model",
-      { id, label },
+      identities.session,
+      identities,
     ),
     normalizeWindow(
       container.secondary_window ?? container.secondary,
-      `model:${id}:7d`,
-      `${label} week`,
-      "model",
-      { id, label },
+      identities.weekly,
+      identities,
     ),
   ].filter((window): window is QuotaWindow => Boolean(window));
 }
@@ -647,10 +683,8 @@ function sendRpc(
 
 function normalizeWindow(
   raw: unknown,
-  id: string,
-  label: string,
-  kind: QuotaWindow["kind"],
-  namedLimit?: { id: string; label: string },
+  fallbackIdentity: WindowIdentity,
+  identities: WindowIdentitySet,
 ): QuotaWindow | undefined {
   const data = objectValue(raw) as RawWindow | undefined;
   if (!data) return undefined;
@@ -667,7 +701,7 @@ function normalizeWindow(
       : new Date(
           Date.now() + numberValue(data.reset_after_seconds)! * 1000,
         ).toISOString();
-  const identity = windowIdentity(windowSeconds, id, label, kind, namedLimit);
+  const identity = windowIdentity(windowSeconds, fallbackIdentity, identities);
   return withRemaining({
     ...identity,
     percentUsed: clampPercent(used),
@@ -681,47 +715,13 @@ function normalizeWindow(
 
 function windowIdentity(
   windowSeconds: number | undefined,
-  fallbackId: string,
-  fallbackLabel: string,
-  fallbackKind: QuotaWindow["kind"],
-  namedLimit?: { id: string; label: string },
-): Pick<QuotaWindow, "id" | "label" | "kind"> {
-  if (windowSeconds === undefined) {
-    return { id: fallbackId, label: fallbackLabel, kind: fallbackKind };
-  }
-
-  if (windowSeconds <= 21_600) {
-    return namedLimit
-      ? {
-          id: `model:${namedLimit.id}:5h`,
-          label: `${namedLimit.label} session`,
-          kind: "model",
-        }
-      : { id: "five_hour", label: "session", kind: "session" };
-  }
-
-  if (windowSeconds >= 518_400) {
-    return namedLimit
-      ? {
-          id: `model:${namedLimit.id}:7d`,
-          label: `${namedLimit.label} week`,
-          kind: "model",
-        }
-      : { id: "seven_day", label: "week", kind: "weekly" };
-  }
-
-  const duration = readableWindowDuration(windowSeconds);
-  return namedLimit
-    ? {
-        id: `model:${namedLimit.id}:window:${duration}`,
-        label: `${namedLimit.label} ${duration} window`,
-        kind: "model",
-      }
-    : {
-        id: `window:${duration}`,
-        label: `${duration} window`,
-        kind: fallbackKind,
-      };
+  fallbackIdentity: WindowIdentity,
+  identities: WindowIdentitySet,
+): WindowIdentity {
+  if (windowSeconds === undefined) return fallbackIdentity;
+  if (windowSeconds === 18_000) return identities.session;
+  if (windowSeconds === 604_800) return identities.weekly;
+  return identities.unfamiliar(windowSeconds);
 }
 
 function readableWindowDuration(windowSeconds: number): string {
