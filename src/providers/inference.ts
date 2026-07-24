@@ -53,14 +53,25 @@ export async function fetchQuota(
 export async function inspectAuth(
   _options: ProviderOptions,
 ): Promise<AuthProviderReport> {
-  return {
-    provider: "inference.net",
-    sources: [
-      {
-        source: "official-cli",
-        status: "missing",
-        error: "run `inf auth` or configure the inf CLI",
-      },
-    ],
-  };
+  try {
+    await execFileText("inf", ["auth", "status", "--json"], 10_000);
+    return {
+      provider: "inference.net",
+      sources: [{ source: "official-cli", status: "available" }],
+    };
+  } catch (error) {
+    return {
+      provider: "inference.net",
+      sources: [
+        {
+          source: "official-cli",
+          status: "missing",
+          error:
+            error instanceof Error
+              ? error.message
+              : "run `inf auth login` or `inf auth set-key`",
+        },
+      ],
+    };
+  }
 }
