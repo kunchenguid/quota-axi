@@ -16,7 +16,9 @@
     "toon",
     "claude",
     "codex",
-    "kimi"
+    "runpod",
+    "fireworks",
+    "daytona"
   ],
   "bin": {
     "quota-axi": "./dist/bin/quota-axi.js"

@@ -5,6 +5,9 @@ import { tokenrouterAdapter } from "./tokenrouter.js";
 import { openrouterAdapter } from "./openrouter.js";
 import { pioneerAdapter } from "./pioneer.js";
 import { commandcodeAdapter } from "./commandcode.js";
+import { runpodAdapter } from "./runpod.js";
+import { fireworksAdapter } from "./fireworks.js";
+import { daytonaAdapter } from "./daytona.js";
 import {
   PROVIDER_IDS,
   type ProviderAdapter,
@@ -19,6 +22,9 @@ export const PROVIDERS: Record<ProviderId, ProviderAdapter> = {
   openrouter: openrouterAdapter,
   pioneer: pioneerAdapter,
   commandcode: commandcodeAdapter,
+  runpod: runpodAdapter,
+  fireworks: fireworksAdapter,
+  daytona: daytonaAdapter,
 };
 
 export function parseProviders(value: string | undefined): ProviderId[] {

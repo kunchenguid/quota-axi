@@ -1,6 +1,6 @@
 ---
 name: quota-axi
-description: "Report local Claude, Codex, Cursor, TokenRouter, OpenRouter, Pioneer, and Command Code quota windows via the quota-axi CLI - remaining percentages, reset times, and provider status read from local auth sources, with no routing, recommendation, or provider mutation. Use before deciding whether it is safe to keep spending a provider's quota, when the user asks about usage, rate limits, or remaining quota, or when comparing local provider headroom."
+description: "Report local Claude, Codex, Cursor, TokenRouter, OpenRouter, Pioneer, Command Code, RunPod, Fireworks, and Daytona quota state via the quota-axi CLI - remaining percentages, reset times, and provider status read from local auth sources, with no routing, recommendation, or provider mutation. Use before deciding whether it is safe to keep spending a provider's quota, when the user asks about usage, rate limits, or remaining quota, or when comparing local provider headroom."
 user-invocable: false
 author: Kun Chen (kunchenguid)
 metadata:
@@ -16,6 +16,9 @@ metadata:
         openrouter,
         pioneer,
         commandcode,
+        runpod,
+        fireworks,
+        daytona,
         cli,
       ]
     category: observability
@@ -64,7 +67,7 @@ usage: quota-axi [auth] [flags]
 commands[2]:
   (none)=quota, auth
 flags[6]:
-  --provider <claude,codex,cursor,tokenrouter,openrouter,pioneer,commandcode>, --json, --full, --allow-keychain-prompt, --help, -v/--version
+  --provider <claude,codex,cursor,tokenrouter,openrouter,pioneer,commandcode,runpod,fireworks,daytona>, --json, --full, --allow-keychain-prompt, --help, -v/--version
 examples:
   quota-axi
   quota-axi --provider claude

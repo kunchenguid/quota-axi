@@ -41,6 +41,9 @@ describe("CLI flag parsing", () => {
       "openrouter",
       "pioneer",
       "commandcode",
+      "runpod",
+      "fireworks",
+      "daytona",
     ]);
   });
 
@@ -70,6 +73,9 @@ describe("CLI flag parsing", () => {
           "openrouter",
           "pioneer",
           "commandcode",
+          "runpod",
+          "fireworks",
+          "daytona",
         ],
         json: true,
         full: true,

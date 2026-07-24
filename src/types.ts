@@ -5,7 +5,10 @@ export type ProviderId =
   | "tokenrouter"
   | "openrouter"
   | "pioneer"
-  | "commandcode";
+  | "commandcode"
+  | "runpod"
+  | "fireworks"
+  | "daytona";
 
 export const PROVIDER_IDS = [
   "claude",
@@ -15,6 +18,9 @@ export const PROVIDER_IDS = [
   "openrouter",
   "pioneer",
   "commandcode",
+  "runpod",
+  "fireworks",
+  "daytona",
 ] as const satisfies readonly ProviderId[];
 
 export type ProviderSource =

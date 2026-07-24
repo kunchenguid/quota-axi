@@ -3,7 +3,7 @@ import { DESCRIPTION, TOP_HELP } from "./cli.js";
 // Trigger string Claude Code (and other agents) match against to auto-load the skill.
 // Kept terse and outcome-focused so it fires on "check quota/rate limits" intents.
 export const SKILL_DESCRIPTION =
-  "Report local Claude, Codex, Cursor, TokenRouter, OpenRouter, Pioneer, and Command Code quota windows via the quota-axi CLI - remaining " +
+  "Report local Claude, Codex, Cursor, TokenRouter, OpenRouter, Pioneer, Command Code, RunPod, Fireworks, and Daytona quota state via the quota-axi CLI - remaining " +
   "percentages, reset times, and provider status read from local auth sources, with no " +
   "routing, recommendation, or provider mutation. Use before deciding whether it is safe " +
   "to keep spending a provider's quota, when the user asks about usage, rate limits, or " +
@@ -24,6 +24,9 @@ export const HERMES_TAGS = [
   "openrouter",
   "pioneer",
   "commandcode",
+  "runpod",
+  "fireworks",
+  "daytona",
   "cli",
 ];
 export const HERMES_CATEGORY = "observability";

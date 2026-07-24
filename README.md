@@ -15,7 +15,7 @@ Quota CLI for agents - designed with [AXI](https://axi.md) (Agent eXperience Int
 Agents need quota state before they choose where work can safely run.
 Vendor dashboards are not shaped for shell automation, and local CLIs expose different windows, resets, and auth sources.
 
-quota-axi reports local Claude, Codex, Cursor, TokenRouter, OpenRouter, Pioneer, and Command Code quota windows in one [AXI](https://axi.md)-shaped call.
+quota-axi reports local Claude, Codex, Cursor, TokenRouter, OpenRouter, Pioneer, Command Code, RunPod, Fireworks, and Daytona quota/account state in one [AXI](https://axi.md)-shaped call.
 It is data only: it never routes, recommends, proxies, intercepts, logs in, imports browser cookies, or mutates provider state.
 
 - **Official sources** - quota-axi reads local provider auth sources and calls the first-party quota, usage, billing, or entitlement endpoints used by the local agents, with a read-only Codex app-server probe as fallback.
@@ -202,14 +202,14 @@ It is generated from `src/skill.ts`; update it with `pnpm run build:skill` and v
 
 ### Flags
 
-| Flag                                                                        | Description                                            |
-| --------------------------------------------------------------------------- | ------------------------------------------------------ |
-| `--provider claude,codex,cursor,tokenrouter,openrouter,pioneer,commandcode` | Scope providers                                        |
-| `--json`                                                                    | Emit normalized JSON instead of TOON for quota or auth |
-| `--full`                                                                    | Include quota account identity and source attempts     |
-| `--allow-keychain-prompt`                                                   | Permit macOS Claude Keychain access that could prompt  |
-| `-h`, `--help`                                                              | Print terse [AXI](https://axi.md) help                 |
-| `-v`, `-V`, `--version`                                                     | Print version                                          |
+| Flag                                                                                                 | Description                                            |
+| ---------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| `--provider claude,codex,cursor,tokenrouter,openrouter,pioneer,commandcode,runpod,fireworks,daytona` | Scope providers                                        |
+| `--json`                                                                                             | Emit normalized JSON instead of TOON for quota or auth |
+| `--full`                                                                                             | Include quota account identity and source attempts     |
+| `--allow-keychain-prompt`                                                                            | Permit macOS Claude Keychain access that could prompt  |
+| `-h`, `--help`                                                                                       | Print terse [AXI](https://axi.md) help                 |
+| `-v`, `-V`, `--version`                                                                              | Print version                                          |
 
 ## Output Model
 
@@ -274,6 +274,9 @@ Source attempts can include `credentialPresent` when a non-secret probe confirms
 | OpenRouter             | Reads the read-only credits endpoint and reports the current USD balance and usage.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | Pioneer                | Reads the read-only billing endpoint and reports the current credit pool.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | Command Code           | Reads the read-only billing credits endpoint and reports the current credit pool.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| RunPod                 | Reads the first-party GraphQL account endpoint and reports current wallet balance.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| Fireworks              | Reads first-party billing usage and reports observed token spend; no unsupported limit is invented.                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| Daytona                | Verifies the first-party sandbox endpoint; billing limits are not exposed by this adapter.                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 
 ### `auth --json` shape
 

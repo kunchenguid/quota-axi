@@ -60,7 +60,7 @@ export const SOURCE_CATALOG: Record<
     source(
       "claude",
       "official-cli",
-      "verified",
+      "authoritative",
       "Claude CLI",
       "test/providers/claude.test.ts",
       20,
@@ -172,6 +172,36 @@ export const SOURCE_CATALOG: Record<
       "Command Code CLI",
       "test/providers/commandcode.test.ts",
       20,
+    ),
+  ],
+  runpod: [
+    source(
+      "runpod",
+      "first-party-api",
+      "authoritative",
+      "RUNPOD_API_KEY via env/Keychain",
+      "test/providers/runpod.test.ts",
+      10,
+    ),
+  ],
+  fireworks: [
+    source(
+      "fireworks",
+      "first-party-api",
+      "authoritative",
+      "FIREWORKS_API_KEY via env/Keychain",
+      "test/providers/fireworks.test.ts",
+      10,
+    ),
+  ],
+  daytona: [
+    source(
+      "daytona",
+      "first-party-api",
+      "authoritative",
+      "DAYTONA_API_TOKEN via env/Keychain",
+      "test/providers/daytona.test.ts",
+      10,
     ),
   ],
 };
