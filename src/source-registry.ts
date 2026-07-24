@@ -86,7 +86,7 @@ export const SOURCE_CATALOG: Record<
     source(
       "codex",
       "official-cli",
-      "verified",
+      "authoritative",
       "Codex app-server",
       "test/providers/codex-built-cli-weekly.test.ts",
       20,
@@ -201,6 +201,26 @@ export const SOURCE_CATALOG: Record<
       "authoritative",
       "DAYTONA_API_TOKEN via env/Keychain",
       "test/providers/daytona.test.ts",
+      10,
+    ),
+  ],
+  "inference.net": [
+    source(
+      "inference.net",
+      "official-cli",
+      "authoritative",
+      "inf CLI auth",
+      "test/providers/inference.test.ts",
+      10,
+    ),
+  ],
+  nvidia: [
+    source(
+      "nvidia",
+      "local-store",
+      "authoritative",
+      "local 40 RPM limiter",
+      "test/providers/nvidia.test.ts",
       10,
     ),
   ],

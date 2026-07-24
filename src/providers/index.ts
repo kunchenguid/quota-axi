@@ -8,6 +8,8 @@ import { commandcodeAdapter } from "./commandcode.js";
 import { runpodAdapter } from "./runpod.js";
 import { fireworksAdapter } from "./fireworks.js";
 import { daytonaAdapter } from "./daytona.js";
+import { inferenceAdapter } from "./inference.js";
+import { nvidiaAdapter } from "./nvidia.js";
 import {
   PROVIDER_IDS,
   type ProviderAdapter,
@@ -25,6 +27,8 @@ export const PROVIDERS: Record<ProviderId, ProviderAdapter> = {
   runpod: runpodAdapter,
   fireworks: fireworksAdapter,
   daytona: daytonaAdapter,
+  "inference.net": inferenceAdapter,
+  nvidia: nvidiaAdapter,
 };
 
 export function parseProviders(value: string | undefined): ProviderId[] {

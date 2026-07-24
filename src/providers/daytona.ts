@@ -1,5 +1,8 @@
 import { readCachedProvider } from "../cache.js";
 import { nowIso } from "../lib/time.js";
+import { readFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import type {
   AuthProviderReport,
   ProviderAdapter,
@@ -33,7 +36,9 @@ export async function fetchQuota(
     KEY,
     options.allowKeychainPrompt,
   );
-  if (!credential) {
+  const configToken = credential ? undefined : await readDaytonaConfigToken();
+  const token = credential?.value ?? configToken;
+  if (!token) {
     attempts.push({
       source: "env/keychain",
       status: "skipped",
@@ -43,7 +48,7 @@ export async function fetchQuota(
     if (cached)
       return staleFromCache(
         cached,
-        `${KEY} unavailable`,
+        `${KEY} and Daytona CLI config unavailable`,
         sourceNames(attempts),
         attempts,
       );
@@ -51,7 +56,7 @@ export async function fetchQuota(
       provider: "daytona",
       label: "Daytona",
       status: "auth_required",
-      error: `${KEY} is not available; run daytona login and export the token`,
+      error: "Daytona credentials unavailable; run `daytona login`",
       sourcesTried: sourceNames(attempts),
       attempts,
     });
@@ -60,7 +65,7 @@ export async function fetchQuota(
   try {
     const response = await fetch(URL, {
       headers: {
-        Authorization: `Bearer ${credential.value}`,
+        Authorization: `Bearer ${token}`,
         Accept: "application/json",
       },
     });
@@ -104,8 +109,33 @@ export async function inspectAuth(
   );
   return {
     provider: "daytona",
-    sources: [credentialSource(KEY, credential, options.allowKeychainPrompt)],
+    sources: [
+      credentialSource(KEY, credential, options.allowKeychainPrompt),
+      {
+        source: "daytona-cli-config",
+        path: "~/Library/Application Support/daytona/config.json",
+        status: (await readDaytonaConfigToken()) ? "available" : "missing",
+      },
+    ],
   };
+}
+async function readDaytonaConfigToken(): Promise<string | undefined> {
+  try {
+    const path = join(
+      homedir(),
+      "Library",
+      "Application Support",
+      "daytona",
+      "config.json",
+    );
+    const raw = JSON.parse(await readFile(path, "utf8")) as {
+      profiles?: { api?: { token?: { accessToken?: string } } }[];
+    };
+    const token = raw.profiles?.[0]?.api?.token?.accessToken?.trim();
+    return token || undefined;
+  } catch {
+    return undefined;
+  }
 }
 const errorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);

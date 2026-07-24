@@ -44,6 +44,8 @@ describe("CLI flag parsing", () => {
       "runpod",
       "fireworks",
       "daytona",
+      "inference.net",
+      "nvidia",
     ]);
   });
 
@@ -76,6 +78,8 @@ describe("CLI flag parsing", () => {
           "runpod",
           "fireworks",
           "daytona",
+          "inference.net",
+          "nvidia",
         ],
         json: true,
         full: true,

@@ -8,7 +8,9 @@ export type ProviderId =
   | "commandcode"
   | "runpod"
   | "fireworks"
-  | "daytona";
+  | "daytona"
+  | "inference.net"
+  | "nvidia";
 
 export const PROVIDER_IDS = [
   "claude",
@@ -21,11 +23,15 @@ export const PROVIDER_IDS = [
   "runpod",
   "fireworks",
   "daytona",
+  "inference.net",
+  "nvidia",
 ] as const satisfies readonly ProviderId[];
 
 export type ProviderSource =
   | "oauth"
   | "cli-rpc"
+  | "official-cli"
+  | "local-diagnostic"
   | "api"
   | "web"
   | "cache"
