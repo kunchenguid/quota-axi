@@ -75,6 +75,7 @@ export type ProviderQuota = {
   windows: QuotaWindow[];
   credits?: {
     remaining?: number;
+    spent?: number;
     unlimited?: boolean;
     unit?: "usd" | "credits";
   };

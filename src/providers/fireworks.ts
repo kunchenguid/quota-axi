@@ -85,7 +85,7 @@ export async function fetchQuota(
       label: "Fireworks",
       source: "api",
       windows: [],
-      credits: { remaining: undefined, unit: "credits" },
+      credits: { spent, unit: "credits" },
       refreshedAt: nowIso(),
       sourcesTried: sourceNames(attempts),
       attempts,
