@@ -20,6 +20,7 @@ import {
 } from "./common.js";
 
 const KEY = "DAYTONA_API_TOKEN";
+const API_KEY = "DAYTONA_API_KEY";
 const URL = "https://app.daytona.io/api/sandbox";
 export const daytonaAdapter: ProviderAdapter = {
   id: "daytona",
@@ -36,8 +37,12 @@ export async function fetchQuota(
     KEY,
     options.allowKeychainPrompt,
   );
-  const configToken = credential ? undefined : await readDaytonaConfigToken();
-  const token = credential?.value ?? configToken;
+  const apiKeyCredential = credential
+    ? undefined
+    : await readProviderCredential(API_KEY, options.allowKeychainPrompt);
+  const configToken =
+    credential || apiKeyCredential ? undefined : await readDaytonaConfigToken();
+  const token = credential?.value ?? apiKeyCredential?.value ?? configToken;
   if (!token) {
     attempts.push({
       source: "env/keychain",
@@ -111,6 +116,7 @@ export async function inspectAuth(
     provider: "daytona",
     sources: [
       credentialSource(KEY, credential, options.allowKeychainPrompt),
+      credentialSource(API_KEY, credential, options.allowKeychainPrompt),
       {
         source: "daytona-cli-config",
         path: "~/Library/Application Support/daytona/config.json",
