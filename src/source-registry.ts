@@ -198,6 +198,44 @@ export const SOURCE_CATALOG: Record<
       10,
     ),
   ],
+  openrouter: [
+    source(
+      "openrouter",
+      "first-party-api",
+      "authoritative",
+      "OPENROUTER_API_KEY via env/Keychain",
+      "test/providers/openrouter.test.ts",
+      10,
+    ),
+  ],
+  pioneer: [
+    source(
+      "pioneer",
+      "first-party-api",
+      "authoritative",
+      "PIONEER_API_KEY via env/Keychain",
+      "test/providers/pioneer.test.ts",
+      10,
+    ),
+  ],
+  commandcode: [
+    source(
+      "commandcode",
+      "first-party-api",
+      "authoritative",
+      "COMMANDCODE_API_KEY via env/Keychain",
+      "test/providers/commandcode.test.ts",
+      10,
+    ),
+    source(
+      "commandcode",
+      "official-cli",
+      "verified",
+      "Command Code CLI",
+      "test/providers/commandcode.test.ts",
+      20,
+    ),
+  ],
 };
 
 export function preferredSources(

@@ -47,6 +47,9 @@ describe("CLI flag parsing", () => {
       "grok",
       "kimi",
       "tokenrouter",
+      "openrouter",
+      "pioneer",
+      "commandcode",
     ]);
   });
 
@@ -75,6 +78,9 @@ describe("CLI flag parsing", () => {
           "grok",
           "kimi",
           "tokenrouter",
+          "openrouter",
+          "pioneer",
+          "commandcode",
         ],
         json: true,
         full: true,
