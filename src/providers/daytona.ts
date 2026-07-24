@@ -42,7 +42,8 @@ export async function fetchQuota(
     : await readProviderCredential(LEGACY_KEY, options.allowKeychainPrompt);
   const configAuth =
     credential || legacyCredential ? undefined : await readDaytonaConfigToken();
-  const token = credential?.value ?? legacyCredential?.value ?? configAuth?.token;
+  const token =
+    credential?.value ?? legacyCredential?.value ?? configAuth?.token;
   if (!token) {
     attempts.push({
       source: "env/keychain",
@@ -154,7 +155,9 @@ export function buildDaytonaHeaders(
 
 type DaytonaConfigAuth = { token: string; organizationId?: string };
 
-async function readDaytonaConfigToken(): Promise<DaytonaConfigAuth | undefined> {
+async function readDaytonaConfigToken(): Promise<
+  DaytonaConfigAuth | undefined
+> {
   try {
     const path = join(
       homedir(),
