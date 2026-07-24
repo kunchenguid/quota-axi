@@ -57,7 +57,15 @@ describe("TokenRouter provider", () => {
     expect(fetchMock).not.toHaveBeenCalled();
     expect(await inspectAuth({ allowKeychainPrompt: false })).toEqual({
       provider: "tokenrouter",
-      sources: [{ source: "env", status: "missing", credentialPresent: false }],
+      sources: [
+        { source: "env", status: "missing", credentialPresent: false },
+        {
+          source: "keychain",
+          status: "skipped",
+          credentialPresent: false,
+          error: "keychain_prompt_required",
+        },
+      ],
     });
   });
 });

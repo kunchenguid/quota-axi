@@ -1,5 +1,6 @@
 import { readCachedProvider } from "../cache.js";
 import { nowIso } from "../lib/time.js";
+import { execFileText } from "../lib/process.js";
 import type {
   AuthProviderReport,
   AuthSourceReport,
@@ -39,18 +40,26 @@ export const tokenrouterAdapter: ProviderAdapter = {
 };
 
 export async function fetchQuota(
-  _options: ProviderOptions,
+  options: ProviderOptions,
 ): Promise<ProviderQuota> {
   const attempts: SourceAttempt[] = [];
-  const key = process.env[KEY_ENV];
+  const credential = await readCredential(options);
   const baseURL =
     process.env.QUOTA_AXI_TOKENROUTER_BASE_URL ?? DEFAULT_BASE_URL;
-  if (!key) {
+  if (!credential) {
     attempts.push({
       source: "env",
       status: "skipped",
       error: "credential_missing",
     });
+    if (process.platform === "darwin" && !options.allowKeychainPrompt) {
+      attempts.push({
+        source: "keychain",
+        status: "skipped",
+        error: "keychain_prompt_required",
+        credentialPresent: true,
+      });
+    }
     const cached = readCachedProvider("tokenrouter");
     if (cached)
       return staleFromCache(
@@ -72,7 +81,7 @@ export async function fetchQuota(
 
   attempts.push({ source: "api", status: "failed" });
   try {
-    const wallet = await fetchWallet(baseURL, key);
+    const wallet = await fetchWallet(baseURL, credential.value);
     attempts[attempts.length - 1] = { source: "api", status: "success" };
     const topUpBalance = finite(wallet.data?.topUpBalance);
     const voucherBalance = finite(wallet.data?.voucherEfficientAmount);
@@ -124,15 +133,64 @@ export async function fetchQuota(
 }
 
 export async function inspectAuth(
-  _options: ProviderOptions,
+  options: ProviderOptions,
 ): Promise<AuthProviderReport> {
   const available = Boolean(process.env[KEY_ENV]);
-  const source: AuthSourceReport = {
-    source: "env",
-    status: available ? "available" : "missing",
-    credentialPresent: available,
-  };
-  return { provider: "tokenrouter", sources: [source] };
+  const sources: AuthSourceReport[] = [
+    {
+      source: "env",
+      status: available ? "available" : "missing",
+      credentialPresent: available,
+    },
+  ];
+  if (process.platform === "darwin") {
+    const keychain = await readKeychainCredential(options.allowKeychainPrompt);
+    sources.push({
+      source: "keychain",
+      status: keychain
+        ? "available"
+        : options.allowKeychainPrompt
+          ? "missing"
+          : "skipped",
+      credentialPresent: Boolean(keychain),
+      error:
+        !options.allowKeychainPrompt && !keychain
+          ? "keychain_prompt_required"
+          : undefined,
+    });
+  }
+  return { provider: "tokenrouter", sources };
+}
+
+type Credential = { value: string; source: "env" | "keychain" };
+
+async function readCredential(
+  options: ProviderOptions,
+): Promise<Credential | undefined> {
+  const env = process.env[KEY_ENV]?.trim();
+  if (env) return { value: env, source: "env" };
+  if (process.platform !== "darwin" || !options.allowKeychainPrompt)
+    return undefined;
+  const keychain = await readKeychainCredential(true);
+  return keychain ? { value: keychain, source: "keychain" } : undefined;
+}
+
+async function readKeychainCredential(
+  allowPrompt: boolean,
+): Promise<string | undefined> {
+  if (process.platform !== "darwin" || !allowPrompt) return undefined;
+  try {
+    const value = (
+      await execFileText(
+        "security",
+        ["find-generic-password", "-a", KEY_ENV, "-s", "bridge-secrets", "-w"],
+        5_000,
+      )
+    ).trim();
+    return value || undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 async function fetchWallet(
