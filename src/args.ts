@@ -22,6 +22,21 @@ export type QuotaFlags = {
   claudeConfigs?: ClaudeConfigSelection[];
 };
 
+export function parseCoverageFlags(args: string[]): { json: boolean } {
+  let json = false;
+  for (const arg of args) {
+    if (arg === "--") continue;
+    if (arg === "--json") {
+      json = true;
+      continue;
+    }
+    throw new AxiError(`unknown argument: ${arg}`, "VALIDATION_ERROR", [
+      "Run `quota-axi coverage --help` for supported flags",
+    ]);
+  }
+  return { json };
+}
+
 /**
  * Parse the flags shared by the `quota` and `auth` commands. Command routing is
  * owned by {@link runAxiCli}; this only interprets the flags that follow.
@@ -160,7 +175,7 @@ function parseProviderScope(value: string | undefined): ProviderId[] {
     throw new AxiError(
       error instanceof Error ? error.message : "unsupported provider",
       "VALIDATION_ERROR",
-      ["Supported providers: claude, codex, cursor, copilot, grok"],
+      ["Supported providers: claude, codex, cursor, copilot, grok, kimi"],
     );
   }
 }

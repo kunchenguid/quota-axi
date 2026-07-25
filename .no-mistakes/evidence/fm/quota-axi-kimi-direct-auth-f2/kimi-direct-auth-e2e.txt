@@ -1,0 +1,12 @@
+Command: quota-axi --provider kimi --json --full
+Fixture: synthetic HOME and Pi auth.json only; fetch intercepted locally
+Exit status: 0
+Provider status: fresh
+Source: api
+Sources tried: pi:kimi-coding
+Attempt: pi:kimi-coding success
+Weekly percent remaining: 88
+Request contract: fixed-origin GET, redirects manual, credentials omitted
+Credential selection: exact kimi-coding literal key accepted; unrelated entry ignored
+Secret redaction: synthetic keys absent from CLI output
+Auth file unchanged: bytes=yes mode=600 mtime=yes

@@ -1,28 +1,32 @@
-import { existsSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { runAxiCli } from "axi-sdk-js";
-import { authCommand, quotaCommand, type QuotaContext } from "./commands.js";
+import {
+  authCommand,
+  coverageCommand,
+  quotaCommand,
+  type QuotaContext,
+} from "./commands.js";
+import { VERSION } from "./version.js";
 
 export const DESCRIPTION =
   "Report local agent-provider quota windows for routing-aware agents.";
 
-export const TOP_HELP = `usage: quota-axi [auth] [flags]
-commands[2]:
-  (none)=quota, auth
-flags[7]:
-  --provider <claude,codex,cursor,copilot,grok>, --claude-config-dir <path> (repeatable), --json, --full, --allow-keychain-prompt, --help, -v/--version
+export const TOP_HELP = `usage: quota-axi [auth|coverage] [flags]
+commands[3]:
+  (none)=quota, auth, coverage
+quota/auth flags[7]:
+  --provider <claude,codex,cursor,copilot,grok,kimi>, --claude-config-dir <path> (repeatable), --json, --full, --allow-keychain-prompt, --help, -v/--version
+coverage flags[2]:
+  --json, --help
 examples:
   quota-axi
   quota-axi --provider claude
   quota-axi --provider claude,codex --claude-config-dir ~/.claude-work --claude-config-dir ~/.claude-personal
-  quota-axi --provider cursor,copilot,grok
+  quota-axi --provider cursor,copilot,grok,kimi
   quota-axi --json
   quota-axi --full
   quota-axi auth
+  quota-axi coverage
 `;
-
-const VERSION = readPackageVersion();
 
 type MainOptions = {
   argv?: string[];
@@ -43,13 +47,16 @@ export async function main(options: MainOptions = {}): Promise<void> {
     commands: {
       quota: quotaCommand,
       auth: authCommand,
+      coverage: coverageCommand,
     },
     // `quota` is the implicit default command, so the bare-invocation home view
     // is never reached (see normalizeArgv); wiring it keeps the SDK contract.
     home: quotaCommand,
     resolveContext: () => ({ binPath }),
     getCommandHelp: (command) =>
-      command === "quota" || command === "auth" ? TOP_HELP : undefined,
+      command === "quota" || command === "auth" || command === "coverage"
+        ? TOP_HELP
+        : undefined,
   });
 }
 
@@ -81,7 +88,12 @@ export function normalizeArgv(raw: string[]): string[] {
   if (raw.length === 1 && isTopLevelFlag(first)) {
     return raw;
   }
-  if (first === "quota" || first === "auth" || first === "update") {
+  if (
+    first === "quota" ||
+    first === "auth" ||
+    first === "coverage" ||
+    first === "update"
+  ) {
     return raw;
   }
   if (first.startsWith("-")) {
@@ -120,27 +132,17 @@ function findCommand(raw: string[]): number {
       index++;
       continue;
     }
-    if (arg === "quota" || arg === "auth" || arg === "update") return index;
+    if (
+      arg === "quota" ||
+      arg === "auth" ||
+      arg === "coverage" ||
+      arg === "update"
+    )
+      return index;
   }
   return -1;
 }
 
 function takesValue(flag: string): boolean {
   return flag === "--provider" || flag === "--claude-config-dir";
-}
-
-function readPackageVersion(): string {
-  const here = dirname(fileURLToPath(import.meta.url));
-  for (const candidate of [
-    join(here, "..", "package.json"),
-    join(here, "..", "..", "package.json"),
-  ]) {
-    if (!existsSync(candidate)) continue;
-    const parsed = JSON.parse(readFileSync(candidate, "utf-8")) as {
-      version?: unknown;
-    };
-    if (typeof parsed.version === "string" && parsed.version.length > 0)
-      return parsed.version;
-  }
-  return "0.0.0";
 }

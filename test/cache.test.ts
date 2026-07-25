@@ -3,12 +3,14 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  deleteCachedProvider,
   readCachedProvider,
   tagProviderCacheKey,
   writeCachedProviders,
@@ -44,6 +46,89 @@ describe("quota cache", () => {
     expect(readCachedProvider("claude")).toBeUndefined();
   });
 
+  it("invalidates Codex identities that do not exactly match duration", () => {
+    useTempCache();
+    const file = cacheFilePath();
+    mkdirSync(dirname(file), { recursive: true });
+    const invalidWindows = [
+      {
+        id: "seven_day",
+        label: "week",
+        kind: "weekly",
+        windowSeconds: 604_800,
+      },
+      {
+        id: "five_hour",
+        label: "session",
+        kind: "session",
+        windowSeconds: 600_000,
+      },
+      {
+        id: "model:preview:7d",
+        label: "Preview week",
+        kind: "model",
+        windowSeconds: 18_000,
+      },
+      {
+        id: "weekly_2",
+        label: "week",
+        kind: "weekly",
+        windowSeconds: 604_800,
+      },
+    ];
+
+    for (const window of invalidWindows) {
+      writeFileSync(
+        file,
+        JSON.stringify({
+          schemaVersion: 1,
+          providers: [{ ...quota("codex", 20), windows: [window] }],
+        }),
+      );
+
+      expect(readCachedProvider("codex")).toBeUndefined();
+    }
+  });
+
+  it("retains exact known and unfamiliar Codex cache identities", () => {
+    useTempCache();
+    const codex = quota("codex", 20);
+    codex.windows = [
+      {
+        id: "five_hour",
+        label: "session",
+        kind: "session",
+        windowSeconds: 18_000,
+      },
+      {
+        id: "weekly",
+        label: "week",
+        kind: "weekly",
+        windowSeconds: 604_800,
+      },
+      {
+        id: "weekly_2",
+        label: "week",
+        kind: "weekly",
+        windowSeconds: 604_800,
+      },
+      {
+        id: "model:preview:window:166.67h",
+        label: "Preview 166.67h window",
+        kind: "model",
+        windowSeconds: 600_000,
+      },
+    ];
+    writeCachedProviders([codex]);
+
+    expect(readCachedProvider("codex")?.windows.map(({ id }) => id)).toEqual([
+      "five_hour",
+      "weekly",
+      "weekly_2",
+      "model:preview:window:166.67h",
+    ]);
+  });
+
   it("merges fresh provider snapshots into existing cache", () => {
     useTempCache();
     writeCachedProviders([quota("claude", 10), quota("codex", 20)]);
@@ -66,6 +151,46 @@ describe("quota cache", () => {
         ?.windows[0].percentUsed,
     ).toBe(20);
     expect(payload.providers.every((provider) => !provider.account)).toBe(true);
+  });
+
+  it("writes normalized cache data with mode 0600 and no attempts or sentinel secret", () => {
+    useTempCache();
+    const sentinel = "CACHE-SENTINEL-KIMI-612704";
+    const kimi = {
+      ...quota("kimi", 37.5),
+      source: "api" as const,
+      state: {
+        ...quota("kimi", 37.5).state,
+        sourcesTried: ["pi:kimi-coding"],
+      },
+      attempts: [
+        {
+          source: "pi:kimi-coding",
+          status: "success" as const,
+          error: sentinel,
+        },
+      ],
+    };
+
+    writeCachedProviders([kimi]);
+
+    const bytes = readFileSync(cacheFilePath(), "utf8");
+    expect(statSync(cacheFilePath()).mode & 0o777).toBe(0o600);
+    expect(bytes).not.toContain(sentinel);
+    expect(bytes).not.toContain("attempts");
+    expect(bytes).not.toContain("account");
+    expect(readCachedProvider("kimi")?.windows[0].percentUsed).toBe(37.5);
+  });
+
+  it("deletes a definitive-auth provider while retaining other snapshots", () => {
+    useTempCache();
+    writeCachedProviders([quota("claude", 10), quota("kimi", 20)]);
+
+    deleteCachedProvider("kimi");
+
+    expect(readCachedProvider("kimi")).toBeUndefined();
+    expect(readCachedProvider("claude")?.windows[0].percentUsed).toBe(10);
+    expect(statSync(cacheFilePath()).mode & 0o777).toBe(0o600);
   });
 
   it("clears a stale snapshot after a fresh no-window report", () => {
@@ -144,5 +269,6 @@ function providerLabel(provider: ProviderId): string {
   if (provider === "codex") return "Codex";
   if (provider === "cursor") return "Cursor";
   if (provider === "copilot") return "GitHub Copilot";
-  return "Grok";
+  if (provider === "grok") return "Grok";
+  return "Kimi";
 }

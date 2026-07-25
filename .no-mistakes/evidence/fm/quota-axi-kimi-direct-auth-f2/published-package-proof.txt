@@ -1,0 +1,8 @@
+Command: npm pack --json --ignore-scripts
+Package: quota-axi@0.1.10
+Packed files: 73
+Packed size: 72234 bytes
+Published dependencies: @toon-format/toon, axi-sdk-js
+Removed Pi SDK dependencies in manifest: none
+Removed Pi SDK references in packed payload: none
+Removed Pi SDK packages in installed production dependency tree: none

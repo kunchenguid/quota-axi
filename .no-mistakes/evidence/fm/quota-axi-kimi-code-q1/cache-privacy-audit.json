@@ -1,0 +1,12 @@
+{
+  "cacheMode": "0600",
+  "provider": "kimi",
+  "source": "api",
+  "windowIds": [
+    "weekly",
+    "five_hour"
+  ],
+  "stateStatus": "fresh",
+  "forbiddenKeys": [],
+  "containsBearer": false
+}

@@ -4,13 +4,23 @@ import {
   annotateQuotaAdvice,
   KEYCHAIN_ACCESS_REMEDY_COMMAND,
 } from "./advice.js";
-import { parseFlags, type ClaudeConfigSelection } from "./args.js";
+import {
+  parseCoverageFlags,
+  parseFlags,
+  type ClaudeConfigSelection,
+} from "./args.js";
 import { writeCachedProviders } from "./cache.js";
 import { withClaudeConfigFlags } from "./command-context.js";
+import { PROVIDER_COVERAGE } from "./coverage.js";
 import { nowIso } from "./lib/time.js";
 import { failedProvider } from "./providers/common.js";
 import { PROVIDERS } from "./providers/index.js";
-import { redactedResponse, renderAuthToon, renderQuotaToon } from "./render.js";
+import {
+  redactedResponse,
+  renderAuthToon,
+  renderCoverageToon,
+  renderQuotaToon,
+} from "./render.js";
 import type {
   AuthProviderReport,
   ProviderId,
@@ -57,6 +67,21 @@ export async function quotaCommand(
   return flags.json
     ? JSON.stringify(redacted, null, 2)
     : renderQuotaToon(redacted, binPath, flags.full, flags.claudeConfigs);
+}
+
+export function coverageCommand(
+  args: string[],
+  _context: QuotaContext | undefined,
+): string {
+  const { json } = parseCoverageFlags(args);
+  const response = {
+    generatedAt: nowIso(),
+    schemaVersion: 1 as const,
+    coverage: PROVIDER_COVERAGE,
+  };
+  return json
+    ? JSON.stringify(response, null, 2)
+    : renderCoverageToon(response);
 }
 
 export async function authCommand(

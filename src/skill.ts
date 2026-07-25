@@ -3,7 +3,7 @@ import { DESCRIPTION, TOP_HELP } from "./cli.js";
 // Trigger string Claude Code (and other agents) match against to auto-load the skill.
 // Kept terse and outcome-focused so it fires on "check quota/rate limits" intents.
 export const SKILL_DESCRIPTION =
-  "Report local Claude, Codex, Cursor, GitHub Copilot, and Grok quota windows via the quota-axi CLI - remaining " +
+  "Report local Claude, Codex, Cursor, GitHub Copilot, Grok, and Kimi quota windows via the quota-axi CLI - remaining " +
   "percentages, reset times, and provider status read from local auth sources, with no " +
   "routing, recommendation, or provider mutation. Use before deciding whether it is safe " +
   "to keep spending a provider's quota, when the user asks about usage, rate limits, or " +
@@ -22,6 +22,7 @@ export const HERMES_TAGS = [
   "cursor",
   "copilot",
   "grok",
+  "kimi",
   "cli",
 ];
 export const HERMES_CATEGORY = "observability";
@@ -59,7 +60,7 @@ You do not need quota-axi installed globally - invoke it with \`npx -y quota-axi
 quota-axi is data only: it never routes, recommends, proxies, intercepts, logs in, imports
 browser cookies, or mutates provider state. It reads local provider auth sources and calls
 first-party provider quota, usage, billing, or entitlement endpoints; it never launches the
-Claude CLI, so it cannot spend the quota it measures.
+Claude, Grok, Pi, or Kimi CLIs, so it cannot spend the quota it measures.
 
 ## When to use
 
@@ -70,7 +71,7 @@ or when comparing supported local provider headroom side by side.
 ## Workflow
 
 1. Run \`npx -y quota-axi\` for compact TOON output covering supported providers' quota windows.
-2. Scope to one provider with \`--provider claude\` or to a subset with \`--provider cursor,copilot,grok\`.
+2. Scope to one provider with \`--provider claude\` or to a subset with \`--provider cursor,copilot,grok,kimi\`.
 3. For multiple Claude subscriptions, repeat \`--claude-config-dir <path>\` or set the quoted,
    platform-delimited \`CLAUDE_CONFIG_DIRS\` environment variable. Every selected seat is read only
    and appears under a stable non-secret basename-plus-hash label.
@@ -78,14 +79,22 @@ or when comparing supported local provider headroom side by side.
 5. Pass \`--full\` to include account identity and per-source attempt details.
 6. Run \`npx -y quota-axi auth\` to check local auth-source availability without printing
    secret values.
-7. On macOS, Claude Keychain value reads are skipped by default until the user grants access once.
+7. Run \`npx -y quota-axi coverage\` to distinguish subscription, metered API, hybrid, and
+   unsupported sources. This static inventory makes no provider calls and names the setup
+   required when allowance is unavailable.
+8. On macOS, Claude Keychain value reads are skipped by default until the user grants access once.
    If quota output reports \`reason: keychain_access_required\`, tell your user to run the exact
    \`remedyCommand\` once and approve Keychain access ("Always Allow"). The command preserves any
    selected Claude profiles. After that successful grant, plain \`quota-axi\` calls reuse the
    existing Keychain access marker to refresh live Claude quota without requiring the flag.
-8. For a managed Codex installation, set \`QUOTA_AXI_CODEX_BINARY\` to its absolute executable
+9. For a managed Codex installation, set \`QUOTA_AXI_CODEX_BINARY\` to its absolute executable
    path. quota-axi uses that exact executable for auth inspection and the read-only app-server
    fallback, and fails closed if the override is invalid.
+10. For Kimi, quota-axi prefers a literal Pi-managed \`kimi-coding\` API key from
+    \`$PI_CODING_AGENT_DIR/auth.json\` (default \`~/.pi/agent/auth.json\`). If it is
+    unavailable, quota-axi may reuse a fresh official Kimi Code CLI access token from
+    \`$KIMI_CODE_HOME/credentials/kimi-code.json\` (default
+    \`$HOME/.kimi-code/credentials/kimi-code.json\`) without refreshing or writing credentials.
 
 ## Usage
 

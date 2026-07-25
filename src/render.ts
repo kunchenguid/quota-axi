@@ -2,6 +2,7 @@ import { encode } from "@toon-format/toon";
 import { quotaHelpLines } from "./advice.js";
 import type { ClaudeConfigSelection } from "./args.js";
 import { withClaudeConfigFlags } from "./command-context.js";
+import type { ProviderCoverage } from "./coverage.js";
 import { collapseHome } from "./lib/fs.js";
 import type {
   AuthProviderReport,
@@ -83,6 +84,30 @@ export function renderQuotaToon(
 
   blocks.push(renderHelp(quotaHelpLines(response, claudeConfigs)));
   return blocks.filter(Boolean).join("\n");
+}
+
+export function renderCoverageToon(response: {
+  generatedAt: string;
+  coverage: readonly ProviderCoverage[];
+}): string {
+  const coverage = response.coverage.map((entry) => ({
+    provider: entry.provider,
+    source: entry.source,
+    billingMode: entry.billingMode,
+    coverage: entry.coverage,
+    allowance: entry.allowance,
+    command: entry.command ?? "none",
+    reason: entry.reason,
+    requires: entry.requires ?? "none",
+  }));
+  return [
+    encode({
+      description:
+        "Inventory provider coverage and billing modes without making provider calls",
+      generatedAt: response.generatedAt,
+    }),
+    encode({ coverage }),
+  ].join("\n");
 }
 
 export function renderAuthToon(

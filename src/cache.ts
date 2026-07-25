@@ -91,6 +91,19 @@ export function writeCachedProviders(providers: ProviderQuota[]): void {
     byProvider.set(providerCacheIdentity(provider), provider);
   const merged = [...byProvider.values()].sort(compareCachedProviders);
 
+  writeCacheFile(file, merged);
+}
+
+export function deleteCachedProvider(provider: ProviderId): void {
+  const existing = readCacheProviders();
+  if (!existing.some((item) => item.provider === provider)) return;
+  writeCacheFile(
+    cacheFilePath(),
+    existing.filter((item) => item.provider !== provider),
+  );
+}
+
+function writeCacheFile(file: string, providers: ProviderQuota[]): void {
   ensurePrivateParent(file);
   const temp = `${file}.${process.pid}.tmp`;
   writeFileSync(
@@ -99,7 +112,7 @@ export function writeCachedProviders(providers: ProviderQuota[]): void {
       {
         generatedAt: new Date().toISOString(),
         schemaVersion: 2,
-        providers: merged.map(serializeCachedProvider),
+        providers: providers.map(serializeCachedProvider),
       },
       null,
       2,
@@ -170,7 +183,8 @@ function normalizeCachedProvider(raw: unknown): ProviderQuota | undefined {
     !state ||
     !status ||
     !sourcesTried ||
-    windows.length === 0
+    windows.length === 0 ||
+    (provider === "codex" && hasInvalidCodexWindowIdentities(windows))
   )
     return undefined;
 
@@ -217,6 +231,139 @@ function compareCachedProviders(
 function serializeCachedProvider(provider: ProviderQuota): object {
   const cacheKey = providerCacheKey(provider);
   return cacheKey ? { ...provider, cacheKey } : provider;
+}
+
+function hasInvalidCodexWindowIdentities(windows: QuotaWindow[]): boolean {
+  const counts = new Map<string, number>();
+  for (const window of windows) {
+    const baseId = codexWindowBaseIdentity(window);
+    if (!baseId) return true;
+    const count = (counts.get(baseId) ?? 0) + 1;
+    counts.set(baseId, count);
+    if (window.id !== (count === 1 ? baseId : `${baseId}_${count}`))
+      return true;
+  }
+  return false;
+}
+
+function codexWindowBaseIdentity(window: QuotaWindow): string | undefined {
+  const id = window.id.replace(/_[2-9]\d*$/, "");
+  if (window.windowSeconds === undefined) {
+    if (matchesWindowIdentity(window, id, "five_hour", "session", "session"))
+      return id;
+    if (matchesWindowIdentity(window, id, "weekly", "week", "weekly"))
+      return id;
+    if (
+      matchesWindowIdentity(
+        window,
+        id,
+        "code_review_five_hour",
+        "code review session",
+        "session",
+      ) ||
+      matchesWindowIdentity(
+        window,
+        id,
+        "code_review_weekly",
+        "code review week",
+        "weekly",
+      ) ||
+      matchesModelWindowIdentity(window, id, "5h", "session") ||
+      matchesModelWindowIdentity(window, id, "7d", "week")
+    )
+      return id;
+    return undefined;
+  }
+  if (window.windowSeconds === 18_000) {
+    if (
+      matchesWindowIdentity(window, id, "five_hour", "session", "session") ||
+      matchesWindowIdentity(
+        window,
+        id,
+        "code_review_five_hour",
+        "code review session",
+        "session",
+      ) ||
+      matchesModelWindowIdentity(window, id, "5h", "session")
+    )
+      return id;
+    return undefined;
+  }
+
+  if (window.windowSeconds === 604_800) {
+    if (
+      matchesWindowIdentity(window, id, "weekly", "week", "weekly") ||
+      matchesWindowIdentity(
+        window,
+        id,
+        "code_review_weekly",
+        "code review week",
+        "weekly",
+      ) ||
+      matchesModelWindowIdentity(window, id, "7d", "week")
+    )
+      return id;
+    return undefined;
+  }
+
+  const duration = readableWindowDuration(window.windowSeconds);
+  if (
+    matchesWindowIdentity(
+      window,
+      id,
+      `window:${duration}`,
+      `${duration} window`,
+      "unknown",
+    ) ||
+    matchesWindowIdentity(
+      window,
+      id,
+      `code_review_window:${duration}`,
+      `${duration} window`,
+      "unknown",
+    ) ||
+    matchesModelWindowIdentity(
+      window,
+      id,
+      `window:${duration}`,
+      `${duration} window`,
+    )
+  )
+    return id;
+  return undefined;
+}
+
+function matchesWindowIdentity(
+  window: QuotaWindow,
+  actualId: string,
+  expectedId: string,
+  label: string,
+  kind: QuotaWindow["kind"],
+): boolean {
+  return (
+    actualId === expectedId && window.label === label && window.kind === kind
+  );
+}
+
+function matchesModelWindowIdentity(
+  window: QuotaWindow,
+  id: string,
+  suffix: string,
+  labelSuffix: string,
+): boolean {
+  return (
+    id.startsWith("model:") &&
+    id.endsWith(`:${suffix}`) &&
+    id.length > `model::${suffix}`.length &&
+    window.label.endsWith(` ${labelSuffix}`) &&
+    window.label.length > labelSuffix.length + 1 &&
+    window.kind === "model"
+  );
+}
+
+function readableWindowDuration(windowSeconds: number): string {
+  const hours = windowSeconds / 3600;
+  return `${Number.isInteger(hours) ? hours : Number(hours.toFixed(2))}h`;
 }
 
 function normalizeCachedWindow(raw: unknown): QuotaWindow | undefined {
