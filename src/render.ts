@@ -1,5 +1,7 @@
 import { encode } from "@toon-format/toon";
 import { quotaHelpLines } from "./advice.js";
+import type { ClaudeConfigSelection } from "./args.js";
+import { withClaudeConfigFlags } from "./command-context.js";
 import { collapseHome } from "./lib/fs.js";
 import type {
   AuthProviderReport,
@@ -16,9 +18,12 @@ export function renderQuotaToon(
   response: QuotaAxiResponse,
   binPath: string,
   full: boolean,
+  claudeConfigs?: ClaudeConfigSelection[],
 ): string {
+  const hasSeats = response.providers.some((provider) => provider.seat);
   const providers = response.providers.map((provider) => ({
     provider: provider.provider,
+    ...(hasSeats ? { seat: provider.seat ?? "none" } : {}),
     plan: provider.plan ?? "unknown",
     source: provider.source,
     status: provider.state.status,
@@ -27,6 +32,7 @@ export function renderQuotaToon(
   const windows = response.providers.flatMap((provider) =>
     provider.windows.map((window) => ({
       provider: provider.provider,
+      ...(hasSeats ? { seat: provider.seat ?? "none" } : {}),
       id: window.id,
       label: window.label,
       percentRemaining: window.percentRemaining ?? "unknown",
@@ -41,6 +47,9 @@ export function renderQuotaToon(
         "Report local agent-provider quota windows for routing-aware agents",
       generatedAt: response.generatedAt,
     }),
+    // Headline aggregate first: an agent reads full/partial/unavailable without
+    // scanning every provider row (AXI pre-computed field).
+    encode({ summary: response.summary }),
     encode({ providers }),
     encode({ windows }),
   ];
@@ -48,6 +57,7 @@ export function renderQuotaToon(
     .filter((provider) => provider.state.reason && provider.state.remedyCommand)
     .map((provider) => ({
       provider: provider.provider,
+      ...(hasSeats ? { seat: provider.seat ?? "none" } : {}),
       reason: provider.state.reason,
       remedyCommand: provider.state.remedyCommand,
     }));
@@ -56,29 +66,35 @@ export function renderQuotaToon(
   if (full) {
     const accounts = response.providers.map((provider) => ({
       provider: provider.provider,
+      ...(hasSeats ? { seat: provider.seat ?? "none" } : {}),
       email: provider.account?.email ?? "hidden",
       organization: provider.account?.organization ?? "none",
       accountId: provider.account?.accountId ?? "none",
       identityStatus: provider.account?.identityStatus ?? "unknown",
     }));
     const attempts = response.providers.flatMap((provider) =>
-      (provider.attempts ?? []).map((attempt) => attemptRow(provider, attempt)),
+      (provider.attempts ?? []).map((attempt) =>
+        attemptRow(provider, attempt, hasSeats),
+      ),
     );
     blocks.push(encode({ accounts }));
     blocks.push(encode({ attempts }));
   }
 
-  blocks.push(renderHelp(quotaHelpLines(response)));
+  blocks.push(renderHelp(quotaHelpLines(response, claudeConfigs)));
   return blocks.filter(Boolean).join("\n");
 }
 
 export function renderAuthToon(
   reports: AuthProviderReport[],
   binPath: string,
+  claudeConfigs?: ClaudeConfigSelection[],
 ): string {
+  const hasSeats = reports.some((report) => report.seat);
   const sources = reports.flatMap((report) =>
     report.sources.map((source) => ({
       provider: report.provider,
+      ...(hasSeats ? { seat: report.seat ?? "none" } : {}),
       source: source.source,
       path: source.path ? collapseHome(source.path) : "none",
       status: source.status,
@@ -93,7 +109,10 @@ export function renderAuthToon(
     }),
     encode({ auth: sources }),
     renderHelp([
-      "Run `quota-axi --allow-keychain-prompt auth` to permit macOS Keychain access",
+      `Run \`${withClaudeConfigFlags(
+        "quota-axi --allow-keychain-prompt auth",
+        claudeConfigs,
+      )}\` to permit macOS Keychain access`,
     ]),
   ].join("\n");
 }
@@ -113,9 +132,14 @@ export function redactedResponse(
   };
 }
 
-function attemptRow(provider: ProviderQuota, attempt: SourceAttempt) {
+function attemptRow(
+  provider: ProviderQuota,
+  attempt: SourceAttempt,
+  hasSeats: boolean,
+) {
   return {
     provider: provider.provider,
+    ...(hasSeats ? { seat: provider.seat ?? "none" } : {}),
     source: attempt.source,
     status: attempt.status,
     error: attempt.error ?? "none",

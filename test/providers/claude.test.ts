@@ -88,6 +88,27 @@ describe("Claude quota parsing", () => {
       },
     ]);
   });
+
+  // Exhausted user quota is a *successful* read (HTTP 200) that reports zero
+  // remaining, not an endpoint failure. It must normalize to a real window so it
+  // is never dropped or conflated with the endpoint-throttled (HTTP 429) path,
+  // which carries no windows and only a retry time.
+  it("reads a spent account as a usable zero-remaining window, not a failure", () => {
+    const result = normalizeClaudeApiUsage(
+      { seven_day: { utilization: 100, resets_at: "2026-07-27T00:00:00Z" } },
+      "Pro",
+    );
+
+    expect(result?.windows).toMatchObject([
+      {
+        id: "seven_day",
+        kind: "weekly",
+        percentUsed: 100,
+        percentRemaining: 0,
+        resetsAt: "2026-07-27T00:00:00Z",
+      },
+    ]);
+  });
 });
 
 describe("Claude OAuth profile parsing", () => {

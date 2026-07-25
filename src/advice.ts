@@ -1,6 +1,9 @@
+import type { ClaudeConfigSelection } from "./args.js";
+import { withClaudeConfigFlags } from "./command-context.js";
 import type {
   ProviderQuota,
   QuotaAxiResponse,
+  QuotaSummary,
   SourceAttempt,
 } from "./types.js";
 
@@ -14,37 +17,73 @@ const BLOCKED_CREDENTIAL_ERRORS = new Set([
 ]);
 
 export function annotateQuotaAdvice(
-  response: Omit<QuotaAxiResponse, "schemaVersion">,
+  response: Omit<QuotaAxiResponse, "schemaVersion" | "summary">,
+  keychainAccessRemedyCommand = KEYCHAIN_ACCESS_REMEDY_COMMAND,
 ): QuotaAxiResponse {
-  const providers = response.providers.map(annotateProviderAdvice);
-  const help = providers
-    .filter(hasKeychainAccessAdvice)
-    .map(keychainAccessHelpLine);
+  const providers = response.providers.map((provider) =>
+    annotateProviderAdvice(provider, keychainAccessRemedyCommand),
+  );
+  const help = [
+    ...new Set(
+      providers.filter(hasKeychainAccessAdvice).map(keychainAccessHelpLine),
+    ),
+  ];
   return {
     generatedAt: response.generatedAt,
     schemaVersion: 2,
+    summary: summarizeProviders(providers),
     providers,
     ...(help.length > 0 ? { help } : {}),
   };
 }
 
-export function quotaHelpLines(response: QuotaAxiResponse): string[] {
+/** A provider row is usable when it carries live or cached quota data. */
+export function isUsableProvider(provider: ProviderQuota): boolean {
+  return provider.state.status === "fresh" || provider.state.status === "stale";
+}
+
+/**
+ * Reduce per-provider (per-seat) rows to one aggregate verdict so a single
+ * seat's failure never masquerades as the whole fleet's state.
+ */
+function summarizeProviders(providers: ProviderQuota[]): QuotaSummary {
+  const total = providers.length;
+  const ok = providers.filter(isUsableProvider).length;
+  const unavailable = total - ok;
+  const availability =
+    total > 0 && ok === total ? "ok" : ok === 0 ? "unavailable" : "partial";
+  return { availability, ok, unavailable, total };
+}
+
+export function quotaHelpLines(
+  response: QuotaAxiResponse,
+  claudeConfigs?: ClaudeConfigSelection[],
+): string[] {
+  const jsonCommand = withClaudeConfigFlags(
+    "quota-axi --provider claude --json",
+    claudeConfigs,
+  );
+  const fullCommand = withClaudeConfigFlags("quota-axi --full", claudeConfigs);
+  const authCommand = withClaudeConfigFlags("quota-axi auth", claudeConfigs);
   return [
     ...(response.help ?? []),
-    "Run `quota-axi --provider claude --json` for JSON output",
-    "Run `quota-axi --full` to include account and source-attempt details",
-    "Run `quota-axi auth` to inspect local auth source availability without printing secrets",
+    `Run \`${jsonCommand}\` for JSON output`,
+    `Run \`${fullCommand}\` to include account and source-attempt details`,
+    `Run \`${authCommand}\` to inspect local auth source availability without printing secrets`,
   ];
 }
 
-function annotateProviderAdvice(provider: ProviderQuota): ProviderQuota {
+function annotateProviderAdvice(
+  provider: ProviderQuota,
+  remedyCommand: string,
+): ProviderQuota {
   if (!needsKeychainAccessAdvice(provider)) return provider;
   return {
     ...provider,
     state: {
       ...provider.state,
       reason: KEYCHAIN_ACCESS_REASON,
-      remedyCommand: KEYCHAIN_ACCESS_REMEDY_COMMAND,
+      remedyCommand,
     },
   };
 }
@@ -79,10 +118,10 @@ function isPromptBlockedKeychainAttempt(attempt: SourceAttempt): boolean {
 function hasKeychainAccessAdvice(provider: ProviderQuota): boolean {
   return (
     provider.state.reason === KEYCHAIN_ACCESS_REASON &&
-    provider.state.remedyCommand === KEYCHAIN_ACCESS_REMEDY_COMMAND
+    Boolean(provider.state.remedyCommand)
   );
 }
 
 function keychainAccessHelpLine(provider: ProviderQuota): string {
-  return `Tell your user: run \`${KEYCHAIN_ACCESS_REMEDY_COMMAND}\` once and approve Keychain access ("Always Allow") so quota-axi can read ${provider.provider}'s live quota.`;
+  return `Tell your user: run \`${provider.state.remedyCommand}\` once and approve Keychain access ("Always Allow") so quota-axi can read ${provider.provider}'s live quota.`;
 }

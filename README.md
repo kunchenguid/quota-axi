@@ -35,6 +35,11 @@ $ npx -y quota-axi
 bin: ~/.npm/_npx/.../quota-axi
 description: Report local agent-provider quota windows for routing-aware agents
 generatedAt: "2026-03-15T16:42:00.000Z"
+summary:
+  availability: ok
+  ok: 5
+  unavailable: 0
+  total: 5
 providers[5]{provider,plan,source,status,refreshedAt}:
   claude,pro,oauth,fresh,"2026-03-15T16:41:55.000Z"
   codex,plus,cli-rpc,fresh,"2026-03-15T16:41:58.000Z"
@@ -68,6 +73,7 @@ $ quota-axi --provider claude --json
 {
   "generatedAt": "2026-03-15T16:42:03.000Z",
   "schemaVersion": 2,
+  "summary": { "availability": "ok", "ok": 1, "unavailable": 0, "total": 1 },
   "providers": [
     {
       "provider": "claude",
@@ -118,6 +124,32 @@ auth[7]{provider,source,path,status,error}:
 help[1]:
   Run `quota-axi --allow-keychain-prompt auth` to permit macOS Keychain access
 ```
+
+### Multiple Claude subscriptions
+
+Repeat `--claude-config-dir` to read every selected Claude subscription in one call; Codex and other selected providers are still queried alongside them:
+
+```sh
+quota-axi --provider claude,codex,grok \
+  --claude-config-dir "$HOME/.claude-work" \
+  --claude-config-dir "$HOME/.claude-personal"
+```
+
+`CLAUDE_CONFIG_DIRS` provides the same selection using the platform path-list delimiter. Quote the whole assignment so the shell passes it safely:
+
+```sh
+# macOS/Linux (`:` delimiter)
+CLAUDE_CONFIG_DIRS="$HOME/.claude-work:$HOME/.claude-personal" \
+  quota-axi --provider claude,codex,grok
+
+# Windows PowerShell (`;` delimiter)
+$env:CLAUDE_CONFIG_DIRS = "$HOME\.claude-work;$HOME\.claude-personal"
+quota-axi --provider claude,codex,grok
+```
+
+Selection is deterministic and sources are not merged: repeated CLI values (in argument order) take precedence over `CLAUDE_CONFIG_DIRS`, then the existing singular `CLAUDE_CONFIG_DIR`, then `~/.claude`. Lexically normalized duplicate directories keep their first position. Selected directories remain separate rows even when they resolve to the same account identity. Multi-seat output uses stable labels made from the directory basename and a short profile hash, such as `.claude-work-a1b2c3`; provider and auth rows never include full config paths, but copy-pasteable next-step and Keychain remedy commands preserve selected profiles. See the [Output Model](#output-model) for conditional seat metadata.
+
+All config and provider access is read-only: quota-axi reads credentials and calls first-party usage endpoints but never writes config directories or changes provider auth/state.
 
 ## Install
 
@@ -188,9 +220,9 @@ It is generated from `src/skill.ts`; update it with `pnpm run build:skill` and v
 └───────────────┘       └──────────────┘
 ```
 
-- **Live first** - direct provider HTTP calls use 15 second request timeouts, Codex JSON-RPC reads use short per-call timeouts, and stale cache fallback is per provider.
+- **Live first** - direct provider HTTP calls use 15 second request timeouts, Codex JSON-RPC reads use short per-call timeouts, and stale cache fallback is per provider or Claude seat.
 - **No first-run Keychain prompt** - macOS Claude Keychain value reads are skipped on plain calls until `--allow-keychain-prompt` succeeds once, then future plain calls reuse that existing grant.
-- **Partial success is success** - one provider can fail while another returns fresh or stale data, and the process still exits 0. Exit code 1 means every provider failed, and 2 means a usage error.
+- **Partial success is success** - one provider or Claude seat can fail while another returns fresh or stale data, and the process still exits 0. The top-level `summary.availability` reports `ok` (every row usable), `partial` (some usable), or `unavailable` (none usable) so an agent reads the aggregate verdict without scanning every row, and a single seat's 429 can never read as all-Claude-down. Exit code 0 covers both full and partial availability; exit code 1 means every row failed (complete unavailability); exit code 2 means a usage error.
 - **No token equivalence** - quota-axi does not claim that one provider percentage equals another provider percentage.
 
 ## CLI Reference
@@ -207,6 +239,7 @@ It is generated from `src/skill.ts`; update it with `pnpm run build:skill` and v
 | Flag                                          | Description                                            |
 | --------------------------------------------- | ------------------------------------------------------ |
 | `--provider claude,codex,cursor,copilot,grok` | Scope providers                                        |
+| `--claude-config-dir <path>`                  | Select a Claude config directory; repeat for many      |
 | `--json`                                      | Emit normalized JSON instead of TOON for quota or auth |
 | `--full`                                      | Include quota account identity and source attempts     |
 | `--allow-keychain-prompt`                     | Permit macOS Claude Keychain access that could prompt  |
@@ -219,14 +252,16 @@ It is generated from `src/skill.ts`; update it with `pnpm run build:skill` and v
 
 ### Quota report shape
 
-| Object                        | Fields                                                                                     |
-| ----------------------------- | ------------------------------------------------------------------------------------------ |
-| Quota report                  | `providers`                                                                                |
-| Provider report               | `provider`, `label`, `source`, `windows`, `state`, optional `plan`, and optional `credits` |
-| Provider report with `--full` | Optional `account` identity and per-source `attempts`                                      |
-| Account identity (`--full`)   | Optional `email`, `organization`, `accountId`, and `identityStatus`                        |
+| Object                        | Fields                                                                                               |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------- |
+| Quota report                  | `summary` and `providers`                                                                            |
+| Aggregate `summary`           | `availability` (`ok`, `partial`, or `unavailable`), plus `ok`, `unavailable`, and `total` row counts |
+| Provider report               | `provider`, `label`, `source`, `windows`, `state`, optional `plan`, `credits`, and multi-seat `seat` |
+| Provider report with `--full` | Optional `account` identity and per-source `attempts`                                                |
+| Account identity (`--full`)   | Optional `email`, `organization`, `accountId`, and `identityStatus`                                  |
 
 Account identity and per-source `attempts` are omitted unless `--full` is passed.
+`seat` appears only when two or more Claude config directories are selected and contains a composition-independent, non-secret basename-plus-hash label; selecting zero or one directory does not add seat metadata.
 Claude `identityStatus` is `verified` only when Anthropic returns an authoritative account identifier; `email` and `organization` are display-only and must not be used for duplicate detection.
 
 ### Provider `state`
@@ -242,7 +277,7 @@ Claude `identityStatus` is `verified` only when Anthropic returns an authoritati
 | `reason`        | Optional reason                      |
 | `remedyCommand` | Optional remedy command              |
 
-When stale or unavailable quota is likely fixable by a one-time macOS Keychain grant, `state.reason` is `keychain_access_required`, `state.remedyCommand` is `quota-axi --allow-keychain-prompt`, and JSON includes an agent-directed `help` entry.
+When stale or unavailable quota is likely fixable by a one-time macOS Keychain grant, `state.reason` is `keychain_access_required`, `state.remedyCommand` contains an actionable `quota-axi --allow-keychain-prompt` invocation, and JSON includes an agent-directed `help` entry. For explicitly selected profiles, the command repeats their literal normalized `--claude-config-dir` values so it reaches the same Keychain items even when selection came from an inline environment assignment.
 Default TOON output includes the same condition in an `advice` block with `provider`, `reason`, and `remedyCommand`, plus the agent-directed help line.
 
 ### Quota windows
@@ -281,10 +316,10 @@ Source attempts can include `credentialPresent` when a non-secret probe confirms
 | Object               | Fields                                                    |
 | -------------------- | --------------------------------------------------------- |
 | Auth report          | `generatedAt`, `schemaVersion: 1`, and `auth`             |
-| Provider auth report | `provider` and `sources`                                  |
+| Provider auth report | `provider`, `sources`, and optional multi-seat `seat`     |
 | Auth source entry    | `source`, optional `path`, `status`, and optional `error` |
 
-Auth source entries can include `credentialPresent` when a non-secret probe confirms a credential item exists.
+Auth source entries can include `credentialPresent` when a non-secret probe confirms a credential item exists. Multi-seat auth reports omit config paths and use `seat` to distinguish subscriptions.
 
 | Name                 | Values                                                                                       |
 | -------------------- | -------------------------------------------------------------------------------------------- |
@@ -295,18 +330,21 @@ Auth source entries can include `credentialPresent` when a non-secret probe conf
 
 ### Provider credential sources
 
-| Provider       | Credential sources read                                                                                                                                                                                                                                          |
-| -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Claude         | `$CLAUDE_CONFIG_DIR/.credentials.json` or `~/.claude/.credentials.json`; on macOS, the corresponding default or path-hashed Claude Code Keychain value with `--allow-keychain-prompt` or, after a profile-scoped non-secret access marker exists, on plain calls |
-| Codex          | `$CODEX_HOME/auth.json` or `~/.codex/auth.json` before the read-only CLI fallback; `$QUOTA_AXI_CODEX_BINARY` can pin that fallback to an absolute executable path                                                                                                |
-| Cursor         | `$CURSOR_STATE_DB` when set or the platform Cursor state database path                                                                                                                                                                                           |
-| GitHub Copilot | `$GITHUB_COPILOT_APPS_JSON` when set or the local Copilot apps auth file                                                                                                                                                                                         |
-| Grok           | `$GROK_AUTH_JSON`, inline `$GROK_AUTH`, `$GROK_AUTH_PATH`, or `$GROK_HOME/auth.json` / `~/.grok/auth.json`                                                                                                                                                       |
+| Provider       | Credential sources read                                                                                                                                                                                                                                                                                                                |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Claude         | Repeated `--claude-config-dir`, path-list `CLAUDE_CONFIG_DIRS`, singular `$CLAUDE_CONFIG_DIR`, or the default `~/.claude` `.credentials.json`; on macOS, the corresponding default or path-hashed Claude Code Keychain value with `--allow-keychain-prompt` or, after a profile-scoped non-secret access marker exists, on plain calls |
+| Codex          | `$CODEX_HOME/auth.json` or `~/.codex/auth.json` before the read-only CLI fallback; `$QUOTA_AXI_CODEX_BINARY` can pin that fallback to an absolute executable path                                                                                                                                                                      |
+| Cursor         | `$CURSOR_STATE_DB` when set or the platform Cursor state database path                                                                                                                                                                                                                                                                 |
+| GitHub Copilot | `$GITHUB_COPILOT_APPS_JSON` when set or the local Copilot apps auth file                                                                                                                                                                                                                                                               |
+| Grok           | `$GROK_AUTH_JSON`, inline `$GROK_AUTH`, `$GROK_AUTH_PATH`, or `$GROK_HOME/auth.json` / `~/.grok/auth.json`                                                                                                                                                                                                                             |
 
 ### Provider notes
 
 **Claude**
 
+- Multiple selected config directories are queried independently and concurrently. When `--allow-keychain-prompt` is present, prompt-capable Claude reads are serialized while other provider reads remain concurrent. Live failures and stale-cache fallbacks remain bounded to their seat and do not suppress other Claude seats or providers.
+- Selected config directories are read only and never created, rewritten, or used to mutate Claude state.
+- Relative profile values selected through `--claude-config-dir` or `CLAUDE_CONFIG_DIRS` retain their literal normalized identity for Claude Code's Keychain service while filesystem and quota-cache access uses the resolved directory.
 - quota-axi records the non-secret access marker after any successful Keychain value read.
 - When that marker exists, plain calls read the Keychain value again so an already-approved "Always Allow" grant keeps live Claude quota fresh.
 - Without the flag or marker, quota-axi may perform a non-secret Keychain item presence check so it only suggests Keychain access when a Claude credential item exists.
@@ -344,15 +382,15 @@ Auth source entries can include `credentialPresent` when a non-secret probe conf
 
 ### Cache
 
-| Item                                   | Behavior                                                                                                                                                                                                                                      |
-| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Quota cache                            | Lives at `~/.cache/quota-axi/quotas.json` or under `$XDG_CACHE_HOME/quota-axi/` when `XDG_CACHE_HOME` is set.                                                                                                                                 |
-| Quota cache permissions                | Uses `0600` file permissions.                                                                                                                                                                                                                 |
-| Quota cache contents                   | Stores normalized non-secret snapshots only.                                                                                                                                                                                                  |
-| Claude Keychain access marker          | Lives alongside the quota cache as `claude-keychain-access-granted` for the default profile or with an eight-character path-hash suffix for a `$CLAUDE_CONFIG_DIR` profile; uses `0600` file permissions and contains no credential material. |
-| Cached reports                         | Only fresh provider snapshots with windows are cached.                                                                                                                                                                                        |
-| Fresh provider reports with no windows | Clear any cached snapshot for that provider, so entitlement-only reports do not leave stale quota windows behind.                                                                                                                             |
-| Reports and details not cached         | Failed providers, stale providers, account identity, and source attempts are not cached.                                                                                                                                                      |
+| Item                                   | Behavior                                                                                                                                                                                                                                                                                                                  |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Quota cache                            | Lives at `~/.cache/quota-axi/quotas.json` or under `$XDG_CACHE_HOME/quota-axi/` when `XDG_CACHE_HOME` is set.                                                                                                                                                                                                             |
+| Quota cache permissions                | Uses `0600` file permissions.                                                                                                                                                                                                                                                                                             |
+| Quota cache contents                   | Stores normalized non-secret snapshots only.                                                                                                                                                                                                                                                                              |
+| Claude Keychain access marker          | Lives alongside the quota cache as `claude-keychain-access-granted` for the default profile or with an eight-character path-hash suffix for a selected config-directory profile (`--claude-config-dir`, `CLAUDE_CONFIG_DIRS`, or `$CLAUDE_CONFIG_DIR`); uses `0600` file permissions and contains no credential material. |
+| Cached reports                         | Only fresh provider snapshots with windows are cached; Claude profiles selected through `--claude-config-dir` or `CLAUDE_CONFIG_DIRS` are isolated by a non-secret path hash.                                                                                                                                             |
+| Fresh provider reports with no windows | Clear the matching provider or Claude-profile snapshot, so entitlement-only reports do not leave stale quota windows behind.                                                                                                                                                                                              |
+| Reports and details not cached         | Failed providers, stale providers, account identity, and source attempts are not cached.                                                                                                                                                                                                                                  |
 
 ## Development
 
