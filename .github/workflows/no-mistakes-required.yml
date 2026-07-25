@@ -1,7 +1,16 @@
 name: Require no-mistakes
 
+# Always-emitted, metadata-only gate. Every pull request must carry the
+# deterministic signature that no-mistakes writes into the PR body.
+#
+# Fork safety: the trigger is pull_request_target, so the workflow that runs is
+# always the base branch copy from main. There are no branch/path filters and no
+# author exemptions, so the check is emitted on every PR and is safe to require.
+#
+# Least privilege: contents: read only, no secrets, no checkout, and no PR-head
+# code execution. The job reads only the PR body from the event payload.
 on:
-  pull_request:
+  pull_request_target:
     types: [opened, edited, synchronize, reopened]
     branches:
       - main
@@ -16,15 +25,8 @@ concurrency:
 jobs:
   check:
     name: PR must be raised via no-mistakes
-    runs-on: ubuntu-latest
-    # Known automation accounts are exempt so the release pipeline keeps working:
-    # - github-actions[bot] opens the release-please PR via GITHUB_TOKEN
-    # - dependabot[bot] opens dependency update PRs
-    # Other authors (human or bot) must raise PRs through `git push no-mistakes`.
-    if: >-
-      github.event.pull_request.user.login != 'github-actions[bot]' &&
-      github.event.pull_request.user.login != 'dependabot[bot]' &&
-      github.event.pull_request.user.login != 'release-please[bot]'
+    runs-on: [quotaaxi-metadata-only-4f9c2b71, quotaaxi-agt8-isolated-4f9c2b71]
+    timeout-minutes: 5
     steps:
       - name: Verify no-mistakes signature in PR body
         env:
@@ -41,7 +43,7 @@ jobs:
           {
             echo "::error::This PR was not raised through no-mistakes."
             echo
-            echo "Contributions to this repository must be submitted via 'git push no-mistakes'."
+            echo "Every pull request to this repository must be submitted via 'git push no-mistakes'."
             echo "That pipeline runs the required review/test/lint/CI steps and writes a"
             echo "deterministic '## Pipeline' section into the PR body containing:"
             echo
