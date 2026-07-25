@@ -30,11 +30,6 @@
   "publishConfig": {
     "access": "public"
   },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "esbuild"
-    ]
-  },
   "scripts": {
     "build": "tsc",
     "build:skill": "tsx scripts/build-skill.ts",

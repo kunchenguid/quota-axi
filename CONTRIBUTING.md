@@ -33,7 +33,7 @@ See the [no-mistakes quick start](https://kunchenguid.github.io/no-mistakes/star
 
 ## Repo conventions
 
-- Node 20+, TypeScript, ESM-only.
+- Node 22.19+, TypeScript, ESM-only.
 - Install dependencies with `pnpm install --frozen-lockfile`; run `pnpm run build`, `pnpm run lint`, `pnpm run format:check`, `pnpm test`, and `pnpm run build:skill -- --check` before pushing.
 - Run `pnpm run format` when `pnpm run format:check` reports formatting drift.
 - After changing dependencies, run `pnpm exec prettier --write pnpm-lock.yaml` so the committed lockfile keeps its Prettier formatting.
