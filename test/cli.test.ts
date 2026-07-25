@@ -115,7 +115,11 @@ describe("CLI flag parsing", () => {
     });
     expect(selectClaudeConfigs([], { CLAUDE_CONFIG_DIR: "./legacy" })).toEqual({
       source: "CLAUDE_CONFIG_DIR",
-      configs: [{ keychainIdentity: "./legacy" }],
+      configs: [{ directory: resolve("legacy"), keychainIdentity: "./legacy" }],
+    });
+    expect(selectClaudeConfigs([], { CLAUDE_CONFIG_DIR: "" })).toEqual({
+      source: "CLAUDE_CONFIG_DIR",
+      configs: [{ keychainIdentity: "" }],
     });
     expect(selectClaudeConfigs([], {})).toEqual({ source: "default" });
   });

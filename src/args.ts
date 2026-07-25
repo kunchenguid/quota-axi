@@ -145,8 +145,14 @@ export function selectClaudeConfigs(
   }
 
   if (env.CLAUDE_CONFIG_DIR !== undefined) {
+    if (env.CLAUDE_CONFIG_DIR === "") {
+      return {
+        configs: [{ keychainIdentity: "" }],
+        source: "CLAUDE_CONFIG_DIR",
+      };
+    }
     return {
-      configs: [{ keychainIdentity: env.CLAUDE_CONFIG_DIR.normalize("NFC") }],
+      configs: normalizeConfigs([env.CLAUDE_CONFIG_DIR]),
       source: "CLAUDE_CONFIG_DIR",
     };
   }
