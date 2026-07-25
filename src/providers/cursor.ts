@@ -150,6 +150,7 @@ export function normalizeCursorUsage(
         kind: "monthly",
         percentUsed: clampPercent(total),
         resetsAt: reset,
+        windowSeconds: null,
       }),
     );
   }
@@ -162,6 +163,7 @@ export function normalizeCursorUsage(
         kind: "monthly",
         percentUsed: clampPercent(auto),
         resetsAt: reset,
+        windowSeconds: null,
       }),
     );
   }
@@ -174,6 +176,7 @@ export function normalizeCursorUsage(
         kind: "monthly",
         percentUsed: clampPercent(api),
         resetsAt: reset,
+        windowSeconds: null,
       }),
     );
   }
@@ -200,6 +203,7 @@ export function normalizeCursorUsage(
           individualUsed === undefined ? undefined : individualUsed / 100,
         limitUsd: individualLimit / 100,
         resetsAt: reset,
+        windowSeconds: null,
       }),
     );
   }

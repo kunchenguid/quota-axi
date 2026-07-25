@@ -142,8 +142,18 @@ describe("Codex quota parsing", () => {
     });
 
     expect(result?.windows).toMatchObject([
-      { id: "five_hour", label: "session", kind: "session" },
-      { id: "weekly", label: "week", kind: "weekly" },
+      {
+        id: "five_hour",
+        label: "session",
+        kind: "session",
+        windowSeconds: null,
+      },
+      {
+        id: "weekly",
+        label: "week",
+        kind: "weekly",
+        windowSeconds: null,
+      },
     ]);
   });
 

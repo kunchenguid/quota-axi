@@ -31,10 +31,12 @@ const GROK_SOURCE = "web" as const;
 const PRODUCT_NAMES: Record<number, { id: string; label: string }> = {
   0: { id: "unspecified", label: "Other" },
   1: { id: "api", label: "API" },
-  2: { id: "grok_build", label: "Grok Build" },
+  // These ids predate the protobuf transport and are part of the normalized
+  // JSON contract. Keep them stable even when vendor enum labels differ.
+  2: { id: "grokbuild", label: "Grok Build" },
   3: { id: "grok_plugins", label: "Grok Plugins" },
   4: { id: "chat", label: "Chat" },
-  5: { id: "imagine", label: "Imagine" },
+  5: { id: "grokimagine", label: "Imagine" },
   6: { id: "voice", label: "Voice" },
 };
 
@@ -158,10 +160,8 @@ export function normalizeGrokConsumerPayload(
     : "unspecified";
   const periodStart = currentPeriod ? timestampAt(currentPeriod, 2) : undefined;
   const resetsAt = currentPeriod ? timestampAt(currentPeriod, 3) : undefined;
-  const validCurrentPeriod =
-    (periodType === "weekly" || periodType === "monthly") &&
-    periodStart !== undefined &&
-    resetsAt !== undefined;
+  const windowSeconds = periodWindowSeconds(periodType, periodStart, resetsAt);
+  const validCurrentPeriod = windowSeconds !== null;
 
   const windows: QuotaWindow[] = [];
   const sharedExplicit = floatAt(config, 1);
@@ -174,6 +174,7 @@ export function normalizeGrokConsumerPayload(
       percentUsed,
       percentRemaining: 100 - percentUsed,
       resetsAt,
+      windowSeconds,
     });
   }
 
@@ -195,6 +196,7 @@ export function normalizeGrokConsumerPayload(
       percentUsed,
       percentRemaining: 100 - percentUsed,
       resetsAt,
+      windowSeconds,
     });
   }
 
@@ -528,6 +530,22 @@ function periodTypeAt(
   if (value === 2n) return "weekly";
   if (value === 1n) return "monthly";
   return "unspecified";
+}
+
+function periodWindowSeconds(
+  periodType: "weekly" | "monthly" | "unspecified",
+  periodStart: string | undefined,
+  resetsAt: string | undefined,
+): number | null {
+  if (
+    (periodType !== "weekly" && periodType !== "monthly") ||
+    periodStart === undefined ||
+    resetsAt === undefined
+  ) {
+    return null;
+  }
+  const seconds = (Date.parse(resetsAt) - Date.parse(periodStart)) / 1_000;
+  return Number.isSafeInteger(seconds) && seconds > 0 ? seconds : null;
 }
 
 function safeNumber(value: bigint | undefined): number | undefined {

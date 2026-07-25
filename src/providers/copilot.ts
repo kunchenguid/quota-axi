@@ -194,6 +194,7 @@ function normalizeQuotaSnapshots(
       resetsAt:
         parseEpochSecondsOrMillis(item.quota_reset_at) ??
         parseEpochSecondsOrMillis(resetFallback),
+      windowSeconds: null,
     });
   }
   return windows;

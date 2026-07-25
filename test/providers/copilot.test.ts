@@ -97,6 +97,10 @@ describe("GitHub Copilot quota parsing", () => {
         resetsAt: "2026-08-01T00:00:00.000Z",
       },
     ]);
+    expect(result?.windows.map(({ windowSeconds }) => windowSeconds)).toEqual([
+      null,
+      null,
+    ]);
   });
 
   it("can return a fresh entitlement report with no numeric windows", () => {

@@ -128,6 +128,48 @@ describe("quota cache", () => {
     ]);
   });
 
+  it("round-trips known and explicitly unknown window lengths", () => {
+    useTempCache();
+    const grok = quota("grok", 20);
+    grok.source = "web";
+    grok.windows = [
+      {
+        id: "credits",
+        label: "credits",
+        kind: "credits",
+        percentUsed: 20,
+        windowSeconds: 604_800,
+      },
+      {
+        id: "product:grok_build",
+        label: "Grok Build",
+        kind: "credits",
+        percentUsed: 10,
+        windowSeconds: null,
+      },
+      {
+        id: "product:imagine",
+        label: "Imagine",
+        kind: "credits",
+        percentUsed: 5,
+        windowSeconds: 604_800,
+      },
+    ];
+
+    writeCachedProviders([grok]);
+
+    expect(
+      readCachedProvider("grok")?.windows.map(({ id, windowSeconds }) => ({
+        id,
+        windowSeconds,
+      })),
+    ).toEqual([
+      { id: "credits", windowSeconds: 604_800 },
+      { id: "product:grokbuild", windowSeconds: null },
+      { id: "product:grokimagine", windowSeconds: 604_800 },
+    ]);
+  });
+
   it("merges fresh provider snapshots into existing cache", () => {
     useTempCache();
     writeCachedProviders([quota("claude", 10), quota("codex", 20)]);

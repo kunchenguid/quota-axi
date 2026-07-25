@@ -145,15 +145,15 @@ describe("quota semantics", () => {
     const result = withQuotaSemantics(
       provider("grok", [
         window("credits", "credits", 1),
-        window("product:grok_build", "credits", 88),
+        window("product:grokbuild", "credits", 88),
       ]),
     );
 
     expect(result.quotaSemantics?.effectiveAvailability).toContainEqual({
-      scope: "product:grok_build",
+      scope: "product:grokbuild",
       status: "known",
       effectivePercentRemaining: 1,
-      boundedBy: ["credits", "product:grok_build"],
+      boundedBy: ["credits", "product:grokbuild"],
       limitingWindowIds: ["credits"],
     });
   });

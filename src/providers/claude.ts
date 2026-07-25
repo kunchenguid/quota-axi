@@ -38,6 +38,8 @@ const KEYCHAIN_PROMPT_TIMEOUT_MS = 60_000;
 const KEYCHAIN_PRESENCE_TIMEOUT_MS = 5_000;
 const KEYCHAIN_ITEM_NOT_FOUND_EXIT_CODE = 44;
 const DEFAULT_KEYCHAIN_SERVICE = "Claude Code-credentials";
+const FIVE_HOURS_SECONDS = 5 * 60 * 60;
+const SEVEN_DAYS_SECONDS = 7 * 24 * 60 * 60;
 
 type ClaudeCredentials = {
   source: "oauth-file" | "keychain";
@@ -242,13 +244,26 @@ export function normalizeClaudeApiUsage(
     scopedWindows.length > 0
       ? scopedWindows
       : [
-          normalizeWindow(data.five_hour, "five_hour", "session", "session"),
-          normalizeWindow(data.seven_day, "seven_day", "week", "weekly"),
+          normalizeWindow(
+            data.five_hour,
+            "five_hour",
+            "session",
+            "session",
+            FIVE_HOURS_SECONDS,
+          ),
+          normalizeWindow(
+            data.seven_day,
+            "seven_day",
+            "week",
+            "weekly",
+            SEVEN_DAYS_SECONDS,
+          ),
           normalizeWindow(
             data.seven_day_opus,
             "seven_day_opus",
             "opus week",
             "model",
+            SEVEN_DAYS_SECONDS,
           ),
         ].filter((window): window is QuotaWindow => Boolean(window));
 
@@ -302,6 +317,13 @@ function normalizeScopedLimitEntry(raw: unknown): QuotaWindow | undefined {
   const percent = typeof entry.percent === "number" ? entry.percent : undefined;
   if (percent === undefined) return undefined;
   const resetsAt = stringValue(entry.resets_at);
+  const group = stringValue(entry.group);
+  const windowSeconds =
+    group === "session"
+      ? FIVE_HOURS_SECONDS
+      : group === "weekly"
+        ? SEVEN_DAYS_SECONDS
+        : null;
 
   const scope = objectValue(entry.scope);
   const model = scope ? objectValue(scope.model) : undefined;
@@ -314,10 +336,10 @@ function normalizeScopedLimitEntry(raw: unknown): QuotaWindow | undefined {
       kind: "model",
       percentUsed: clampPercent(percent),
       resetsAt,
+      windowSeconds,
     });
   }
 
-  const group = stringValue(entry.group);
   if (group === "session") {
     return withRemaining({
       id: "five_hour",
@@ -325,6 +347,7 @@ function normalizeScopedLimitEntry(raw: unknown): QuotaWindow | undefined {
       kind: "session",
       percentUsed: clampPercent(percent),
       resetsAt,
+      windowSeconds,
     });
   }
   if (group === "weekly") {
@@ -334,6 +357,7 @@ function normalizeScopedLimitEntry(raw: unknown): QuotaWindow | undefined {
       kind: "weekly",
       percentUsed: clampPercent(percent),
       resetsAt,
+      windowSeconds,
     });
   }
 
@@ -344,6 +368,7 @@ function normalizeScopedLimitEntry(raw: unknown): QuotaWindow | undefined {
     kind: "unknown",
     percentUsed: clampPercent(percent),
     resetsAt,
+    windowSeconds,
   });
 }
 
@@ -682,6 +707,7 @@ function normalizeWindow(
   id: string,
   label: string,
   kind: QuotaWindow["kind"],
+  windowSeconds: number,
 ): QuotaWindow | undefined {
   if (!raw || typeof raw !== "object") return undefined;
   const data = raw as RawUsageWindow;
@@ -694,6 +720,7 @@ function normalizeWindow(
     kind,
     percentUsed: clampPercent(used),
     resetsAt: stringValue(data.resets_at) ?? stringValue(data.reset_at),
+    windowSeconds,
   });
 }
 
@@ -725,6 +752,7 @@ function normalizeExtraUsage(raw: unknown): QuotaWindow | undefined {
     percentUsed,
     spentUsd,
     limitUsd,
+    windowSeconds: null,
   });
 }
 

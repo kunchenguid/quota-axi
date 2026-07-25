@@ -664,6 +664,7 @@ export function normalizeKimiPayload(payload: unknown): NormalizedKimiPayload {
       percentUsed: principal.percentUsed,
       percentRemaining: principal.percentRemaining,
       ...(principal.resetsAt ? { resetsAt: principal.resetsAt } : {}),
+      windowSeconds: WEEK_SECONDS,
     },
   ];
   const diagnostics: KimiDiagnostic[] = [];
@@ -699,7 +700,7 @@ export function normalizeKimiPayload(payload: unknown): NormalizedKimiPayload {
       percentUsed: detail.percentUsed,
       percentRemaining: detail.percentRemaining,
       ...(detail.resetsAt ? { resetsAt: detail.resetsAt } : {}),
-      ...(windowSeconds !== undefined ? { windowSeconds } : {}),
+      windowSeconds: windowSeconds ?? null,
     });
   }
 

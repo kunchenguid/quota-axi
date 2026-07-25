@@ -137,11 +137,15 @@ function normalizeCachedProvider(raw: unknown): ProviderQuota | undefined {
   const state = objectValue(data.state);
   const status = literalValue(state?.status, PROVIDER_STATUSES);
   const sourcesTried = stringArrayValue(state?.sourcesTried);
-  const windows = Array.isArray(data.windows)
+  const normalizedWindows = Array.isArray(data.windows)
     ? data.windows
         .map(normalizeCachedWindow)
         .filter((window): window is QuotaWindow => Boolean(window))
     : [];
+  const windows =
+    provider === "grok"
+      ? normalizedWindows.map(normalizeGrokWindowIdentity)
+      : normalizedWindows;
   if (
     !provider ||
     !label ||
@@ -176,6 +180,16 @@ function normalizeCachedProvider(raw: unknown): ProviderQuota | undefined {
   return result;
 }
 
+function normalizeGrokWindowIdentity(window: QuotaWindow): QuotaWindow {
+  if (window.id === "product:grok_build") {
+    return { ...window, id: "product:grokbuild" };
+  }
+  if (window.id === "product:imagine") {
+    return { ...window, id: "product:grokimagine" };
+  }
+  return window;
+}
+
 function hasInvalidCodexWindowIdentities(windows: QuotaWindow[]): boolean {
   const counts = new Map<string, number>();
   for (const window of windows) {
@@ -191,7 +205,7 @@ function hasInvalidCodexWindowIdentities(windows: QuotaWindow[]): boolean {
 
 function codexWindowBaseIdentity(window: QuotaWindow): string | undefined {
   const id = window.id.replace(/_[2-9]\d*$/, "");
-  if (window.windowSeconds === undefined) {
+  if (window.windowSeconds == null) {
     if (matchesWindowIdentity(window, id, "five_hour", "session", "session"))
       return id;
     if (matchesWindowIdentity(window, id, "weekly", "week", "weekly"))
@@ -321,7 +335,8 @@ function normalizeCachedWindow(raw: unknown): QuotaWindow | undefined {
   assignNumber(result, "percentRemaining", data.percentRemaining);
   assignString(result, "resetsAt", data.resetsAt);
   assignString(result, "resetText", data.resetText);
-  assignNumber(result, "windowSeconds", data.windowSeconds);
+  if (data.windowSeconds === null) result.windowSeconds = null;
+  else assignNumber(result, "windowSeconds", data.windowSeconds);
   assignNumber(result, "spentUsd", data.spentUsd);
   assignNumber(result, "limitUsd", data.limitUsd);
   return result;

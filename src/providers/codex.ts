@@ -709,7 +709,7 @@ function normalizeWindow(
       parseEpochOrIso(data.reset_at) ??
       parseEpochOrIso(data.resetsAt) ??
       resetFromSeconds,
-    windowSeconds,
+    windowSeconds: windowSeconds ?? null,
   });
 }
 

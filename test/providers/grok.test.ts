@@ -136,6 +136,8 @@ type ConsumerPayloadOptions = {
   includePercent?: boolean;
   products?: Array<{ product?: number; usagePercent?: number }>;
   periodType?: 0 | 1 | 2;
+  periodStart?: string;
+  periodEnd?: string;
   includePeriod?: boolean;
   includePeriodStart?: boolean;
   includePeriodEnd?: boolean;
@@ -162,8 +164,9 @@ function consumerPayload(options: ConsumerPayloadOptions = {}): Uint8Array {
     config.push(message(7, concat(...fields)));
   }
   if (options.includePeriod !== false) {
-    const end = Date.parse("2026-07-27T20:00:00Z") / 1_000;
-    const start = end - 7 * 86_400;
+    const end = Date.parse(options.periodEnd ?? "2026-07-27T20:00:00Z") / 1_000;
+    const start =
+      Date.parse(options.periodStart ?? "2026-07-20T20:00:00Z") / 1_000;
     const period: Uint8Array[] = [scalar(1, options.periodType ?? 2)];
     if (options.includePeriodStart !== false)
       period.push(message(2, timestamp(start)));
@@ -270,14 +273,16 @@ describe("Grok consumer quota parsing", () => {
         percentUsed: 18.25,
         percentRemaining: 81.75,
         resetsAt: "2026-07-27T20:00:00.000Z",
+        windowSeconds: 604_800,
       },
       {
-        id: "product:grok_build",
+        id: "product:grokbuild",
         label: "Grok Build",
         kind: "credits",
         percentUsed: 33.25,
         percentRemaining: 66.75,
         resetsAt: "2026-07-27T20:00:00.000Z",
+        windowSeconds: 604_800,
       },
       {
         id: "product:chat",
@@ -286,6 +291,7 @@ describe("Grok consumer quota parsing", () => {
         percentUsed: 100,
         percentRemaining: 0,
         resetsAt: "2026-07-27T20:00:00.000Z",
+        windowSeconds: 604_800,
       },
     ]);
   });
@@ -307,6 +313,7 @@ describe("Grok consumer quota parsing", () => {
         percentUsed: 0,
         percentRemaining: 100,
         resetsAt: undefined,
+        windowSeconds: null,
       },
     ]);
   });
@@ -323,7 +330,7 @@ describe("Grok consumer quota parsing", () => {
     expect(result.windows).toMatchObject([
       { id: "credits", percentUsed: 0, percentRemaining: 100 },
       {
-        id: "product:grok_build",
+        id: "product:grokbuild",
         percentUsed: 0,
         percentRemaining: 100,
       },
@@ -331,19 +338,61 @@ describe("Grok consumer quota parsing", () => {
     expect(result.credits).toEqual({ remaining: 0, unit: "credits" });
   });
 
-  it("supports monthly periods and unknown product enum values", () => {
+  it("derives a monthly period length for every window from its boundaries", () => {
     const result = normalizeGrokConsumerPayload(
       consumerPayload({
         periodType: 1,
+        periodStart: "2026-07-01T20:00:00Z",
+        periodEnd: "2026-08-01T20:00:00Z",
         products: [{ product: 99, usagePercent: 12.5 }],
       }),
     );
 
-    expect(result.windows[1]).toMatchObject({
-      id: "product:unknown_99",
-      label: "Product 99",
-      percentUsed: 12.5,
-    });
+    expect(
+      result.windows.map(({ id, windowSeconds }) => [id, windowSeconds]),
+    ).toEqual([
+      ["credits", 2_678_400],
+      ["product:unknown_99", 2_678_400],
+    ]);
+  });
+
+  it("marks an unspecified period explicitly unknown", () => {
+    const result = normalizeGrokConsumerPayload(
+      consumerPayload({
+        periodType: 0,
+        products: [{ product: 2, usagePercent: 12.5 }],
+      }),
+    );
+
+    expect(
+      result.windows.map(({ id, windowSeconds }) => [id, windowSeconds]),
+    ).toEqual([
+      ["credits", null],
+      ["product:grokbuild", null],
+    ]);
+  });
+
+  it("keeps published product ids stable across transport changes", () => {
+    const result = normalizeGrokConsumerPayload(
+      consumerPayload({
+        products: [1, 2, 3, 4, 5, 6].map((product) => ({
+          product,
+          usagePercent: 10,
+        })),
+      }),
+    );
+
+    expect(
+      result.windows.map(({ id, windowSeconds }) => ({ id, windowSeconds })),
+    ).toEqual([
+      { id: "credits", windowSeconds: 604_800 },
+      { id: "product:api", windowSeconds: 604_800 },
+      { id: "product:grokbuild", windowSeconds: 604_800 },
+      { id: "product:grok_plugins", windowSeconds: 604_800 },
+      { id: "product:chat", windowSeconds: 604_800 },
+      { id: "product:grokimagine", windowSeconds: 604_800 },
+      { id: "product:voice", windowSeconds: 604_800 },
+    ]);
   });
 
   it("rejects a missing config", () => {
@@ -856,6 +905,7 @@ describe("Grok CLI rendering regression", () => {
           id: "credits",
           percentUsed: 0,
           percentRemaining: 100,
+          windowSeconds: 604_800,
         },
       ],
     });
@@ -863,6 +913,33 @@ describe("Grok CLI rendering regression", () => {
     const toon = await captureCli(["--provider", "grok"]);
     expect(toon).toContain("grok,credits,credits,100");
     expect(toon).not.toContain("grok,credits,credits,unknown");
+  });
+
+  it("renders an explicitly unknown period as JSON null", async () => {
+    writeValidAuth();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        grpcResponse(
+          consumerPayload({
+            periodType: 0,
+            products: [{ product: 2, usagePercent: 12.5 }],
+          }),
+        ),
+      ),
+    );
+
+    const jsonText = await captureCli(["--provider", "grok", "--json"]);
+    const json = JSON.parse(jsonText) as QuotaAxiResponse;
+    expect(
+      json.providers[0].windows.map(({ id, windowSeconds }) => ({
+        id,
+        windowSeconds,
+      })),
+    ).toEqual([
+      { id: "credits", windowSeconds: null },
+      { id: "product:grokbuild", windowSeconds: null },
+    ]);
   });
 });
 

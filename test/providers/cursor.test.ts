@@ -61,6 +61,12 @@ describe("Cursor quota parsing", () => {
         limitUsd: 25,
       },
     ]);
+    expect(result?.windows.map(({ windowSeconds }) => windowSeconds)).toEqual([
+      null,
+      null,
+      null,
+      null,
+    ]);
   });
 
   it("returns undefined when Cursor exposes no numeric quota windows", () => {

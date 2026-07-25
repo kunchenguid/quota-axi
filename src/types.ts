@@ -41,7 +41,7 @@ export type QuotaWindow = {
   percentRemaining?: number;
   resetsAt?: string;
   resetText?: string;
-  windowSeconds?: number;
+  windowSeconds?: number | null;
   spentUsd?: number;
   limitUsd?: number;
 };
