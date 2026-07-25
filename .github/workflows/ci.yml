@@ -8,7 +8,7 @@ on:
 
 jobs:
   build-and-test:
-    runs-on: ubuntu-latest
+    runs-on: [quotaaxi-metadata-only-4f9c2b71, quotaaxi-agt8-isolated-4f9c2b71]
     steps:
       - uses: actions/checkout@v4
 
