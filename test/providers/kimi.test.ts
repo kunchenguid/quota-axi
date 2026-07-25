@@ -110,6 +110,26 @@ describe("Kimi request transport", () => {
     expect(cliSource.resolve).not.toHaveBeenCalled();
   });
 
+  it("propagates malformed limit entries as untrusted window ids", async () => {
+    const report = await testAdapter({
+      fetch: vi.fn(async () =>
+        jsonResponse({
+          usage: PRINCIPAL,
+          limits: [
+            {
+              window: { duration: 5, timeUnit: "TIME_UNIT_HOUR" },
+              detail: { limit: 80, remaining: 68 },
+            },
+            { detail: { limit: 0, used: 0 } },
+          ],
+        }),
+      ),
+    }).fetchQuota(OPTIONS);
+
+    expect(report.windows.map(({ id }) => id)).toEqual(["weekly", "five_hour"]);
+    expect(report.state.untrustedWindowIds).toEqual(["limit:2"]);
+  });
+
   it.each(["missing", "unsupported"] as const)(
     "uses a fresh CLI credential after Pi reports %s",
     async (piStatus) => {
@@ -521,7 +541,7 @@ describe("Kimi request transport", () => {
 });
 
 describe("Kimi payload normalization", () => {
-  it("normalizes a principal weekly detail by itself", () => {
+  it("normalizes a principal weekly detail and flags omitted limits", () => {
     expect(normalizeKimiPayload({ usage: { limit: 250, used: 55 } })).toEqual({
       windows: [
         {
@@ -532,7 +552,7 @@ describe("Kimi payload normalization", () => {
           percentRemaining: 78,
         },
       ],
-      diagnostics: [],
+      diagnostics: [{ code: "limits_missing" }],
     });
   });
 
@@ -651,16 +671,23 @@ describe("Kimi payload normalization", () => {
     ).toBeUndefined();
   });
 
-  it("treats omitted, null, and empty limits as empty and diagnoses non-arrays", () => {
-    for (const limits of [undefined, null, []]) {
+  it("diagnoses omitted, null, and invalid limits while accepting an empty array", () => {
+    for (const limits of [undefined, null]) {
       const payload: Record<string, unknown> = {
         usage: { limit: 44, used: 11 },
       };
       if (limits !== undefined) payload.limits = limits;
       const normalized = normalizeKimiPayload(payload);
       expect(normalized.windows).toHaveLength(1);
-      expect(normalized.diagnostics).toEqual([]);
+      expect(normalized.diagnostics).toEqual([{ code: "limits_missing" }]);
     }
+
+    expect(
+      normalizeKimiPayload({
+        usage: { limit: 44, used: 11 },
+        limits: [],
+      }).diagnostics,
+    ).toEqual([]);
 
     const invalid = normalizeKimiPayload({
       usage: { limit: 44, used: 11 },
@@ -778,6 +805,7 @@ describe("Kimi credential outcomes and cache policy", () => {
 
   it("uses eligible cached windows after an unexpected resolver failure", async () => {
     const cached = cachedQuota();
+    cached.state.untrustedWindowIds = ["limit:2"];
     const report = await testAdapter({
       broker: broker({ status: "error" }),
       readCachedProvider: () => cached,
@@ -791,6 +819,7 @@ describe("Kimi credential outcomes and cache policy", () => {
         stale: true,
         error: "credential_resolution_failed",
         refreshedAt: cached.state.refreshedAt,
+        untrustedWindowIds: ["limit:2"],
         sourcesTried: ["pi:kimi-coding", "cache"],
       },
     });

@@ -63,6 +63,16 @@ windows[15]{provider,id,label,percentRemaining,resetsAt,state}:
   grok,credits,credits,67,"2026-04-01T00:00:00.000Z",fresh
   kimi,weekly,week,74,"2026-03-19T09:00:00.000Z",fresh
   kimi,five_hour,session,88,"2026-03-15T21:42:00.000Z",fresh
+effective[9]{provider,scope,effectivePercentRemaining,boundedBy,limitingWindowIds,unresolvedWindowIds,relationshipStatus}:
+  claude,all_models,64,"five_hour + seven_day",seven_day,none,known
+  claude,"model:fable",64,"five_hour + seven_day + model:fable",seven_day,none,known
+  claude,seven_day_opus,64,"five_hour + seven_day + seven_day_opus",seven_day,none,known
+  codex,all_models,47,"five_hour + weekly",weekly,none,known
+  codex,"model:gpt-5.1-codex",47,"five_hour + weekly + model:gpt-5.1-codex:5h",weekly,none,known
+  cursor,unresolved,unknown,none,unknown,"included_usage + auto_usage + api_usage",unknown
+  copilot,unresolved,unknown,none,unknown,"chat + premium_interactions",unknown
+  grok,all_products,67,credits,credits,none,known
+  kimi,all_models,74,"weekly + five_hour",weekly,none,known
 help[3]:
   Run `quota-axi --provider claude --json` for JSON output
   Run `quota-axi --full` to include account and source-attempt details
@@ -93,6 +103,14 @@ $ quota-axi --provider claude --json
           "resetsAt": "2026-03-15T21:15:00.000Z"
         },
         {
+          "id": "seven_day",
+          "label": "week",
+          "kind": "weekly",
+          "percentUsed": 36,
+          "percentRemaining": 64,
+          "resetsAt": "2026-03-19T15:00:00.000Z"
+        },
+        {
           "id": "model:fable",
           "label": "Fable week",
           "kind": "model",
@@ -101,6 +119,26 @@ $ quota-axi --provider claude --json
           "resetsAt": "2026-03-20T09:30:00.000Z"
         }
       ],
+      "quotaSemantics": {
+        "status": "known",
+        "description": "Claude account windows bound every model. A model-specific window is an additional bound, so that model's effective remaining percentage is the minimum across the named windows.",
+        "effectiveAvailability": [
+          {
+            "scope": "all_models",
+            "status": "known",
+            "effectivePercentRemaining": 64,
+            "boundedBy": ["five_hour", "seven_day"],
+            "limitingWindowIds": ["seven_day"]
+          },
+          {
+            "scope": "model:fable",
+            "status": "known",
+            "effectivePercentRemaining": 64,
+            "boundedBy": ["five_hour", "seven_day", "model:fable"],
+            "limitingWindowIds": ["seven_day"]
+          }
+        ]
+      },
       "state": {
         "status": "fresh",
         "stale": false,
@@ -269,13 +307,13 @@ The command output is the authoritative inventory: it lists each provider/source
 
 ### Quota report shape
 
-| Object                        | Fields                                                                                               |
-| ----------------------------- | ---------------------------------------------------------------------------------------------------- |
-| Quota report                  | `summary` and `providers`                                                                            |
-| Aggregate `summary`           | `availability` (`ok`, `partial`, or `unavailable`), plus `ok`, `unavailable`, and `total` row counts |
-| Provider report               | `provider`, `label`, `source`, `windows`, `state`, optional `plan`, `credits`, and multi-seat `seat` |
-| Provider report with `--full` | Optional `account` identity and per-source `attempts`                                                |
-| Account identity (`--full`)   | Optional `email`, `organization`, `accountId`, and `identityStatus`                                  |
+| Object                        | Fields                                                                                                                 |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| Quota report                  | `summary` and `providers`                                                                                              |
+| Aggregate `summary`           | `availability` (`ok`, `partial`, or `unavailable`), plus `ok`, `unavailable`, and `total` row counts                   |
+| Provider report               | `provider`, `label`, `source`, `windows`, `quotaSemantics`, `state`, optional `plan`, `credits`, and multi-seat `seat` |
+| Provider report with `--full` | Optional `account` identity and per-source `attempts`                                                                  |
+| Account identity (`--full`)   | Optional `email`, `organization`, `accountId`, and `identityStatus`                                                    |
 
 Account identity and per-source `attempts` are omitted unless `--full` is passed.
 `seat` appears only when two or more Claude config directories are selected and contains a composition-independent, non-secret basename-plus-hash label; selecting zero or one directory does not add seat metadata.
@@ -283,16 +321,17 @@ Claude `identityStatus` is `verified` only when Anthropic returns an authoritati
 
 ### Provider `state`
 
-| Field           | Description                          |
-| --------------- | ------------------------------------ |
-| `status`        | Provider status                      |
-| `stale`         | Whether the provider report is stale |
-| `sourcesTried`  | Sources tried for the provider       |
-| `refreshedAt`   | Optional refresh timestamp           |
-| `error`         | Optional error                       |
-| `retryAfter`    | Optional retry-after state           |
-| `reason`        | Optional reason                      |
-| `remedyCommand` | Optional remedy command              |
+| Field                | Description                                                              |
+| -------------------- | ------------------------------------------------------------------------ |
+| `status`             | Provider status                                                          |
+| `stale`              | Whether the provider report is stale                                     |
+| `sourcesTried`       | Sources tried for the provider                                           |
+| `refreshedAt`        | Optional refresh timestamp                                               |
+| `error`              | Optional error                                                           |
+| `retryAfter`         | Optional retry-after state                                               |
+| `reason`             | Optional reason                                                          |
+| `remedyCommand`      | Optional remedy command                                                  |
+| `untrustedWindowIds` | Optional identifiers for limits that could not be parsed authoritatively |
 
 When stale or unavailable quota is likely fixable by a one-time macOS Keychain grant, `state.reason` is `keychain_access_required`, `state.remedyCommand` contains an actionable `quota-axi --allow-keychain-prompt` invocation, and JSON includes an agent-directed `help` entry. For explicitly selected profiles, the command repeats their literal normalized `--claude-config-dir` values so it reaches the same Keychain items even when selection came from an inline environment assignment.
 Default TOON output includes the same condition in an `advice` block with `provider`, `reason`, and `remedyCommand`, plus the agent-directed help line.
@@ -304,6 +343,12 @@ Default TOON output includes the same condition in an `advice` block with `provi
 | Required  | `id`, `label`, `kind`                                               |
 | Optional  | Percentages, reset fields, `windowSeconds`, and credit-spend fields |
 
+Do not interpret a model window's percentage in isolation. `quotaSemantics.effectiveAvailability` reports the effective percentage for each understood scope, the complete `boundedBy` window set used to compute it, and the currently limiting window IDs. `all_models` applies to any model without a more specific scope; a matching `model:*` scope includes both account and model-specific bounds. Grok uses the analogous `all_products` and `product:*` scopes.
+
+A model-specific `scope` names the model window or the shared model prefix when multiple period windows describe one Codex model.
+
+`quotaSemantics.status` is `known` only when quota-axi understands the relationships needed for the reported scopes. A non-definitive availability entry omits `effectivePercentRemaining`. Unfamiliar vendor windows produce `partial` or `unknown` semantics and are named in `unresolvedWindowIds`; an empty provider report is `unknown` without inventing an unresolved window.
+
 ### Quota enums
 
 | Name                             | Values                                                                                      |
@@ -313,6 +358,7 @@ Default TOON output includes the same condition in an `advice` block with `provi
 | Current provider adapter sources | `oauth`, `cli-rpc`, `api`, `web`, `cache`, and `unavailable`                                |
 | Window kinds                     | `session`, `weekly`, `monthly`, `model`, `credits`, or `unknown`                            |
 | Window lanes                     | `subscription` or `metered`; set only where a provider bills them separately                |
+| Quota relationship statuses      | `known`, `partial`, or `unknown`                                                           |
 | Source attempt statuses          | `success`, `failed`, or `skipped`                                                           |
 
 Source attempts can include `credentialPresent` when a non-secret probe confirms a credential item exists.

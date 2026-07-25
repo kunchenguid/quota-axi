@@ -1,0 +1,16 @@
+bin: ~/.no-mistakes/worktrees/6eca570dbcdb/01KYC5PENW945FAXY4MK10JQWW/bin/quota-axi.ts
+description: Report local agent-provider quota windows for routing-aware agents
+generatedAt: "2026-07-25T08:30:42.917Z"
+providers[1]{provider,plan,source,status,refreshedAt}:
+  claude,max,oauth,fresh,"2026-07-25T08:30:42.713Z"
+windows[3]{provider,id,label,percentRemaining,resetsAt,state}:
+  claude,five_hour,session,88,"2026-07-25T10:19:59.681218+00:00",fresh
+  claude,seven_day,week,2,"2026-07-25T14:59:59.681244+00:00",fresh
+  claude,"model:fable",Fable week,19,"2026-07-25T14:59:59.681586+00:00",fresh
+effective[2]{provider,scope,effectivePercentRemaining,boundedBy,limitingWindowIds,unresolvedWindowIds,relationshipStatus}:
+  claude,all_models,2,five_hour + seven_day,seven_day,none,known
+  claude,"model:fable",2,"five_hour + seven_day + model:fable",seven_day,none,known
+help[3]:
+  Run `quota-axi --provider claude --json` for JSON output
+  Run `quota-axi --full` to include account and source-attempt details
+  Run `quota-axi auth` to inspect local auth source availability without printing secrets

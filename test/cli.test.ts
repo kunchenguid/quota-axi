@@ -783,6 +783,51 @@ describe("CLI quota rendering", () => {
     expect(concurrent).toBe(true);
   });
 
+  it("reports effective Fable headroom when its account window is nearly exhausted", async () => {
+    useTempCache();
+    PROVIDERS.claude = providerWithQuota({
+      ...freshClaudeQuota(),
+      windows: [
+        {
+          id: "five_hour",
+          label: "session",
+          kind: "session",
+          percentUsed: 9,
+          percentRemaining: 91,
+        },
+        {
+          id: "seven_day",
+          label: "week",
+          kind: "weekly",
+          percentUsed: 97,
+          percentRemaining: 3,
+        },
+        {
+          id: "model:fable",
+          label: "Fable week",
+          kind: "model",
+          percentUsed: 81,
+          percentRemaining: 19,
+        },
+      ],
+    });
+
+    const output = JSON.parse(
+      await capture(["--provider", "claude", "--json"]),
+    ) as QuotaAxiResponse;
+    expect(
+      output.providers[0].quotaSemantics?.effectiveAvailability.find(
+        ({ scope }) => scope === "model:fable",
+      ),
+    ).toEqual({
+      scope: "model:fable",
+      status: "known",
+      effectivePercentRemaining: 3,
+      boundedBy: ["five_hour", "seven_day", "model:fable"],
+      limitingWindowIds: ["seven_day"],
+    });
+  });
+
   it("renders Kimi remaining quota in compact TOON and normalized JSON", async () => {
     useTempCache();
     PROVIDERS.kimi = providerWithQuota(freshKimiQuota());

@@ -12,6 +12,7 @@ import {
 import { writeCachedProviders } from "./cache.js";
 import { withClaudeConfigFlags } from "./command-context.js";
 import { PROVIDER_COVERAGE } from "./coverage.js";
+import { withQuotaSemantics } from "./interpretation.js";
 import { nowIso } from "./lib/time.js";
 import { failedProvider } from "./providers/common.js";
 import { PROVIDERS } from "./providers/index.js";
@@ -130,7 +131,9 @@ async function fetchQuota(
         sourcesTried: [],
       });
     }
-    return request.seat ? withQuotaSeat(quota, request.seat) : quota;
+    return withQuotaSemantics(
+      request.seat ? withQuotaSeat(quota, request.seat) : quota,
+    );
   });
   return annotateQuotaAdvice(
     {

@@ -33,7 +33,10 @@ or when comparing supported local provider headroom side by side.
 3. For multiple Claude subscriptions, repeat `--claude-config-dir <path>` or set the quoted,
    platform-delimited `CLAUDE_CONFIG_DIRS` environment variable. Every selected seat is read only
    and appears under a stable non-secret basename-plus-hash label.
-4. Pass `--json` for the normalized machine-readable model instead of TOON.
+4. Pass `--json` for the normalized machine-readable model instead of TOON. Read
+   `quotaSemantics.effectiveAvailability` rather than treating a model window in isolation:
+   account windows can bound every model, and `boundedBy` names every window included in the
+   effective percentage. If relationship status is `partial` or `unknown`, do not infer one.
 5. Pass `--full` to include account identity and per-source attempt details.
 6. Run `npx -y quota-axi auth` to check local auth-source availability without printing
    secret values.

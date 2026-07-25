@@ -40,6 +40,7 @@ const DURATION_MULTIPLIERS: Record<string, number> = {
 };
 
 export type KimiDiagnostic =
+  | { code: "limits_missing" }
   | { code: "limits_invalid" }
   | { code: "detail_invalid"; index: number };
 
@@ -224,6 +225,11 @@ async function acquireKimiQuota(
       dependencies.now,
     );
     const normalized = normalizeKimiPayload(payload);
+    const untrustedWindowIds = normalized.diagnostics.map((diagnostic) =>
+      diagnostic.code === "detail_invalid"
+        ? `limit:${diagnostic.index}`
+        : "limits",
+    );
     const refreshedAt = new Date(dependencies.now()).toISOString();
     attempts[attempts.length - 1] = {
       source: credentialSource,
@@ -238,6 +244,7 @@ async function acquireKimiQuota(
         status: "fresh",
         stale: false,
         refreshedAt,
+        ...(untrustedWindowIds.length > 0 ? { untrustedWindowIds } : {}),
         sourcesTried: attempts.map(({ source }) => source),
       },
       attempts,
@@ -436,6 +443,9 @@ function staleKimiReport(
       refreshedAt: cached.state.refreshedAt,
       error,
       ...(retryAfter ? { retryAfter } : {}),
+      ...(cached.state.untrustedWindowIds
+        ? { untrustedWindowIds: cached.state.untrustedWindowIds }
+        : {}),
       sourcesTried: [...attempts.map(({ source }) => source), "cache"],
     },
     attempts,
@@ -658,11 +668,11 @@ export function normalizeKimiPayload(payload: unknown): NormalizedKimiPayload {
   ];
   const diagnostics: KimiDiagnostic[] = [];
   const limitsValue = root.limits;
-  if (
-    limitsValue !== undefined &&
-    limitsValue !== null &&
-    !Array.isArray(limitsValue)
-  ) {
+  if (limitsValue === undefined || limitsValue === null) {
+    diagnostics.push({ code: "limits_missing" });
+    return { windows, diagnostics };
+  }
+  if (!Array.isArray(limitsValue)) {
     diagnostics.push({ code: "limits_invalid" });
     return { windows, diagnostics };
   }

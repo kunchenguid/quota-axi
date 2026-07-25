@@ -161,6 +161,7 @@ describe("quota cache", () => {
       source: "api" as const,
       state: {
         ...quota("kimi", 37.5).state,
+        untrustedWindowIds: ["limit:2"],
         sourcesTried: ["pi:kimi-coding"],
       },
       attempts: [
@@ -180,6 +181,9 @@ describe("quota cache", () => {
     expect(bytes).not.toContain("attempts");
     expect(bytes).not.toContain("account");
     expect(readCachedProvider("kimi")?.windows[0].percentUsed).toBe(37.5);
+    expect(readCachedProvider("kimi")?.state.untrustedWindowIds).toEqual([
+      "limit:2",
+    ]);
   });
 
   it("deletes a definitive-auth provider while retaining other snapshots", () => {
