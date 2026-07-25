@@ -358,7 +358,7 @@ A model-specific `scope` names the model window or the shared model prefix when 
 | Current provider adapter sources | `oauth`, `cli-rpc`, `api`, `web`, `cache`, and `unavailable`                                |
 | Window kinds                     | `session`, `weekly`, `monthly`, `model`, `credits`, or `unknown`                            |
 | Window lanes                     | `subscription` or `metered`; set only where a provider bills them separately                |
-| Quota relationship statuses      | `known`, `partial`, or `unknown`                                                           |
+| Quota relationship statuses      | `known`, `partial`, or `unknown`                                                            |
 | Source attempt statuses          | `success`, `failed`, or `skipped`                                                           |
 
 Source attempts can include `credentialPresent` when a non-secret probe confirms a credential item exists.
