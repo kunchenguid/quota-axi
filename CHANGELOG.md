@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.13](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.12...quota-axi-v0.1.13) (2026-07-25)
+
+
+### Features
+
+* report effective quota availability ([#41](https://github.com/kunchenguid/quota-axi/issues/41)) ([4760cfd](https://github.com/kunchenguid/quota-axi/commit/4760cfd820670ac42df487b1635b535eec236897))
+
 ## [0.1.12](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.11...quota-axi-v0.1.12) (2026-07-24)
 
 
