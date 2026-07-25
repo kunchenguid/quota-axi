@@ -5,6 +5,7 @@ import type {
   ProviderQuota,
   ProviderSource,
   ProviderStatus,
+  QuotaLane,
   QuotaWindow,
 } from "./types.js";
 import { PROVIDER_IDS } from "./types.js";
@@ -22,6 +23,7 @@ const PROVIDER_STATUSES = [
   "stale",
   "unavailable",
   "auth_required",
+  "unsupported",
   "rate_limited",
   "error",
 ] as const satisfies readonly ProviderStatus[];
@@ -33,6 +35,10 @@ const WINDOW_KINDS = [
   "credits",
   "unknown",
 ] as const satisfies readonly QuotaWindow["kind"][];
+const QUOTA_LANES = [
+  "subscription",
+  "metered",
+] as const satisfies readonly QuotaLane[];
 
 const PROVIDER_CACHE_KEY = Symbol("quota-axi-provider-cache-key");
 type CacheTaggedProvider = ProviderQuota & {
@@ -374,6 +380,10 @@ function normalizeCachedWindow(raw: unknown): QuotaWindow | undefined {
   const kind = literalValue(data.kind, WINDOW_KINDS);
   if (!id || !label || !kind) return undefined;
   const result: QuotaWindow = { id, label, kind };
+  // The subscription/metered lane must survive a cache round-trip: a stale row
+  // that lost its lane would read as generic credit and mislead dispatch.
+  const lane = literalValue(data.lane, QUOTA_LANES);
+  if (lane) result.lane = lane;
   assignNumber(result, "percentUsed", data.percentUsed);
   assignNumber(result, "percentRemaining", data.percentRemaining);
   assignString(result, "resetsAt", data.resetsAt);

@@ -65,6 +65,12 @@ export function staleFromCache(
   error: string,
   sourcesTried: string[],
   attempts: SourceAttempt[],
+  /**
+   * Retry hint from the live attempt that forced the fallback. Serving stale
+   * data must not silently drop an authoritative `Retry-After`: the row still
+   * needs to say when a fresh read becomes possible again.
+   */
+  retryAfter?: string,
 ): ProviderQuota {
   return {
     ...cached,
@@ -74,6 +80,7 @@ export function staleFromCache(
       status: "stale",
       stale: true,
       error,
+      ...(retryAfter ? { retryAfter } : {}),
       sourcesTried: [...new Set([...sourcesTried, "cache"])],
     },
     attempts,

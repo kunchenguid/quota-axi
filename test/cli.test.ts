@@ -1118,6 +1118,113 @@ describe("endpoint throttling versus exhausted user quota", () => {
   });
 });
 
+describe("Grok subscription and metered lanes alongside other providers", () => {
+  it("keeps Grok lanes distinct without disturbing Claude seats or Codex", async () => {
+    useTempCache();
+    const [arcs, jr] = useMixedProviderFixtures();
+    PROVIDERS.grok = providerWithQuota(twoLaneGrokQuota());
+
+    const text = await capture([
+      "--provider",
+      "claude,codex,grok",
+      "--claude-config-dir",
+      arcs,
+      "--claude-config-dir",
+      jr,
+      "--json",
+    ]);
+    const output = JSON.parse(text) as QuotaAxiResponse;
+
+    // Claude's multi-seat fan-out and Codex are untouched by Grok's lanes.
+    expect(
+      output.providers.map((provider) => ({
+        provider: provider.provider,
+        seat: provider.seat,
+        status: provider.state.status,
+      })),
+    ).toEqual([
+      { provider: "claude", seat: seatId(arcs), status: "fresh" },
+      { provider: "claude", seat: seatId(jr), status: "auth_required" },
+      { provider: "codex", seat: undefined, status: "fresh" },
+      { provider: "grok", seat: undefined, status: "fresh" },
+    ]);
+    const codex = output.providers.find((row) => row.provider === "codex");
+    expect(codex?.windows).toEqual([
+      {
+        id: "five_hour",
+        label: "session",
+        kind: "session",
+        percentUsed: 0,
+        percentRemaining: 100,
+      },
+    ]);
+    // Other providers do not acquire a lane they never declared.
+    expect(codex?.windows[0]?.lane).toBeUndefined();
+    expect(
+      output.providers.find((row) => row.provider === "claude")?.windows[0]
+        ?.lane,
+    ).toBeUndefined();
+
+    // Grok's subscription allowance stays readable independently of its
+    // metered xAI API balance: 88% plan headroom, 5% metered headroom.
+    const grok = output.providers.find((row) => row.provider === "grok");
+    expect(
+      grok?.windows.map((window) => [
+        window.id,
+        window.lane,
+        window.percentRemaining,
+      ]),
+    ).toEqual([
+      ["subscription", "subscription", 88],
+      ["on_demand", "metered", 5],
+    ]);
+    expect(grok?.credits).toEqual({ remaining: 3.25, unit: "credits" });
+    expect(output.summary).toEqual({
+      availability: "partial",
+      ok: 3,
+      unavailable: 1,
+      total: 4,
+    });
+    expect(process.exitCode).toBeUndefined();
+  });
+});
+
+function twoLaneGrokQuota(): ProviderQuota {
+  return {
+    provider: "grok",
+    label: "Grok",
+    source: "api",
+    plan: "SuperGrok Heavy",
+    windows: [
+      {
+        id: "subscription",
+        label: "SuperGrok Heavy",
+        kind: "weekly",
+        lane: "subscription",
+        percentUsed: 12,
+        percentRemaining: 88,
+        resetsAt: "2026-07-15T00:00:00.000Z",
+      },
+      {
+        id: "on_demand",
+        label: "on-demand credits",
+        kind: "credits",
+        lane: "metered",
+        percentUsed: 95,
+        percentRemaining: 5,
+      },
+    ],
+    credits: { remaining: 3.25, unit: "credits" },
+    state: {
+      status: "fresh",
+      stale: false,
+      refreshedAt: "2026-07-06T18:10:00Z",
+      sourcesTried: ["api"],
+    },
+    attempts: [{ source: "api", status: "success" }],
+  };
+}
+
 function seatId(directory: string): string {
   return `${basename(directory) || "root"}-${createHash("sha256")
     .update(directory)

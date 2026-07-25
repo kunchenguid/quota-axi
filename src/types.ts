@@ -28,15 +28,28 @@ export type ProviderStatus =
   | "stale"
   | "unavailable"
   | "auth_required"
+  /** Authenticated, but the local credential cannot answer for quota. */
+  | "unsupported"
   | "rate_limited"
   | "error";
 
 export type ProviderStateReason = "keychain_access_required";
 
+/**
+ * Which allowance a window measures. `subscription` is plan-included capacity
+ * (for Grok, the Grok Build / SuperGrok billing period); `metered` is
+ * pay-as-you-go xAI API credit. They are never interchangeable for dispatch: a
+ * dormant metered lane says nothing about subscription headroom, and an
+ * exhausted prepaid balance is not an exhausted subscription.
+ */
+export type QuotaLane = "subscription" | "metered";
+
 export type QuotaWindow = {
   id: string;
   label: string;
   kind: "session" | "weekly" | "monthly" | "model" | "credits" | "unknown";
+  /** Set where a provider bills subscription and metered capacity separately. */
+  lane?: QuotaLane;
   percentUsed?: number;
   percentRemaining?: number;
   resetsAt?: string;
@@ -97,7 +110,7 @@ export type QuotaSummary = {
   availability: AggregateAvailability;
   /** Rows that returned usable data (status fresh or stale). */
   ok: number;
-  /** Rows that failed (auth_required, rate_limited, unavailable, error). */
+  /** Rows that failed (auth_required, unsupported, rate_limited, unavailable, error). */
   unavailable: number;
   total: number;
 };

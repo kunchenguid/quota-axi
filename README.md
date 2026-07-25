@@ -116,7 +116,7 @@ $ quota-axi --provider claude --json
 $ quota-axi auth
 bin: ~/.npm/_npx/.../quota-axi
 description: Inspect local quota auth sources without printing secret values
-auth[9]{provider,source,path,status,error}:
+auth[10]{provider,source,path,status,error}:
   claude,oauth-file,~/.claude/.credentials.json,available,none
   claude,keychain,none,skipped,keychain_prompt_required
   codex,auth-json,~/.codex/auth.json,available,none
@@ -124,6 +124,7 @@ auth[9]{provider,source,path,status,error}:
   cursor,state-vscdb,~/Library/Application Support/Cursor/User/globalStorage/state.vscdb,available,none
   copilot,apps-json,~/.config/github-copilot/apps.json,available,none
   grok,auth-json,~/.grok/auth.json,available,none
+  grok,pi-auth-json,~/.pi/agent/auth.json,missing,none
   kimi,pi:kimi-coding,none,available,none
   kimi,kimi-code-cli,none,available,none
 help[1]:
@@ -305,13 +306,14 @@ Default TOON output includes the same condition in an `advice` block with `provi
 
 ### Quota enums
 
-| Name                             | Values                                                                       |
-| -------------------------------- | ---------------------------------------------------------------------------- |
-| Provider statuses                | `fresh`, `stale`, `unavailable`, `auth_required`, `rate_limited`, or `error` |
-| Provider sources                 | `oauth`, `cli-rpc`, `api`, `web`, `cache`, or `unavailable`                  |
-| Current provider adapter sources | `oauth`, `cli-rpc`, `api`, `web`, `cache`, and `unavailable`                 |
-| Window kinds                     | `session`, `weekly`, `monthly`, `model`, `credits`, or `unknown`             |
-| Source attempt statuses          | `success`, `failed`, or `skipped`                                            |
+| Name                             | Values                                                                                      |
+| -------------------------------- | ------------------------------------------------------------------------------------------- |
+| Provider statuses                | `fresh`, `stale`, `unavailable`, `auth_required`, `unsupported`, `rate_limited`, or `error` |
+| Provider sources                 | `oauth`, `cli-rpc`, `api`, `web`, `cache`, or `unavailable`                                 |
+| Current provider adapter sources | `oauth`, `cli-rpc`, `api`, `web`, `cache`, and `unavailable`                                |
+| Window kinds                     | `session`, `weekly`, `monthly`, `model`, `credits`, or `unknown`                            |
+| Window lanes                     | `subscription` or `metered`; set only where a provider bills them separately                |
+| Source attempt statuses          | `success`, `failed`, or `skipped`                                                           |
 
 Source attempts can include `credentialPresent` when a non-secret probe confirms a credential item exists.
 
@@ -324,8 +326,9 @@ Source attempts can include `credentialPresent` when a non-secret probe confirms
 | Codex                  | Identifies exact 18,000-second and 604,800-second periods as `five_hour` and `weekly`, regardless of source slot; periods without a duration retain their positional identity. Additional model- or feature-scoped limits use `model:<id>:5h` / `model:<id>:7d`, and code-review limits use `code_review_five_hour` / `code_review_weekly`. Unfamiliar durations remain honest `<hours>h` windows instead of being classified as known periods. Duplicate derived IDs are preserved with `_2`, `_3`, and later suffixes. Optional credit balance data can also appear. |
 | Cursor                 | Can report `included_usage`, `auto_usage`, `api_usage`, and optional `spend_limit` windows.                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | GitHub Copilot         | Can report quota snapshot windows such as `chat`, `completions`, and `premium_interactions`; when the first-party endpoint exposes entitlement but no numeric quota windows, quota-axi reports a fresh provider state with an empty `windows` list rather than inventing percentages.                                                                                                                                                                                                                                                                                  |
-| Grok                   | Reports the shared `credits` window, optional product-scoped `product:<slug>` windows, the current-period reset, and optional prepaid credit balance from the consumer Usage-page operation.                                                                                                                                                                                                                                                                                                                                                                           |
+| Grok                   | Reports the shared subscription-lane `credits` window, optional subscription-lane product-scoped `product:<slug>` windows, the current-period reset, and optional metered prepaid credit balance from the consumer Usage-page operation.                                                                                                                                                                                                                                                                                                                               |
 | Grok proto3 zero       | For the exact consumer operation only, an omitted usage float is the official proto3 zero when a valid weekly or monthly current period proves the config is present; quota-axi reports `0` used and `100` remaining rather than deriving usage from money.                                                                                                                                                                                                                                                                                                            |
+| Grok metered balance   | Prepaid balance is metered xAI API money, never subscription allowance. A zero prepaid balance is omitted so dormant metering cannot read as an exhausted subscription.                                                                                                                                                                                                                                                                                                                                                                                                |
 | Kimi                   | Reports the principal `weekly` subscription window plus every valid self-described limit in wire order. Only a limit whose normalized duration is exactly 18,000 seconds is identified as `five_hour`; future limits remain `limit:<index>` unknown windows.                                                                                                                                                                                                                                                                                                           |
 
 ### `auth --json` shape
@@ -338,10 +341,10 @@ Source attempts can include `credentialPresent` when a non-secret probe confirms
 
 Auth source entries can include `credentialPresent` when a non-secret probe confirms a credential item exists. Multi-seat auth reports omit config paths and use `seat` to distinguish subscriptions.
 
-| Name                 | Values                                                                                                                          |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| Auth source statuses | `available`, `missing`, `invalid`, `expired`, or `skipped`                                                                      |
-| Auth source names    | `oauth-file`, `keychain`, `auth-json`, `auth-env`, `apps-json`, `state-vscdb`, `cli-rpc`, `pi:kimi-coding`, and `kimi-code-cli` |
+| Name                 | Values                                                                                                                                          |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| Auth source statuses | `available`, `missing`, `invalid`, `expired`, or `skipped`                                                                                      |
+| Auth source names    | `oauth-file`, `keychain`, `auth-json`, `auth-env`, `pi-auth-json`, `apps-json`, `state-vscdb`, `cli-rpc`, `pi:kimi-coding`, and `kimi-code-cli` |
 
 ## Security Posture
 
@@ -353,7 +356,7 @@ Auth source entries can include `credentialPresent` when a non-secret probe conf
 | Codex          | `$CODEX_HOME/auth.json` or `~/.codex/auth.json` before the read-only CLI fallback; `$QUOTA_AXI_CODEX_BINARY` can pin that fallback to an absolute executable path                                                                                                                                                                      |
 | Cursor         | `$CURSOR_STATE_DB` when set or the platform Cursor state database path                                                                                                                                                                                                                                                                 |
 | GitHub Copilot | `$GITHUB_COPILOT_APPS_JSON` when set or the local Copilot apps auth file                                                                                                                                                                                                                                                               |
-| Grok           | `$GROK_AUTH_JSON`, inline `$GROK_AUTH`, `$GROK_AUTH_PATH`, or `$GROK_HOME/auth.json` / `~/.grok/auth.json`                                                                                                                                                                                                                             |
+| Grok           | `$GROK_AUTH_JSON`, inline `$GROK_AUTH`, `$GROK_AUTH_PATH`, or `$GROK_HOME/auth.json` / `~/.grok/auth.json`, then Pi's `$PI_AUTH_JSON` or `$PI_HOME/agent/auth.json` / `~/.pi/agent/auth.json` for a literal `xai` OAuth session                                                                                                        |
 | Kimi           | Pi's `$PI_CODING_AGENT_DIR/auth.json` (default `~/.pi/agent/auth.json`) for a literal `kimi-coding` API key first, then a fresh official Kimi Code CLI access token from `$KIMI_CODE_HOME/credentials/kimi-code.json` (default `$HOME/.kimi-code/credentials/kimi-code.json`)                                                          |
 
 ### Provider notes
@@ -388,6 +391,8 @@ Auth source entries can include `credentialPresent` when a non-secret probe conf
 
 - It selects session-scoped auth instead of API-key entries and sends a read-only gRPC-web request to Grok's consumer `grok_api_v2.GrokBuildBilling.GetGrokCreditsConfig` operation.
 - Session-scoped Grok auth includes web/session scopes and OIDC records scoped to `auth.x.ai` with `auth_mode` or `authMode` set to `oidc`, including scope keys with `::<client id>` suffixes.
+- If no Grok auth file has a usable session, it can read Pi's shared auth file and use only the `xai` entry when it is an OAuth session. xAI API keys are reported as `unsupported` and are never spent as quota probes.
+- Grok quota windows use `lane: "subscription"` for the consumer allowance. Prepaid balance is metered money and is omitted when it is zero.
 - It does not send browser cookies, launch the Grok CLI, refresh credentials, perform OAuth, retain raw response bodies, or derive usage from monetary fields.
 
 **Kimi**

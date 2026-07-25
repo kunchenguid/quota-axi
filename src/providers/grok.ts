@@ -9,6 +9,8 @@ import type {
   ProviderAdapter,
   ProviderOptions,
   ProviderQuota,
+  ProviderStatus,
+  QuotaLane,
   QuotaWindow,
   SourceAttempt,
 } from "../types.js";
@@ -27,6 +29,13 @@ const RESPONSE_LIMIT_BYTES = 64 * 1024;
 const GRPC_MESSAGE_LIMIT_CHARS = 1_024;
 const EMPTY_GRPC_REQUEST = Uint8Array.from([0, 0, 0, 0, 0]);
 const GROK_SOURCE = "web" as const;
+/** Provider key the Pi coding agent files its xAI session under. */
+const PI_XAI_PROVIDER_ID = "xai";
+const PI_AUTH_SOURCE = "pi-auth-json";
+/** Epoch values at or above this are milliseconds; below it, seconds. */
+const EPOCH_MILLISECOND_FLOOR = 1e12;
+const UNSUPPORTED_API_KEY_ERROR =
+  "Grok subscription quota is not readable from an xAI API key";
 
 const PRODUCT_NAMES: Record<number, { id: string; label: string }> = {
   0: { id: "unspecified", label: "Other" },
@@ -51,7 +60,10 @@ type CredentialState =
       credentials: GrokCredentials;
       source: AuthSourceReport;
     }
-  | { status: "missing" | "invalid" | "expired"; source: AuthSourceReport };
+  | {
+      status: "missing" | "invalid" | "expired" | "unsupported";
+      source: AuthSourceReport;
+    };
 
 type CredentialCandidate = GrokCredentials & {
   scope?: string;
@@ -82,8 +94,9 @@ export async function fetchQuota(
   const attempts: SourceAttempt[] = [];
   let finalError: string;
   let retryAfter: string | undefined;
+  let blockedStatus: ProviderStatus | undefined;
 
-  const credentialState = readCredentialState();
+  const credentialState = selectCredentialState(readCredentialStates());
   if (credentialState.status === "available") {
     attempts.push({ source: GROK_SOURCE, status: "failed" });
     try {
@@ -118,18 +131,31 @@ export async function fetchQuota(
       status: "skipped",
       error: `credentials_${credentialState.status}`,
     });
-    finalError = "Grok sign-in required";
+    if (credentialState.status === "unsupported") {
+      blockedStatus = "unsupported";
+      finalError = UNSUPPORTED_API_KEY_ERROR;
+    } else {
+      finalError = "Grok sign-in required";
+    }
   }
 
   const cached = readCachedProvider("grok");
   if (cached?.source === GROK_SOURCE) {
-    return staleFromCache(cached, finalError, sourceNames(attempts), attempts);
+    return staleFromCache(
+      cached,
+      finalError,
+      sourceNames(attempts),
+      attempts,
+      retryAfter,
+    );
   }
 
   return failedProvider({
     provider: "grok",
     label: "Grok",
-    status: retryAfter ? "rate_limited" : statusFromError(finalError),
+    status:
+      blockedStatus ??
+      (retryAfter ? "rate_limited" : statusFromError(finalError)),
     error: finalError,
     retryAfter,
     sourcesTried: sourceNames(attempts),
@@ -140,8 +166,7 @@ export async function fetchQuota(
 export async function inspectAuth(
   _options: ProviderOptions,
 ): Promise<AuthProviderReport> {
-  const credentialState = readCredentialState();
-  return { provider: "grok", sources: [credentialState.source] };
+  return { provider: "grok", sources: readCredentialStates().map(sourceOf) };
 }
 
 export function normalizeGrokConsumerPayload(
@@ -164,6 +189,7 @@ export function normalizeGrokConsumerPayload(
     resetsAt !== undefined;
 
   const windows: QuotaWindow[] = [];
+  const usageLane: QuotaLane = "subscription";
   const sharedExplicit = floatAt(config, 1);
   if (sharedExplicit !== undefined || validCurrentPeriod) {
     const percentUsed = clampExactPercent(sharedExplicit ?? 0);
@@ -171,6 +197,7 @@ export function normalizeGrokConsumerPayload(
       id: "credits",
       label: "credits",
       kind: "credits",
+      lane: usageLane,
       percentUsed,
       percentRemaining: 100 - percentUsed,
       resetsAt,
@@ -192,6 +219,7 @@ export function normalizeGrokConsumerPayload(
       id: `product:${productName.id}`,
       label: productName.label,
       kind: "credits",
+      lane: usageLane,
       percentUsed,
       percentRemaining: 100 - percentUsed,
       resetsAt,
@@ -213,7 +241,7 @@ export function normalizeGrokConsumerPayload(
     },
     windows,
     credits:
-      prepaidBalance === undefined
+      prepaidBalance === undefined || prepaidBalance <= 0
         ? undefined
         : { remaining: prepaidBalance, unit: "credits" },
     refreshedAt: nowIso(),
@@ -540,7 +568,25 @@ function clampExactPercent(value: number): number {
   return Math.min(100, Math.max(0, value));
 }
 
-function readCredentialState(): CredentialState {
+function readCredentialStates(): CredentialState[] {
+  return [readGrokCredentialState(), readPiCredentialState()];
+}
+
+function selectCredentialState(states: CredentialState[]): CredentialState {
+  return (
+    states.find((state) => state.status === "available") ??
+    states.find((state) => state.status === "expired") ??
+    states.find((state) => state.status === "unsupported") ??
+    states.find((state) => state.status === "invalid") ??
+    states[0]
+  );
+}
+
+function sourceOf(state: CredentialState): AuthSourceReport {
+  return state.source;
+}
+
+function readGrokCredentialState(): CredentialState {
   const explicitAuthFile = stringValue(process.env.GROK_AUTH_JSON);
   if (explicitAuthFile) {
     return extractCredentialState(
@@ -558,6 +604,81 @@ function readCredentialState(): CredentialState {
   }
   const authFile = grokAuthFile();
   return extractCredentialState(readJsonFileResult(authFile), authFile);
+}
+
+function readPiCredentialState(): CredentialState {
+  const file = piAuthFile();
+  const raw = readJsonFileResult(file);
+  if (raw.status === "missing")
+    return { status: "missing", source: piSource(file, "missing") };
+  if (raw.status === "invalid")
+    return {
+      status: "invalid",
+      source: piSource(file, "invalid", raw.error),
+    };
+
+  const entry = objectValue(objectValue(raw.value)?.[PI_XAI_PROVIDER_ID]);
+  if (!entry) return { status: "missing", source: piSource(file, "missing") };
+
+  const type = stringValue(entry.type)?.toLowerCase().replace(/-/g, "_");
+  if (type === "api_key")
+    return {
+      status: "unsupported",
+      source: piSource(file, "skipped", "api_key_not_subscription_auth"),
+    };
+  if (type !== "oauth")
+    return {
+      status: "invalid",
+      source: piSource(file, "invalid", "not_oauth_session"),
+    };
+
+  const key = stringValue(entry.access) ?? stringValue(entry.key);
+  if (!key) return { status: "invalid", source: piSource(file, "invalid") };
+
+  const expiresAt = parseExpiry(
+    entry.expires ?? entry.expires_at ?? entry.expiresAt,
+  );
+  if (isExpired(expiresAt))
+    return { status: "expired", source: piSource(file, "expired") };
+
+  return {
+    status: "available",
+    credentials: {
+      key,
+      email: stringValue(entry.email),
+      teamId: stringValue(entry.team_id) ?? stringValue(entry.teamId),
+      expiresAt,
+    },
+    source: piSource(file, "available"),
+  };
+}
+
+function piSource(
+  path: string,
+  status: AuthSourceReport["status"],
+  error?: string,
+): AuthSourceReport {
+  return { source: PI_AUTH_SOURCE, path, status, error };
+}
+
+function piAuthFile(): string {
+  return (
+    stringValue(process.env.PI_AUTH_JSON) ??
+    join(piHomeDir(), "agent", "auth.json")
+  );
+}
+
+function piHomeDir(): string {
+  return process.env.PI_HOME || join(homedir(), ".pi");
+}
+
+function parseExpiry(value: unknown): string | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    const milliseconds = value < EPOCH_MILLISECOND_FLOOR ? value * 1000 : value;
+    const date = new Date(milliseconds);
+    return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
+  }
+  return typeof value === "string" ? value : undefined;
 }
 
 function readInlineAuth(value: string): JsonFileReadResult {
@@ -620,6 +741,17 @@ function extractCredentialState(
     return {
       status: "expired",
       source: authSource(source, path, "expired"),
+    };
+  }
+  if (credentialCandidates(data).some(isGrokApiKeyCandidate)) {
+    return {
+      status: "unsupported",
+      source: authSource(
+        source,
+        path,
+        "skipped",
+        "api_key_not_subscription_auth",
+      ),
     };
   }
   return {

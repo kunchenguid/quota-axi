@@ -13,6 +13,7 @@ import { writeCachedProviders } from "../../src/cache.js";
 import { main } from "../../src/cli.js";
 import {
   fetchQuota,
+  inspectAuth,
   normalizeGrokConsumerPayload,
 } from "../../src/providers/grok.js";
 import type { ProviderQuota, QuotaAxiResponse } from "../../src/types.js";
@@ -23,6 +24,8 @@ const originalGrokAuthJson = process.env.GROK_AUTH_JSON;
 const originalGrokAuthPath = process.env.GROK_AUTH_PATH;
 const originalGrokAuth = process.env.GROK_AUTH;
 const originalGrokHome = process.env.GROK_HOME;
+const originalPiAuthJson = process.env.PI_AUTH_JSON;
+const originalPiHome = process.env.PI_HOME;
 const originalXdgCacheHome = process.env.XDG_CACHE_HOME;
 const originalPath = process.env.PATH;
 const originalPathExt = process.env.PATHEXT;
@@ -34,6 +37,8 @@ beforeEach(() => {
   delete process.env.GROK_AUTH_PATH;
   delete process.env.GROK_AUTH;
   process.env.GROK_HOME = join(tempDir, "grok-home");
+  delete process.env.PI_AUTH_JSON;
+  process.env.PI_HOME = join(tempDir, "pi-home");
   process.env.XDG_CACHE_HOME = join(tempDir, "cache");
   process.env.PATH = join(tempDir, "empty-bin");
   process.env.PATHEXT = ".CMD;.EXE";
@@ -51,6 +56,10 @@ afterEach(() => {
   else process.env.GROK_AUTH = originalGrokAuth;
   if (originalGrokHome === undefined) delete process.env.GROK_HOME;
   else process.env.GROK_HOME = originalGrokHome;
+  if (originalPiAuthJson === undefined) delete process.env.PI_AUTH_JSON;
+  else process.env.PI_AUTH_JSON = originalPiAuthJson;
+  if (originalPiHome === undefined) delete process.env.PI_HOME;
+  else process.env.PI_HOME = originalPiHome;
   if (originalXdgCacheHome === undefined) delete process.env.XDG_CACHE_HOME;
   else process.env.XDG_CACHE_HOME = originalXdgCacheHome;
   if (originalPath === undefined) delete process.env.PATH;
@@ -78,6 +87,12 @@ function writeValidAuth(key = "valid-key"): void {
       expires_at: "2035-01-01T00:00:00.000Z",
     },
   });
+}
+
+function writePiAuth(value: unknown): string {
+  const file = join(tempDir!, "pi-home", "agent", "auth.json");
+  writeJson(file, value);
+  return file;
 }
 
 function concat(...parts: Uint8Array[]): Uint8Array {
@@ -230,6 +245,7 @@ function cachedGrok(source: "api" | "web"): ProviderQuota {
         id: "credits",
         label: "credits",
         kind: "credits",
+        lane: "subscription",
         percentUsed: 20,
         percentRemaining: 80,
       },
@@ -267,6 +283,7 @@ describe("Grok consumer quota parsing", () => {
         id: "credits",
         label: "credits",
         kind: "credits",
+        lane: "subscription",
         percentUsed: 18.25,
         percentRemaining: 81.75,
         resetsAt: "2026-07-27T20:00:00.000Z",
@@ -275,6 +292,7 @@ describe("Grok consumer quota parsing", () => {
         id: "product:grok_build",
         label: "Grok Build",
         kind: "credits",
+        lane: "subscription",
         percentUsed: 33.25,
         percentRemaining: 66.75,
         resetsAt: "2026-07-27T20:00:00.000Z",
@@ -283,6 +301,7 @@ describe("Grok consumer quota parsing", () => {
         id: "product:chat",
         label: "Chat",
         kind: "credits",
+        lane: "subscription",
         percentUsed: 100,
         percentRemaining: 0,
         resetsAt: "2026-07-27T20:00:00.000Z",
@@ -304,6 +323,7 @@ describe("Grok consumer quota parsing", () => {
         id: "credits",
         label: "credits",
         kind: "credits",
+        lane: "subscription",
         percentUsed: 0,
         percentRemaining: 100,
         resetsAt: undefined,
@@ -328,7 +348,7 @@ describe("Grok consumer quota parsing", () => {
         percentRemaining: 100,
       },
     ]);
-    expect(result.credits).toEqual({ remaining: 0, unit: "credits" });
+    expect(result.credits).toBeUndefined();
   });
 
   it("supports monthly periods and unknown product enum values", () => {
@@ -342,6 +362,7 @@ describe("Grok consumer quota parsing", () => {
     expect(result.windows[1]).toMatchObject({
       id: "product:unknown_99",
       label: "Product 99",
+      lane: "subscription",
       percentUsed: 12.5,
     });
   });
@@ -721,7 +742,100 @@ describe("Grok auth discovery", () => {
 
     const result = await fetchQuota({ allowKeychainPrompt: false });
 
+    expect(result.state.status).toBe("unsupported");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("discovers the Pi xAI session without disclosing credential material", async () => {
+    const file = writePiAuth({
+      deepseek: { type: "api_key", key: "deepseek-secret" },
+      xai: {
+        type: "oauth",
+        access: "pi-xai-access-token",
+        refresh: "pi-xai-refresh-token",
+        expires: 2_051_222_400_000,
+      },
+    });
+
+    const report = await inspectAuth({ allowKeychainPrompt: false });
+    const piSource = report.sources.find(
+      (source) => source.source === "pi-auth-json",
+    );
+
+    expect(piSource).toMatchObject({ status: "available", path: file });
+    const serialized = JSON.stringify(report);
+    expect(serialized).not.toContain("pi-xai-access-token");
+    expect(serialized).not.toContain("pi-xai-refresh-token");
+    expect(serialized).not.toContain("deepseek-secret");
+  });
+
+  it("falls back to the Pi xAI session when no Grok auth exists", async () => {
+    writePiAuth({
+      xai: {
+        type: "oauth",
+        access: "pi-xai-access-token",
+        expires: 2_051_222_400_000,
+      },
+    });
+    const fetchMock = stubSuccessfulFetch();
+
+    const result = await fetchQuota({ allowKeychainPrompt: false });
+
+    expect(result.state.status).toBe("fresh");
+    expect(result.windows[0]).toMatchObject({ lane: "subscription" });
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({
+      headers: expect.objectContaining({
+        Authorization: "Bearer pi-xai-access-token",
+      }),
+    });
+  });
+
+  it("treats an expired Pi session as auth required rather than usable", async () => {
+    writePiAuth({
+      xai: {
+        type: "oauth",
+        access: "pi-xai-access-token",
+        expires: 1_700_000_000_000,
+      },
+    });
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await fetchQuota({ allowKeychainPrompt: false });
+
     expect(result.state.status).toBe("auth_required");
+    expect(result.windows).toEqual([]);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("reports a Pi xAI API key as unsupported without spending metered usage", async () => {
+    writePiAuth({ xai: { type: "api_key", key: "xai-api-key" } });
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await fetchQuota({ allowKeychainPrompt: false });
+
+    expect(result.state.status).toBe("unsupported");
+    expect(result.state.error).toContain("API key");
+    expect(result.windows).toEqual([]);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects non-OAuth Pi xAI entries without sending their credential", async () => {
+    writePiAuth({
+      xai: {
+        type: "session",
+        access: "non-oauth-token",
+        expires: 2_051_222_400_000,
+      },
+    });
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await fetchQuota({ allowKeychainPrompt: false });
+
+    expect(result.state.status).toBe("auth_required");
+    expect(result.windows).toEqual([]);
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -823,11 +937,40 @@ describe("Grok cache provenance", () => {
 
     expect(result).toMatchObject({
       source: "cache",
-      windows: [{ percentUsed: 20, percentRemaining: 80 }],
+      windows: [
+        { lane: "subscription", percentUsed: 20, percentRemaining: 80 },
+      ],
       state: {
         status: "stale",
         stale: true,
         sourcesTried: ["web", "cache"],
+      },
+    });
+  });
+
+  it("preserves a retry hint when throttling falls back to same-source cache", async () => {
+    writeValidAuth();
+    writeCachedProviders([cachedGrok("web")]);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(undefined, {
+            status: 429,
+            headers: { "retry-after": "120" },
+          }),
+      ),
+    );
+
+    const result = await fetchQuota({ allowKeychainPrompt: false });
+
+    expect(result).toMatchObject({
+      source: "cache",
+      windows: [{ lane: "subscription", percentRemaining: 80 }],
+      state: {
+        status: "stale",
+        stale: true,
+        retryAfter: expect.any(String),
       },
     });
   });
