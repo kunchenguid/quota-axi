@@ -51,12 +51,21 @@ type CredentialState =
       credentials: GrokCredentials;
       source: AuthSourceReport;
     }
-  | { status: "missing" | "invalid" | "expired"; source: AuthSourceReport };
+  | { status: "missing" | "invalid"; source: AuthSourceReport }
+  | {
+      status: "expired";
+      source: AuthSourceReport;
+      refreshable: boolean;
+    };
 
 type CredentialCandidate = GrokCredentials & {
   scope?: string;
   raw: Record<string, unknown>;
+  hasRefreshToken: boolean;
 };
+
+const GROK_SIGN_IN_REQUIRED_ERROR = "Grok sign-in required";
+const GROK_ACCESS_TOKEN_EXPIRED_ERROR = "Grok access token expired";
 
 type NormalizedGrokQuota = {
   account?: ProviderQuota["account"];
@@ -118,7 +127,10 @@ export async function fetchQuota(
       status: "skipped",
       error: `credentials_${credentialState.status}`,
     });
-    finalError = "Grok sign-in required";
+    finalError =
+      credentialState.status === "expired" && credentialState.refreshable
+        ? GROK_ACCESS_TOKEN_EXPIRED_ERROR
+        : GROK_SIGN_IN_REQUIRED_ERROR;
   }
 
   const cached = readCachedProvider("grok");
@@ -376,9 +388,9 @@ function throwForGrpcStatus(
   if (!/^(?:[0-9]|1[0-6])$/.test(value)) throw new ProtocolError();
   const status = Number(value);
   if (status === 0) return;
-  if (status === 16) throw new SafeGrokError("Grok sign-in required");
+  if (status === 16) throw new SafeGrokError(GROK_SIGN_IN_REQUIRED_ERROR);
   if (status === 7 && grpcMessageIndicatesAuthFailure(message))
-    throw new SafeGrokError("Grok sign-in required");
+    throw new SafeGrokError(GROK_SIGN_IN_REQUIRED_ERROR);
   if (status === 8) throw new RateLimitError();
   throw new SafeGrokError("Grok quota unavailable");
 }
@@ -599,10 +611,12 @@ function extractCredentialState(
       source: authSource(source, path, "invalid"),
     };
   let expired = false;
+  let expiredRefreshable = false;
   for (const candidate of selectedCredentialCandidates(data)) {
     const expiresAt = candidate.expiresAt;
     if (isExpired(expiresAt)) {
       expired = true;
+      if (candidate.hasRefreshToken) expiredRefreshable = true;
       continue;
     }
     return {
@@ -620,6 +634,7 @@ function extractCredentialState(
     return {
       status: "expired",
       source: authSource(source, path, "expired"),
+      refreshable: expiredRefreshable,
     };
   }
   return {
@@ -642,7 +657,7 @@ function grokHomeDir(): string {
 
 function rejectUnusableUsageResponse(response: Response): void {
   if (response.status === 401 || response.status === 403) {
-    throw new SafeGrokError("Grok sign-in required");
+    throw new SafeGrokError(GROK_SIGN_IN_REQUIRED_ERROR);
   }
   if (response.status === 429) {
     throw new RateLimitError(
@@ -706,7 +721,23 @@ function credentialCandidate(
     email: stringValue(item.email),
     teamId: stringValue(item.team_id) ?? stringValue(item.teamId),
     expiresAt: stringValue(item.expires_at) ?? stringValue(item.expiresAt),
+    // Presence only - never retain the refresh token value.
+    hasRefreshToken: hasNonEmptyStringField(
+      item,
+      "refresh_token",
+      "refreshToken",
+    ),
   };
+}
+
+function hasNonEmptyStringField(
+  item: Record<string, unknown>,
+  ...keys: string[]
+): boolean {
+  return keys.some((key) => {
+    const value = item[key];
+    return typeof value === "string" && value.length > 0;
+  });
 }
 
 function credentialScope(

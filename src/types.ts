@@ -31,7 +31,9 @@ export type ProviderStatus =
   | "rate_limited"
   | "error";
 
-export type ProviderStateReason = "keychain_access_required";
+export type ProviderStateReason =
+  | "keychain_access_required"
+  | "credentials_expired";
 
 export type QuotaWindow = {
   id: string;

@@ -46,10 +46,15 @@ or when comparing supported local provider headroom side by side.
    After that successful grant, plain `quota-axi` calls reuse the existing Keychain access
    marker, scoped to both profile and account, to refresh live Claude quota without requiring
    the flag. Legacy markers are not reused, so an upgrade may require this one-time grant again.
-7. For a managed Codex installation, set `QUOTA_AXI_CODEX_BINARY` to its absolute executable
+7. If Grok reports `reason: credentials_expired` (or `error: Grok access token expired`), the
+   local session is still signed in but the short-lived access token expired. Tell your user to
+   open the Grok CLI (`grok`) once so Grok can refresh its local session token. Do not treat that
+   as a full sign-out, and do not ask quota-axi to refresh credentials - it never launches Grok or
+   writes auth files. Reserve true sign-in recovery for `Grok sign-in required`.
+8. For a managed Codex installation, set `QUOTA_AXI_CODEX_BINARY` to its absolute executable
    path. quota-axi uses that exact executable for auth inspection and the read-only app-server
    fallback, and fails closed if the override is invalid.
-8. For Kimi, quota-axi prefers a literal Pi-managed `kimi-coding` API key from
+9. For Kimi, quota-axi prefers a literal Pi-managed `kimi-coding` API key from
    `$PI_CODING_AGENT_DIR/auth.json` (default `~/.pi/agent/auth.json`). If it is
    unavailable, quota-axi may reuse a fresh official Kimi Code CLI access token from
    `$KIMI_CODE_HOME/credentials/kimi-code.json` (default

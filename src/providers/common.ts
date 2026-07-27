@@ -83,7 +83,8 @@ export function staleFromCache(
 export function statusFromError(error: string): ProviderStatus {
   if (
     error === "keychain_prompt_required" ||
-    /sign-in|required|reauth/i.test(error)
+    error === "credentials_expired" ||
+    /sign-in|required|reauth|access token expired/i.test(error)
   )
     return "auth_required";
   if (/rate.?limit/i.test(error)) return "rate_limited";

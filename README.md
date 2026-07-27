@@ -288,7 +288,8 @@ Claude `identityStatus` is `verified` only when Anthropic returns an authoritati
 | `untrustedWindowIds` | Optional identifiers for limits that could not be parsed authoritatively |
 
 When stale or unavailable quota is likely fixable by a one-time macOS Keychain grant, `state.reason` is `keychain_access_required`, `state.remedyCommand` is `quota-axi --allow-keychain-prompt`, and JSON includes an agent-directed `help` entry.
-Default TOON output includes the same condition in an `advice` block with `provider`, `reason`, and `remedyCommand`, plus the agent-directed help line.
+When Grok's local OIDC session still has a refreshable record but the access token's `expires_at` is past, `state.error` is `Grok access token expired`, `state.reason` is `credentials_expired`, `state.remedyCommand` is `grok`, and JSON includes an agent-directed `help` entry telling the user to open the Grok CLI once so Grok can refresh its local session token. Default JSON exposes that `reason` and `remedyCommand` without requiring `--full`; full output still includes `attempts[].error: credentials_expired`.
+Default TOON output includes the same conditions in an `advice` block with `provider`, `reason`, and `remedyCommand`, plus the agent-directed help line.
 
 Claude credential failures without a usable access token preserve the precise `credentials_missing` or `credentials_invalid` error. A usage response with HTTP 401/403 reports `Claude sign-in required`. These definitive failures return no windows and retire the Claude cache instead of masking current authentication state with stale quota.
 
@@ -394,7 +395,9 @@ Auth source entries can include `credentialPresent` when a non-secret probe conf
 
 - It selects session-scoped auth instead of API-key entries and sends a read-only gRPC-web request to Grok's consumer `grok_api_v2.GrokBuildBilling.GetGrokCreditsConfig` operation.
 - Session-scoped Grok auth includes web/session scopes and OIDC records scoped to `auth.x.ai` with `auth_mode` or `authMode` set to `oidc`, including scope keys with `::<client id>` suffixes.
+- The Grok CLI owns OIDC access-token refresh and rewrites `~/.grok/auth.json`. quota-axi only reads the resulting session: an expired access token with a remaining refreshable session reports `Grok access token expired` / `reason: credentials_expired` and advises opening the Grok CLI once; it does not refresh tokens itself. Missing or unusable session auth without a refreshable record, and live HTTP 401/403 or gRPC unauthenticated responses, still report `Grok sign-in required`.
 - It does not send browser cookies, launch the Grok CLI, refresh credentials, perform OAuth, retain raw response bodies, or derive usage from monetary fields.
+- Top-level `credits.remaining` is prepaid/on-demand balance and is distinct from the shared period `windows` credits percentage used for effective availability.
 
 **Kimi**
 
