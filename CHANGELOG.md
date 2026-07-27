@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.14](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.13...quota-axi-v0.1.14) (2026-07-27)
+
+
+### Bug Fixes
+
+* **claude:** pin Keychain reads to current user ([#46](https://github.com/kunchenguid/quota-axi/issues/46)) ([8f65d58](https://github.com/kunchenguid/quota-axi/commit/8f65d58aa0b0efacd0850b9107a8324b122654e3))
+* **providers:** correct Claude auth and stale quota fallback ([#44](https://github.com/kunchenguid/quota-axi/issues/44)) ([8dd34ee](https://github.com/kunchenguid/quota-axi/commit/8dd34eee84da602844a8c2fac96fe71de158a514))
+
 ## [0.1.13](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.12...quota-axi-v0.1.13) (2026-07-25)
 
 
