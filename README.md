@@ -218,14 +218,16 @@ $ quota-axi --provider claude --json
 $ quota-axi auth
 bin: ~/.npm/_npx/.../quota-axi
 description: Inspect local quota auth sources without printing secret values
-auth[10]{provider,source,path,status,error}:
+auth[12]{provider,source,path,status,error}:
   claude,oauth-file,~/.claude/.credentials.json,available,none
   claude,keychain,none,skipped,keychain_prompt_required
   codex,auth-json,~/.codex/auth.json,available,none
   codex,cli-rpc,~/.local/bin/codex,available,none
   cursor,state-vscdb,~/Library/Application Support/Cursor/User/globalStorage/state.vscdb,available,none
+  cursor,cursor-cli-auth,~/.config/cursor/auth.json,missing,none
   cursor,cli-keychain,~/.cursor/cli-config.json,skipped,keychain_prompt_required
   copilot,apps-json,~/.config/github-copilot/apps.json,available,none
+  copilot,copilot-cli-config,~/.copilot/config.json,missing,none
   grok,auth-json,~/.grok/auth.json,available,none
   kimi,pi:kimi-coding,none,available,none
   kimi,kimi-code-cli,none,available,none
@@ -511,23 +513,23 @@ Default model order is deterministic and non-preferential: provider, then model 
 
 Auth source entries can include `credentialPresent` when a non-secret probe confirms a credential item exists.
 
-| Name                 | Values                                                                                                                                                    |
-| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Auth source statuses | `available`, `missing`, `invalid`, `expired`, `skipped`, or `error`                                                                                       |
-| Auth source names    | `oauth-file`, `keychain`, `auth-json`, `auth-env`, `apps-json`, `state-vscdb`, `cli-keychain`, `cli-rpc`, `pi:kimi-coding`, `pi:xai`, and `kimi-code-cli` |
+| Name                 | Values                                                                                                                                                                                              |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Auth source statuses | `available`, `missing`, `invalid`, `expired`, `skipped`, or `error`                                                                                                                                 |
+| Auth source names    | `oauth-file`, `keychain`, `auth-json`, `auth-env`, `apps-json`, `copilot-cli-config`, `state-vscdb`, `cursor-cli-auth`, `cli-keychain`, `cli-rpc`, `pi:kimi-coding`, `pi:xai`, and `kimi-code-cli` |
 
 ## Security Posture
 
 ### Provider credential sources
 
-| Provider       | Credential sources read                                                                                                                                                                                                                                                                                                                                                     |
-| -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Claude         | `$CLAUDE_CONFIG_DIR/.credentials.json` or `~/.claude/.credentials.json`; on macOS, the corresponding default or path-hashed Claude Code Keychain value pinned to Claude Code's validated current-user account, with `--allow-keychain-prompt` or, after a profile-and-account-scoped non-secret access marker exists, on plain calls                                        |
-| Codex          | `$CODEX_HOME/auth.json` or `~/.codex/auth.json` before the read-only CLI fallback; `$QUOTA_AXI_CODEX_BINARY` can pin that fallback to an absolute executable path                                                                                                                                                                                                           |
-| Cursor         | Cursor editor: `$CURSOR_STATE_DB` when set or the platform Cursor state database path. Cursor CLI (`cursor-agent`), macOS only: identity from `$CURSOR_CLI_CONFIG` or `~/.cursor/cli-config.json`, plus the `cursor-access-token` / `cursor-user` Keychain value with `--allow-keychain-prompt` or, after an account-scoped non-secret access marker exists, on plain calls |
-| GitHub Copilot | `$GITHUB_COPILOT_APPS_JSON` when set or the local Copilot apps auth file                                                                                                                                                                                                                                                                                                    |
-| Grok           | Grok CLI session auth from `$GROK_AUTH_JSON`, inline `$GROK_AUTH`, `$GROK_AUTH_PATH`, or `$GROK_HOME/auth.json` / `~/.grok/auth.json`, plus Pi's independent `$PI_CODING_AGENT_DIR/auth.json` `xai` entry (default `~/.pi/agent/auth.json`) for OAuth or literal API-key model auth                                                                                         |
-| Kimi           | Pi's `$PI_CODING_AGENT_DIR/auth.json` (default `~/.pi/agent/auth.json`) for a literal `kimi-coding` API key or unexpired OAuth access token first, then a fresh official Kimi Code CLI access token from `$KIMI_CODE_HOME/credentials/kimi-code.json` (default `$HOME/.kimi-code/credentials/kimi-code.json`)                                                               |
+| Provider       | Credential sources read                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Claude         | `$CLAUDE_CONFIG_DIR/.credentials.json` or `~/.claude/.credentials.json`; on macOS, the corresponding default or path-hashed Claude Code Keychain value pinned to Claude Code's validated current-user account, with `--allow-keychain-prompt` or, after a profile-and-account-scoped non-secret access marker exists, on plain calls                                                                                                                                                                                                          |
+| Codex          | `$CODEX_HOME/auth.json` or `~/.codex/auth.json` before the read-only CLI fallback; `$QUOTA_AXI_CODEX_BINARY` can pin that fallback to an absolute executable path                                                                                                                                                                                                                                                                                                                                                                             |
+| Cursor         | Cursor editor: `$CURSOR_STATE_DB` when set or the platform Cursor state database path; then the Cursor CLI `$CURSOR_CLI_AUTH_JSON` when set or `$XDG_CONFIG_HOME/cursor/auth.json` (default `~/.config/cursor/auth.json`); then, macOS only, Cursor CLI (`cursor-agent`) identity from `$CURSOR_CLI_CONFIG` or `~/.cursor/cli-config.json`, plus the `cursor-access-token` / `cursor-user` Keychain value with `--allow-keychain-prompt` or, after an account-scoped non-secret access marker exists, on plain calls                          |
+| GitHub Copilot | `$GITHUB_COPILOT_APPS_JSON` when set or the local Copilot apps auth file; then the GitHub Copilot CLI `$GITHUB_COPILOT_CLI_CONFIG` when set or `~/.copilot/config.json`                                                                                                                                                                                                                                                                                                                                                                       |
+| Grok           | Grok CLI session auth from `$GROK_AUTH_JSON`, inline `$GROK_AUTH`, `$GROK_AUTH_PATH`, or `$GROK_HOME/auth.json` / `~/.grok/auth.json`, plus Pi's independent `$PI_CODING_AGENT_DIR/auth.json` `xai` entry (default `~/.pi/agent/auth.json`) for OAuth or literal API-key model auth                                                                                                                                                                                                                                                           |
+| Kimi           | Pi's `$PI_CODING_AGENT_DIR/auth.json` (default `~/.pi/agent/auth.json`) for a literal `kimi-coding` API key or unexpired OAuth access token first, then a fresh official Kimi Code CLI access token from `$KIMI_CODE_HOME/credentials/kimi-code.json` (default `$HOME/.kimi-code/credentials/kimi-code.json`)                                                                                                                                                                                                                                 |
 
 ### Provider notes
 
@@ -551,17 +553,22 @@ Auth source entries can include `credentialPresent` when a non-secret probe conf
 
 **Cursor**
 
-- The Cursor editor and the Cursor CLI keep credentials in different stores, so both are independent sources and Cursor auth is usable when either one is. For quota fetching, the editor `state-vscdb` source is tried first because it never prompts; a CLI Keychain value read occurs only when the editor has no usable token or its token is rejected. The `auth` command still reports both sources without reading the CLI token value when the editor source is available.
-- Cursor Desktop is not required. On a CLI-only machine, quota can refresh from the CLI Keychain token after the one-time Keychain grant described below. That quota attempt is named `cli-keychain` in `sourcesTried`; the editor-credential fetch keeps its historical `api` attempt name. When credential discovery cannot produce a token, an unavailable source known to hold a credential takes precedence over a merely absent store, so a signed-in `cursor-agent` user sees the Keychain remedy rather than `Cursor sign-in required`.
-- Editor source: it uses `sqlite3 -readonly` to read `cursorAuth` values and calls Cursor's first-party dashboard usage endpoint. If `sqlite3` is unavailable, that source is reported as skipped with `sqlite3_unavailable`.
-- CLI source (macOS only): `cli-config.json` holds sign-in identity only and is never a token; its `authInfo` is the signed-in signal and supplies the reported account email. The access token is read from the login Keychain item `cursor-access-token` / `cursor-user` only under `--allow-keychain-prompt` or an existing account-scoped non-secret access marker, which is recorded after a successful value read. Without either, quota-axi performs a non-secret presence check only and reports `keychain_prompt_required`.
+- The Cursor editor and the Cursor CLI keep credentials in different stores, so all are independent sources and Cursor auth is usable when any one is. For quota fetching, the non-prompting stores are tried first — the editor `state-vscdb` source, then the CLI `cursor-cli-auth` auth.json; a CLI Keychain value read occurs only when no earlier source has a usable token or an earlier token is rejected. The `auth` command still reports every source without reading the CLI Keychain token value when a non-prompting source is available.
+- Cursor Desktop is not required. On a CLI-only machine, quota can refresh from the CLI `auth.json` token or, after the one-time Keychain grant described below, from the CLI Keychain token. A CLI-resolved quota attempt is named for its credential store (`cursor-cli-auth` or `cli-keychain`) in `sourcesTried`; the editor-credential fetch keeps its historical `api` attempt name. When credential discovery cannot produce a token, an unavailable source known to hold a credential takes precedence over a merely absent store, so a signed-in `cursor-agent` user sees the Keychain remedy rather than `Cursor sign-in required`.
+- Editor source: it uses `sqlite3 -readonly` to read `cursorAuth` values and calls Cursor's first-party dashboard usage endpoint. If `sqlite3` is unavailable, that source is reported as skipped with `sqlite3_unavailable`; the CLI sources can still supply credentials.
+- CLI auth.json source: when the editor state database yields no credential, it reads the Cursor CLI `auth.json` read-only with a 1 MiB cap. The editor store always has priority. A CLI token whose JWT `exp` is already past is reported as `expired` without being sent; a token without a parseable expiry is left for the API's own 401 to decide. The `cursor-cli-auth` source is skipped as `unsupported_platform` on Windows.
+- Requests bearing an auth.json CLI token add `x-cursor-client-type: cli` and an `x-cursor-client-version` header taken from `cursor-agent --version`, ANSI-stripped, trimmed, and charset-validated before use, falling back to `unknown` on any failure. Editor-origin and Keychain-sourced requests keep the original header set unchanged.
+- CLI Keychain source (macOS only): `cli-config.json` holds sign-in identity only and is never a token; its `authInfo` is the signed-in signal and supplies the reported account email. The access token is read from the login Keychain item `cursor-access-token` / `cursor-user` only under `--allow-keychain-prompt` or an existing account-scoped non-secret access marker, which is recorded after a successful value read. Without either, quota-axi performs a non-secret presence check only and reports `keychain_prompt_required`.
 - quota-axi never refreshes Cursor credentials. CLI access-token refresh is intentionally not implemented: the `cursor-refresh-token` Keychain item is never read, so an expired CLI access token surfaces as `Cursor sign-in required` and the remedy is running `cursor-agent login` again. This is a known limitation, not a silent gap.
 - The token value is used only as the bearer of Cursor's read-only dashboard usage request. It is never logged, cached, or included in any output.
 
 **GitHub Copilot**
 
 - It calls GitHub's first-party Copilot user endpoint.
-- It only sends tokens associated with public GitHub hosts to that public endpoint; host-specific GitHub Enterprise tokens are treated as unavailable there.
+- It only sends tokens associated with public GitHub hosts to that public endpoint; host-specific GitHub Enterprise tokens are treated as unavailable there. This applies to both credential sources.
+- When `apps.json` yields no credential, it reads the GitHub Copilot CLI config read-only with a 1 MiB cap, tolerating full-line `//` comments (inline trailing comments are not stripped). `apps.json` always has priority.
+- Token selection from the CLI config's `copilotTokens` prefers the entry matching `lastLoggedInUser`, then falls back to the first public-GitHub-host entry.
+- The `copilot-cli-config` source is skipped as `unsupported_platform` on Windows.
 
 **Grok**
 
