@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.16](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.15...quota-axi-v0.1.16) (2026-07-28)
+
+
+### Bug Fixes
+
+* **providers:** correct Codex and Grok auth classification ([#51](https://github.com/kunchenguid/quota-axi/issues/51)) ([d4383e6](https://github.com/kunchenguid/quota-axi/commit/d4383e694472e6f689b26b636ba8a9cb15fef7f6))
+
 ## [0.1.15](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.14...quota-axi-v0.1.15) (2026-07-28)
 
 
