@@ -1,6 +1,11 @@
-import { open } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import {
+  errorCode,
+  nonempty,
+  objectValue,
+  readBoundedFile,
+} from "../lib/credential-file.js";
 import { matchesUserEndpoint, normalizeHost } from "./copilot.js";
 
 export const COPILOT_CLI_CREDENTIAL_SOURCE = "copilot-cli-config";
@@ -122,11 +127,14 @@ function stripCommentLines(text: string): string {
 }
 
 /**
- * Deterministic token selection over `copilotTokens` (PRD R2/R3):
+ * Deterministic token selection over `copilotTokens` (PRD R2/R3), restricted
+ * to entries whose host normalises to the public user endpoint — host-scoped
+ * GitHub Enterprise tokens are treated as unavailable here, matching the
+ * apps-json invariant (only public GitHub host tokens are ever sent to the
+ * public endpoint):
  * 1. exact match on `${lastLoggedInUser.host}:${lastLoggedInUser.login}`;
- * 2. else the entry whose host normalises to github.com;
- * 3. else, if exactly one usable entry exists, that one;
- * 4. else undefined (ambiguous multi-host, no github.com match).
+ * 2. else the first public-endpoint entry;
+ * 3. else undefined (no public-endpoint token).
  */
 function selectToken(
   config: Record<string, unknown>,
@@ -140,9 +148,12 @@ function selectToken(
     if (!token) continue;
     const separatorIndex = key.lastIndexOf(":");
     if (separatorIndex === -1) continue;
+    const host = key.slice(0, separatorIndex);
+    const normalized = normalizeHost(host);
+    if (normalized === undefined || !matchesUserEndpoint(normalized)) continue;
     candidates.push({
       key,
-      host: key.slice(0, separatorIndex),
+      host,
       login: key.slice(separatorIndex + 1),
       token,
     });
@@ -158,58 +169,9 @@ function selectToken(
     if (exact) return exact;
   }
 
-  const githubMatch = candidates.find((candidate) => {
-    const normalized = normalizeHost(candidate.host);
-    return normalized !== undefined && matchesUserEndpoint(normalized);
-  });
-  if (githubMatch) return githubMatch;
-
-  return candidates.length === 1 ? candidates[0] : undefined;
-}
-
-async function readBoundedFile(
-  path: string,
-  maxBytes: number,
-): Promise<Buffer> {
-  const file = await open(path, "r");
-  try {
-    const contents = new Uint8Array(maxBytes + 1);
-    let offset = 0;
-    while (offset < contents.byteLength) {
-      const { bytesRead } = await file.read(
-        contents,
-        offset,
-        contents.byteLength - offset,
-        null,
-      );
-      if (bytesRead === 0) break;
-      offset += bytesRead;
-    }
-    return Buffer.from(contents.buffer, contents.byteOffset, offset);
-  } finally {
-    await file.close();
-  }
-}
-
-function nonempty(value: string | undefined): string | undefined {
-  return value && value.length > 0 ? value : undefined;
-}
-
-function objectValue(value: unknown): Record<string, unknown> | undefined {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
+  return candidates[0];
 }
 
 function stringValue(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
-}
-
-function errorCode(error: unknown): string | undefined {
-  return error !== null &&
-    typeof error === "object" &&
-    "code" in error &&
-    typeof error.code === "string"
-    ? error.code
-    : undefined;
 }

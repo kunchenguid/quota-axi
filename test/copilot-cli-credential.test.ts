@@ -101,6 +101,31 @@ describe("GitHub Copilot CLI credential discovery", () => {
       home,
       JSON.stringify({
         lastLoggedInUser: {
+          host: "https://github.com",
+          login: "second-user",
+        },
+        copilotTokens: {
+          "https://github.com:first-user": "gho_fakeFirst3",
+          "https://github.com:second-user": "gho_fakeSecond3",
+        },
+      }),
+    );
+    const source = fixtureSource({ environment: { HOME: home } });
+
+    await expect(source.resolve()).resolves.toEqual({
+      status: "available",
+      oauthToken: "gho_fakeSecond3",
+      login: "second-user",
+      host: "github.com",
+    });
+  });
+
+  it("never selects an enterprise-host token, even when lastLoggedInUser points at it", async () => {
+    const home = temporaryDirectory();
+    writeConfig(
+      home,
+      JSON.stringify({
+        lastLoggedInUser: {
           host: "https://ghe.example.test",
           login: "enterprise-user",
         },
@@ -114,9 +139,9 @@ describe("GitHub Copilot CLI credential discovery", () => {
 
     await expect(source.resolve()).resolves.toEqual({
       status: "available",
-      oauthToken: "gho_fakeEnt3",
-      login: "enterprise-user",
-      host: "ghe.example.test",
+      oauthToken: "gho_fakePublic3",
+      login: "public-user",
+      host: "github.com",
     });
   });
 
@@ -190,7 +215,7 @@ describe("GitHub Copilot CLI credential discovery", () => {
     await expect(source.resolve()).resolves.toEqual({ status: "invalid" });
   });
 
-  it("selects the sole entry when exactly one usable token exists", async () => {
+  it("treats a sole enterprise-host entry as unavailable rather than sending it to the public endpoint", async () => {
     const home = temporaryDirectory();
     writeConfig(
       home,
@@ -202,12 +227,7 @@ describe("GitHub Copilot CLI credential discovery", () => {
     );
     const source = fixtureSource({ environment: { HOME: home } });
 
-    await expect(source.resolve()).resolves.toEqual({
-      status: "available",
-      oauthToken: "gho_fakeSole7",
-      login: "only-user",
-      host: "ghe.example.test",
-    });
+    await expect(source.resolve()).resolves.toEqual({ status: "invalid" });
   });
 
   it("ignores empty-string tokens, treating them as absent", async () => {

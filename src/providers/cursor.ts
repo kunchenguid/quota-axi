@@ -165,7 +165,9 @@ export async function inspectAuth(
   options: ProviderOptions,
 ): Promise<AuthProviderReport> {
   const editorState = await readCredentialState();
-  const cliAuthState = await readCliAuthCredentialState();
+  const cliAuthState = await readCliAuthCredentialState({
+    includeClientVersion: false,
+  });
   const sources = [editorState.source, cliAuthState.source];
   if (isCursorCliSourceSupported()) {
     const nonPromptingAvailable =
@@ -445,9 +447,11 @@ async function readCredentialState(): Promise<CredentialState> {
   }
 }
 
-async function readCliAuthCredentialState(): Promise<CredentialState> {
+async function readCliAuthCredentialState(options?: {
+  includeClientVersion?: boolean;
+}): Promise<CredentialState> {
   const path = cursorCliAuthPath();
-  const resolution = await createCursorCliCredentialSource().resolve();
+  const resolution = await createCursorCliCredentialSource().resolve(options);
 
   if (resolution.status === "available") {
     return {

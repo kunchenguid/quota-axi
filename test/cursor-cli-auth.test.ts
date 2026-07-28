@@ -223,6 +223,22 @@ describe("Cursor CLI credential discovery", () => {
     });
   });
 
+  it("does not spawn cursor-agent for a plain inspect()", async () => {
+    const home = temporaryDirectory();
+    writeAuth(home, { accessToken: "opaque-cli-access-token-9" });
+    const commandExists = vi.fn(async () => true);
+    const execFileText = vi.fn(async () => "9.9.9\n");
+    const source = fixtureSource({
+      environment: { HOME: home },
+      commandExists,
+      execFileText,
+    });
+
+    await expect(source.inspect()).resolves.toBe("available");
+    expect(commandExists).not.toHaveBeenCalled();
+    expect(execFileText).not.toHaveBeenCalled();
+  });
+
   it("returns skipped on win32", async () => {
     const source = fixtureSource({
       platform: () => "win32",

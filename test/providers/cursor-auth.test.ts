@@ -322,6 +322,28 @@ describe("Cursor credential-state reporting", () => {
     }
   });
 
+  it("reports sign-in required on win32 where cursor-cli-auth is platform-skipped", async () => {
+    vi.doMock("../../src/lib/process.js", () => ({
+      commandExists: vi.fn(async () => true),
+      execFileText: vi.fn(async () => {
+        throw new Error("unable to open database file");
+      }),
+    }));
+
+    await withPlatform("win32", async () => {
+      const { fetchQuota } = await import("../../src/providers/cursor.js");
+      const result = await fetchQuota({ allowKeychainPrompt: false });
+
+      expect(result.state.status).toBe("auth_required");
+      expect(result.state.error).toBe("Cursor sign-in required");
+      expect(result.attempts).toContainEqual({
+        source: "cursor-cli-auth",
+        status: "skipped",
+        error: "unsupported_platform",
+      });
+    });
+  });
+
   it("reports auth_required with both sources listed when both are missing", async () => {
     vi.doMock("../../src/lib/process.js", () => ({
       commandExists: vi.fn(async () => true),
