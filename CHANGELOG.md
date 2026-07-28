@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.1.15](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.14...quota-axi-v0.1.15) (2026-07-28)
+
+
+### Features
+
+* add cycle-average quota pace signals ([#49](https://github.com/kunchenguid/quota-axi/issues/49)) ([b465eae](https://github.com/kunchenguid/quota-axi/commit/b465eaeb4050e6ae919da7832908e33a9a9e7af8))
+
+
+### Bug Fixes
+
+* **providers:** distinguish expired Grok sessions from sign-in required ([#47](https://github.com/kunchenguid/quota-axi/issues/47)) ([83ef9fd](https://github.com/kunchenguid/quota-axi/commit/83ef9fd8b643790d71913c049f7554fd2e75abfc))
+
 ## [0.1.14](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.13...quota-axi-v0.1.14) (2026-07-27)
 
 
