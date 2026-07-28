@@ -66,4 +66,21 @@ describe("Cursor quota parsing", () => {
   it("returns undefined when Cursor exposes no numeric quota windows", () => {
     expect(normalizeCursorUsage({ planUsage: {} })).toBeUndefined();
   });
+
+  it("tolerates missing email/membershipType from a CLI-origin credential", () => {
+    // cursor-cli-auth has no cachedEmail/stripeMembershipType (those come
+    // only from state.vscdb); plan must still resolve from GetPlanInfo and
+    // the function must not throw when credentials omit both fields.
+    const result = normalizeCursorUsage(
+      { planUsage: { totalPercentUsed: 15 } },
+      { planInfo: { planName: "pro" } },
+      {},
+    );
+
+    expect(result?.plan).toBe("pro");
+    expect(result?.account?.email).toBeUndefined();
+    expect(result?.windows).toMatchObject([
+      { id: "included_usage", percentUsed: 15, percentRemaining: 85 },
+    ]);
+  });
 });

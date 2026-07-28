@@ -16,6 +16,7 @@ const EDITOR_TOKEN = "editor-token-stand-in";
 const originalEnv = {
   CURSOR_STATE_DB: process.env.CURSOR_STATE_DB,
   CURSOR_CLI_CONFIG: process.env.CURSOR_CLI_CONFIG,
+  CURSOR_CLI_AUTH_JSON: process.env.CURSOR_CLI_AUTH_JSON,
   XDG_CACHE_HOME: process.env.XDG_CACHE_HOME,
 };
 let tempDir: string;
@@ -26,6 +27,9 @@ beforeEach(() => {
   // Absent on purpose: the editor database is what a CLI-only machine lacks.
   process.env.CURSOR_STATE_DB = join(tempDir, "state.vscdb");
   process.env.CURSOR_CLI_CONFIG = join(tempDir, "cli-config.json");
+  // Isolated to a nonexistent-by-default path so these CLI-only cases never
+  // fall through to a real ~/.config/cursor/auth.json on this machine.
+  process.env.CURSOR_CLI_AUTH_JSON = join(tempDir, "cursor-cli-auth.json");
   process.env.XDG_CACHE_HOME = join(tempDir, "cache");
 });
 

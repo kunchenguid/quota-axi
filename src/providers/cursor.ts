@@ -21,6 +21,11 @@ import {
   withRemaining,
 } from "./common.js";
 import {
+  cursorCliAuthPath,
+  createCursorCliCredentialSource,
+  DEFAULT_CURSOR_CLIENT_VERSION,
+} from "./cursor-cli-auth.js";
+import {
   isCursorCliSourceSupported,
   readCursorCliCredentialState,
 } from "./cursor-cli-credential.js";
@@ -34,10 +39,12 @@ type CursorCredentials = {
   accessToken: string;
   email?: string;
   membershipType?: string;
+  clientType: "editor" | "cli";
+  clientVersion?: string;
 };
 
 type UnavailableCredentialState = {
-  status: "missing" | "invalid" | "skipped";
+  status: "missing" | "invalid" | "skipped" | "expired";
   source: AuthSourceReport;
 };
 
@@ -49,6 +56,16 @@ type CredentialState =
     }
   | UnavailableCredentialState;
 
+type CursorCredentialSourceName =
+  | "state-vscdb"
+  | "cursor-cli-auth"
+  | "cli-keychain";
+
+type CredentialReader = {
+  source: CursorCredentialSourceName;
+  read: () => Promise<CredentialState>;
+};
+
 export const cursorAdapter: ProviderAdapter = {
   id: "cursor",
   label: "Cursor",
@@ -56,105 +73,88 @@ export const cursorAdapter: ProviderAdapter = {
   inspectAuth,
 };
 
+/**
+ * The Cursor editor and CLI keep credentials in different stores, and any
+ * source alone is enough. Quota fetching tries the non-prompting stores
+ * first — the editor state.vscdb, then the CLI auth.json — and reads the
+ * prompt-gated CLI Keychain value (macOS only) last, only when no earlier
+ * source yields a usable token or an earlier token is rejected by Cursor.
+ */
+function credentialReaders(options: ProviderOptions): CredentialReader[] {
+  return [
+    { source: "state-vscdb", read: readCredentialState },
+    { source: "cursor-cli-auth", read: () => readCliAuthCredentialState() },
+    ...(isCursorCliSourceSupported()
+      ? [
+          {
+            source: "cli-keychain" as const,
+            read: () => readCliCredentialState(options),
+          },
+        ]
+      : []),
+  ];
+}
+
 export async function fetchQuota(
   options: ProviderOptions,
 ): Promise<ProviderQuota> {
   const attempts: SourceAttempt[] = [];
-  let finalError: string;
+  const unavailable: UnavailableCredentialState[] = [];
+  let finalError: string | undefined;
   let retryAfter: string | undefined;
 
-  const resolution = await resolveCredentials(options);
-  for (const state of resolution.unavailable) {
-    attempts.push({
-      source: state.source.source,
-      status: "skipped",
-      error: cursorCredentialError(state),
-      ...(state.source.credentialPresent === undefined
-        ? {}
-        : { credentialPresent: state.source.credentialPresent }),
-    });
-  }
-
-  if (resolution.credentials) {
+  const readers = credentialReaders(options);
+  for (let index = 0; index < readers.length; index += 1) {
+    const reader = readers[index];
+    const state = await reader.read();
+    if (state.status !== "available") {
+      unavailable.push(state);
+      attempts.push(unavailableAttempt(state));
+      continue;
+    }
     // The editor-credential fetch keeps its established `api` attempt name; a
     // CLI-resolved fetch is named for its credential store so `sourcesTried`
-    // shows that the Keychain token, not the absent editor store, answered.
-    const quotaSource =
-      resolution.source === "cli-keychain" ? "cli-keychain" : "api";
-    attempts.push({ source: quotaSource, status: "failed" });
+    // shows which store, not the absent editor store, answered.
+    const label = reader.source === "state-vscdb" ? "api" : reader.source;
+    attempts.push({ source: label, status: "failed" });
     try {
-      const quota = await fetchCursorUsage(resolution.credentials);
-      attempts[attempts.length - 1] = {
-        source: quotaSource,
-        status: "success",
-      };
+      const quota = await fetchCursorUsage(state.credentials);
+      attempts[attempts.length - 1] = { source: label, status: "success" };
       return cursorSuccess(quota, attempts);
     } catch (error) {
       finalError = errorMessage(error);
+      if (error instanceof RateLimitError) retryAfter = error.retryAfter;
+      const hasFallback = index < readers.length - 1;
       attempts[attempts.length - 1] = {
-        source: quotaSource,
+        source:
+          error instanceof CursorAuthError && hasFallback
+            ? reader.source
+            : label,
         status: "failed",
         error: finalError,
       };
-      if (
-        error instanceof CursorAuthError &&
-        resolution.source === "state-vscdb" &&
-        isCursorCliSourceSupported()
-      ) {
-        attempts[attempts.length - 1] = {
-          source: "state-vscdb",
-          status: "failed",
-          error: finalError,
-        };
-        const cliState = await readCliCredentialState(options);
-        if (cliState.status === "available") {
-          attempts.push({ source: "cli-keychain", status: "failed" });
-          try {
-            const quota = await fetchCursorUsage(cliState.credentials);
-            attempts[attempts.length - 1] = {
-              source: "cli-keychain",
-              status: "success",
-            };
-            return cursorSuccess(quota, attempts);
-          } catch (cliError) {
-            finalError = errorMessage(cliError);
-            attempts[attempts.length - 1] = {
-              source: "cli-keychain",
-              status: "failed",
-              error: finalError,
-            };
-            if (cliError instanceof RateLimitError)
-              retryAfter = cliError.retryAfter;
-          }
-        } else {
-          attempts.push({
-            source: cliState.source.source,
-            status: "skipped",
-            error: cursorCredentialError(cliState),
-            ...(cliState.source.credentialPresent === undefined
-              ? {}
-              : { credentialPresent: cliState.source.credentialPresent }),
-          });
-        }
-      } else if (error instanceof RateLimitError) {
-        retryAfter = error.retryAfter;
-      }
+      if (!(error instanceof CursorAuthError)) break;
     }
-  } else {
-    const primary = primaryUnavailable(resolution.unavailable);
-    finalError = cursorFinalError(primary, cursorCredentialError(primary));
   }
+
+  const resolvedFinalError =
+    finalError ?? combinedCursorFinalError(unavailable);
 
   const cached = readCachedProvider("cursor");
   if (cached) {
-    return staleFromCache(cached, finalError, sourceNames(attempts), attempts);
+    return staleFromCache(
+      cached,
+      resolvedFinalError,
+      sourceNames(attempts),
+      attempts,
+    );
   }
 
   return failedProvider({
     provider: "cursor",
     label: "Cursor",
-    status: retryAfter ? "rate_limited" : statusFromError(finalError),
-    error: finalError,
+    status: retryAfter ? "rate_limited" : statusFromError(resolvedFinalError),
+    error: resolvedFinalError,
     retryAfter,
     sourcesTried: sourceNames(attempts),
     attempts,
@@ -165,16 +165,19 @@ export async function inspectAuth(
   options: ProviderOptions,
 ): Promise<AuthProviderReport> {
   const editorState = await readCredentialState();
-  const sources = [editorState.source];
+  const cliAuthState = await readCliAuthCredentialState();
+  const sources = [editorState.source, cliAuthState.source];
   if (isCursorCliSourceSupported()) {
-    const editorAvailable = editorState.status === "available";
+    const nonPromptingAvailable =
+      editorState.status === "available" ||
+      cliAuthState.status === "available";
     sources.push(
       (
         await readCliCredentialState(
-          editorAvailable
+          nonPromptingAvailable
             ? { ...options, allowKeychainPrompt: false }
             : options,
-          editorAvailable,
+          nonPromptingAvailable,
         )
       ).source,
     );
@@ -182,71 +185,40 @@ export async function inspectAuth(
   return { provider: "cursor", sources };
 }
 
-/**
- * The Cursor editor and CLI keep credentials in different stores, and either
- * source is enough, so a CLI-only machine with no editor `state.vscdb` can
- * still refresh quota after Keychain access is granted. Quota fetching tries
- * the non-prompting editor store first;
- * it reads the CLI Keychain value when the editor token is absent, unreadable,
- * or rejected by Cursor.
- */
-async function resolveCredentials(options: ProviderOptions): Promise<{
-  credentials?: CursorCredentials;
-  source?: "state-vscdb" | "cli-keychain";
-  unavailable: UnavailableCredentialState[];
-}> {
-  const unavailable: UnavailableCredentialState[] = [];
-  const editorState = await readCredentialState();
-  if (editorState.status === "available") {
-    return {
-      credentials: editorState.credentials,
-      source: "state-vscdb",
-      unavailable,
-    };
-  }
-  unavailable.push(editorState);
-
-  if (!isCursorCliSourceSupported()) return { unavailable };
-  const cliState = await readCliCredentialState(options);
-  if (cliState.status === "available") {
-    return {
-      credentials: cliState.credentials,
-      source: "cli-keychain",
-      unavailable,
-    };
-  }
-  unavailable.push(cliState);
-  return { unavailable };
-}
-
-/**
- * A CLI-only machine has no editor store at all, so reporting the editor's
- * `credentials_missing` would tell a signed-in `cursor-agent` user to sign in
- * again. Prefer a source that still holds a credential - a Keychain value read
- * waiting on the one-time prompt - so the error carries its actual remedy.
- */
-function primaryUnavailable(
-  states: UnavailableCredentialState[],
-): UnavailableCredentialState {
-  return (
-    states.find((state) => state.source.credentialPresent === true) ?? states[0]
-  );
-}
-
-async function readCliCredentialState(
-  options: ProviderOptions,
-  presenceOnly = false,
-): Promise<CredentialState> {
-  const state = await readCursorCliCredentialState(options, presenceOnly);
-  if (state.status !== "available") return state;
+function unavailableAttempt(state: UnavailableCredentialState): SourceAttempt {
   return {
-    status: "available",
-    credentials: {
-      accessToken: state.accessToken,
-      email: state.identity.email,
-    },
-    source: state.source,
+    source: state.source.source,
+    status: "skipped",
+    error: cursorCredentialError(state),
+    ...(state.source.credentialPresent === undefined
+      ? {}
+      : { credentialPresent: state.source.credentialPresent }),
   };
+}
+
+/**
+ * Prefers a genuine diagnostic ("invalid": e.g. a locked/corrupted sqlite
+ * DB, then "expired": a stale CLI token) over a plain absence from any
+ * source, so a real signal is not masked just because the other sources are
+ * also unavailable. Next, a source that provably still holds a credential —
+ * a Keychain value read waiting on the one-time prompt — outranks a merely
+ * absent store, so a signed-in `cursor-agent` user sees the Keychain remedy
+ * instead of `Cursor sign-in required`. Otherwise the first non-skipped
+ * source decides, preserving the original cursorFinalError "missing"
+ * semantics. When every source is skipped and none holds a credential,
+ * state-vscdb's skip reason wins (e.g. sqlite3_unavailable on win32 without
+ * sqlite3).
+ */
+function combinedCursorFinalError(
+  states: UnavailableCredentialState[],
+): string {
+  const decisive =
+    states.find((state) => state.status === "invalid") ??
+    states.find((state) => state.status === "expired") ??
+    states.find((state) => state.source.credentialPresent === true) ??
+    states.find((state) => state.status !== "skipped") ??
+    states[0];
+  return cursorFinalError(decisive, cursorCredentialError(decisive));
 }
 
 export function normalizeCursorUsage(
@@ -356,10 +328,8 @@ async function fetchCursorUsage(credentials: CursorCredentials): Promise<{
   refreshedAt: string;
 }> {
   const [usage, planInfo] = await Promise.all([
-    postDashboardRpc(credentials.accessToken, "GetCurrentPeriodUsage"),
-    postDashboardRpc(credentials.accessToken, "GetPlanInfo").catch(
-      () => undefined,
-    ),
+    postDashboardRpc(credentials, "GetCurrentPeriodUsage"),
+    postDashboardRpc(credentials, "GetPlanInfo").catch(() => undefined),
   ]);
   const quota = normalizeCursorUsage(usage, planInfo, credentials);
   if (!quota) throw new Error("Cursor quota unavailable");
@@ -367,7 +337,7 @@ async function fetchCursorUsage(credentials: CursorCredentials): Promise<{
 }
 
 async function postDashboardRpc(
-  accessToken: string,
+  credentials: CursorCredentials,
   method: string,
 ): Promise<unknown> {
   const controller = new AbortController();
@@ -377,12 +347,7 @@ async function postDashboardRpc(
       `${API_URL}/aiserver.v1.DashboardService/${method}`,
       {
         method: "POST",
-        headers: {
-          authorization: `Bearer ${accessToken}`,
-          accept: "application/json",
-          "content-type": "application/json",
-          "connect-protocol-version": "1",
-        },
+        headers: cursorRequestHeaders(credentials),
         body: "{}",
         signal: controller.signal,
       },
@@ -392,6 +357,30 @@ async function postDashboardRpc(
   } finally {
     clearTimeout(timer);
   }
+}
+
+/**
+ * Editor-origin requests keep today's exact header set, and Keychain-sourced
+ * CLI tokens keep it too, matching the behaviour they shipped with. Requests
+ * bearing an auth.json CLI token additionally carry the two x-cursor-*
+ * headers the CLI endpoint expects; clientVersion is already ANSI-stripped
+ * and charset-validated by the credential source, so it is safe to use here.
+ */
+function cursorRequestHeaders(
+  credentials: CursorCredentials,
+): Record<string, string> {
+  const headers: Record<string, string> = {
+    authorization: `Bearer ${credentials.accessToken}`,
+    accept: "application/json",
+    "content-type": "application/json",
+    "connect-protocol-version": "1",
+  };
+  if (credentials.clientType === "cli") {
+    headers["x-cursor-client-type"] = "cli";
+    headers["x-cursor-client-version"] =
+      credentials.clientVersion ?? DEFAULT_CURSOR_CLIENT_VERSION;
+  }
+  return headers;
 }
 
 function rejectUnusableUsageResponse(response: Response): void {
@@ -433,7 +422,7 @@ async function readCredentialState(): Promise<CredentialState> {
     );
     return {
       status: "available",
-      credentials: { accessToken, email, membershipType },
+      credentials: { accessToken, email, membershipType, clientType: "editor" },
       source: { source: "state-vscdb", path: STATE_DB, status: "available" },
     };
   } catch (error) {
@@ -454,6 +443,65 @@ async function readCredentialState(): Promise<CredentialState> {
       },
     };
   }
+}
+
+async function readCliAuthCredentialState(): Promise<CredentialState> {
+  const path = cursorCliAuthPath();
+  const resolution = await createCursorCliCredentialSource().resolve();
+
+  if (resolution.status === "available") {
+    return {
+      status: "available",
+      credentials: {
+        accessToken: resolution.accessToken,
+        clientType: "cli",
+        clientVersion: resolution.clientVersion,
+      },
+      source: {
+        source: "cursor-cli-auth",
+        path,
+        status: "available",
+      },
+    };
+  }
+  if (resolution.status === "skipped") {
+    return {
+      status: "skipped",
+      source: {
+        source: "cursor-cli-auth",
+        path,
+        status: "skipped",
+        error: resolution.reason,
+      },
+    };
+  }
+  return {
+    status: resolution.status,
+    source: {
+      source: "cursor-cli-auth",
+      path,
+      status: resolution.status,
+    },
+  };
+}
+
+async function readCliCredentialState(
+  options: ProviderOptions,
+  presenceOnly = false,
+): Promise<CredentialState> {
+  const state = await readCursorCliCredentialState(options, presenceOnly);
+  if (state.status !== "available") return state;
+  return {
+    status: "available",
+    // Keychain-sourced requests keep the editor header set: the dashboard
+    // endpoint accepts this bearer without the x-cursor-* CLI headers.
+    credentials: {
+      accessToken: state.accessToken,
+      email: state.identity.email,
+      clientType: "editor",
+    },
+    source: state.source,
+  };
 }
 
 async function readCursorStateValue(key: string): Promise<string | undefined> {
