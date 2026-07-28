@@ -9,6 +9,7 @@ import {
 } from "../../src/providers/copilot.js";
 
 const originalAppsJson = process.env.GITHUB_COPILOT_APPS_JSON;
+const originalCliConfig = process.env.GITHUB_COPILOT_CLI_CONFIG;
 const originalXdgCacheHome = process.env.XDG_CACHE_HOME;
 const originalXdgConfigHome = process.env.XDG_CONFIG_HOME;
 const originalHome = process.env.HOME;
@@ -18,6 +19,9 @@ let tempDir: string | undefined;
 beforeEach(() => {
   tempDir = mkdtempSync(join(tmpdir(), "quota-axi-copilot-"));
   process.env.GITHUB_COPILOT_APPS_JSON = join(tempDir, "apps.json");
+  // Isolated to a nonexistent-by-default path so tests never fall through to
+  // the real ~/.copilot/config.json on the machine running the suite.
+  process.env.GITHUB_COPILOT_CLI_CONFIG = join(tempDir, "copilot-cli.json");
   process.env.XDG_CACHE_HOME = join(tempDir, "cache");
 });
 
@@ -26,6 +30,9 @@ afterEach(() => {
   if (originalAppsJson === undefined)
     delete process.env.GITHUB_COPILOT_APPS_JSON;
   else process.env.GITHUB_COPILOT_APPS_JSON = originalAppsJson;
+  if (originalCliConfig === undefined)
+    delete process.env.GITHUB_COPILOT_CLI_CONFIG;
+  else process.env.GITHUB_COPILOT_CLI_CONFIG = originalCliConfig;
   if (originalXdgCacheHome === undefined) delete process.env.XDG_CACHE_HOME;
   else process.env.XDG_CACHE_HOME = originalXdgCacheHome;
   if (originalXdgConfigHome === undefined) delete process.env.XDG_CONFIG_HOME;
@@ -40,6 +47,10 @@ afterEach(() => {
 
 function writeAppsJson(value: unknown): void {
   writeFileSync(process.env.GITHUB_COPILOT_APPS_JSON!, JSON.stringify(value));
+}
+
+function writeCliConfig(value: unknown): void {
+  writeFileSync(process.env.GITHUB_COPILOT_CLI_CONFIG!, JSON.stringify(value));
 }
 
 function writeJson(path: string, value: unknown): void {
@@ -288,5 +299,113 @@ describe("GitHub Copilot quota parsing", () => {
         status: "available",
       });
     });
+  });
+
+  it("falls back to copilot-cli-config when apps-json has no credentials", async () => {
+    writeCliConfig({
+      copilotTokens: {
+        "https://github.com:cli-user": "gho_fakeCliOnly1",
+      },
+    });
+    const fetchMock = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      expect(new Headers(init?.headers).get("authorization")).toBe(
+        "Bearer gho_fakeCliOnly1",
+      );
+      return new Response(
+        JSON.stringify({
+          login: "cli-user",
+          access_type_sku: "individual",
+        }),
+        { status: 200 },
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await fetchQuota({ allowKeychainPrompt: false });
+
+    expect(result.state.status).toBe("fresh");
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(result.attempts).toContainEqual({
+      source: "apps-json",
+      status: "skipped",
+      error: "credentials_missing",
+    });
+
+    const authReport = await inspectAuth({ allowKeychainPrompt: false });
+    expect(authReport.sources).toHaveLength(2);
+    expect(authReport.sources).toContainEqual({
+      source: "copilot-cli-config",
+      path: process.env.GITHUB_COPILOT_CLI_CONFIG,
+      status: "available",
+    });
+  });
+
+  it("reports auth_required with both sources listed when both are missing", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await fetchQuota({ allowKeychainPrompt: false });
+
+    expect(result.state.status).toBe("auth_required");
+    expect(result.state.error).toBe("GitHub Copilot sign-in required");
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(result.attempts).toContainEqual({
+      source: "apps-json",
+      status: "skipped",
+      error: "credentials_missing",
+    });
+    expect(result.attempts).toContainEqual({
+      source: "copilot-cli-config",
+      status: "skipped",
+      error: "credentials_missing",
+    });
+
+    const authReport = await inspectAuth({ allowKeychainPrompt: false });
+    expect(authReport.sources).toEqual([
+      {
+        source: "apps-json",
+        path: process.env.GITHUB_COPILOT_APPS_JSON,
+        status: "missing",
+      },
+      {
+        source: "copilot-cli-config",
+        path: process.env.GITHUB_COPILOT_CLI_CONFIG,
+        status: "missing",
+      },
+    ]);
+  });
+
+  it("prefers apps-json over copilot-cli-config when both are available", async () => {
+    writeAppsJson({
+      fixture: { oauth_token: "apps-json-token" },
+    });
+    writeCliConfig({
+      copilotTokens: {
+        "https://github.com:cli-user": "gho_fakeUnused1",
+      },
+    });
+    const fetchMock = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      expect(new Headers(init?.headers).get("authorization")).toBe(
+        "Bearer apps-json-token",
+      );
+      return new Response(
+        JSON.stringify({
+          login: "fixture-user",
+          access_type_sku: "individual",
+        }),
+        { status: 200 },
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await fetchQuota({ allowKeychainPrompt: false });
+
+    expect(result.state.status).toBe("fresh");
+    expect(fetchMock).toHaveBeenCalledOnce();
+    // apps-json succeeded, so no skip entry is recorded for it (byte-identical
+    // to the pre-existing apps-json-only success path).
+    expect(result.attempts).not.toContainEqual(
+      expect.objectContaining({ source: "apps-json" }),
+    );
   });
 });

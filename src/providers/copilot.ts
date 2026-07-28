@@ -24,6 +24,11 @@ import {
   statusFromError,
   successProvider,
 } from "./common.js";
+import {
+  COPILOT_CLI_CREDENTIAL_SOURCE,
+  copilotCliConfigPath,
+  createCopilotCliCredentialSource,
+} from "./copilot-cli-credential.js";
 
 const USER_URL = "https://api.github.com/copilot_internal/user";
 const USER_HOST = new URL(USER_URL).hostname;
@@ -40,7 +45,7 @@ type CredentialState =
       credentials: CopilotCredentials;
       source: AuthSourceReport;
     }
-  | { status: "missing" | "invalid"; source: AuthSourceReport };
+  | { status: "missing" | "invalid" | "skipped"; source: AuthSourceReport };
 
 type CredentialCandidate = {
   credentials: CopilotCredentials;
@@ -61,11 +66,11 @@ export async function fetchQuota(
   let finalError: string;
   let retryAfter: string | undefined;
 
-  const credentialState = readCredentialState();
-  if (credentialState.status === "available") {
+  const credentials = await resolveCopilotCredentials(attempts);
+  if (credentials) {
     attempts.push({ source: "api", status: "failed" });
     try {
-      const quota = await fetchCopilotUser(credentialState.credentials);
+      const quota = await fetchCopilotUser(credentials);
       attempts[attempts.length - 1] = { source: "api", status: "success" };
       return successProvider({
         provider: "copilot",
@@ -88,11 +93,6 @@ export async function fetchQuota(
       if (error instanceof RateLimitError) retryAfter = error.retryAfter;
     }
   } else {
-    attempts.push({
-      source: "apps-json",
-      status: "skipped",
-      error: `credentials_${credentialState.status}`,
-    });
     finalError = "GitHub Copilot sign-in required";
   }
 
@@ -115,8 +115,45 @@ export async function fetchQuota(
 export async function inspectAuth(
   _options: ProviderOptions,
 ): Promise<AuthProviderReport> {
-  const credentialState = readCredentialState();
-  return { provider: "copilot", sources: [credentialState.source] };
+  const appsJsonState = readAppsJsonCredentialState();
+  const cliConfigState = await readCliConfigCredentialState();
+  return {
+    provider: "copilot",
+    sources: [appsJsonState.source, cliConfigState.source],
+  };
+}
+
+/**
+ * Tries apps-json first (existing IDE-store behaviour, byte-identical when
+ * available), then falls back to the CLI config source. Only the sources
+ * that fail to yield credentials are recorded as skipped attempts, mirroring
+ * apps-json's original success-path behaviour (no attempt logged when a
+ * source succeeds; the HTTP call itself is the "api" attempt).
+ */
+async function resolveCopilotCredentials(
+  attempts: SourceAttempt[],
+): Promise<CopilotCredentials | undefined> {
+  const appsJsonState = readAppsJsonCredentialState();
+  if (appsJsonState.status === "available") {
+    return appsJsonState.credentials;
+  }
+  attempts.push({
+    source: "apps-json",
+    status: "skipped",
+    error: `credentials_${appsJsonState.status}`,
+  });
+
+  const cliConfigState = await readCliConfigCredentialState();
+  if (cliConfigState.status === "available") {
+    return cliConfigState.credentials;
+  }
+  attempts.push({
+    source: COPILOT_CLI_CREDENTIAL_SOURCE,
+    status: "skipped",
+    error:
+      cliConfigState.source.error ?? `credentials_${cliConfigState.status}`,
+  });
+  return undefined;
 }
 
 export function normalizeCopilotUser(raw: unknown):
@@ -199,8 +236,52 @@ function normalizeQuotaSnapshots(
   return windows;
 }
 
-function readCredentialState(authFile = copilotAppsFile()): CredentialState {
+function readAppsJsonCredentialState(
+  authFile = copilotAppsFile(),
+): CredentialState {
   return extractCredentialState(readJsonFileResult(authFile), authFile);
+}
+
+async function readCliConfigCredentialState(): Promise<CredentialState> {
+  const path = copilotCliConfigPath();
+  const resolution = await createCopilotCliCredentialSource().resolve();
+
+  if (resolution.status === "available") {
+    return {
+      status: "available",
+      credentials: {
+        oauthToken: resolution.oauthToken,
+        login: resolution.login,
+      },
+      source: {
+        source: COPILOT_CLI_CREDENTIAL_SOURCE,
+        path,
+        status: "available",
+      },
+    };
+  }
+  if (resolution.status === "skipped") {
+    return {
+      status: "skipped",
+      source: {
+        source: COPILOT_CLI_CREDENTIAL_SOURCE,
+        path,
+        status: "skipped",
+        error: resolution.reason,
+      },
+    };
+  }
+  return {
+    status: resolution.status,
+    source: {
+      source: COPILOT_CLI_CREDENTIAL_SOURCE,
+      path,
+      status: resolution.status,
+      ...(resolution.status === "invalid" && resolution.reason
+        ? { error: resolution.reason }
+        : {}),
+    },
+  };
 }
 
 function extractCredentialState(
@@ -270,7 +351,7 @@ function credentialHost(
   );
 }
 
-function normalizeHost(value: string | undefined): string | undefined {
+export function normalizeHost(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   if (!trimmed) return undefined;
   try {
@@ -290,7 +371,7 @@ function normalizeHost(value: string | undefined): string | undefined {
   }
 }
 
-function matchesUserEndpoint(host: string): boolean {
+export function matchesUserEndpoint(host: string): boolean {
   return (
     host === USER_HOST ||
     (USER_HOST === "api.github.com" && host === "github.com")
