@@ -17,6 +17,7 @@ export const PROVIDER_IDS = [
 
 export type ProviderSource =
   | "oauth"
+  | "pi:openai-codex"
   | "cli-rpc"
   | "api"
   | "web"

@@ -71,10 +71,13 @@ or when comparing supported local provider headroom side by side.
    empty windows means model auth is present (Grok CLI and/or Pi `xai`) while consumer credit
    windows are unknown - not logged out. Reserve true sign-in recovery for
    `authStatus: unusable` / `Grok sign-in required`.
-8. For a managed Codex installation, set `QUOTA_AXI_CODEX_BINARY` to its absolute executable
-   path. quota-axi uses that exact executable for auth inspection and the read-only app-server
-   fallback, and fails closed if the override is invalid. Codex OAuth availability follows the
-   access token, not id_token expiry alone.
+8. Codex checks its native OAuth file first, then Pi's `openai-codex` subscription OAuth
+   entry in `$PI_CODING_AGENT_DIR/auth.json` (default `~/.pi/agent/auth.json`), then the
+   read-only app-server fallback. quota-axi only reads Pi's unexpired token and account ID; it
+   never refreshes or writes Pi credentials. For a managed Codex installation, set
+   `QUOTA_AXI_CODEX_BINARY` to its absolute executable path. quota-axi uses that exact
+   executable for auth inspection and the fallback, and fails closed if the override is invalid.
+   Native Codex OAuth availability follows the access token, not id_token expiry alone.
 9. For Kimi, quota-axi prefers a literal Pi-managed `kimi-coding` API key from
    `$PI_CODING_AGENT_DIR/auth.json` (default `~/.pi/agent/auth.json`). If it is
    unavailable, quota-axi may reuse a fresh official Kimi Code CLI access token from

@@ -27,8 +27,8 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 - macOS Claude Keychain presence and value reads mirror Claude Code's validated current-user account selector and never fall back to an ambiguous service-only query. Value reads are skipped on plain calls until a successful value read records the profile-and-account-scoped non-secret access marker under the quota-axi cache directory; after that, plain calls may reuse the existing grant and read live Claude quota.
 - Managed-profile, Claude identity, and Codex executable-override contracts are documented in [README Security Posture](README.md#security-posture).
 - `--allow-keychain-prompt` is the first-time opt-in that permits the Claude Keychain value read which can prompt, and agents should relay the one-time "Always Allow" grant when `keychain_access_required` advice appears.
-- Codex uses `$CODEX_HOME/auth.json` or `~/.codex/auth.json` OAuth before the CLI fallback.
-- Codex `auth.json` support is OAuth-token only; never treat `OPENAI_API_KEY` as valid quota auth or send API keys to ChatGPT quota endpoints.
+- Codex credential precedence is `$CODEX_HOME/auth.json` or `~/.codex/auth.json` OAuth, Pi's bounded read-only `$PI_CODING_AGENT_DIR/auth.json` `openai-codex` subscription OAuth entry, then the CLI fallback; quota-axi never refreshes or writes Pi credentials.
+- Codex auth-file support is OAuth-token only; never treat `OPENAI_API_KEY` or Pi `api_key` entries as valid subscription quota auth or send API keys to ChatGPT quota endpoints.
 - Never launch the Claude CLI to probe quota, because that would spend the quota being measured.
 - The read-only Codex app-server JSON-RPC probe is the only CLI fallback.
 - The cache path is `~/.cache/quota-axi/quotas.json`, or under `$XDG_CACHE_HOME/quota-axi/` when `XDG_CACHE_HOME` is set.
