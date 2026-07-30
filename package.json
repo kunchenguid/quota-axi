@@ -16,6 +16,7 @@
     "toon",
     "claude",
     "codex",
+    "sub2api",
     "kimi"
   ],
   "bin": {
@@ -52,7 +53,8 @@
   },
   "dependencies": {
     "@toon-format/toon": "2.1.0",
-    "axi-sdk-js": "^0.1.7"
+    "axi-sdk-js": "^0.1.7",
+    "smol-toml": "^1.7.1"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",

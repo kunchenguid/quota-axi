@@ -36,6 +36,15 @@ export function renderQuotaToon(
       state: provider.state.status,
     })),
   );
+  const credits = response.providers
+    .filter((provider) => provider.credits)
+    .map((provider) => ({
+      provider: provider.provider,
+      remaining: provider.credits?.remaining ?? "unknown",
+      unlimited: provider.credits?.unlimited ?? "unknown",
+      unit: provider.credits?.unit ?? "unknown",
+      state: provider.state.status,
+    }));
   const effective = response.providers.flatMap((provider) => {
     const semantics = provider.quotaSemantics;
     if (!semantics || semantics.effectiveAvailability.length === 0) {
@@ -91,6 +100,7 @@ export function renderQuotaToon(
       generatedAt: response.generatedAt,
     }),
     encode({ providers }),
+    ...(credits.length > 0 ? [encode({ credits })] : []),
     encode({ windows }),
     encode({ effective }),
   ];

@@ -13,6 +13,9 @@ importers:
       axi-sdk-js:
         specifier: ^0.1.7
         version: 0.1.8
+      smol-toml:
+        specifier: ^1.7.1
+        version: 1.7.1
     devDependencies:
       "@eslint/js":
         specifier: 10.0.1
@@ -1565,6 +1568,13 @@ packages:
         integrity: sha512-ybx0WO1/8bSBLEWXZvEd7gMW3Sn3JFlW3TvX1nREbDLRNQNaeNN8WK0meBwPdAaOI7TtRRRJn/Es1zhrrCHu7g==,
       }
 
+  smol-toml@1.7.1:
+    resolution:
+      {
+        integrity: sha512-PPlsspAZ4jbMBu5DMFhfUGDQLu/vrL4SyBROVS37x8ynnVmFIs1VPBz1Co8Xks3TvpIaZXmU85y4DrQ+UyVFoQ==,
+      }
+    engines: { node: ">= 18" }
+
   source-map-js@1.2.1:
     resolution:
       {
@@ -2574,6 +2584,8 @@ snapshots:
   shebang-regex@3.0.0: {}
 
   siginfo@2.0.0: {}
+
+  smol-toml@1.7.1: {}
 
   source-map-js@1.2.1: {}
 

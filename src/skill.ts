@@ -3,8 +3,8 @@ import { DESCRIPTION, TOP_HELP } from "./cli.js";
 // Trigger string Claude Code (and other agents) match against to auto-load the skill.
 // Kept terse and outcome-focused so it fires on "check quota/rate limits" intents.
 export const SKILL_DESCRIPTION =
-  "Report local Claude, Codex, Cursor, GitHub Copilot, Grok, and Kimi quota windows via the quota-axi CLI - remaining " +
-  "effective usable runway, percentages, reset times, cycle-average pace vs the reset clock, and provider status read from local auth sources, " +
+  "Report local Claude, Codex, Cursor, GitHub Copilot, Grok, and Kimi quota windows plus sub2API balance via the quota-axi CLI - remaining " +
+  "effective usable runway, percentages or balance, reset times, cycle-average pace vs the reset clock, and provider status read from local auth sources, " +
   "with no routing, recommendation, or provider mutation. Use before deciding whether it is safe " +
   "to keep spending a provider's quota, when the user asks about usage, rate limits, pace, or " +
   "remaining quota, or when comparing local provider headroom.";
@@ -24,6 +24,7 @@ export const HERMES_TAGS = [
   "copilot",
   "grok",
   "kimi",
+  "sub2api",
   "cli",
 ];
 export const HERMES_CATEGORY = "observability";
@@ -60,7 +61,7 @@ You do not need quota-axi installed globally - invoke it with \`npx -y quota-axi
 
 quota-axi is data only: it never routes, recommends, proxies, intercepts, logs in, imports
 browser cookies, or mutates provider state. It reads local provider auth sources and calls
-first-party provider quota, usage, billing, or entitlement endpoints; it never launches the
+first-party provider quota endpoints or the explicitly configured sub2API usage endpoint; it never launches the
 Claude, Grok, Pi, or Kimi CLIs, so it cannot spend the quota it measures.
 
 ## When to use
@@ -72,7 +73,7 @@ or when comparing supported local provider headroom side by side.
 ## Workflow
 
 1. Run \`npx -y quota-axi\` for compact TOON output covering supported providers' quota windows.
-2. Scope to one provider with \`--provider claude\` or to a subset with \`--provider cursor,copilot,grok,kimi\`.
+2. Scope to one provider with \`--provider claude\` or to a subset with \`--provider cursor,copilot,grok,kimi,sub2api\`.
 3. Pass \`--json\` for the normalized machine-readable model instead of TOON. Read
    \`quotaSemantics.effectiveAvailability\` rather than treating a model window in isolation:
    account windows can bound every model, and \`boundedBy\` names every window included in the
@@ -117,6 +118,10 @@ or when comparing supported local provider headroom side by side.
    Grok also reads that same Pi auth file for an independent \`xai\` OAuth or literal API-key
    entry and treats Grok as usable when either the Grok CLI session or Pi \`xai\` credential is
    valid.
+10. For sub2API, quota-axi prefers \`SUB2API_BASE_URL\` and \`SUB2API_API_KEY\`, then falls back
+    to an active Codex \`model_provider = "sub2api"\` and its \`OPENAI_API_KEY\`. It sends one
+    redirect-disabled \`GET /v1/usage\` to that configured origin and reports the returned
+    monetary or credit balance without inventing percentage windows or reset times.
 
 ## Usage
 
@@ -132,6 +137,8 @@ ${TOP_HELP.trimEnd()}
   every provider failed; exit code 2 means a usage error.
 - Percentages are not comparable across providers - quota-axi never claims one provider's
   percentage equals another's.
+- A sub2API balance is an amount, not a percentage, and has no effective availability or pace
+  unless that endpoint later supplies authoritative total-limit and cycle data.
 - Claude \`--full\` output exposes the authoritative OAuth profile \`account.uuid\` as
   \`account.accountId\` when Anthropic returns one; otherwise the account identity is explicitly
   marked unverified rather than inferred.

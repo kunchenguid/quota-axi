@@ -18,6 +18,7 @@ const originalCursorProvider = PROVIDERS.cursor;
 const originalCopilotProvider = PROVIDERS.copilot;
 const originalGrokProvider = PROVIDERS.grok;
 const originalKimiProvider = PROVIDERS.kimi;
+const originalSub2apiProvider = PROVIDERS.sub2api;
 const originalXdgCacheHome = process.env.XDG_CACHE_HOME;
 let tempDir: string | undefined;
 
@@ -28,6 +29,7 @@ afterEach(() => {
   PROVIDERS.copilot = originalCopilotProvider;
   PROVIDERS.grok = originalGrokProvider;
   PROVIDERS.kimi = originalKimiProvider;
+  PROVIDERS.sub2api = originalSub2apiProvider;
   if (originalXdgCacheHome === undefined) delete process.env.XDG_CACHE_HOME;
   else process.env.XDG_CACHE_HOME = originalXdgCacheHome;
   if (tempDir) rmSync(tempDir, { recursive: true, force: true });
@@ -45,6 +47,7 @@ describe("CLI flag parsing", () => {
       "copilot",
       "grok",
       "kimi",
+      "sub2api",
     ]);
   });
 
@@ -65,7 +68,15 @@ describe("CLI flag parsing", () => {
   it("collects the boolean flags", () => {
     expect(parseFlags(["--json", "--full", "--allow-keychain-prompt"])).toEqual(
       {
-        providers: ["claude", "codex", "cursor", "copilot", "grok", "kimi"],
+        providers: [
+          "claude",
+          "codex",
+          "cursor",
+          "copilot",
+          "grok",
+          "kimi",
+          "sub2api",
+        ],
         json: true,
         full: true,
         allowKeychainPrompt: true,
@@ -564,6 +575,42 @@ describe("CLI quota rendering", () => {
       /recommend|prefer provider|switch to|route to/i,
     );
   });
+
+  it("renders sub2API monetary balance without inventing a percentage", async () => {
+    useTempCache();
+    PROVIDERS.sub2api = providerWithQuota({
+      provider: "sub2api",
+      label: "sub2API",
+      source: "api",
+      windows: [],
+      credits: { remaining: 27.5, unit: "usd" },
+      state: {
+        status: "fresh",
+        stale: false,
+        refreshedAt: "2026-07-30T00:00:00.000Z",
+        sourcesTried: ["codex-config"],
+      },
+    });
+
+    const toon = await capture(["--provider", "sub2api"]);
+    expect(toon).toContain(
+      "credits[1]{provider,remaining,unlimited,unit,state}:\n  sub2api,27.5,unknown,usd,fresh",
+    );
+    expect(toon).not.toContain("sub2api,credits,credits,27.5");
+
+    const json = JSON.parse(
+      await capture(["--provider", "sub2api", "--json"]),
+    ) as QuotaAxiResponse;
+    expect(json.providers[0]).toMatchObject({
+      provider: "sub2api",
+      credits: { remaining: 27.5, unit: "usd" },
+      windows: [],
+      quotaSemantics: {
+        status: "unknown",
+        effectiveAvailability: [],
+      },
+    });
+  });
 });
 
 describe("CLI plumbing via the axi SDK", () => {
@@ -594,6 +641,7 @@ describe("CLI plumbing via the axi SDK", () => {
     PROVIDERS.copilot = providerWithAuth("copilot", "GitHub Copilot");
     PROVIDERS.grok = providerWithAuth("grok", "Grok");
     PROVIDERS.kimi = providerWithAuth("kimi", "Kimi");
+    PROVIDERS.sub2api = providerWithAuth("sub2api", "sub2API");
 
     const output = await capture(["--allow-keychain-prompt", "auth"]);
     expect(output).toContain(

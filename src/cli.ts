@@ -11,11 +11,11 @@ commands[2]:
 output:
   Default TOON reports effective headroom and usable-runway evidence; use --full or --json for reserve diagnostics.
 flags[6]:
-  --provider <claude,codex,cursor,copilot,grok,kimi>, --json, --full, --allow-keychain-prompt, --help, -v/--version
+  --provider <claude,codex,cursor,copilot,grok,kimi,sub2api>, --json, --full, --allow-keychain-prompt, --help, -v/--version
 examples:
   quota-axi
   quota-axi --provider claude
-  quota-axi --provider cursor,copilot,grok,kimi
+  quota-axi --provider cursor,copilot,grok,kimi,sub2api
   quota-axi --json
   quota-axi --full
   quota-axi auth
