@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.17](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.16...quota-axi-v0.1.17) (2026-07-31)
+
+
+### Features
+
+* report effective usable runway ([#57](https://github.com/kunchenguid/quota-axi/issues/57)) ([19d0403](https://github.com/kunchenguid/quota-axi/commit/19d04035e4adc2fa8c0ec280ba40d613de56bc22))
+
 ## [0.1.16](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.15...quota-axi-v0.1.16) (2026-07-28)
 
 
