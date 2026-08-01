@@ -74,7 +74,15 @@ describe("CLI flag parsing", () => {
   it("collects the boolean flags", () => {
     expect(parseFlags(["--json", "--full", "--allow-keychain-prompt"])).toEqual(
       {
-        providers: ["claude", "codex", "cursor", "copilot", "grok", "kimi"],
+        providers: [
+          "claude",
+          "codex",
+          "cursor",
+          "copilot",
+          "grok",
+          "kimi",
+          "agy",
+        ],
         json: true,
         full: true,
         allowKeychainPrompt: true,

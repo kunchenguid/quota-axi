@@ -48,6 +48,7 @@ describe("quota semantics", () => {
       ["codex", [window("weekly", "weekly", 38)]],
       ["grok", [window("credits", "credits", 44)]],
       ["kimi", [window("weekly", "weekly", 59)]],
+      ["agy", [window("gemini_weekly", "weekly", 98)]],
       ["cursor", [window("included_usage", "monthly", 72)]],
       ["copilot", [window("premium_interactions", "monthly", 81)]],
     ];
@@ -328,6 +329,19 @@ describe("quota semantics", () => {
       status: "unknown",
       effectiveAvailability: [],
       unresolvedWindowIds: ["included_usage"],
+    });
+
+    const agy = withQuotaSemantics(
+      provider("agy", [
+        window("gemini_5h", "session", 100),
+        window("gemini_weekly", "weekly", 98),
+      ]),
+      GENERATED_AT,
+    );
+    expect(agy.quotaSemantics).toMatchObject({
+      status: "unknown",
+      effectiveAvailability: [],
+      unresolvedWindowIds: ["gemini_5h", "gemini_weekly"],
     });
 
     const kimi = withQuotaSemantics(
