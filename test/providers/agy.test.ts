@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { writeCachedProviders } from "../../src/cache.js";
 import {
   fetchQuotaWithRuntime,
@@ -17,6 +17,10 @@ import type { ProviderQuota } from "../../src/types.js";
 
 const originalXdgCacheHome = process.env.XDG_CACHE_HOME;
 let tempDir: string | undefined;
+
+beforeEach(() => {
+  useTempCache();
+});
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -292,7 +296,6 @@ describe("Antigravity provider", () => {
   });
 
   it("uses stale cache when the live loopback source is unavailable", async () => {
-    useTempCache();
     writeCachedProviders([cachedAgyQuota()]);
 
     const result = await fetchQuotaWithRuntime(runtimeWith({ ps: "" }));
