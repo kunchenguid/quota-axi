@@ -5,12 +5,10 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  readCachedProvider,
-  writeCachedProviders,
-} from "../../src/cache.js";
+import { readCachedProvider, writeCachedProviders } from "../../src/cache.js";
 import {
   fetchQuotaWithRuntime,
+  inspectAuthWithRuntime,
   normalizeAgyQuotaSummary,
   normalizeAgyUserStatus,
   portsFromLsof,
@@ -33,12 +31,10 @@ afterEach(async () => {
   vi.restoreAllMocks();
   vi.useRealTimers();
   await Promise.all(
-    servers.splice(0).map(
-      (server) => {
-        server.closeAllConnections();
-        return new Promise<void>((resolve) => server.close(() => resolve()));
-      },
-    ),
+    servers.splice(0).map((server) => {
+      server.closeAllConnections();
+      return new Promise<void>((resolve) => server.close(() => resolve()));
+    }),
   );
   if (originalXdgCacheHome === undefined) delete process.env.XDG_CACHE_HOME;
   else process.env.XDG_CACHE_HOME = originalXdgCacheHome;
@@ -193,7 +189,7 @@ describe("Antigravity provider", () => {
     const calls: Array<{ endpoint: AgyConnectionEndpoint; path: string }> = [];
     const result = await fetchQuotaWithRuntime(
       runtimeWith({
-        ps: "123 /Applications/Google Antigravity.app/Contents/Resources/bin/language-server --csrf_token token\n",
+        ps: "123 /Applications/Google Antigravity.app/Contents/Resources/bin/language-server --csrf_token token --extension_server_port 64123 --extension_server_csrf_token extension-token\n",
         lsof: lsofFor(123, 64440),
         responses: {
           "https:64440:/exa.language_server_pb.LanguageServerService/GetUnleashData":
@@ -216,6 +212,37 @@ describe("Antigravity provider", () => {
       requiresCsrfToken: true,
       requiresUnleashProbe: true,
     });
+    expect(calls.every((call) => call.endpoint.port !== 64123)).toBe(true);
+  });
+
+  it("uses an extension port only when the app process owns its listener", async () => {
+    const calls: AgyConnectionEndpoint[] = [];
+    const result = await fetchQuotaWithRuntime(
+      runtimeWith({
+        ps: "123 /Applications/Google Antigravity.app/Contents/Resources/bin/language-server --csrf_token main-token --extension_server_port 64123 --extension_server_csrf_token extension-token\n",
+        lsof: `${lsofFor(123, 64440)}agy 123 test 9u IPv4 0x2 0t0 TCP 127.0.0.1:64123 (LISTEN)\n`,
+        requestJson: async (endpoint, path) => {
+          calls.push(endpoint);
+          if (
+            endpoint.port === 64123 &&
+            endpoint.csrfToken === "extension-token"
+          ) {
+            if (path.endsWith("GetUnleashData")) return {};
+            if (path.endsWith("RetrieveUserQuotaSummary"))
+              return fixture("quota-summary.json");
+          }
+          throw new Error("connect ECONNREFUSED");
+        },
+      }),
+    );
+
+    expect(result.state.status).toBe("fresh");
+    expect(calls).toContainEqual(
+      expect.objectContaining({
+        port: 64123,
+        csrfToken: "extension-token",
+      }),
+    );
   });
 
   it("reports unavailable without trying HTTP when Antigravity is not running", async () => {
@@ -263,6 +290,33 @@ describe("Antigravity provider", () => {
       status: "error",
       error: "Antigravity port discovery failed",
     });
+  });
+
+  it("preserves sanitized discovery failures during auth inspection", async () => {
+    const processResult = await inspectAuthWithRuntime(
+      runtimeWith({ psError: new Error("ps failed at /Users/private") }),
+    );
+    const portResult = await inspectAuthWithRuntime(
+      runtimeWith({
+        ps: "123 /Users/test/.local/bin/agy\n",
+        lsofError: new Error("lsof denied for private-host"),
+      }),
+    );
+
+    expect(processResult.sources).toEqual([
+      {
+        source: "loopback",
+        status: "error",
+        error: "Antigravity process discovery failed",
+      },
+    ]);
+    expect(portResult.sources).toEqual([
+      {
+        source: "loopback",
+        status: "error",
+        error: "Antigravity port discovery failed",
+      },
+    ]);
   });
 
   it("continues discovery when another verified process has listening ports", async () => {
@@ -458,7 +512,7 @@ describe("Antigravity provider", () => {
   });
 
   it("does not launch agy or any provider process", async () => {
-    const commands: string[] = [];
+    const commands: Array<{ command: string; args: string[] }> = [];
     const runtime = runtimeWith({
       ps: "123 /Users/test/.local/bin/agy\n",
       lsof: lsofFor(123, 64440),
@@ -466,16 +520,25 @@ describe("Antigravity provider", () => {
         "https:64440:/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary":
           fixture("quota-summary.json"),
       },
-      onExec(command) {
-        commands.push(command);
+      onExec(command, args) {
+        commands.push({ command, args });
       },
     });
 
     const result = await fetchQuotaWithRuntime(runtime);
 
     expect(result.state.status).toBe("fresh");
-    expect(commands).toEqual(["ps", "lsof"]);
-    expect(commands).not.toContain("agy");
+    expect(commands).toEqual([
+      {
+        command: "ps",
+        args: ["-x", "-u", String(process.geteuid()), "-o", "pid=,command="],
+      },
+      {
+        command: "lsof",
+        args: ["-nP", "-a", "-p", "123", "-iTCP", "-sTCP:LISTEN"],
+      },
+    ]);
+    expect(commands.map((call) => call.command)).not.toContain("agy");
   });
 });
 
@@ -487,12 +550,12 @@ function runtimeWith(options: {
   lsofByPid?: Record<number, string | Error>;
   requestJson?: AgyProbeRuntime["requestJson"];
   responses?: Record<string, unknown>;
-  onExec?: (command: string) => void;
+  onExec?: (command: string, args: string[]) => void;
   onRequest?: (endpoint: AgyConnectionEndpoint, path: string) => void;
 }): AgyProbeRuntime {
   return {
     async execFileText(command, args) {
-      options.onExec?.(command);
+      options.onExec?.(command, args);
       if (command === "ps") {
         if (options.psError) throw options.psError;
         return options.ps ?? "";

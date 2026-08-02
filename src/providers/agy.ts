@@ -120,7 +120,12 @@ export async function fetchQuotaWithRuntime(
   if (staleEligibleFailure(finalFailure)) {
     const cached = readCachedProvider("agy");
     if (cached) {
-      return staleFromCache(cached, finalError, sourceNames(attempts), attempts);
+      return staleFromCache(
+        cached,
+        finalError,
+        sourceNames(attempts),
+        attempts,
+      );
     }
   } else if (isDefinitiveAuthFailure(finalFailure)) {
     try {
@@ -143,24 +148,38 @@ export async function fetchQuotaWithRuntime(
 export async function inspectAuth(
   _options: ProviderOptions,
 ): Promise<AuthProviderReport> {
-  let endpoints: AgyConnectionEndpoint[];
+  return inspectAuthWithRuntime(defaultRuntime);
+}
+
+export async function inspectAuthWithRuntime(
+  runtime: AgyProbeRuntime,
+): Promise<AuthProviderReport> {
   try {
-    endpoints = await discoverAgyEndpoints(
-      defaultRuntime,
+    const endpoints = await discoverAgyEndpoints(
+      runtime,
       createProbeDeadline(),
     );
-  } catch {
-    endpoints = [];
+    return {
+      provider: "agy",
+      sources: [
+        {
+          source: "loopback",
+          status: endpoints.length > 0 ? "available" : "missing",
+        },
+      ],
+    };
+  } catch (error) {
+    return {
+      provider: "agy",
+      sources: [
+        {
+          source: "loopback",
+          status: "error",
+          error: errorMessage(error),
+        },
+      ],
+    };
   }
-  return {
-    provider: "agy",
-    sources: [
-      {
-        source: "loopback",
-        status: endpoints.length > 0 ? "available" : "missing",
-      },
-    ],
-  };
 }
 
 export function normalizeAgyQuotaSummary(raw: unknown):
@@ -325,7 +344,10 @@ async function discoverAgyEndpoints(
       }
     }
 
-    if (processInfo.extensionPort) {
+    if (
+      processInfo.extensionPort &&
+      listeningPorts.includes(processInfo.extensionPort)
+    ) {
       const token =
         processInfo.extensionServerCsrfToken ?? processInfo.csrfToken;
       if (token) {
@@ -452,11 +474,14 @@ async function readProcessList(
   deadline: number,
 ): Promise<string> {
   if (process.platform === "win32") return "";
+  const effectiveUid = process.geteuid?.();
+  if (effectiveUid === undefined)
+    throw new AgyDiscoveryError("Antigravity process discovery failed");
   try {
     return await withinProbeBudget(deadline, PROCESS_TIMEOUT_MS, (timeoutMs) =>
       runtime.execFileText(
         "ps",
-        ["-axo", "pid=,command="],
+        ["-x", "-u", String(effectiveUid), "-o", "pid=,command="],
         timeoutMs,
       ),
     );
@@ -926,7 +951,9 @@ function errorMessage(error: unknown): string {
 function sanitizeTransportError(error: Error): Error {
   const code = (error as NodeJS.ErrnoException).code;
   if (code && /^[A-Z][A-Z0-9_]+$/.test(code)) {
-    return new AgyUnavailableError(`Antigravity loopback unavailable (${code})`);
+    return new AgyUnavailableError(
+      `Antigravity loopback unavailable (${code})`,
+    );
   }
   return new AgyUnavailableError("Antigravity loopback unavailable");
 }
@@ -1003,8 +1030,7 @@ class AgyHttpError extends Error {
 }
 
 function httpErrorMessage(status: number): string {
-  if (status === 401 || status === 403)
-    return "Antigravity sign-in required";
+  if (status === 401 || status === 403) return "Antigravity sign-in required";
   if (status === 429) return "Antigravity quota endpoint rate limited";
   return `Antigravity quota endpoint returned HTTP ${status}`;
 }
