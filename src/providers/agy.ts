@@ -132,7 +132,7 @@ export async function fetchQuotaWithRuntime(
 export async function inspectAuth(
   _options: ProviderOptions,
 ): Promise<AuthProviderReport> {
-  let endpoints: AgyConnectionEndpoint[] = [];
+  let endpoints: AgyConnectionEndpoint[];
   try {
     endpoints = await discoverAgyEndpoints(
       defaultRuntime,
@@ -361,11 +361,8 @@ async function fetchEndpointQuota(
   let summaryError: unknown;
   try {
     const summary = normalizeAgyQuotaSummary(
-      await withinProbeBudget(
-        deadline,
-        REQUEST_TIMEOUT_MS,
-        (timeoutMs) =>
-          runtime.requestJson(endpoint, QUOTA_SUMMARY_PATH, timeoutMs),
+      await withinProbeBudget(deadline, REQUEST_TIMEOUT_MS, (timeoutMs) =>
+        runtime.requestJson(endpoint, QUOTA_SUMMARY_PATH, timeoutMs),
       ),
     );
     if (summary) {
@@ -445,11 +442,8 @@ async function readProcessList(
 ): Promise<string> {
   if (process.platform === "win32") return "";
   try {
-    return await withinProbeBudget(
-      deadline,
-      PROCESS_TIMEOUT_MS,
-      (timeoutMs) =>
-        runtime.execFileText("ps", ["-axo", "pid=,command="], timeoutMs),
+    return await withinProbeBudget(deadline, PROCESS_TIMEOUT_MS, (timeoutMs) =>
+      runtime.execFileText("ps", ["-axo", "pid=,command="], timeoutMs),
     );
   } catch (error) {
     if (error instanceof AgyProbeBudgetError) throw error;
@@ -465,15 +459,12 @@ async function readListeningPorts(
   if (process.platform === "win32") return [];
   try {
     return portsFromLsof(
-      await withinProbeBudget(
-        deadline,
-        PORT_TIMEOUT_MS,
-        (timeoutMs) =>
-          runtime.execFileText(
-            "lsof",
-            ["-nP", "-a", "-p", String(pid), "-iTCP", "-sTCP:LISTEN"],
-            timeoutMs,
-          ),
+      await withinProbeBudget(deadline, PORT_TIMEOUT_MS, (timeoutMs) =>
+        runtime.execFileText(
+          "lsof",
+          ["-nP", "-a", "-p", String(pid), "-iTCP", "-sTCP:LISTEN"],
+          timeoutMs,
+        ),
       ),
     );
   } catch (error) {
@@ -859,7 +850,9 @@ function withinProbeBudget<T>(
 ): Promise<T> {
   const remainingMs = deadline - Date.now();
   if (remainingMs <= 0)
-    return Promise.reject(new AgyProbeBudgetError("Antigravity probe timed out"));
+    return Promise.reject(
+      new AgyProbeBudgetError("Antigravity probe timed out"),
+    );
   const timeoutMs = Math.min(perOperationTimeoutMs, remainingMs);
   return new Promise((resolve, reject) => {
     const timer = setTimeout(

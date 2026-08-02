@@ -295,8 +295,8 @@ It is generated from `src/skill.ts`; update it with `pnpm run build:skill` and v
 └─────┬─────────┘
       ▼
 ┌───────────────┐       ┌──────────────┐
-│ local auth    │ ───▶  │ first-party  │
-│ sources       │       │ provider APIs│
+│ local auth or │ ───▶  │ first-party  │
+│ runtime       │       │ APIs/loopback│
 └─────┬─────────┘       └──────┬───────┘
       ▼                        ▼
 ┌───────────────┐       ┌──────────────┐
@@ -309,7 +309,7 @@ It is generated from `src/skill.ts`; update it with `pnpm run build:skill` and v
 └───────────────┘       └──────────────┘
 ```
 
-- **Live first** - direct provider HTTP calls use 15 second request timeouts, Codex JSON-RPC reads use short per-call timeouts, and stale cache fallback is per provider.
+- **Live first** - direct provider HTTP calls use 15 second request timeouts, Codex JSON-RPC and Antigravity loopback reads use shorter per-call timeouts, and stale cache fallback is per provider.
 - **No first-run Keychain prompt** - macOS Claude Keychain value reads are skipped on plain calls until `--allow-keychain-prompt` succeeds once, then future plain calls reuse that existing grant.
 - **Partial success is success** - one provider can fail while another returns fresh or stale data, and the process still exits 0. Exit code 1 means every provider failed, and 2 means a usage error.
 - **No token equivalence** - quota-axi does not claim that one provider percentage equals another provider percentage.
@@ -497,7 +497,7 @@ Auth source entries can include `credentialPresent` when a non-secret probe conf
 | GitHub Copilot | `$GITHUB_COPILOT_APPS_JSON` when set or the local Copilot apps auth file                                                                                                                                                                                                                                                             |
 | Grok           | Grok CLI session auth from `$GROK_AUTH_JSON`, inline `$GROK_AUTH`, `$GROK_AUTH_PATH`, or `$GROK_HOME/auth.json` / `~/.grok/auth.json`, plus Pi's independent `$PI_CODING_AGENT_DIR/auth.json` `xai` entry (default `~/.pi/agent/auth.json`) for OAuth or literal API-key model auth                                                  |
 | Kimi           | Pi's `$PI_CODING_AGENT_DIR/auth.json` (default `~/.pi/agent/auth.json`) for a literal `kimi-coding` API key first, then a fresh official Kimi Code CLI access token from `$KIMI_CODE_HOME/credentials/kimi-code.json` (default `$HOME/.kimi-code/credentials/kimi-code.json`)                                                        |
-| Antigravity    | No credential files; discovers already-running Antigravity or `agy` processes and reads only their 127.0.0.1 loopback quota endpoints                                                                                                                                                                                                |
+| Antigravity    | No credential files; discovers already-running Antigravity or `agy` processes and reads only their 127.0.0.1 read-only loopback endpoints                                                                                                                                                                                            |
 
 ### Provider notes
 
@@ -551,14 +551,14 @@ Auth source entries can include `credentialPresent` when a non-secret probe conf
 **Antigravity**
 
 - It never launches, restarts, signs in to, or mutates Antigravity or `agy`.
-- It runs process and listening-port discovery, then POSTs `{}` to documented local read endpoints on `127.0.0.1`.
-- It prefers `RetrieveUserQuotaSummary`, uses `GetUserStatus` for account plan identity behind `--full`, and can fall back to model quota data from `GetUserStatus` / `GetCommandModelConfigs` when grouped quota summary is unavailable.
+- It runs process and listening-port discovery, then sends read-only POST requests with operation-specific bodies to local endpoints on `127.0.0.1`.
+- It prefers `RetrieveUserQuotaSummary`, uses `GetUserStatus` for plan identity and account identity exposed only behind `--full`, and can fall back to model quota data from `GetUserStatus` / `GetCommandModelConfigs` when grouped quota summary is unavailable.
 - Burn rate is not reported for Antigravity v1 because the local payload exposes point-in-time quota snapshots, not enough history to compute a rate honestly.
 
 ### Safety guarantees
 
-- Quota and auth HTTP requests go only to first-party provider usage, quota, billing, or entitlement endpoints with the user's local credentials.
-- The user-initiated `update` command is the only non-provider network surface, and it is not part of quota measurement.
+- Remote quota and auth HTTP requests go only to first-party provider usage, quota, billing, or entitlement endpoints with the user's local credentials; Antigravity requests stay on 127.0.0.1 loopback.
+- The user-initiated `update` command is the only outbound non-provider network surface, and it is not part of quota measurement.
 - It sends credential values only to the first-party provider request they authenticate.
 - It never prints, logs, or caches credential values.
 - It never launches the Claude, Grok, Pi, Kimi, or Antigravity/`agy` CLIs, so it cannot spend quota or mutate provider credentials while measuring them.
