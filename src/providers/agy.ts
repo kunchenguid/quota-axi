@@ -36,6 +36,7 @@ const UNLEASH_PATH =
 const PROCESS_TIMEOUT_MS = 5_000;
 const PORT_TIMEOUT_MS = 2_000;
 const REQUEST_TIMEOUT_MS = 3_000;
+const PROBE_BUDGET_MS = 10_000;
 
 type AgyProcessSource = "agy" | "app";
 
@@ -131,7 +132,15 @@ export async function fetchQuotaWithRuntime(
 export async function inspectAuth(
   _options: ProviderOptions,
 ): Promise<AuthProviderReport> {
-  const endpoints = await discoverAgyEndpoints(defaultRuntime);
+  let endpoints: AgyConnectionEndpoint[] = [];
+  try {
+    endpoints = await discoverAgyEndpoints(
+      defaultRuntime,
+      createProbeDeadline(),
+    );
+  } catch {
+    endpoints = [];
+  }
   return {
     provider: "agy",
     sources: [
@@ -229,7 +238,8 @@ async function fetchLoopbackQuota(runtime: AgyProbeRuntime): Promise<{
   windows: QuotaWindow[];
   refreshedAt: string;
 }> {
-  const endpoints = await discoverAgyEndpoints(runtime);
+  const deadline = createProbeDeadline();
+  const endpoints = await discoverAgyEndpoints(runtime, deadline);
   if (endpoints.length === 0)
     throw new AgyUnavailableError("Antigravity/agy is not running");
 
@@ -238,10 +248,10 @@ async function fetchLoopbackQuota(runtime: AgyProbeRuntime): Promise<{
     try {
       if (
         endpoint.requiresUnleashProbe &&
-        !(await probeEndpoint(runtime, endpoint))
+        !(await probeEndpoint(runtime, endpoint, deadline))
       )
         continue;
-      return await fetchEndpointQuota(runtime, endpoint);
+      return await fetchEndpointQuota(runtime, endpoint, deadline);
     } catch (error) {
       lastError = error;
     }
@@ -254,11 +264,18 @@ async function fetchLoopbackQuota(runtime: AgyProbeRuntime): Promise<{
 
 async function discoverAgyEndpoints(
   runtime: AgyProbeRuntime,
+  deadline: number,
 ): Promise<AgyConnectionEndpoint[]> {
-  const processes = processInfosFromPs(await readProcessList(runtime));
+  const processes = processInfosFromPs(
+    await readProcessList(runtime, deadline),
+  );
   const endpoints: AgyConnectionEndpoint[] = [];
   for (const processInfo of processes) {
-    const listeningPorts = await readListeningPorts(runtime, processInfo.pid);
+    const listeningPorts = await readListeningPorts(
+      runtime,
+      processInfo.pid,
+      deadline,
+    );
     if (processInfo.source === "agy") {
       for (const port of listeningPorts) {
         endpoints.push(
@@ -334,6 +351,7 @@ function endpointFor(
 async function fetchEndpointQuota(
   runtime: AgyProbeRuntime,
   endpoint: AgyConnectionEndpoint,
+  deadline: number,
 ): Promise<{
   plan?: string;
   account?: ProviderQuota["account"];
@@ -343,14 +361,15 @@ async function fetchEndpointQuota(
   let summaryError: unknown;
   try {
     const summary = normalizeAgyQuotaSummary(
-      await runtime.requestJson(
-        endpoint,
-        QUOTA_SUMMARY_PATH,
+      await withinProbeBudget(
+        deadline,
         REQUEST_TIMEOUT_MS,
+        (timeoutMs) =>
+          runtime.requestJson(endpoint, QUOTA_SUMMARY_PATH, timeoutMs),
       ),
     );
     if (summary) {
-      const identity = await fetchEndpointIdentity(runtime, endpoint);
+      const identity = await fetchEndpointIdentity(runtime, endpoint, deadline);
       return {
         ...summary,
         plan: identity?.plan,
@@ -367,7 +386,9 @@ async function fetchEndpointQuota(
   for (const path of [USER_STATUS_PATH, COMMAND_MODEL_CONFIGS_PATH]) {
     try {
       const fallback = normalizeAgyUserStatus(
-        await runtime.requestJson(endpoint, path, REQUEST_TIMEOUT_MS),
+        await withinProbeBudget(deadline, REQUEST_TIMEOUT_MS, (timeoutMs) =>
+          runtime.requestJson(endpoint, path, timeoutMs),
+        ),
       );
       if (fallback && fallback.windows.length > 0) return fallback;
     } catch (error) {
@@ -383,11 +404,15 @@ async function fetchEndpointQuota(
 async function probeEndpoint(
   runtime: AgyProbeRuntime,
   endpoint: AgyConnectionEndpoint,
+  deadline: number,
 ): Promise<boolean> {
   try {
-    await runtime.requestJson(endpoint, UNLEASH_PATH, REQUEST_TIMEOUT_MS);
+    await withinProbeBudget(deadline, REQUEST_TIMEOUT_MS, (timeoutMs) =>
+      runtime.requestJson(endpoint, UNLEASH_PATH, timeoutMs),
+    );
     return true;
-  } catch {
+  } catch (error) {
+    if (error instanceof AgyProbeBudgetError) throw error;
     return false;
   }
 }
@@ -395,6 +420,7 @@ async function probeEndpoint(
 async function fetchEndpointIdentity(
   runtime: AgyProbeRuntime,
   endpoint: AgyConnectionEndpoint,
+  deadline: number,
 ): Promise<
   | {
       plan?: string;
@@ -404,22 +430,29 @@ async function fetchEndpointIdentity(
 > {
   try {
     return normalizeAgyUserStatus(
-      await runtime.requestJson(endpoint, USER_STATUS_PATH, REQUEST_TIMEOUT_MS),
+      await withinProbeBudget(deadline, REQUEST_TIMEOUT_MS, (timeoutMs) =>
+        runtime.requestJson(endpoint, USER_STATUS_PATH, timeoutMs),
+      ),
     );
   } catch {
     return undefined;
   }
 }
 
-async function readProcessList(runtime: AgyProbeRuntime): Promise<string> {
+async function readProcessList(
+  runtime: AgyProbeRuntime,
+  deadline: number,
+): Promise<string> {
   if (process.platform === "win32") return "";
   try {
-    return await runtime.execFileText(
-      "ps",
-      ["-axo", "pid=,command="],
+    return await withinProbeBudget(
+      deadline,
       PROCESS_TIMEOUT_MS,
+      (timeoutMs) =>
+        runtime.execFileText("ps", ["-axo", "pid=,command="], timeoutMs),
     );
-  } catch {
+  } catch (error) {
+    if (error instanceof AgyProbeBudgetError) throw error;
     return "";
   }
 }
@@ -427,17 +460,24 @@ async function readProcessList(runtime: AgyProbeRuntime): Promise<string> {
 async function readListeningPorts(
   runtime: AgyProbeRuntime,
   pid: number,
+  deadline: number,
 ): Promise<number[]> {
   if (process.platform === "win32") return [];
   try {
     return portsFromLsof(
-      await runtime.execFileText(
-        "lsof",
-        ["-nP", "-a", "-p", String(pid), "-iTCP", "-sTCP:LISTEN"],
+      await withinProbeBudget(
+        deadline,
         PORT_TIMEOUT_MS,
+        (timeoutMs) =>
+          runtime.execFileText(
+            "lsof",
+            ["-nP", "-a", "-p", String(pid), "-iTCP", "-sTCP:LISTEN"],
+            timeoutMs,
+          ),
       ),
     );
-  } catch {
+  } catch (error) {
+    if (error instanceof AgyProbeBudgetError) throw error;
     return [];
   }
 }
@@ -472,7 +512,6 @@ function normalizeQuotaSummaryBucket(
     resetsAt:
       parseEpochOrIso(bucket.resetTime) ?? parseEpochOrIso(bucket.reset_time),
     resetText: stringValue(bucket.description),
-    windowSeconds: windowKind.windowSeconds,
   };
   const remaining = remainingFraction(bucket);
   if (remaining !== undefined) {
@@ -558,7 +597,6 @@ function agyWindowKind(bucket: Record<string, unknown>): {
   id: "5h" | "weekly" | "unknown";
   label: "5-hour" | "weekly" | "quota";
   kind: QuotaWindow["kind"];
-  windowSeconds?: number;
   sortRank: number;
 } {
   const raw = [
@@ -575,7 +613,6 @@ function agyWindowKind(bucket: Record<string, unknown>): {
       id: "5h",
       label: "5-hour",
       kind: "session",
-      windowSeconds: 5 * 60 * 60,
       sortRank: 0,
     };
   }
@@ -584,7 +621,6 @@ function agyWindowKind(bucket: Record<string, unknown>): {
       id: "weekly",
       label: "weekly",
       kind: "weekly",
-      windowSeconds: 7 * 24 * 60 * 60,
       sortRank: 1,
     };
   }
@@ -685,7 +721,7 @@ function schemeSortRank(scheme: AgyConnectionEndpoint["scheme"]): number {
 
 function statusForError(error: string): ProviderStatus {
   if (
-    /not running|no local|loopback timed out|ECONNREFUSED|ECONNRESET|ECONNABORTED|ENOTFOUND|EHOSTUNREACH|ETIMEDOUT|EPIPE|EPROTO|socket hang up/i.test(
+    /not running|no local|(?:loopback|probe) timed out|ECONNREFUSED|ECONNRESET|ECONNABORTED|ENOTFOUND|EHOSTUNREACH|ETIMEDOUT|EPIPE|EPROTO|socket hang up/i.test(
       error,
     )
   )
@@ -756,7 +792,7 @@ function requestLoopbackJson(
 }
 
 function requestBodyForPath(path: string): Record<string, unknown> {
-  if (path === QUOTA_SUMMARY_PATH) return { forceRefresh: true };
+  if (path === QUOTA_SUMMARY_PATH) return { forceRefresh: false };
   return {
     metadata: {
       ideName: "antigravity",
@@ -812,7 +848,40 @@ function errorMessage(error: unknown): string {
   return "Antigravity quota unavailable";
 }
 
+function createProbeDeadline(): number {
+  return Date.now() + PROBE_BUDGET_MS;
+}
+
+function withinProbeBudget<T>(
+  deadline: number,
+  perOperationTimeoutMs: number,
+  operation: (timeoutMs: number) => Promise<T>,
+): Promise<T> {
+  const remainingMs = deadline - Date.now();
+  if (remainingMs <= 0)
+    return Promise.reject(new AgyProbeBudgetError("Antigravity probe timed out"));
+  const timeoutMs = Math.min(perOperationTimeoutMs, remainingMs);
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new AgyProbeBudgetError("Antigravity probe timed out")),
+      timeoutMs,
+    );
+    operation(timeoutMs).then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
 class AgyUnavailableError extends Error {}
+
+class AgyProbeBudgetError extends AgyUnavailableError {}
 
 class AgyMalformedResponseError extends Error {}
 

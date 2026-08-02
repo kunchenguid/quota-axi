@@ -42,7 +42,6 @@ describe("Antigravity quota parsing", () => {
         percentUsed: 9,
         percentRemaining: 91,
         resetsAt: "2026-06-15T11:39:34.000Z",
-        windowSeconds: 18000,
       },
       {
         id: "gemini_weekly",
@@ -51,7 +50,6 @@ describe("Antigravity quota parsing", () => {
         percentUsed: 18,
         percentRemaining: 82,
         resetsAt: "2026-06-19T08:45:39.000Z",
-        windowSeconds: 604800,
       },
       {
         id: "claude_gpt_5h",
@@ -60,7 +58,6 @@ describe("Antigravity quota parsing", () => {
         percentUsed: 27,
         percentRemaining: 73,
         resetsAt: "2026-06-15T12:52:10.000Z",
-        windowSeconds: 18000,
       },
       {
         id: "claude_gpt_weekly",
@@ -69,9 +66,9 @@ describe("Antigravity quota parsing", () => {
         percentUsed: 36,
         percentRemaining: 64,
         resetsAt: "2026-06-20T00:39:54.000Z",
-        windowSeconds: 604800,
       },
     ]);
+    expect(result?.windows.every((window) => !window.windowSeconds)).toBe(true);
   });
 
   it("normalizes oneof remaining values", () => {
@@ -95,6 +92,7 @@ describe("Antigravity quota parsing", () => {
       percentUsed: 50,
       percentRemaining: 50,
     });
+    expect(result?.windows[0]?.windowSeconds).toBeUndefined();
   });
 
   it("falls back to model windows from user status payloads", () => {
@@ -267,6 +265,29 @@ describe("Antigravity provider", () => {
 
     expect(result.state.status).toBe("fresh");
     expect(result.windows[0]?.id).toBe("gemini_5h");
+  });
+
+  it("bounds probing across all discovered endpoints", async () => {
+    vi.useFakeTimers();
+    const calls: string[] = [];
+    const resultPromise = fetchQuotaWithRuntime(
+      runtimeWith({
+        ps: "123 /Users/test/.local/bin/agy\n",
+        lsof: `${lsofFor(123, 64440)}agy 123 test 9u IPv4 0x2 0t0 TCP 127.0.0.1:64441 (LISTEN)\n`,
+        requestJson: async (endpoint, path) => {
+          calls.push(`${endpoint.scheme}:${endpoint.port}:${path}`);
+          return new Promise<never>(() => undefined);
+        },
+      }),
+    );
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    const result = await resultPromise;
+
+    expect(result.state.status).toBe("unavailable");
+    expect(result.state.error).toBe("Antigravity probe timed out");
+    expect(calls).toHaveLength(4);
+    vi.useRealTimers();
   });
 
   it("reports malformed loopback responses as errors", async () => {
