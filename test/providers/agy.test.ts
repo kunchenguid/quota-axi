@@ -1,15 +1,21 @@
 import { readFileSync } from "node:fs";
 import { mkdtempSync, rmSync } from "node:fs";
+import { createServer, type ServerResponse } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { writeCachedProviders } from "../../src/cache.js";
+import {
+  readCachedProvider,
+  writeCachedProviders,
+} from "../../src/cache.js";
 import {
   fetchQuotaWithRuntime,
   normalizeAgyQuotaSummary,
   normalizeAgyUserStatus,
   portsFromLsof,
   processInfosFromPs,
+  requestLoopbackJson,
   type AgyConnectionEndpoint,
   type AgyProbeRuntime,
 } from "../../src/providers/agy.js";
@@ -17,13 +23,23 @@ import type { ProviderQuota } from "../../src/types.js";
 
 const originalXdgCacheHome = process.env.XDG_CACHE_HOME;
 let tempDir: string | undefined;
+const servers: ReturnType<typeof createServer>[] = [];
 
 beforeEach(() => {
   useTempCache();
 });
 
-afterEach(() => {
+afterEach(async () => {
   vi.restoreAllMocks();
+  vi.useRealTimers();
+  await Promise.all(
+    servers.splice(0).map(
+      (server) => {
+        server.closeAllConnections();
+        return new Promise<void>((resolve) => server.close(() => resolve()));
+      },
+    ),
+  );
   if (originalXdgCacheHome === undefined) delete process.env.XDG_CACHE_HOME;
   else process.env.XDG_CACHE_HOME = originalXdgCacheHome;
   if (tempDir) rmSync(tempDir, { recursive: true, force: true });
@@ -120,7 +136,10 @@ describe("Antigravity quota parsing", () => {
     const processes = processInfosFromPs(`
       101 /Users/test/.local/bin/agy
       102 /Applications/Google Antigravity.app/Contents/Resources/bin/language-server --csrf_token token --extension_server_port 64123
-      103 codex --prompt "run quota-axi --provider agy"
+      103 /usr/bin/node /opt/antigravity-cli/mcp-server.cjs --port 64124
+      104 codex --prompt "antigravity-cli mcp-server.cjs language_server"
+      105 /usr/bin/node /opt/runner.cjs --prompt "/opt/antigravity-cli/mcp-server.cjs"
+      106 /usr/bin/codex --prompt "/Applications/Antigravity.app/Contents/bin/language_server --csrf_token fake"
     `);
 
     expect(processes).toMatchObject([
@@ -131,6 +150,7 @@ describe("Antigravity quota parsing", () => {
         csrfToken: "token",
         extensionPort: 64123,
       },
+      { pid: 103, source: "agy" },
     ]);
     expect(
       portsFromLsof(`
@@ -222,6 +242,45 @@ describe("Antigravity provider", () => {
 
     expect(result.state.status).toBe("unavailable");
     expect(result.state.error).toBe("connect ECONNREFUSED 127.0.0.1:64440");
+  });
+
+  it("preserves sanitized process and port discovery failures", async () => {
+    const processResult = await fetchQuotaWithRuntime(
+      runtimeWith({ psError: new Error("ps failed at /Users/private") }),
+    );
+    const portResult = await fetchQuotaWithRuntime(
+      runtimeWith({
+        ps: "123 /Users/test/.local/bin/agy\n",
+        lsofError: new Error("lsof denied for private-host"),
+      }),
+    );
+
+    expect(processResult.state).toMatchObject({
+      status: "error",
+      error: "Antigravity process discovery failed",
+    });
+    expect(portResult.state).toMatchObject({
+      status: "error",
+      error: "Antigravity port discovery failed",
+    });
+  });
+
+  it("continues discovery when another verified process has listening ports", async () => {
+    const result = await fetchQuotaWithRuntime(
+      runtimeWith({
+        ps: "123 /Users/test/.local/bin/agy\n124 /Users/test/.local/bin/agy\n",
+        lsofByPid: {
+          123: new Error("permission denied"),
+          124: lsofFor(124, 64441),
+        },
+        responses: {
+          "https:64441:/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary":
+            fixture("quota-summary.json"),
+        },
+      }),
+    );
+
+    expect(result.state.status).toBe("fresh");
   });
 
   it("falls back to model quotas when quota summary has no usable buckets", async () => {
@@ -329,6 +388,75 @@ describe("Antigravity provider", () => {
     });
   });
 
+  it("preserves authentication failures and retires stale cache", async () => {
+    writeCachedProviders([cachedAgyQuota()]);
+    const port = await startServer((_response) => {
+      _response.writeHead(401, { "content-type": "application/json" });
+      _response.end(JSON.stringify({ error: "secret-account@example.test" }));
+    });
+
+    const result = await fetchQuotaWithRuntime(
+      runtimeWith({
+        ps: "123 /Users/test/.local/bin/agy\n",
+        lsof: lsofFor(123, port),
+        requestJson: requestLoopbackJson,
+      }),
+    );
+
+    expect(result.state).toMatchObject({
+      status: "auth_required",
+      error: "Antigravity sign-in required",
+    });
+    expect(JSON.stringify(result)).not.toContain("secret-account");
+    expect(readCachedProvider("agy")).toBeUndefined();
+  });
+
+  it("preserves rate limits over protocol failures", async () => {
+    const port = await startServer((response) => {
+      response.writeHead(429, { "content-type": "application/json" });
+      response.end(JSON.stringify({ message: "private diagnostic" }));
+    });
+
+    const result = await fetchQuotaWithRuntime(
+      runtimeWith({
+        ps: "123 /Users/test/.local/bin/agy\n",
+        lsof: lsofFor(123, port),
+        requestJson: requestLoopbackJson,
+      }),
+    );
+
+    expect(result.state).toMatchObject({
+      status: "rate_limited",
+      error: "Antigravity quota endpoint rate limited",
+    });
+    expect(JSON.stringify(result)).not.toContain("private diagnostic");
+  });
+
+  it("terminates trickling and oversized loopback responses", async () => {
+    const tricklePort = await startServer((response) => {
+      const interval = setInterval(() => response.write(" "), 5);
+      response.on("close", () => clearInterval(interval));
+    });
+    const trickleRequest = requestLoopbackJson(
+      endpointAt(tricklePort),
+      "/quota",
+      50,
+    );
+
+    await expect(trickleRequest).rejects.toThrow(
+      "Antigravity loopback timed out",
+    );
+
+    const oversizedPort = await startServer((response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(`"${"x".repeat(1024 * 1024)}"`);
+    });
+
+    await expect(
+      requestLoopbackJson(endpointAt(oversizedPort), "/quota", 1_000),
+    ).rejects.toThrow("Antigravity loopback response too large");
+  });
+
   it("does not launch agy or any provider process", async () => {
     const commands: string[] = [];
     const runtime = runtimeWith({
@@ -354,21 +482,38 @@ describe("Antigravity provider", () => {
 function runtimeWith(options: {
   ps?: string;
   lsof?: string;
+  psError?: Error;
+  lsofError?: Error;
+  lsofByPid?: Record<number, string | Error>;
   requestJson?: AgyProbeRuntime["requestJson"];
   responses?: Record<string, unknown>;
   onExec?: (command: string) => void;
   onRequest?: (endpoint: AgyConnectionEndpoint, path: string) => void;
 }): AgyProbeRuntime {
   return {
-    async execFileText(command) {
+    async execFileText(command, args) {
       options.onExec?.(command);
-      if (command === "ps") return options.ps ?? "";
-      if (command === "lsof") return options.lsof ?? "";
+      if (command === "ps") {
+        if (options.psError) throw options.psError;
+        return options.ps ?? "";
+      }
+      if (command === "lsof") {
+        if (options.lsofError) throw options.lsofError;
+        const pid = Number(args[args.indexOf("-p") + 1]);
+        const output = options.lsofByPid?.[pid];
+        if (output instanceof Error) throw output;
+        return output ?? options.lsof ?? "";
+      }
       throw new Error(`unexpected command: ${command}`);
     },
-    async requestJson(endpoint: AgyConnectionEndpoint, path: string) {
+    async requestJson(
+      endpoint: AgyConnectionEndpoint,
+      path: string,
+      timeoutMs: number,
+    ) {
       options.onRequest?.(endpoint, path);
-      if (options.requestJson) return options.requestJson(endpoint, path, 0);
+      if (options.requestJson)
+        return options.requestJson(endpoint, path, timeoutMs);
       const key = `${endpoint.scheme}:${endpoint.port}:${path}`;
       if (options.responses && key in options.responses)
         return options.responses[key];
@@ -387,6 +532,26 @@ function lsofFor(pid: number, port: number): string {
   return `COMMAND PID USER FD TYPE DEVICE SIZE/OFF NODE NAME
 agy ${pid} test 8u IPv4 0x1 0t0 TCP 127.0.0.1:${port} (LISTEN)
 `;
+}
+
+async function startServer(
+  handler: (response: ServerResponse) => void,
+): Promise<number> {
+  const server = createServer((_request, response) => handler(response));
+  servers.push(server);
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  return (server.address() as AddressInfo).port;
+}
+
+function endpointAt(port: number): AgyConnectionEndpoint {
+  return {
+    scheme: "http",
+    port,
+    source: "agy",
+    pid: process.pid,
+    requiresCsrfToken: false,
+    requiresUnleashProbe: false,
+  };
 }
 
 function useTempCache(): void {

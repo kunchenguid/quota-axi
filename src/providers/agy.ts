@@ -1,6 +1,6 @@
 import * as http from "node:http";
 import * as https from "node:https";
-import { readCachedProvider } from "../cache.js";
+import { deleteCachedProvider, readCachedProvider } from "../cache.js";
 import { execFileText } from "../lib/process.js";
 import {
   clampPercent,
@@ -37,6 +37,7 @@ const PROCESS_TIMEOUT_MS = 5_000;
 const PORT_TIMEOUT_MS = 2_000;
 const REQUEST_TIMEOUT_MS = 3_000;
 const PROBE_BUDGET_MS = 10_000;
+const MAX_RESPONSE_BYTES = 1024 * 1024;
 
 type AgyProcessSource = "agy" | "app";
 
@@ -89,7 +90,7 @@ export async function fetchQuotaWithRuntime(
   runtime: AgyProbeRuntime,
 ): Promise<ProviderQuota> {
   const attempts: SourceAttempt[] = [{ source: "loopback", status: "failed" }];
-  let finalError: string;
+  let finalFailure: unknown;
 
   try {
     const quota = await fetchLoopbackQuota(runtime);
@@ -106,7 +107,8 @@ export async function fetchQuotaWithRuntime(
       attempts,
     });
   } catch (error) {
-    finalError = errorMessage(error);
+    finalFailure = error;
+    const finalError = errorMessage(error);
     attempts[0] = {
       source: "loopback",
       status: error instanceof AgyUnavailableError ? "skipped" : "failed",
@@ -114,9 +116,18 @@ export async function fetchQuotaWithRuntime(
     };
   }
 
-  const cached = readCachedProvider("agy");
-  if (cached) {
-    return staleFromCache(cached, finalError, sourceNames(attempts), attempts);
+  const finalError = errorMessage(finalFailure);
+  if (staleEligibleFailure(finalFailure)) {
+    const cached = readCachedProvider("agy");
+    if (cached) {
+      return staleFromCache(cached, finalError, sourceNames(attempts), attempts);
+    }
+  } else if (isDefinitiveAuthFailure(finalFailure)) {
+    try {
+      deleteCachedProvider("agy");
+    } catch {
+      undefined;
+    }
   }
 
   return failedProvider({
@@ -246,14 +257,11 @@ async function fetchLoopbackQuota(runtime: AgyProbeRuntime): Promise<{
   let lastError: unknown;
   for (const endpoint of endpoints) {
     try {
-      if (
-        endpoint.requiresUnleashProbe &&
-        !(await probeEndpoint(runtime, endpoint, deadline))
-      )
-        continue;
+      if (endpoint.requiresUnleashProbe)
+        await probeEndpoint(runtime, endpoint, deadline);
       return await fetchEndpointQuota(runtime, endpoint, deadline);
     } catch (error) {
-      lastError = error;
+      lastError = strongerFailure(lastError, error);
     }
   }
 
@@ -270,12 +278,20 @@ async function discoverAgyEndpoints(
     await readProcessList(runtime, deadline),
   );
   const endpoints: AgyConnectionEndpoint[] = [];
+  let discoveryError: unknown;
   for (const processInfo of processes) {
-    const listeningPorts = await readListeningPorts(
-      runtime,
-      processInfo.pid,
-      deadline,
-    );
+    let listeningPorts: number[];
+    try {
+      listeningPorts = await readListeningPorts(
+        runtime,
+        processInfo.pid,
+        deadline,
+      );
+    } catch (error) {
+      if (error instanceof AgyProbeBudgetError) throw error;
+      discoveryError = strongerFailure(discoveryError, error);
+      continue;
+    }
     if (processInfo.source === "agy") {
       for (const port of listeningPorts) {
         endpoints.push(
@@ -326,6 +342,7 @@ async function discoverAgyEndpoints(
       }
     }
   }
+  if (endpoints.length === 0 && discoveryError) throw discoveryError;
   return endpoints.sort(compareEndpoints);
 }
 
@@ -377,7 +394,7 @@ async function fetchEndpointQuota(
       "Antigravity quota summary malformed",
     );
   } catch (error) {
-    summaryError = error;
+    summaryError = strongerFailure(summaryError, error);
   }
 
   for (const path of [USER_STATUS_PATH, COMMAND_MODEL_CONFIGS_PATH]) {
@@ -389,7 +406,7 @@ async function fetchEndpointQuota(
       );
       if (fallback && fallback.windows.length > 0) return fallback;
     } catch (error) {
-      summaryError = error;
+      summaryError = strongerFailure(summaryError, error);
     }
   }
 
@@ -402,16 +419,10 @@ async function probeEndpoint(
   runtime: AgyProbeRuntime,
   endpoint: AgyConnectionEndpoint,
   deadline: number,
-): Promise<boolean> {
-  try {
-    await withinProbeBudget(deadline, REQUEST_TIMEOUT_MS, (timeoutMs) =>
-      runtime.requestJson(endpoint, UNLEASH_PATH, timeoutMs),
-    );
-    return true;
-  } catch (error) {
-    if (error instanceof AgyProbeBudgetError) throw error;
-    return false;
-  }
+): Promise<void> {
+  await withinProbeBudget(deadline, REQUEST_TIMEOUT_MS, (timeoutMs) =>
+    runtime.requestJson(endpoint, UNLEASH_PATH, timeoutMs),
+  );
 }
 
 async function fetchEndpointIdentity(
@@ -443,11 +454,15 @@ async function readProcessList(
   if (process.platform === "win32") return "";
   try {
     return await withinProbeBudget(deadline, PROCESS_TIMEOUT_MS, (timeoutMs) =>
-      runtime.execFileText("ps", ["-axo", "pid=,command="], timeoutMs),
+      runtime.execFileText(
+        "ps",
+        ["-axo", "pid=,command="],
+        timeoutMs,
+      ),
     );
   } catch (error) {
     if (error instanceof AgyProbeBudgetError) throw error;
-    return "";
+    throw new AgyDiscoveryError("Antigravity process discovery failed");
   }
 }
 
@@ -469,7 +484,7 @@ async function readListeningPorts(
     );
   } catch (error) {
     if (error instanceof AgyProbeBudgetError) throw error;
-    return [];
+    throw new AgyDiscoveryError("Antigravity port discovery failed");
   }
 }
 
@@ -661,17 +676,58 @@ function windowKindRank(window: QuotaWindow): number {
 }
 
 function agyProcessSource(command: string): AgyProcessSource | undefined {
-  const executable = executableName(command);
-  if (executable === "agy") return "agy";
-  const lowered = command.toLowerCase();
-  if (lowered.includes("antigravity-cli") && lowered.includes("mcp-server.cjs"))
-    return "agy";
+  const commandTokens = tokenizeCommand(command);
+  const invokedExecutable = executableName(commandTokens[0] ?? "");
+  if (invokedExecutable === "agy") return "agy";
+
   if (
-    /language[-_]server(?:_[a-z0-9_]+)?/i.test(command) &&
-    lowered.includes("antigravity")
-  )
-    return "app";
+    invokedExecutable &&
+    /^(?:node|nodejs|bun|mcp-server(?:\.cjs)?)$/.test(invokedExecutable)
+  ) {
+    const script = invokedExecutable.startsWith("mcp-server")
+      ? commandTokens[0]
+      : commandTokens[1];
+    if (isAgyMcpScript(script)) return "agy";
+  }
+
+  if (isAgyAppExecutable(command)) return "app";
   return undefined;
+}
+
+function tokenizeCommand(command: string): string[] {
+  return [...command.matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g)].map(
+    (match) => match[1] ?? match[2] ?? match[3],
+  );
+}
+
+function isAgyMcpScript(token: string | undefined): boolean {
+  if (!token) return false;
+  const path = normalizedPath(token);
+  return (
+    path.split("/").pop() === "mcp-server.cjs" &&
+    path.split("/").includes("antigravity-cli")
+  );
+}
+
+function isAgyAppExecutable(command: string): boolean {
+  const normalized = normalizedPath(command);
+  if (
+    /^\/applications\/[^\n]*antigravity\.app\/contents\/[^\n]*\/language[-_]server(?:_[a-z0-9_]+)?(?=\s+--|$)/.test(
+      normalized,
+    )
+  )
+    return true;
+  const firstToken = tokenizeCommand(command)[0];
+  if (!firstToken) return false;
+  const path = normalizedPath(firstToken);
+  return (
+    path.includes("antigravity") &&
+    /(?:^|\/)language[-_]server(?:_[a-z0-9_]+)?(?:\.exe)?$/.test(path)
+  );
+}
+
+function normalizedPath(value: string): string {
+  return value.replace(/\\/g, "/").toLowerCase();
 }
 
 function executableName(command: string): string | undefined {
@@ -712,7 +768,7 @@ function schemeSortRank(scheme: AgyConnectionEndpoint["scheme"]): number {
 
 function statusForError(error: string): ProviderStatus {
   if (
-    /not running|no local|(?:loopback|probe) timed out|ECONNREFUSED|ECONNRESET|ECONNABORTED|ENOTFOUND|EHOSTUNREACH|ETIMEDOUT|EPIPE|EPROTO|socket hang up/i.test(
+    /not running|no local|loopback unavailable|(?:loopback|probe) timed out|ECONNREFUSED|ECONNRESET|ECONNABORTED|ENOTFOUND|EHOSTUNREACH|ETIMEDOUT|EPIPE|EPROTO|socket hang up/i.test(
       error,
     )
   )
@@ -720,7 +776,7 @@ function statusForError(error: string): ProviderStatus {
   return statusFromError(error);
 }
 
-function requestLoopbackJson(
+export function requestLoopbackJson(
   endpoint: AgyConnectionEndpoint,
   path: string,
   timeoutMs: number,
@@ -745,39 +801,67 @@ function requestLoopbackJson(
     };
     if (endpoint.scheme === "https") options.rejectUnauthorized = false;
     const client = endpoint.scheme === "https" ? https : http;
-    const request = client.request(options, (response) => {
+    let response: http.IncomingMessage | undefined;
+    let settled = false;
+    let timer: NodeJS.Timeout;
+    const finish = (error?: Error, value?: unknown): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (error) {
+        response?.destroy();
+        request.destroy();
+        reject(error);
+      } else {
+        resolve(value);
+      }
+    };
+    const request = client.request(options, (incoming) => {
+      response = incoming;
+      if (
+        !incoming.statusCode ||
+        incoming.statusCode < 200 ||
+        incoming.statusCode >= 300
+      ) {
+        finish(new AgyHttpError(incoming.statusCode ?? 0));
+        return;
+      }
       const chunks: Uint8Array[] = [];
-      response.on("data", (chunk: Buffer | string) => {
+      let receivedBytes = 0;
+      incoming.on("data", (chunk: Buffer | string) => {
+        if (settled) return;
         const bytes = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
+        receivedBytes += bytes.byteLength;
+        if (receivedBytes > MAX_RESPONSE_BYTES) {
+          finish(
+            new AgyMalformedResponseError(
+              "Antigravity loopback response too large",
+            ),
+          );
+          return;
+        }
         chunks.push(new Uint8Array(bytes));
       });
-      response.on("end", () => {
+      incoming.on("end", () => {
+        if (settled) return;
         const text = Buffer.concat(chunks).toString("utf8");
-        if (!response.statusCode || response.statusCode < 200) {
-          reject(new AgyHttpError(response.statusCode ?? 0, text));
-          return;
-        }
-        if (response.statusCode >= 300) {
-          reject(new AgyHttpError(response.statusCode, text));
-          return;
-        }
         try {
-          resolve(JSON.parse(text) as unknown);
+          finish(undefined, JSON.parse(text) as unknown);
         } catch {
-          reject(
+          finish(
             new AgyMalformedResponseError(
               "Antigravity loopback returned invalid JSON",
             ),
           );
         }
       });
+      incoming.on("error", (error) => finish(sanitizeTransportError(error)));
     });
-    request.setTimeout(timeoutMs, () => {
-      request.destroy(
-        new AgyUnavailableError("Antigravity loopback timed out"),
-      );
-    });
-    request.on("error", (error) => reject(error));
+    timer = setTimeout(
+      () => finish(new AgyUnavailableError("Antigravity loopback timed out")),
+      timeoutMs,
+    );
+    request.on("error", (error) => finish(sanitizeTransportError(error)));
     request.end(body);
   });
 }
@@ -839,6 +923,38 @@ function errorMessage(error: unknown): string {
   return "Antigravity quota unavailable";
 }
 
+function sanitizeTransportError(error: Error): Error {
+  const code = (error as NodeJS.ErrnoException).code;
+  if (code && /^[A-Z][A-Z0-9_]+$/.test(code)) {
+    return new AgyUnavailableError(`Antigravity loopback unavailable (${code})`);
+  }
+  return new AgyUnavailableError("Antigravity loopback unavailable");
+}
+
+function strongerFailure(current: unknown, candidate: unknown): unknown {
+  if (current === undefined) return candidate;
+  return failureRank(candidate) > failureRank(current) ? candidate : current;
+}
+
+function failureRank(error: unknown): number {
+  const status = statusForError(errorMessage(error));
+  if (status === "auth_required") return 4;
+  if (status === "rate_limited") return 3;
+  if (status === "error") return 2;
+  if (status === "unavailable") return 1;
+  return 0;
+}
+
+function staleEligibleFailure(error: unknown): boolean {
+  if (error instanceof AgyHttpError)
+    return error.status === 429 || error.status >= 500;
+  return statusForError(errorMessage(error)) === "unavailable";
+}
+
+function isDefinitiveAuthFailure(error: unknown): boolean {
+  return statusForError(errorMessage(error)) === "auth_required";
+}
+
 function createProbeDeadline(): number {
   return Date.now() + PROBE_BUDGET_MS;
 }
@@ -878,24 +994,19 @@ class AgyProbeBudgetError extends AgyUnavailableError {}
 
 class AgyMalformedResponseError extends Error {}
 
+class AgyDiscoveryError extends Error {}
+
 class AgyHttpError extends Error {
-  constructor(
-    readonly status: number,
-    body: string,
-  ) {
-    super(`Antigravity quota unavailable (${status})${errorSuffix(body)}`);
+  constructor(readonly status: number) {
+    super(httpErrorMessage(status));
   }
 }
 
-function errorSuffix(body: string): string {
-  if (!body.trim()) return "";
-  try {
-    const data = JSON.parse(body) as Record<string, unknown>;
-    const message = stringValue(data.message) ?? stringValue(data.error);
-    return message ? `: ${message}` : "";
-  } catch {
-    return "";
-  }
+function httpErrorMessage(status: number): string {
+  if (status === 401 || status === 403)
+    return "Antigravity sign-in required";
+  if (status === 429) return "Antigravity quota endpoint rate limited";
+  return `Antigravity quota endpoint returned HTTP ${status}`;
 }
 
 const defaultRuntime: AgyProbeRuntime = {

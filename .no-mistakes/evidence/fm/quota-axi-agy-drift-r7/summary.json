@@ -1,0 +1,41 @@
+{
+  "installedBinary": {
+    "identity": "quota-axi global npm package executable",
+    "version": "0.1.5",
+    "agyProviderAdvertised": false
+  },
+  "sourceTree": {
+    "identity": "quota-axi isolated source worktree",
+    "version": "0.1.17",
+    "agyProviderAdvertised": true
+  },
+  "divergence": "The installed binary predates the source tree's Agy provider; the source tree was executed directly and was not installed globally.",
+  "sanitizedLiveAgyObservation": {
+    "capturedAt": "2026-08-02T15:37:29.186Z",
+    "source": "cli-rpc",
+    "status": "fresh",
+    "windows": [
+      {
+        "id": "gemini_weekly",
+        "kind": "weekly",
+        "percentUsed": 100,
+        "percentRemaining": 0,
+        "resetsAt": "2026-08-09T15:01:00.000Z"
+      },
+      {
+        "id": "claude_gpt_weekly",
+        "kind": "weekly",
+        "percentUsed": 4,
+        "percentRemaining": 96,
+        "resetsAt": "2026-08-09T15:05:30.000Z"
+      }
+    ],
+    "redactions": [
+      "account identifiers",
+      "credential material",
+      "filesystem paths",
+      "host details",
+      "free-form response text"
+    ]
+  }
+}
