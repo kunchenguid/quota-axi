@@ -131,7 +131,7 @@ export async function fetchQuotaWithRuntime(
     try {
       deleteCachedProvider("agy");
     } catch {
-      undefined;
+      // Cache retirement is best effort; preserve the definitive auth result.
     }
   }
 
@@ -828,7 +828,6 @@ export function requestLoopbackJson(
     const client = endpoint.scheme === "https" ? https : http;
     let response: http.IncomingMessage | undefined;
     let settled = false;
-    let timer: NodeJS.Timeout;
     const finish = (error?: Error, value?: unknown): void => {
       if (settled) return;
       settled = true;
@@ -882,7 +881,7 @@ export function requestLoopbackJson(
       });
       incoming.on("error", (error) => finish(sanitizeTransportError(error)));
     });
-    timer = setTimeout(
+    const timer = setTimeout(
       () => finish(new AgyUnavailableError("Antigravity loopback timed out")),
       timeoutMs,
     );
