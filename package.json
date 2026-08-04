@@ -2,7 +2,7 @@
   "name": "quota-axi",
   "version": "0.1.17",
   "packageManager": "pnpm@11.1.1",
-  "description": "AXI CLI that reports local agent-provider quota windows without routing or mutation",
+  "description": "AXI CLI that reports local agent-provider quota windows without routing, and with no provider mutation beyond in-place Claude token renewal",
   "type": "module",
   "repository": {
     "type": "git",
