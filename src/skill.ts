@@ -5,7 +5,7 @@ import { DESCRIPTION, TOP_HELP } from "./cli.js";
 export const SKILL_DESCRIPTION =
   "Report local Claude, Codex, Cursor, GitHub Copilot, Grok, and Kimi quota windows via the quota-axi CLI - remaining " +
   "effective usable runway, percentages, reset times, cycle-average pace vs the reset clock, and provider status read from local auth sources, " +
-  "with no routing, recommendation, or provider mutation. Use before deciding whether it is safe " +
+  "with no routing or recommendation and no provider mutation beyond in-place Claude token renewal. Use before deciding whether it is safe " +
   "to keep spending a provider's quota, when the user asks about usage, rate limits, pace, or " +
   "remaining quota, or when comparing local provider headroom.";
 
@@ -143,8 +143,11 @@ ${TOP_HELP.trimEnd()}
   Fresh provider reports with no windows clear stale provider snapshots instead of caching
   empty quota.
   Claude local expiry metadata is advisory when an access token exists: the existing read-only
-  usage request decides validity. Missing or invalid credentials without a usable token and HTTP
-  401/403 retire Claude cache; only transient failures may use bounded, reset-pruned stale data.
+  usage request decides validity. An HTTP 401/403 first triggers at most one in-place OAuth token
+  renewal from a locally present refresh token, then one retry. Missing or invalid credentials
+  without a usable token, and a 401/403 that could not be renewed, retire Claude cache; only
+  transient failures - including a refresh that failed transiently - may use bounded, reset-pruned
+  stale data.
   The Claude Keychain access marker lives alongside it, is scoped by hashed profile and
   account hashes, and contains no credential values or raw account name.
 `;
