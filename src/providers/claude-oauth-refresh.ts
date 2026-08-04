@@ -84,73 +84,10 @@ export type ClaudeRefreshResult =
 export async function refreshClaudeOAuthCredential(
   context: ClaudeRefreshContext,
 ): Promise<ClaudeRefreshResult> {
-  let response: Response;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), REFRESH_TIMEOUT_MS);
-  try {
-    const body: Record<string, string> = {
-      grant_type: "refresh_token",
-      refresh_token: context.refreshToken,
-      client_id: context.clientId ?? CLAUDE_OAUTH_CLIENT_ID,
-    };
-    // RFC 6749 §6: omitting `scope` on a refresh keeps the originally granted
-    // scopes. When the stored credential records its scopes, send exactly those
-    // so renewal never narrows them; these are authoritative per-credential
-    // data, not guessed constants.
-    if (context.scopes && context.scopes.length > 0) {
-      body.scope = context.scopes.join(" ");
-    }
-    response = await fetch(CLAUDE_OAUTH_TOKEN_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "User-Agent": CLAUDE_CODE_USER_AGENT,
-        accept: "application/json",
-      },
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    });
-  } catch (error) {
-    return {
-      status: "unavailable",
-      code:
-        error instanceof Error && error.name === "AbortError"
-          ? "refresh_timeout"
-          : "refresh_unreachable",
-    };
-  } finally {
-    clearTimeout(timer);
-  }
+  const exchange = await exchangeRefreshToken(context);
+  if (exchange.status === "failed") return exchange.result;
 
-  // Only a rejection of the refresh token itself ends the session. HTTP
-  // 401/403 is that rejection; a 400 is only definitive when the endpoint
-  // says `invalid_grant`, because RFC 6749 §5.2 also returns 400 for
-  // invalid_client, invalid_scope, invalid_request, and
-  // unsupported_grant_type — none of which mean the stored refresh token is
-  // dead. Those, 429, 5xx, and anything else stay transient so a valid
-  // session is preserved.
-  if (response.status === 401 || response.status === 403) {
-    return { status: "rejected", code: "refresh_rejected" };
-  }
-  if (response.status === 400) {
-    return (await tokenErrorCode(response)) === "invalid_grant"
-      ? { status: "rejected", code: "refresh_rejected" }
-      : { status: "unavailable", code: "refresh_grant_error" };
-  }
-  if (response.status === 429) {
-    return { status: "unavailable", code: "refresh_rate_limited" };
-  }
-  if (!response.ok) {
-    return { status: "unavailable", code: "refresh_http_error" };
-  }
-
-  let payload: unknown;
-  try {
-    payload = await response.json();
-  } catch {
-    return { status: "unavailable", code: "refresh_malformed" };
-  }
-  const data = objectValue(payload);
+  const data = exchange.data;
   const accessToken = data ? stringValue(data.access_token) : undefined;
   const expiresInSeconds = data ? numberValue(data.expires_in) : undefined;
 
@@ -191,6 +128,103 @@ export async function refreshClaudeOAuthCredential(
   });
 
   return { status: "refreshed", accessToken, expiresAt, persistence };
+}
+
+type TokenExchange =
+  | { status: "ok"; data: Record<string, unknown> | undefined }
+  | { status: "failed"; result: ClaudeRefreshResult };
+
+// The whole token exchange — connect, headers, and body — runs under one
+// deadline, so an endpoint or intercepting proxy that answers with headers and
+// then stalls the body can never hang the read. Persistence happens after this
+// returns, under its own bound.
+async function exchangeRefreshToken(
+  context: ClaudeRefreshContext,
+): Promise<TokenExchange> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REFRESH_TIMEOUT_MS);
+  try {
+    let response: Response;
+    try {
+      const body: Record<string, string> = {
+        grant_type: "refresh_token",
+        refresh_token: context.refreshToken,
+        client_id: context.clientId ?? CLAUDE_OAUTH_CLIENT_ID,
+      };
+      // RFC 6749 §6: omitting `scope` on a refresh keeps the originally granted
+      // scopes. When the stored credential records its scopes, send exactly
+      // those so renewal never narrows them; these are authoritative
+      // per-credential data, not guessed constants.
+      if (context.scopes && context.scopes.length > 0) {
+        body.scope = context.scopes.join(" ");
+      }
+      response = await fetch(CLAUDE_OAUTH_TOKEN_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "User-Agent": CLAUDE_CODE_USER_AGENT,
+          accept: "application/json",
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+    } catch (error) {
+      return failedExchange({
+        status: "unavailable",
+        code: isAbortError(error) ? "refresh_timeout" : "refresh_unreachable",
+      });
+    }
+
+    // Only a rejection of the refresh token itself ends the session. HTTP
+    // 401/403 is that rejection; a 400 is only definitive when the endpoint
+    // says `invalid_grant`, because RFC 6749 §5.2 also returns 400 for
+    // invalid_client, invalid_scope, invalid_request, and
+    // unsupported_grant_type — none of which mean the stored refresh token is
+    // dead. Those, 429, 5xx, and anything else stay transient so a valid
+    // session is preserved.
+    if (response.status === 401 || response.status === 403) {
+      return failedExchange({ status: "rejected", code: "refresh_rejected" });
+    }
+    if (response.status === 400) {
+      return (await tokenErrorCode(response)) === "invalid_grant"
+        ? failedExchange({ status: "rejected", code: "refresh_rejected" })
+        : failedExchange({
+            status: "unavailable",
+            code: "refresh_grant_error",
+          });
+    }
+    if (response.status === 429) {
+      return failedExchange({
+        status: "unavailable",
+        code: "refresh_rate_limited",
+      });
+    }
+    if (!response.ok) {
+      return failedExchange({
+        status: "unavailable",
+        code: "refresh_http_error",
+      });
+    }
+
+    try {
+      return { status: "ok", data: objectValue(await response.json()) };
+    } catch (error) {
+      return failedExchange({
+        status: "unavailable",
+        code: isAbortError(error) ? "refresh_timeout" : "refresh_malformed",
+      });
+    }
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function failedExchange(result: ClaudeRefreshResult): TokenExchange {
+  return { status: "failed", result };
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
 }
 
 type RenewedFields = {

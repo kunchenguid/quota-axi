@@ -67,6 +67,27 @@ function fileContext(
   };
 }
 
+/**
+ * A response whose headers have arrived but whose body never resolves until the
+ * request signal aborts, mirroring an endpoint or proxy that stalls mid-body.
+ */
+function stalledBodyResponse(status: number, signal: AbortSignal): Response {
+  const stalled = () =>
+    new Promise<never>((_resolve, reject) => {
+      signal.addEventListener("abort", () => {
+        const error = new Error("aborted");
+        error.name = "AbortError";
+        reject(error);
+      });
+    });
+  return {
+    status,
+    ok: status >= 200 && status < 300,
+    json: stalled,
+    text: stalled,
+  } as unknown as Response;
+}
+
 function okTokenResponse(
   body: Record<string, unknown>,
 ): () => Promise<Response> {
@@ -316,6 +337,67 @@ describe("Claude OAuth refresh (module)", () => {
       expect(readOauth(path)).toEqual(oauth);
     },
   );
+
+  it("bounds a stalled success body under the refresh deadline", async () => {
+    vi.useFakeTimers();
+    const dir = useTempDir();
+    const path = join(dir, ".credentials.json");
+    const oauth = {
+      accessToken: "old",
+      refreshToken: "refresh-1",
+      expiresAt: 0,
+    };
+    writeCredentialFile(path, oauth);
+    // Headers arrive, then the body never does: only a deadline that spans the
+    // body read can end this.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init: RequestInit) =>
+        stalledBodyResponse(200, init.signal as AbortSignal),
+      ),
+    );
+
+    const { refreshClaudeOAuthCredential } =
+      await import("../../src/providers/claude-oauth-refresh.js");
+    const pending = refreshClaudeOAuthCredential(fileContext(path, oauth));
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(await pending).toEqual({
+      status: "unavailable",
+      code: "refresh_timeout",
+    });
+    expect(readOauth(path)).toEqual(oauth);
+  });
+
+  it("bounds a stalled 400 error body under the refresh deadline", async () => {
+    vi.useFakeTimers();
+    const dir = useTempDir();
+    const path = join(dir, ".credentials.json");
+    const oauth = {
+      accessToken: "old",
+      refreshToken: "refresh-1",
+      expiresAt: 0,
+    };
+    writeCredentialFile(path, oauth);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init: RequestInit) =>
+        stalledBodyResponse(400, init.signal as AbortSignal),
+      ),
+    );
+
+    const { refreshClaudeOAuthCredential } =
+      await import("../../src/providers/claude-oauth-refresh.js");
+    const pending = refreshClaudeOAuthCredential(fileContext(path, oauth));
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    // The error code could not be read, so the session is preserved.
+    expect(await pending).toEqual({
+      status: "unavailable",
+      code: "refresh_grant_error",
+    });
+    expect(readOauth(path)).toEqual(oauth);
+  });
 
   it.each([
     [
