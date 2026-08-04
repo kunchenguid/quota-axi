@@ -1,5 +1,10 @@
 import { chmodSync, renameSync, writeFileSync } from "node:fs";
-import { cacheFilePath, ensurePrivateParent, readJsonFile } from "./lib/fs.js";
+import {
+  cacheFilePath,
+  claudeCredentialContextId,
+  ensurePrivateParent,
+  readJsonFile,
+} from "./lib/fs.js";
 import type {
   ProviderId,
   ProviderQuota,
@@ -33,11 +38,35 @@ const WINDOW_KINDS = [
   "credits",
   "unknown",
 ] as const satisfies readonly QuotaWindow["kind"][];
+const CACHE_SCHEMA_VERSION = 2;
+const CLAUDE_CONTEXT_ID = /^[a-f0-9]{64}$/;
+
+type CachedProvider = {
+  snapshot: ProviderQuota;
+  claudeCredentialContextId?: string;
+};
 
 export function readCachedProvider(
   provider: ProviderId,
 ): ProviderQuota | undefined {
-  return readCacheProviders().find((item) => item.provider === provider);
+  return readCacheProviders().find(
+    (item) => item.snapshot.provider === provider,
+  )?.snapshot;
+}
+
+/**
+ * Claude stale quota may only be reused when the cache record proves it was
+ * captured for the same locally selected credential context.
+ */
+export function readCachedClaudeProvider(
+  contextId: string,
+): ProviderQuota | undefined {
+  if (!CLAUDE_CONTEXT_ID.test(contextId)) return undefined;
+  return readCacheProviders().find(
+    (item) =>
+      item.snapshot.provider === "claude" &&
+      item.claudeCredentialContextId === contextId,
+  )?.snapshot;
 }
 
 export function writeCachedProviders(providers: ProviderQuota[]): void {
@@ -51,42 +80,51 @@ export function writeCachedProviders(providers: ProviderQuota[]): void {
   );
   const cacheable = providers
     .map(toCacheProvider)
-    .filter((provider): provider is ProviderQuota => Boolean(provider));
+    .filter((provider): provider is CachedProvider => Boolean(provider));
 
   const file = cacheFilePath();
-  const byProvider = new Map<ProviderId, ProviderQuota>();
+  const byProvider = new Map<ProviderId, CachedProvider>();
   let clearedExisting = false;
   for (const provider of readCacheProviders()) {
-    if (clearProviders.has(provider.provider)) {
+    if (clearProviders.has(provider.snapshot.provider)) {
       clearedExisting = true;
       continue;
     }
-    byProvider.set(provider.provider, provider);
+    byProvider.set(provider.snapshot.provider, provider);
   }
   if (cacheable.length === 0 && !clearedExisting) return;
-  for (const provider of cacheable) byProvider.set(provider.provider, provider);
+  for (const provider of cacheable)
+    byProvider.set(provider.snapshot.provider, provider);
   const merged = PROVIDER_IDS.map((provider) =>
     byProvider.get(provider),
-  ).filter((provider): provider is ProviderQuota => Boolean(provider));
+  ).filter((provider): provider is CachedProvider => Boolean(provider));
 
   writeCacheFile(file, merged);
 }
 
 export function deleteCachedProvider(provider: ProviderId): void {
   const existing = readCacheProviders();
-  if (!existing.some((item) => item.provider === provider)) return;
+  if (!existing.some((item) => item.snapshot.provider === provider)) return;
   writeCacheFile(
     cacheFilePath(),
-    existing.filter((item) => item.provider !== provider),
+    existing.filter((item) => item.snapshot.provider !== provider),
   );
 }
 
-function writeCacheFile(file: string, providers: ProviderQuota[]): void {
+function writeCacheFile(file: string, providers: CachedProvider[]): void {
   ensurePrivateParent(file);
   const temp = `${file}.${process.pid}.tmp`;
   writeFileSync(
     temp,
-    `${JSON.stringify({ generatedAt: new Date().toISOString(), schemaVersion: 1, providers }, null, 2)}\n`,
+    `${JSON.stringify(
+      {
+        generatedAt: new Date().toISOString(),
+        schemaVersion: CACHE_SCHEMA_VERSION,
+        providers: providers.map(serializeCachedProvider),
+      },
+      null,
+      2,
+    )}\n`,
     { mode: 0o600 },
   );
   chmodSync(temp, 0o600);
@@ -94,41 +132,66 @@ function writeCacheFile(file: string, providers: ProviderQuota[]): void {
   chmodSync(file, 0o600);
 }
 
-function readCacheProviders(): ProviderQuota[] {
+function readCacheProviders(): CachedProvider[] {
   const raw = readJsonFile(cacheFilePath());
   const payload = objectValue(raw);
+  const schemaVersion = numberValue(payload?.schemaVersion);
   if (
     !payload ||
-    payload.schemaVersion !== 1 ||
+    (schemaVersion !== 1 && schemaVersion !== CACHE_SCHEMA_VERSION) ||
     !Array.isArray(payload.providers)
   )
     return [];
   return payload.providers
-    .map(normalizeCachedProvider)
-    .filter((provider): provider is ProviderQuota => Boolean(provider));
+    .map((provider) => normalizeCachedProvider(provider, schemaVersion))
+    .filter((provider): provider is CachedProvider => Boolean(provider));
 }
 
-function toCacheProvider(provider: ProviderQuota): ProviderQuota | undefined {
+function toCacheProvider(provider: ProviderQuota): CachedProvider | undefined {
   if (provider.state.status !== "fresh" || provider.windows.length === 0)
     return undefined;
-  return normalizeCachedProvider({
-    provider: provider.provider,
-    label: provider.label,
-    source: provider.source,
-    plan: provider.plan,
-    windows: provider.windows,
-    credits: provider.credits,
-    state: {
-      status: provider.state.status,
-      stale: false,
-      refreshedAt: provider.state.refreshedAt,
-      untrustedWindowIds: provider.state.untrustedWindowIds,
-      sourcesTried: provider.state.sourcesTried,
+  const snapshot = normalizeCachedProvider(
+    {
+      provider: provider.provider,
+      label: provider.label,
+      source: provider.source,
+      plan: provider.plan,
+      windows: provider.windows,
+      credits: provider.credits,
+      state: {
+        status: provider.state.status,
+        stale: false,
+        refreshedAt: provider.state.refreshedAt,
+        untrustedWindowIds: provider.state.untrustedWindowIds,
+        sourcesTried: provider.state.sourcesTried,
+      },
     },
-  });
+    CACHE_SCHEMA_VERSION,
+  )?.snapshot;
+  if (!snapshot) return undefined;
+  return {
+    snapshot,
+    ...(provider.provider === "claude"
+      ? { claudeCredentialContextId: claudeCredentialContextId() }
+      : {}),
+  };
 }
 
-function normalizeCachedProvider(raw: unknown): ProviderQuota | undefined {
+function serializeCachedProvider(
+  provider: CachedProvider,
+): Record<string, unknown> {
+  return {
+    ...provider.snapshot,
+    ...(provider.claudeCredentialContextId
+      ? { credentialContext: provider.claudeCredentialContextId }
+      : {}),
+  };
+}
+
+function normalizeCachedProvider(
+  raw: unknown,
+  schemaVersion: number,
+): CachedProvider | undefined {
   const data = objectValue(raw);
   if (!data) return undefined;
   const provider = literalValue(data.provider, PROVIDER_IDS);
@@ -154,7 +217,7 @@ function normalizeCachedProvider(raw: unknown): ProviderQuota | undefined {
   )
     return undefined;
 
-  const result: ProviderQuota = {
+  const snapshot: ProviderQuota = {
     provider,
     label,
     source,
@@ -169,11 +232,21 @@ function normalizeCachedProvider(raw: unknown): ProviderQuota | undefined {
   const refreshedAt = stringValue(state.refreshedAt);
   const untrustedWindowIds = stringArrayValue(state.untrustedWindowIds);
   const credits = normalizeCachedCredits(data.credits);
-  if (plan) result.plan = plan;
-  if (refreshedAt) result.state.refreshedAt = refreshedAt;
-  if (untrustedWindowIds) result.state.untrustedWindowIds = untrustedWindowIds;
-  if (credits) result.credits = credits;
-  return result;
+  if (plan) snapshot.plan = plan;
+  if (refreshedAt) snapshot.state.refreshedAt = refreshedAt;
+  if (untrustedWindowIds)
+    snapshot.state.untrustedWindowIds = untrustedWindowIds;
+  if (credits) snapshot.credits = credits;
+  const credentialContext = stringValue(data.credentialContext);
+  return {
+    snapshot,
+    ...(schemaVersion === CACHE_SCHEMA_VERSION &&
+    snapshot.provider === "claude" &&
+    credentialContext &&
+    CLAUDE_CONTEXT_ID.test(credentialContext)
+      ? { claudeCredentialContextId: credentialContext }
+      : {}),
+  };
 }
 
 function hasInvalidCodexWindowIdentities(windows: QuotaWindow[]): boolean {

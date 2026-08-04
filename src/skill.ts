@@ -149,7 +149,9 @@ ${TOP_HELP.trimEnd()}
   empty quota.
   Claude local expiry metadata is advisory when an access token exists: the existing read-only
   usage request decides validity. Missing or invalid credentials without a usable token and HTTP
-  401/403 retire Claude cache; only transient failures may use bounded, reset-pruned stale data.
+  401/403 retire Claude cache; only transient failures may use bounded, reset-pruned stale data
+  from the same selected configuration context. Its cache-only context identifier is opaque, and
+  legacy context-less Claude snapshots are not reused.
   Claude and Cursor CLI Keychain access markers live alongside it, use hashed account scope,
   and contain no credential values or raw account identity. The Claude marker is also
   profile-scoped.

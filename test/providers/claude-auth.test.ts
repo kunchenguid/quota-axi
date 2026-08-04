@@ -608,6 +608,98 @@ describe("Claude credential-state reporting", () => {
       expect(JSON.stringify(annotated)).not.toContain(fakeToken);
     },
   );
+  it("uses a stale snapshot only for its matching synthetic credential context", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-06T20:00:00.000Z"));
+    const home = useTempHome();
+    const contextA = join(home, "synthetic-context-a");
+    process.env.CLAUDE_CONFIG_DIR = contextA;
+    writeClaudeConfigCredential(contextA, {
+      accessToken: "synthetic-token-a",
+      expiresAt: "2035-01-01T00:00:00.000Z",
+    });
+    const { writeCachedProviders } = await import("../../src/cache.js");
+    writeCachedProviders([cachedClaudeQuota(42)]);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new TypeError("network unavailable");
+      }),
+    );
+
+    const { fetchQuota } = await import("../../src/providers/claude.js");
+    const result = await fetchQuota({ allowKeychainPrompt: false });
+
+    expect(result).toMatchObject({
+      source: "cache",
+      windows: [expect.objectContaining({ percentUsed: 42 })],
+      state: { status: "stale", stale: true },
+    });
+  });
+
+  it("rejects a stale snapshot from a different synthetic credential context", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-06T20:00:00.000Z"));
+    const home = useTempHome();
+    const contextA = join(home, "synthetic-context-a");
+    const contextB = join(home, "synthetic-context-b");
+    process.env.CLAUDE_CONFIG_DIR = contextA;
+    const { writeCachedProviders } = await import("../../src/cache.js");
+    writeCachedProviders([cachedClaudeQuota(42)]);
+    process.env.CLAUDE_CONFIG_DIR = contextB;
+    writeClaudeConfigCredential(contextB, {
+      accessToken: "synthetic-token-b",
+      expiresAt: "2035-01-01T00:00:00.000Z",
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new TypeError("network unavailable");
+      }),
+    );
+
+    const { fetchQuota } = await import("../../src/providers/claude.js");
+    const result = await fetchQuota({ allowKeychainPrompt: false });
+
+    expect(result).toMatchObject({
+      source: "unavailable",
+      windows: [],
+      state: { status: "error", stale: false, error: "network unavailable" },
+    });
+  });
+
+  it("fails closed for a legacy context-less Claude snapshot", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-06T20:00:00.000Z"));
+    const home = useTempHome();
+    const context = join(home, "synthetic-context-a");
+    process.env.CLAUDE_CONFIG_DIR = context;
+    writeClaudeConfigCredential(context, {
+      accessToken: "synthetic-token-a",
+      expiresAt: "2035-01-01T00:00:00.000Z",
+    });
+    const { cacheFilePath } = await import("../../src/lib/fs.js");
+    mkdirSync(dirname(cacheFilePath()), { recursive: true });
+    writeFileSync(
+      cacheFilePath(),
+      JSON.stringify({ schemaVersion: 1, providers: [cachedClaudeQuota(42)] }),
+    );
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new TypeError("network unavailable");
+      }),
+    );
+
+    const { fetchQuota } = await import("../../src/providers/claude.js");
+    const result = await fetchQuota({ allowKeychainPrompt: false });
+
+    expect(result).toMatchObject({
+      source: "unavailable",
+      windows: [],
+      state: { status: "error", stale: false, error: "network unavailable" },
+    });
+  });
 
   it("prunes reset-expired windows while retaining an eligible active window", async () => {
     vi.useFakeTimers();
@@ -1310,9 +1402,16 @@ function writeClaudeCredential(
   home: string,
   oauth: Record<string, unknown>,
 ): void {
-  mkdirSync(join(home, ".claude"), { recursive: true });
+  writeClaudeConfigCredential(join(home, ".claude"), oauth);
+}
+
+function writeClaudeConfigCredential(
+  configDir: string,
+  oauth: Record<string, unknown>,
+): void {
+  mkdirSync(configDir, { recursive: true });
   writeFileSync(
-    join(home, ".claude", ".credentials.json"),
+    join(configDir, ".credentials.json"),
     JSON.stringify({ claudeAiOauth: oauth }),
   );
 }
