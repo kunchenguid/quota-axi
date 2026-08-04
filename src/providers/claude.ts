@@ -11,6 +11,11 @@ import {
 } from "../lib/fs.js";
 import { execFileText } from "../lib/process.js";
 import { clampPercent, nowIso, retryAfterToIso } from "../lib/time.js";
+import {
+  refreshClaudeOAuthCredential,
+  type ClaudeCredentialWriteBack,
+  type ClaudeRefreshContext,
+} from "./claude-oauth-refresh.js";
 import type {
   AuthProviderReport,
   AuthSourceReport,
@@ -50,6 +55,10 @@ type ClaudeCredentials = {
   accessToken: string;
   plan?: string;
   expiresAt?: number;
+  // Present only when the credential carries a refresh token and a same-context
+  // write-back target, enabling a single safe OAuth refresh on definitive
+  // rejection of the current access token.
+  refresh?: ClaudeRefreshContext;
 };
 
 type AvailableCredentialState = {
@@ -166,13 +175,59 @@ export async function fetchQuota(
 
   let definitiveFailure: ClaudeFailure | undefined;
   let transientFailure: ClaudeFailure | undefined;
+  // A quota read performs at most one OAuth refresh, and after it at most one
+  // usage retry. The guard spans every credential so multiple expired sources
+  // cannot multiply refreshes.
+  let refreshUsed = false;
+
+  const fetchUsageWithSingleRefresh = async (
+    credential: ClaudeCredentials,
+  ): Promise<Awaited<ReturnType<typeof fetchOauthUsage>>> => {
+    try {
+      return await fetchOauthUsage(credential);
+    } catch (error) {
+      const failure = claudeFailureFor(error);
+      if (!failure.definitiveAuth || !credential.refresh || refreshUsed) {
+        throw error;
+      }
+      refreshUsed = true;
+      const result = await refreshClaudeOAuthCredential(credential.refresh);
+      attempts.push({
+        source: "oauth-refresh",
+        status: result.status === "refreshed" ? "success" : "failed",
+        ...(result.status === "refreshed" ? {} : { error: result.code }),
+      });
+      if (result.status === "refreshed") {
+        // Retry the usage request exactly once with the renewed token.
+        return await fetchOauthUsage({
+          ...credential,
+          accessToken: result.accessToken,
+          expiresAt: result.expiresAt,
+        });
+      }
+      if (result.status === "rejected") {
+        // The refresh token itself was rejected: a definitive end of session,
+        // kept distinct from a transient refresh failure.
+        throw new ClaudeFailure("Claude sign-in required", {
+          status: "auth_required",
+          definitiveAuth: true,
+        });
+      }
+      // Transient refresh failure: preserve the valid session and surface a
+      // bounded, stale-eligible failure rather than a false sign-in result.
+      throw new ClaudeFailure("Claude quota unavailable", {
+        staleEligible: true,
+      });
+    }
+  };
 
   if (credentials.length > 0) {
     for (const credential of credentials) {
+      const credentialAttempt = attempts.length;
       attempts.push({ source: credential.source, status: "failed" });
       try {
-        const quota = await fetchOauthUsage(credential);
-        attempts[attempts.length - 1] = {
+        const quota = await fetchUsageWithSingleRefresh(credential);
+        attempts[credentialAttempt] = {
           source: credential.source,
           status: "success",
         };
@@ -198,7 +253,7 @@ export async function fetchQuota(
         });
       } catch (error) {
         const failure = claudeFailureFor(error);
-        attempts[attempts.length - 1] = {
+        attempts[credentialAttempt] = {
           source: credential.source,
           status: "failed",
           error: failure.code,
@@ -499,6 +554,7 @@ async function readCredentialStates(
     readJsonFileResult(locations.credentialFile),
     "oauth-file",
     locations.credentialFile,
+    { kind: "file", path: locations.credentialFile },
   );
   states.push(fileState);
 
@@ -590,6 +646,12 @@ async function readKeychainCredentialState(
     return extractCredentialState(
       { status: "success", value: JSON.parse(blob) },
       "keychain",
+      undefined,
+      {
+        kind: "keychain",
+        account: locations.keychainAccount,
+        service: locations.keychainService,
+      },
     );
   } catch {
     return {
@@ -715,6 +777,7 @@ function extractCredentialState(
   raw: JsonFileReadResult,
   source: ClaudeCredentials["source"],
   path?: string,
+  writeBack?: ClaudeCredentialWriteBack,
 ): CredentialState {
   if (raw.status === "missing")
     return { status: "missing", source: { source, path, status: "missing" } };
@@ -726,10 +789,11 @@ function extractCredentialState(
   const data = objectValue(raw.value);
   if (!data)
     return { status: "invalid", source: { source, path, status: "invalid" } };
-  const oauth =
+  const nested =
     data.claudeAiOauth && typeof data.claudeAiOauth === "object"
-      ? (data.claudeAiOauth as Record<string, unknown>)
-      : data;
+      ? "claudeAiOauth"
+      : undefined;
+  const oauth = nested ? (data.claudeAiOauth as Record<string, unknown>) : data;
   const accessToken =
     stringValue(oauth.accessToken) ?? stringValue(oauth.access_token);
   if (!accessToken)
@@ -737,7 +801,14 @@ function extractCredentialState(
   const expiresAt = expiresAtMillis(oauth.expiresAt);
   const plan =
     stringValue(oauth.subscriptionType) ?? stringValue(data.subscriptionType);
-  const credentials = { source, accessToken, plan, expiresAt };
+  const refresh = buildRefreshContext(data, oauth, nested, writeBack);
+  const credentials: ClaudeCredentials = {
+    source,
+    accessToken,
+    plan,
+    expiresAt,
+    refresh,
+  };
   if (expiresAt !== undefined && expiresAt <= Date.now()) {
     return {
       status: "expired",
@@ -748,6 +819,31 @@ function extractCredentialState(
   return {
     status: "available",
     credentials,
+  };
+}
+
+// Build the same-context refresh handle when the credential carries a refresh
+// token and a write-back target. Absent either, the credential is not
+// refreshable and behaves exactly as before.
+function buildRefreshContext(
+  container: Record<string, unknown>,
+  oauth: Record<string, unknown>,
+  oauthKey: string | undefined,
+  writeBack: ClaudeCredentialWriteBack | undefined,
+): ClaudeRefreshContext | undefined {
+  if (!writeBack) return undefined;
+  const refreshToken =
+    stringValue(oauth.refreshToken) ?? stringValue(oauth.refresh_token);
+  if (!refreshToken) return undefined;
+  const clientId = stringValue(oauth.clientId) ?? stringValue(oauth.client_id);
+  const scopes = stringArrayValue(oauth.scopes);
+  return {
+    refreshToken,
+    ...(clientId ? { clientId } : {}),
+    ...(scopes ? { scopes } : {}),
+    container,
+    oauthKey,
+    writeBack,
   };
 }
 
@@ -933,6 +1029,14 @@ function objectValue(value: unknown): Record<string, unknown> | undefined {
 
 function stringValue(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function stringArrayValue(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const strings = value.filter(
+    (item): item is string => typeof item === "string" && item.length > 0,
+  );
+  return strings.length > 0 ? strings : undefined;
 }
 
 function expiresAtMillis(value: unknown): number | undefined {

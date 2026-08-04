@@ -27,10 +27,13 @@ Report local agent-provider quota windows for routing-aware agents.
 
 You do not need quota-axi installed globally - invoke it with `npx -y quota-axi`.
 
-quota-axi is data only: it never routes, recommends, proxies, intercepts, logs in, imports
-browser cookies, or mutates provider state. It reads local provider auth sources and calls
-first-party provider quota, usage, billing, or entitlement endpoints; it never launches the
-Claude, Grok, Pi, or Kimi CLIs, so it cannot spend the quota it measures.
+quota-axi is data only: it never routes, recommends, proxies, intercepts, logs in, or imports
+browser cookies. It reads local provider auth sources and calls first-party provider quota,
+usage, billing, or entitlement endpoints; it never launches the Claude, Grok, Pi, or Kimi CLIs,
+so it cannot spend the quota it measures. Its one credential mutation is renewing an expired
+Claude access token from a locally present refresh token and rewriting that one short-lived
+credential in place (the same renewal the Claude CLI performs on use, never a login); it writes
+no other provider's credentials.
 
 ## When to use
 
