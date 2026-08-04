@@ -1,7 +1,7 @@
 import { mkdirSync, readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, relative, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 export type JsonFileReadResult =
   | { status: "success"; value: unknown }
@@ -53,9 +53,11 @@ export function cacheFilePath(): string {
  * selected by the current process. The selected path never leaves this helper.
  */
 export function claudeCredentialContextId(): string {
-  const configDir = (
-    process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude")
-  ).normalize("NFC");
+  const configDir = resolve(
+    (process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude")).normalize(
+      "NFC",
+    ),
+  );
   return createHash("sha256")
     .update(`claude-config-dir:${configDir}`)
     .digest("hex");
