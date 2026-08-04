@@ -1,4 +1,4 @@
-import { chmodSync, renameSync, writeFileSync } from "node:fs";
+import { chmodSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { ensurePrivateParent, readJsonFileResult } from "../lib/fs.js";
 import { execFileText } from "../lib/process.js";
 
@@ -13,8 +13,14 @@ const CLAUDE_OAUTH_TOKEN_URL = "https://platform.claude.com/v1/oauth/token";
 const CLAUDE_OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 const CLAUDE_CODE_USER_AGENT = "claude-code/2.1.202";
 const REFRESH_TIMEOUT_MS = 30_000;
-const KEYCHAIN_WRITE_TIMEOUT_MS = 30_000;
-const KEYCHAIN_READ_TIMEOUT_MS = 60_000;
+// Write-back is bounded so a quota read is never held hostage by Keychain
+// access: the compare-and-swap re-read and the update share one total budget,
+// well below the interactive read budget used to discover the credential.
+const KEYCHAIN_WRITE_BACK_BUDGET_MS = 12_000;
+const KEYCHAIN_WRITE_BACK_READ_TIMEOUT_MS = 6_000;
+// Guard against a hostile or broken token endpoint: only enough of an error
+// body is read to recover the RFC 6749 §5.2 `error` code.
+const TOKEN_ERROR_BODY_LIMIT = 8_192;
 
 // Where the renewed short-lived credential is written back. The refresh only
 // ever rewrites the exact source and credential context it was read from; it
@@ -27,24 +33,45 @@ export type ClaudeRefreshContext = {
   refreshToken: string;
   clientId?: string;
   scopes?: string[];
-  /** The full parsed credential container as read (file JSON or Keychain blob). */
-  container: Record<string, unknown>;
   /** "claudeAiOauth" when the OAuth object is nested; undefined when top-level. */
   oauthKey?: string;
   writeBack: ClaudeCredentialWriteBack;
 };
 
+// The outcome of writing the renewed credential back to its source. It never
+// changes the refresh outcome itself; the caller surfaces it so a lost
+// rotation is visible rather than silent.
+export type ClaudeRefreshPersistence =
+  // The renewed credential is stored in its source.
+  | { status: "persisted" }
+  // The source was rotated concurrently (for example by the Claude CLI); that
+  // newer credential is adopted and left untouched.
+  | { status: "superseded" }
+  // The store could not be updated. When the provider rotated the refresh
+  // token, the stored credential is now behind the server and a real sign-in
+  // may be required — an unavoidable risk of a hard write denial.
+  | { status: "failed"; code: string };
+
 export type ClaudeRefreshResult =
   // Renewed: an access token valid until `expiresAt` (epoch ms). Write-back is
   // best-effort and never downgrades this outcome; the caller uses the token
   // for this read regardless.
-  | { status: "refreshed"; accessToken: string; expiresAt: number }
+  | {
+      status: "refreshed";
+      accessToken: string;
+      expiresAt: number;
+      persistence: ClaudeRefreshPersistence;
+    }
   // Definitive: the refresh token itself was rejected (the session is over).
   // The caller preserves the stored credential and reports sign-in required.
   | { status: "rejected"; code: string }
   // Transient: network, timeout, rate limit, server, or malformed response.
   // The caller preserves the stored credential and the valid session.
-  | { status: "unavailable"; code: string };
+  | {
+      status: "unavailable";
+      code: string;
+      persistence?: ClaudeRefreshPersistence;
+    };
 
 /**
  * Renew a locally expired Claude access token from its refresh token, then
@@ -95,15 +122,20 @@ export async function refreshClaudeOAuthCredential(
     clearTimeout(timer);
   }
 
-  // A rejected refresh token is a definitive end of session, distinct from a
-  // transient failure. 429/5xx and anything else stay transient so a valid
+  // Only a rejection of the refresh token itself ends the session. HTTP
+  // 401/403 is that rejection; a 400 is only definitive when the endpoint
+  // says `invalid_grant`, because RFC 6749 §5.2 also returns 400 for
+  // invalid_client, invalid_scope, invalid_request, and
+  // unsupported_grant_type — none of which mean the stored refresh token is
+  // dead. Those, 429, 5xx, and anything else stay transient so a valid
   // session is preserved.
-  if (
-    response.status === 400 ||
-    response.status === 401 ||
-    response.status === 403
-  ) {
+  if (response.status === 401 || response.status === 403) {
     return { status: "rejected", code: "refresh_rejected" };
+  }
+  if (response.status === 400) {
+    return (await tokenErrorCode(response)) === "invalid_grant"
+      ? { status: "rejected", code: "refresh_rejected" }
+      : { status: "unavailable", code: "refresh_grant_error" };
   }
   if (response.status === 429) {
     return { status: "unavailable", code: "refresh_rate_limited" };
@@ -121,18 +153,12 @@ export async function refreshClaudeOAuthCredential(
   const data = objectValue(payload);
   const accessToken = data ? stringValue(data.access_token) : undefined;
   const expiresInSeconds = data ? numberValue(data.expires_in) : undefined;
-  if (!accessToken || expiresInSeconds === undefined) {
-    return { status: "unavailable", code: "refresh_malformed" };
-  }
 
   const now = Date.now();
-  const expiresAt = now + expiresInSeconds * 1_000;
   // Preserve refresh-token rotation: adopt a replacement when the provider
   // returns one, but never discard the still-valid refresh token when the
   // response omits it.
-  const rotatedRefreshToken =
-    (data ? stringValue(data.refresh_token) : undefined) ??
-    context.refreshToken;
+  const rotated = data ? stringValue(data.refresh_token) : undefined;
   const refreshTokenExpiresInSeconds = data
     ? numberValue(data.refresh_token_expires_in)
     : undefined;
@@ -141,73 +167,106 @@ export async function refreshClaudeOAuthCredential(
       ? now + refreshTokenExpiresInSeconds * 1_000
       : undefined;
 
-  await persistRenewedCredential(context, {
+  if (!accessToken || expiresInSeconds === undefined) {
+    // The response is unusable for this read, but a rotation the provider has
+    // already performed is real: store the replacement refresh token alone so
+    // the local credential is not left behind the server. Nothing else in the
+    // stored credential is touched.
+    if (rotated === undefined || rotated === context.refreshToken) {
+      return { status: "unavailable", code: "refresh_malformed" };
+    }
+    const persistence = await persistRenewedCredential(context, {
+      refreshToken: rotated,
+      refreshTokenExpiresAt,
+    });
+    return { status: "unavailable", code: "refresh_malformed", persistence };
+  }
+
+  const expiresAt = now + expiresInSeconds * 1_000;
+  const persistence = await persistRenewedCredential(context, {
     accessToken,
-    refreshToken: rotatedRefreshToken,
+    refreshToken: rotated ?? context.refreshToken,
     expiresAt,
     refreshTokenExpiresAt,
   });
 
-  return { status: "refreshed", accessToken, expiresAt };
+  return { status: "refreshed", accessToken, expiresAt, persistence };
 }
 
 type RenewedFields = {
-  accessToken: string;
+  accessToken?: string;
   refreshToken: string;
-  expiresAt: number;
+  expiresAt?: number;
   refreshTokenExpiresAt?: number;
 };
 
 // Persistence is best-effort: a write failure, denied Keychain access, or a
 // concurrent credential change never downgrades the refreshed result — the
 // caller still holds a valid access token for this read. It only ever narrows
-// to a no-op, never corrupts or deletes the stored credential.
+// to a no-op, never corrupts or deletes the stored credential. The outcome is
+// reported so a failed write-back of a rotated refresh token is visible.
 async function persistRenewedCredential(
   context: ClaudeRefreshContext,
   renewed: RenewedFields,
-): Promise<void> {
+): Promise<ClaudeRefreshPersistence> {
   try {
     if (context.writeBack.kind === "file") {
-      await persistToFile(context, renewed, context.writeBack.path);
-    } else {
-      await persistToKeychain(context, renewed, context.writeBack);
+      return persistToFile(context, renewed, context.writeBack.path);
     }
+    return await persistToKeychain(context, renewed, context.writeBack);
   } catch {
     // Preserve the valid session; the next read simply refreshes again.
+    return { status: "failed", code: "write_back_denied" };
   }
 }
 
-async function persistToFile(
+function persistToFile(
   context: ClaudeRefreshContext,
   renewed: RenewedFields,
   path: string,
-): Promise<void> {
+): ClaudeRefreshPersistence {
   const current = readJsonFileResult(path);
-  if (current.status !== "success") return;
+  if (current.status !== "success") {
+    return { status: "failed", code: "write_back_unreadable" };
+  }
   const container = objectValue(current.value);
-  if (!container) return;
+  if (!container) return { status: "failed", code: "write_back_unreadable" };
   // Compare-and-swap on the refresh token: if another process (for example the
   // Claude CLI) already rotated it since we read, adopt that newer credential
   // rather than clobbering it.
-  if (!currentRefreshTokenMatches(container, context)) return;
+  if (!currentRefreshTokenMatches(container, context)) {
+    return { status: "superseded" };
+  }
 
   const updated = mergeRenewedCredential(container, context.oauthKey, renewed);
   const serialized = `${JSON.stringify(updated, null, 2)}\n`;
   ensurePrivateParent(path);
   const temp = `${path}.${process.pid}.tmp`;
-  writeFileSync(temp, serialized, { mode: 0o600 });
-  chmodSync(temp, 0o600);
-  renameSync(temp, path);
+  try {
+    writeFileSync(temp, serialized, { mode: 0o600 });
+    chmodSync(temp, 0o600);
+    renameSync(temp, path);
+  } catch (error) {
+    // Never leave credential material behind in an abandoned temp file.
+    try {
+      unlinkSync(temp);
+    } catch {
+      // Already gone, or the same condition that failed the write.
+    }
+    throw error;
+  }
   chmodSync(path, 0o600);
+  return { status: "persisted" };
 }
 
 async function persistToKeychain(
   context: ClaudeRefreshContext,
   renewed: RenewedFields,
   target: { account: string; service: string },
-): Promise<void> {
+): Promise<ClaudeRefreshPersistence> {
   // Re-read the exact pinned item and compare-and-swap on the refresh token so
   // a concurrent rotation is adopted, not overwritten.
+  const deadline = Date.now() + KEYCHAIN_WRITE_BACK_BUDGET_MS;
   let currentBlob: string;
   try {
     currentBlob = await execFileText(
@@ -220,19 +279,29 @@ async function persistToKeychain(
         "-s",
         target.service,
       ],
-      KEYCHAIN_READ_TIMEOUT_MS,
+      Math.min(
+        KEYCHAIN_WRITE_BACK_READ_TIMEOUT_MS,
+        KEYCHAIN_WRITE_BACK_BUDGET_MS,
+      ),
     );
   } catch {
-    return;
+    return { status: "failed", code: "write_back_unreadable" };
   }
   let currentContainer: Record<string, unknown> | undefined;
   try {
     currentContainer = objectValue(JSON.parse(currentBlob));
   } catch {
-    return;
+    return { status: "failed", code: "write_back_unreadable" };
   }
-  if (!currentContainer) return;
-  if (!currentRefreshTokenMatches(currentContainer, context)) return;
+  if (!currentContainer) {
+    return { status: "failed", code: "write_back_unreadable" };
+  }
+  if (!currentRefreshTokenMatches(currentContainer, context)) {
+    return { status: "superseded" };
+  }
+
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) return { status: "failed", code: "write_back_timeout" };
 
   const updated = mergeRenewedCredential(
     currentContainer,
@@ -241,6 +310,11 @@ async function persistToKeychain(
   );
   // `-U` updates the existing item in place, scoped to the exact account and
   // service, preserving its ACL. It never touches any other Keychain item.
+  // The renewed blob is passed as a `security` argument, which is readable by
+  // other processes running as this same user for the lifetime of that one
+  // short-lived call; `security` offers no stdin path for this update, so the
+  // exposure is inherent to Keychain write-back and is kept to the single
+  // narrowest invocation that performs it.
   await execFileText(
     "security",
     [
@@ -253,8 +327,22 @@ async function persistToKeychain(
       "-w",
       JSON.stringify(updated),
     ],
-    KEYCHAIN_WRITE_TIMEOUT_MS,
+    remaining,
   );
+  return { status: "persisted" };
+}
+
+// Read only the RFC 6749 §5.2 `error` code out of a token-endpoint failure.
+// The body itself is never retained, logged, or returned.
+async function tokenErrorCode(response: Response): Promise<string | undefined> {
+  try {
+    const body = await response.text();
+    if (body.length > TOKEN_ERROR_BODY_LIMIT) return undefined;
+    const data = objectValue(JSON.parse(body));
+    return data ? stringValue(data.error) : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function currentRefreshTokenMatches(
@@ -276,9 +364,13 @@ function mergeRenewedCredential(
   renewed: RenewedFields,
 ): Record<string, unknown> {
   const oauth = { ...(oauthObject(container, oauthKey) ?? {}) };
-  setPreferredKey(oauth, "accessToken", "access_token", renewed.accessToken);
+  if (renewed.accessToken !== undefined) {
+    setPreferredKey(oauth, "accessToken", "access_token", renewed.accessToken);
+  }
   setPreferredKey(oauth, "refreshToken", "refresh_token", renewed.refreshToken);
-  setPreferredKey(oauth, "expiresAt", "expires_at", renewed.expiresAt);
+  if (renewed.expiresAt !== undefined) {
+    setPreferredKey(oauth, "expiresAt", "expires_at", renewed.expiresAt);
+  }
   if (renewed.refreshTokenExpiresAt !== undefined) {
     setPreferredKey(
       oauth,

@@ -1,7 +1,9 @@
 import {
+  chmodSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -256,7 +258,10 @@ describe("Claude quota refresh integration", () => {
     const before = readFileSync(path, "utf8");
     const { fetch: fetchMock } = router({
       usage: [async () => new Response(null, { status: 401 })],
-      token: async () => new Response("invalid_grant", { status: 400 }),
+      token: async () =>
+        new Response(JSON.stringify({ error: "invalid_grant" }), {
+          status: 400,
+        }),
     });
     vi.stubGlobal("fetch", fetchMock);
 
@@ -325,6 +330,164 @@ describe("Claude quota refresh integration", () => {
       source: "oauth-refresh",
       status: "failed",
       error: "refresh_unreachable",
+    });
+  });
+
+  it("never turns a transient refresh failure into a sign-in result when a second credential source exists", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-06T20:00:00.000Z"));
+    usePlatform("darwin");
+    const home = useTempHome();
+    const { claudeKeychainAccessMarkerPath } =
+      await import("../../src/lib/fs.js");
+    const marker = claudeKeychainAccessMarkerPath("fixture-user");
+    mkdirSync(dirname(marker), { recursive: true, mode: 0o700 });
+    writeFileSync(marker, "granted\n", { mode: 0o600 });
+    // Both sources are present and refreshable, exactly the dual-source setup
+    // where the keychain credential is tried first.
+    const path = writeClaudeCredential(join(home, ".claude"), {
+      accessToken: "file-access",
+      refreshToken: "file-refresh",
+      expiresAt: EXPIRED,
+    });
+    const before = readFileSync(path, "utf8");
+    const keychainBlob = JSON.stringify({
+      claudeAiOauth: {
+        accessToken: "keychain-access",
+        refreshToken: "keychain-refresh",
+        expiresAt: 0,
+      },
+    });
+    const execFileText = vi.fn(async (_cmd: string, args: string[]) => {
+      if (args[0] === "add-generic-password") {
+        throw new Error("keychain write must not happen");
+      }
+      return args.includes("-w") ? keychainBlob : "";
+    });
+    vi.doMock("../../src/lib/process.js", () => ({ execFileText }));
+    const { writeCachedProviders } = await import("../../src/cache.js");
+    writeCachedProviders([
+      {
+        provider: "claude",
+        label: "Claude",
+        source: "oauth",
+        windows: [
+          {
+            id: "five_hour",
+            label: "session",
+            kind: "session",
+            percentUsed: 34,
+            percentRemaining: 66,
+          },
+        ],
+        state: {
+          status: "fresh",
+          stale: false,
+          refreshedAt: "2026-07-06T18:10:00Z",
+          sourcesTried: ["oauth"],
+        },
+      },
+    ]);
+    const { fetch: fetchMock } = router({
+      // every usage call rejects the (expired) access token it was sent
+      usage: [async () => new Response(null, { status: 401 })],
+      token: async () => {
+        throw new TypeError("network down");
+      },
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { fetchQuota } = await import("../../src/providers/claude.js");
+    const result = await fetchQuota({ allowKeychainPrompt: false });
+
+    // The second source's 401 must not become a definitive sign-in: the
+    // session was never proven unrenewable.
+    expect(result.state.status).not.toBe("auth_required");
+    expect(result.source).toBe("cache");
+    expect(result.state.status).toBe("stale");
+    // exactly one refresh attempt across both sources, credential untouched
+    expect(fetchMock.mock.calls.filter(([u]) => u === TOKEN_URL)).toHaveLength(
+      1,
+    );
+    expect(readFileSync(path, "utf8")).toBe(before);
+  });
+
+  it("surfaces a failed credential write-back instead of losing it silently", async () => {
+    const home = useTempHome();
+    const configDir = join(home, ".claude");
+    const path = writeClaudeCredential(configDir, {
+      accessToken: "expired-access",
+      refreshToken: "refresh-1",
+      expiresAt: EXPIRED,
+    });
+    const { fetch: fetchMock } = router({
+      usage: [
+        async () => new Response(null, { status: 401 }),
+        async () => usageResponse(),
+      ],
+      token: async () =>
+        new Response(
+          JSON.stringify({
+            access_token: "renewed-access",
+            refresh_token: "refresh-2",
+            expires_in: 3600,
+          }),
+          { status: 200 },
+        ),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    // The credential directory is not writable, so the rotated refresh token
+    // cannot be stored even though the refresh itself succeeded.
+    const { fetchQuota } = await import("../../src/providers/claude.js");
+    chmodSync(configDir, 0o500);
+    let result: Awaited<ReturnType<typeof fetchQuota>>;
+    try {
+      result = await fetchQuota({ allowKeychainPrompt: false });
+    } finally {
+      chmodSync(configDir, 0o700);
+    }
+
+    // the read still succeeds; only the write-back is reported as failed
+    expect(result.state.status).toBe("fresh");
+    expect(result.attempts).toContainEqual({
+      source: "oauth-refresh-write-back",
+      status: "failed",
+      error: "write_back_denied",
+    });
+    // no credential material is left behind in an abandoned temp file
+    expect(
+      readdirSync(configDir).filter((entry) => entry.endsWith(".tmp")),
+    ).toEqual([]);
+    expect(readOauth(path).refreshToken).toBe("refresh-1");
+  });
+
+  it("records a successful credential write-back as its own attempt", async () => {
+    const home = useTempHome();
+    writeClaudeCredential(join(home, ".claude"), {
+      accessToken: "expired-access",
+      refreshToken: "refresh-1",
+      expiresAt: EXPIRED,
+    });
+    const { fetch: fetchMock } = router({
+      usage: [
+        async () => new Response(null, { status: 401 }),
+        async () => usageResponse(),
+      ],
+      token: async () =>
+        new Response(
+          JSON.stringify({ access_token: "renewed-access", expires_in: 3600 }),
+          { status: 200 },
+        ),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { fetchQuota } = await import("../../src/providers/claude.js");
+    const result = await fetchQuota({ allowKeychainPrompt: false });
+
+    expect(result.attempts).toContainEqual({
+      source: "oauth-refresh-write-back",
+      status: "success",
     });
   });
 

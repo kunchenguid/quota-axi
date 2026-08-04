@@ -61,7 +61,6 @@ function fileContext(
       (oauth.refreshToken as string | undefined) ?? "refresh-token-original",
     clientId: oauth.clientId as string | undefined,
     scopes: oauth.scopes as string[] | undefined,
-    container: { claudeAiOauth: oauth },
     oauthKey: "claudeAiOauth",
     writeBack: { kind: "file", path } satisfies ClaudeCredentialWriteBack,
     ...overrides,
@@ -249,9 +248,48 @@ describe("Claude OAuth refresh (module)", () => {
     expect(written.refreshToken).toBe("refresh-sibling");
   });
 
-  it.each([400, 401, 403])(
+  it.each([
+    [
+      400,
+      async () =>
+        new Response(JSON.stringify({ error: "invalid_grant" }), {
+          status: 400,
+        }),
+    ],
+    [401, async () => new Response(null, { status: 401 })],
+    [403, async () => new Response(null, { status: 403 })],
+  ])(
     "reports a rejected refresh token (HTTP %i) as definitive and never writes",
-    async (status) => {
+    async (_status, responder) => {
+      const dir = useTempDir();
+      const path = join(dir, ".credentials.json");
+      const oauth = {
+        accessToken: "old",
+        refreshToken: "refresh-1",
+        expiresAt: 0,
+      };
+      writeCredentialFile(path, oauth);
+      vi.stubGlobal("fetch", vi.fn(responder as () => Promise<Response>));
+
+      const { refreshClaudeOAuthCredential } =
+        await import("../../src/providers/claude-oauth-refresh.js");
+      const result = await refreshClaudeOAuthCredential(
+        fileContext(path, oauth),
+      );
+
+      expect(result).toEqual({ status: "rejected", code: "refresh_rejected" });
+      expect(readOauth(path)).toEqual(oauth);
+    },
+  );
+
+  it.each([
+    ["invalid_client", JSON.stringify({ error: "invalid_client" })],
+    ["invalid_scope", JSON.stringify({ error: "invalid_scope" })],
+    ["invalid_request", JSON.stringify({ error: "invalid_request" })],
+    ["a non-JSON body", "something went wrong"],
+  ])(
+    "keeps the session on a 400 grant error (%s) that is not invalid_grant",
+    async (_label, body) => {
       const dir = useTempDir();
       const path = join(dir, ".credentials.json");
       const oauth = {
@@ -262,7 +300,7 @@ describe("Claude OAuth refresh (module)", () => {
       writeCredentialFile(path, oauth);
       vi.stubGlobal(
         "fetch",
-        vi.fn(async () => new Response("invalid_grant", { status })),
+        vi.fn(async () => new Response(body, { status: 400 })),
       );
 
       const { refreshClaudeOAuthCredential } =
@@ -271,7 +309,10 @@ describe("Claude OAuth refresh (module)", () => {
         fileContext(path, oauth),
       );
 
-      expect(result).toEqual({ status: "rejected", code: "refresh_rejected" });
+      expect(result).toEqual({
+        status: "unavailable",
+        code: "refresh_grant_error",
+      });
       expect(readOauth(path)).toEqual(oauth);
     },
   );
@@ -327,6 +368,28 @@ describe("Claude OAuth refresh (module)", () => {
       expiresAt: 0,
     };
     writeCredentialFile(path, oauth);
+    vi.stubGlobal("fetch", vi.fn(okTokenResponse({ token_type: "Bearer" })));
+
+    const { refreshClaudeOAuthCredential } =
+      await import("../../src/providers/claude-oauth-refresh.js");
+    const result = await refreshClaudeOAuthCredential(fileContext(path, oauth));
+
+    expect(result).toEqual({
+      status: "unavailable",
+      code: "refresh_malformed",
+    });
+    expect(readOauth(path)).toEqual(oauth);
+  });
+
+  it("still stores a rotated refresh token when the rest of the 200 response is unusable", async () => {
+    const dir = useTempDir();
+    const path = join(dir, ".credentials.json");
+    const oauth = {
+      accessToken: "old",
+      refreshToken: "refresh-1",
+      expiresAt: 0,
+    };
+    writeCredentialFile(path, oauth);
     vi.stubGlobal(
       "fetch",
       vi.fn(okTokenResponse({ refresh_token: "refresh-2" })),
@@ -339,8 +402,66 @@ describe("Claude OAuth refresh (module)", () => {
     expect(result).toEqual({
       status: "unavailable",
       code: "refresh_malformed",
+      persistence: { status: "persisted" },
     });
-    expect(readOauth(path)).toEqual(oauth);
+    // The provider already rotated, so the replacement is stored; nothing else
+    // in the credential is touched.
+    expect(readOauth(path)).toEqual({ ...oauth, refreshToken: "refresh-2" });
+  });
+
+  it("reports a failed write-back instead of losing the rotation silently", async () => {
+    const dir = useTempDir();
+    const path = join(dir, ".credentials.json");
+    // No credential file exists at the write-back path, so the compare-and-swap
+    // re-read fails and the rotated token cannot be stored.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        okTokenResponse({
+          access_token: "renewed",
+          refresh_token: "refresh-2",
+          expires_in: 3600,
+        }),
+      ),
+    );
+
+    const { refreshClaudeOAuthCredential } =
+      await import("../../src/providers/claude-oauth-refresh.js");
+    const result = await refreshClaudeOAuthCredential({
+      refreshToken: "refresh-1",
+      oauthKey: "claudeAiOauth",
+      writeBack: { kind: "file", path },
+    });
+
+    expect(result).toMatchObject({
+      status: "refreshed",
+      accessToken: "renewed",
+      persistence: { status: "failed", code: "write_back_unreadable" },
+    });
+  });
+
+  it("reports an adopted concurrent rotation as superseded rather than failed", async () => {
+    const dir = useTempDir();
+    const path = join(dir, ".credentials.json");
+    writeCredentialFile(path, {
+      accessToken: "sibling-access",
+      refreshToken: "refresh-sibling",
+      expiresAt: 0,
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(okTokenResponse({ access_token: "renewed", expires_in: 3600 })),
+    );
+
+    const { refreshClaudeOAuthCredential } =
+      await import("../../src/providers/claude-oauth-refresh.js");
+    const result = await refreshClaudeOAuthCredential({
+      refreshToken: "refresh-1",
+      oauthKey: "claudeAiOauth",
+      writeBack: { kind: "file", path },
+    });
+
+    expect(result).toMatchObject({ persistence: { status: "superseded" } });
   });
 
   it("updates the exact pinned Keychain item, scoped to its account and service", async () => {
@@ -373,7 +494,6 @@ describe("Claude OAuth refresh (module)", () => {
       await import("../../src/providers/claude-oauth-refresh.js");
     const result = await refreshClaudeOAuthCredential({
       refreshToken: "refresh-1",
-      container: JSON.parse(currentBlob) as Record<string, unknown>,
       oauthKey: "claudeAiOauth",
       writeBack: {
         kind: "keychain",
@@ -422,7 +542,6 @@ describe("Claude OAuth refresh (module)", () => {
       await import("../../src/providers/claude-oauth-refresh.js");
     const result = await refreshClaudeOAuthCredential({
       refreshToken: "refresh-1",
-      container: { claudeAiOauth: { refreshToken: "refresh-1" } },
       oauthKey: "claudeAiOauth",
       writeBack: {
         kind: "keychain",

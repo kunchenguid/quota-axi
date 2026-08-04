@@ -15,6 +15,7 @@ import {
   refreshClaudeOAuthCredential,
   type ClaudeCredentialWriteBack,
   type ClaudeRefreshContext,
+  type ClaudeRefreshPersistence,
 } from "./claude-oauth-refresh.js";
 import type {
   AuthProviderReport,
@@ -179,6 +180,10 @@ export async function fetchQuota(
   // usage retry. The guard spans every credential so multiple expired sources
   // cannot multiply refreshes.
   let refreshUsed = false;
+  // Set when the single refresh failed transiently. Renewability is then
+  // unproven for this read, so no later rejection of an expired access token
+  // may be reported as the definitive end of the session.
+  let refreshUnproven = false;
 
   const fetchUsageWithSingleRefresh = async (
     credential: ClaudeCredentials,
@@ -187,9 +192,9 @@ export async function fetchQuota(
       return await fetchOauthUsage(credential);
     } catch (error) {
       const failure = claudeFailureFor(error);
-      if (!failure.definitiveAuth || !credential.refresh || refreshUsed) {
-        throw error;
-      }
+      if (!failure.definitiveAuth) throw error;
+      if (refreshUnproven) throw unprovenSessionFailure();
+      if (!credential.refresh || refreshUsed) throw error;
       refreshUsed = true;
       const result = await refreshClaudeOAuthCredential(credential.refresh);
       attempts.push({
@@ -197,6 +202,9 @@ export async function fetchQuota(
         status: result.status === "refreshed" ? "success" : "failed",
         ...(result.status === "refreshed" ? {} : { error: result.code }),
       });
+      if (result.status !== "rejected" && result.persistence) {
+        attempts.push(writeBackAttempt(result.persistence));
+      }
       if (result.status === "refreshed") {
         // Retry the usage request exactly once with the renewed token.
         return await fetchOauthUsage({
@@ -215,9 +223,8 @@ export async function fetchQuota(
       }
       // Transient refresh failure: preserve the valid session and surface a
       // bounded, stale-eligible failure rather than a false sign-in result.
-      throw new ClaudeFailure("Claude quota unavailable", {
-        staleEligible: true,
-      });
+      refreshUnproven = true;
+      throw unprovenSessionFailure();
     }
   };
 
@@ -282,12 +289,46 @@ export async function fetchQuota(
     }
   }
 
+  // A transient refresh failure anywhere in this read leaves the session's
+  // renewability unproven, so a definitive failure recorded before it must not
+  // retire the cache or claim sign-in is required.
+  const preferred = refreshUnproven ? transientFailure : undefined;
   return failureReport(
-    definitiveFailure ??
+    preferred ??
+      definitiveFailure ??
       transientFailure ??
       new ClaudeFailure("Claude quota unavailable", { staleEligible: true }),
     attempts,
   );
+}
+
+// A bounded, stale-eligible failure used when the session is still believed
+// valid but could not be renewed during this read.
+function unprovenSessionFailure(): ClaudeFailure {
+  return new ClaudeFailure("Claude quota unavailable", { staleEligible: true });
+}
+
+// Surface the write-back outcome so a rotated refresh token that could not be
+// stored is visible in `--full` attempts instead of being lost silently. It
+// carries an opaque code only and never downgrades the quota read.
+function writeBackAttempt(
+  persistence: ClaudeRefreshPersistence,
+): SourceAttempt {
+  if (persistence.status === "persisted") {
+    return { source: "oauth-refresh-write-back", status: "success" };
+  }
+  if (persistence.status === "superseded") {
+    return {
+      source: "oauth-refresh-write-back",
+      status: "skipped",
+      error: "write_back_superseded",
+    };
+  }
+  return {
+    source: "oauth-refresh-write-back",
+    status: "failed",
+    error: persistence.code,
+  };
 }
 
 function failureReport(
@@ -801,7 +842,7 @@ function extractCredentialState(
   const expiresAt = expiresAtMillis(oauth.expiresAt);
   const plan =
     stringValue(oauth.subscriptionType) ?? stringValue(data.subscriptionType);
-  const refresh = buildRefreshContext(data, oauth, nested, writeBack);
+  const refresh = buildRefreshContext(oauth, nested, writeBack);
   const credentials: ClaudeCredentials = {
     source,
     accessToken,
@@ -826,7 +867,6 @@ function extractCredentialState(
 // token and a write-back target. Absent either, the credential is not
 // refreshable and behaves exactly as before.
 function buildRefreshContext(
-  container: Record<string, unknown>,
   oauth: Record<string, unknown>,
   oauthKey: string | undefined,
   writeBack: ClaudeCredentialWriteBack | undefined,
@@ -841,7 +881,6 @@ function buildRefreshContext(
     refreshToken,
     ...(clientId ? { clientId } : {}),
     ...(scopes ? { scopes } : {}),
-    container,
     oauthKey,
     writeBack,
   };
