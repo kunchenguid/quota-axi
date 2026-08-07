@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.1.18](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.17...quota-axi-v0.1.18) (2026-08-07)
+
+
+### Features
+
+* **cli:** add human terminal quota report ([#66](https://github.com/kunchenguid/quota-axi/issues/66)) ([7c5bb5e](https://github.com/kunchenguid/quota-axi/commit/7c5bb5e538951973cc4de01a74f55cf0a9aa45a2))
+* **models:** add intelligence-aware quota evidence ([#64](https://github.com/kunchenguid/quota-axi/issues/64)) ([229ad37](https://github.com/kunchenguid/quota-axi/commit/229ad37fd6ed368b08f76439c1db15959510a4f7))
+
+
+### Bug Fixes
+
+* **cli:** fast-path bare version checks ([#67](https://github.com/kunchenguid/quota-axi/issues/67)) ([f9d5b9f](https://github.com/kunchenguid/quota-axi/commit/f9d5b9f5fdd7d98817f29ef83935acd9b33093d4))
+
 ## [0.1.17](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.16...quota-axi-v0.1.17) (2026-07-31)
 
 
