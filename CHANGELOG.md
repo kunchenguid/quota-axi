@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.19](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.18...quota-axi-v0.1.19) (2026-08-08)
+
+
+### Features
+
+* **tui:** make the human report live and act on captain feedback, fix Pi Kimi OAuth ([#68](https://github.com/kunchenguid/quota-axi/issues/68)) ([fcc9aa3](https://github.com/kunchenguid/quota-axi/commit/fcc9aa3b11dab333cbcb295bbdece303b730fd4e))
+
 ## [0.1.18](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.17...quota-axi-v0.1.18) (2026-08-07)
 
 
