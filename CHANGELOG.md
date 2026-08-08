@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.20](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.19...quota-axi-v0.1.20) (2026-08-08)
+
+
+### Bug Fixes
+
+* **pace:** treat a missing resetsAt on a zero-use window as not-yet-triggered ([#70](https://github.com/kunchenguid/quota-axi/issues/70)) ([3ab4d12](https://github.com/kunchenguid/quota-axi/commit/3ab4d127c5adaa2768f5c2a1320cb14128ae1ad2))
+* **tui:** polish --tui exhaustion notes and align two-up card rows ([#72](https://github.com/kunchenguid/quota-axi/issues/72)) ([170dd33](https://github.com/kunchenguid/quota-axi/commit/170dd33065168774ce39584a2e4110df3aa959cb))
+
 ## [0.1.19](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.18...quota-axi-v0.1.19) (2026-08-08)
 
 
