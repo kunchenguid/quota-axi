@@ -4,7 +4,9 @@ import { copilotAdapter } from "./copilot.js";
 import { cursorAdapter } from "./cursor.js";
 import { grokAdapter } from "./grok.js";
 import { kimiAdapter } from "./kimi.js";
+import { agyAdapter } from "./agy.js";
 import {
+  DEFAULT_PROVIDER_IDS,
   PROVIDER_IDS,
   type ProviderAdapter,
   type ProviderId,
@@ -17,10 +19,11 @@ export const PROVIDERS: Record<ProviderId, ProviderAdapter> = {
   copilot: copilotAdapter,
   grok: grokAdapter,
   kimi: kimiAdapter,
+  antigravity: agyAdapter,
 };
 
 export function parseProviders(value: string | undefined): ProviderId[] {
-  if (!value) return [...PROVIDER_IDS];
+  if (!value) return [...DEFAULT_PROVIDER_IDS];
   const providers = value
     .split(",")
     .map((item) => item.trim())

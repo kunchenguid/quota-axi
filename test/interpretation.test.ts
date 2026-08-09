@@ -42,6 +42,69 @@ function weeklyResetsAt(elapsedFraction: number): string {
 }
 
 describe("quota semantics", () => {
+  it("keeps Antigravity effective relationships unknown while deriving raw window pace", () => {
+    const result = withQuotaSemantics(
+      {
+        provider: "antigravity",
+        label: "Antigravity",
+        source: "cli-print",
+        windows: [
+          {
+            id: "consumer/session",
+            label: "Consumer: Session",
+            kind: "session",
+            percentRemaining: 75,
+            percentUsed: 25,
+            startsAt: "2026-08-09T07:00:00.000Z",
+            resetsAt: "2026-08-09T12:00:00.000Z",
+            windowSeconds: 18_000,
+          },
+        ],
+        state: {
+          status: "fresh",
+          stale: false,
+          sourcesTried: ["cli-print"],
+        },
+      },
+      "2026-08-09T09:00:00.000Z",
+    );
+
+    expect(result.windows[0]?.pace?.status).toBe("behind");
+    expect(result.quotaSemantics).toMatchObject({
+      status: "unknown",
+      effectiveAvailability: [],
+      unresolvedWindowIds: ["consumer/session"],
+    });
+  });
+
+  it("keeps stale Antigravity effective pace and runway unknown", () => {
+    const result = withQuotaSemantics(
+      {
+        provider: "antigravity",
+        label: "Antigravity",
+        source: "cache",
+        windows: [
+          {
+            id: "consumer/session",
+            label: "Consumer: Session",
+            kind: "session",
+            percentRemaining: 75,
+            percentUsed: 25,
+          },
+        ],
+        state: {
+          status: "stale",
+          stale: true,
+          sourcesTried: ["cli-print", "cache"],
+        },
+      },
+      "2026-08-09T09:00:00.000Z",
+    );
+
+    expect(result.quotaSemantics?.status).toBe("unknown");
+    expect(result.quotaSemantics?.effectiveAvailability).toEqual([]);
+  });
+
   it("keeps every stale provider's effective availability unknown", () => {
     const cases: Array<[ProviderQuota["provider"], QuotaWindow[]]> = [
       ["claude", [window("five_hour", "session", 66)]],

@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parseFlags, parseModelsFlags } from "../src/args.js";
-import { main, normalizeArgv } from "../src/cli.js";
+import { main, normalizeArgv, TOP_HELP } from "../src/cli.js";
 import { authCommand } from "../src/commands.js";
 import { PROVIDERS } from "../src/providers/index.js";
 import { redactedResponse } from "../src/render.js";
@@ -51,6 +51,9 @@ describe("CLI flag parsing", () => {
 
   it("scopes comma-separated providers", () => {
     expect(parseFlags(["--provider", "claude"]).providers).toEqual(["claude"]);
+    expect(parseFlags(["--provider", "antigravity"]).providers).toEqual([
+      "antigravity",
+    ]);
     expect(
       parseFlags(["--provider=cursor,copilot,grok,kimi"]).providers,
     ).toEqual(["cursor", "copilot", "grok", "kimi"]);
@@ -130,6 +133,10 @@ describe("CLI flag parsing", () => {
     expect(() => parseFlags(["--provider", "gemini"])).toThrow(
       "unsupported provider",
     );
+  });
+
+  it("documents Antigravity in the supported provider help", () => {
+    expect(TOP_HELP).toContain("antigravity");
   });
 
   it("rejects unknown flags", () => {

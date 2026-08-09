@@ -1,0 +1,64 @@
+{
+  "status": "SUCCESS",
+  "conversation_id": "",
+  "duration_seconds": 0,
+  "num_turns": 0,
+  "response": "Usage information",
+  "usage": {
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "thinking_tokens": 0,
+    "cache_read_tokens": 0,
+    "total_tokens": 0
+  },
+  "command": {
+    "name": "usage",
+    "data": {
+      "description": "Quota usage",
+      "groups": [
+        {
+          "name": "Gemini Models",
+          "description": "Gemini quota",
+          "buckets": [
+            {
+              "id": "gemini-weekly",
+              "name": "Weekly Limit Remaining",
+              "description": "Weekly quota",
+              "window": "weekly",
+              "remaining_fraction": 0.9905693531036377,
+              "reset_time": "2026-08-11T19:28:33Z"
+            },
+            {
+              "id": "gemini-5h",
+              "name": "Five Hour Limit Remaining",
+              "window": "5h",
+              "remaining_fraction": 1,
+              "reset_time": "2026-08-09T15:01:48Z"
+            }
+          ]
+        },
+        {
+          "name": "Claude and GPT models",
+          "description": "Third-party model quota",
+          "buckets": [
+            {
+              "id": "3p-weekly",
+              "name": "Weekly Limit Remaining",
+              "description": "Weekly quota",
+              "window": "weekly",
+              "remaining_fraction": 0.9735119938850403,
+              "reset_time": "2026-08-12T04:39:05Z"
+            },
+            {
+              "id": "3p-5h",
+              "name": "Five Hour Limit Remaining",
+              "window": "5h",
+              "remaining_fraction": 1,
+              "reset_time": "2026-08-09T15:01:48Z"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

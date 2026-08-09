@@ -1,6 +1,6 @@
 ---
 name: quota-axi
-description: "Report local Claude, Codex, Cursor, GitHub Copilot, Grok, and Kimi quota windows via the quota-axi CLI - remaining effective usable runway, percentages, reset times, cycle-average pace vs the reset clock, and provider status read from local auth sources, with no routing, provider mutation, or default ordering preference. Use before deciding whether it is safe to keep spending a provider's quota, when the user asks about usage, rate limits, pace, or remaining quota, or when comparing local provider headroom."
+description: "Report local Claude, Codex, Cursor, GitHub Copilot, Grok, Kimi, and explicit-only Antigravity quota windows via the quota-axi CLI - remaining effective usable runway, percentages, reset times, cycle-average pace vs the reset clock, and provider status read from local auth sources, with no routing, provider mutation, or default ordering preference. Use before deciding whether it is safe to keep spending a provider's quota, when the user asks about usage, rate limits, pace, or remaining quota, or when comparing local provider headroom."
 user-invocable: false
 author: Kun Chen (kunchenguid)
 metadata:
@@ -16,6 +16,7 @@ metadata:
         copilot,
         grok,
         kimi,
+        antigravity,
         cli,
       ]
     category: observability
@@ -32,7 +33,11 @@ route, proxies, intercepts, logs in, imports browser cookies, or mutates provide
 output has no ordering preference. The explicit `models --sort runway` comparator only orders
 quota evidence, preserves ties, and is never a recommendation. It reads local provider auth sources and calls
 first-party provider quota, usage, billing, or entitlement endpoints; it never launches the
-Claude, Grok, Pi, or Kimi CLIs, so it cannot spend the quota it measures.
+Claude, Grok, Pi, or Kimi CLIs. Antigravity is explicit-only and runs only the documented
+1.1.11+ `agy -p "/usage" --output-format json` print command. The child uses the real home and
+minimal current-user session for its existing system-keyring auth, with temporary XDG storage and
+cwd; quota-axi never reads or copies Antigravity credentials and never refreshes auth, calls a
+private RPC, starts a model turn, or launches a second command.
 
 ## When to use
 
@@ -43,7 +48,7 @@ or when comparing supported local provider headroom side by side.
 ## Workflow
 
 1. Run `npx -y quota-axi` for compact TOON output covering supported providers' quota windows.
-2. Scope to one provider with `--provider claude` or to a subset with `--provider cursor,copilot,grok,kimi`.
+2. Scope to one provider with `--provider claude` or to a subset with `--provider cursor,copilot,grok,kimi`. Use `--provider antigravity` only when an explicit Antigravity print-mode probe is wanted; it is not part of the bare/default provider set.
 3. Pass `--json` for the normalized machine-readable model instead of TOON. Read
    `quotaSemantics.effectiveAvailability` rather than treating a model window in isolation:
    account windows can bound every model, and `boundedBy` names every window included in the
@@ -93,6 +98,14 @@ or when comparing supported local provider headroom side by side.
    Grok also reads that same Pi auth file for an independent `xai` OAuth or literal API-key
    entry and treats Grok as usable when either the Grok CLI session or Pi `xai` credential is
    valid.
+10. For Antigravity, quota-axi runs only `agy -p "/usage" --output-format json` from CLI 1.1.11+.
+    The child keeps the real HOME/minimal current-user session for the CLI's existing system-keyring
+    auth, with a private temporary cwd and XDG config/cache/state directories removed after every
+    outcome. Auth inspection reports executable availability only; the quota command establishes
+    usability. Live `5h` and `weekly` buckets receive trusted durations even when groups omit
+    `id`. The vendor's signed-out browser fallback is disclosed for maintainer policy; quota-axi
+    never completes login, copies credentials, invokes private RPCs or model turns, or returns raw
+    stderr/JSON/account/plan data.
 
 ## Usage
 
@@ -103,11 +116,11 @@ commands[3]:
 output:
   Default TOON reports local quota evidence. models is a deterministic data join; --sort runway is explicit opt-in ordering. --tui renders a live human terminal report instead (q quits).
 flags[11]:
-  --provider <claude,codex,cursor,copilot,grok,kimi>, --json, --full, --tui, --refresh <30s-24h>, --once, --allow-keychain-prompt, --intelligence <high|medium|low>, --sort <runway>, --help, -v/--version
+  --provider <claude,codex,cursor,copilot,grok,kimi,antigravity>, --json, --full, --tui, --refresh <30s-24h>, --once, --allow-keychain-prompt, --intelligence <high|medium|low>, --sort <runway>, --help, -v/--version
 examples:
   quota-axi
   quota-axi --provider claude
-  quota-axi --provider cursor,copilot,grok,kimi
+  quota-axi --provider cursor,copilot,grok,kimi,antigravity
   quota-axi --json
   quota-axi --full
   quota-axi --tui

@@ -239,6 +239,129 @@ describe("quota cache", () => {
     ]);
     expect(readCachedProvider("copilot")).toBeUndefined();
   });
+
+  it("round-trips a normalized Antigravity cli-print snapshot without identity", () => {
+    useTempCache();
+    const antigravity: ProviderQuota = {
+      provider: "antigravity",
+      label: "Antigravity",
+      source: "cli-print",
+      windows: [
+        {
+          id: "group:consumer/bucket:session",
+          label: "Session",
+          kind: "session",
+          percentRemaining: 75,
+          resetsAt: "2026-08-09T12:00:00.000Z",
+        },
+      ],
+      plan: "must-not-cache-plan",
+      credits: { remaining: 12, unit: "credits" },
+      account: { email: "must-not-cache@example.invalid" },
+      attempts: [{ source: "cli-print", status: "success" }],
+      state: {
+        status: "fresh",
+        stale: false,
+        refreshedAt: "2026-08-09T08:00:00.000Z",
+        sourcesTried: ["cli-print"],
+      },
+    };
+
+    writeCachedProviders([antigravity]);
+
+    const cached = readCachedProvider("antigravity");
+    expect(cached?.source).toBe("cli-print");
+    expect(cached?.windows[0]?.percentRemaining).toBe(75);
+    expect(cached?.account).toBeUndefined();
+    expect(cached?.attempts).toBeUndefined();
+    expect(cached?.plan).toBeUndefined();
+    expect(cached?.credits).toBeUndefined();
+    const bytes = readFileSync(cacheFilePath(), "utf8");
+    expect(bytes).not.toContain("must-not-cache-plan");
+    expect(bytes).not.toContain("credits");
+  });
+
+  it("rejects Antigravity cache writes and entries with non-print provenance", () => {
+    useTempCache();
+    for (const source of ["api", "web", "cli-rpc", "cache"] as const) {
+      writeCachedProviders([{ ...cachedAntigravity(), source }]);
+      expect(readCachedProvider("antigravity")).toBeUndefined();
+    }
+
+    mkdirSync(dirname(cacheFilePath()), { recursive: true });
+    writeFileSync(
+      cacheFilePath(),
+      JSON.stringify({
+        schemaVersion: 1,
+        providers: [
+          {
+            ...cachedAntigravity(),
+            source: "cli-print",
+            state: {
+              ...cachedAntigravity().state,
+              status: "stale",
+              stale: true,
+            },
+          },
+          {
+            ...cachedAntigravity(),
+            source: "api",
+          },
+          {
+            ...cachedAntigravity(),
+            plan: "crafted-forbidden-plan",
+          },
+        ],
+      }),
+    );
+    expect(readCachedProvider("antigravity")).toBeUndefined();
+  });
+
+  it("retires a prior Antigravity snapshot when a fresh report has only untrusted windows", () => {
+    useTempCache();
+    writeCachedProviders([antigravityWindow("trusted", false)]);
+    writeCachedProviders([antigravityWindow("invalid", true)]);
+
+    expect(readCachedProvider("antigravity")).toBeUndefined();
+  });
+
+  it("caches a mixed Antigravity report with trusted and diagnostic windows", () => {
+    useTempCache();
+    const trusted = antigravityWindow("trusted", false);
+    const invalid = antigravityWindow("invalid", true);
+    writeCachedProviders([
+      {
+        ...trusted,
+        windows: [...trusted.windows, ...invalid.windows],
+        state: { ...trusted.state, untrustedWindowIds: ["invalid"] },
+      },
+    ]);
+
+    const cached = readCachedProvider("antigravity");
+    expect(cached?.windows).toHaveLength(2);
+    expect(
+      cached?.windows.find(({ id }) => id === "invalid")?.percentRemaining,
+    ).toBeUndefined();
+    expect(cached?.state.untrustedWindowIds).toEqual(["invalid"]);
+  });
+
+  it("caches an Antigravity diagnostic window when its percentage is valid", () => {
+    useTempCache();
+    const diagnostic = antigravityWindow("unknown-period", true);
+    diagnostic.windows[0] = {
+      ...diagnostic.windows[0],
+      percentRemaining: 65,
+      percentUsed: 35,
+    };
+
+    writeCachedProviders([diagnostic]);
+
+    const cached = readCachedProvider("antigravity");
+    expect(cached?.windows).toHaveLength(1);
+    expect(cached?.windows[0]?.kind).toBe("unknown");
+    expect(cached?.windows[0]?.percentRemaining).toBe(65);
+    expect(cached?.state.untrustedWindowIds).toEqual(["unknown-period"]);
+  });
 });
 
 function useTempCache(): void {
@@ -276,11 +399,56 @@ function quotaWithoutWindows(provider: ProviderId): ProviderQuota {
   };
 }
 
+function antigravityWindow(id: string, untrusted: boolean): ProviderQuota {
+  return {
+    provider: "antigravity",
+    label: "Antigravity",
+    source: "cli-print",
+    windows: [
+      {
+        id,
+        label: id,
+        kind: "unknown",
+        ...(untrusted ? {} : { percentRemaining: 80, percentUsed: 20 }),
+      },
+    ],
+    state: {
+      status: "fresh",
+      stale: false,
+      sourcesTried: ["cli-print"],
+      ...(untrusted ? { untrustedWindowIds: [id] } : {}),
+    },
+  };
+}
+
+function cachedAntigravity(): ProviderQuota {
+  return {
+    provider: "antigravity",
+    label: "Antigravity",
+    source: "cli-print",
+    windows: [
+      {
+        id: "consumer/session",
+        label: "Session",
+        kind: "session",
+        percentRemaining: 75,
+      },
+    ],
+    state: {
+      status: "fresh",
+      stale: false,
+      refreshedAt: "2026-08-09T08:00:00.000Z",
+      sourcesTried: ["cli-print"],
+    },
+  };
+}
+
 function providerLabel(provider: ProviderId): string {
   if (provider === "claude") return "Claude";
   if (provider === "codex") return "Codex";
   if (provider === "cursor") return "Cursor";
   if (provider === "copilot") return "GitHub Copilot";
   if (provider === "grok") return "Grok";
+  if (provider === "antigravity") return "Antigravity";
   return "Kimi";
 }
