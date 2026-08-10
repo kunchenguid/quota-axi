@@ -16,10 +16,12 @@ import type {
 } from "../types.js";
 import {
   failedProvider,
+  runOverrideFlight,
   sourceNames,
   staleFromCache,
   statusFromError,
   successProvider,
+  type OverrideErrorVerdict,
 } from "./common.js";
 import {
   createPiXaiCredentialBroker,
@@ -108,7 +110,7 @@ export function createGrokAdapter(
   return {
     id: "grok",
     label: "Grok",
-    fetchQuota: (_options) => fetchQuotaWithDependencies(dependencies),
+    fetchQuota: (options) => fetchQuotaWithDependencies(dependencies, options),
     inspectAuth: (_options) => inspectAuthWithDependencies(dependencies),
   };
 }
@@ -116,9 +118,9 @@ export function createGrokAdapter(
 export const grokAdapter = createGrokAdapter();
 
 export async function fetchQuota(
-  _options: ProviderOptions,
+  options: ProviderOptions,
 ): Promise<ProviderQuota> {
-  return fetchQuotaWithDependencies(defaultGrokDependencies);
+  return fetchQuotaWithDependencies(defaultGrokDependencies, options);
 }
 
 export async function inspectAuth(
@@ -129,7 +131,21 @@ export async function inspectAuth(
 
 async function fetchQuotaWithDependencies(
   dependencies: GrokDependencies,
+  options: ProviderOptions,
 ): Promise<ProviderQuota> {
+  // The override flight is exclusive: it never reads Grok CLI or Pi xAI
+  // credential sources and never answers from or writes to the quota cache.
+  const override = options.credentialOverrides?.grok;
+  if (override) {
+    return runOverrideFlight({
+      provider: "grok",
+      label: "Grok",
+      token: override.token,
+      fetchWithToken: (token) => fetchGrokConsumerQuota({ key: token }),
+      classifyError: classifyGrokOverrideError,
+    });
+  }
+
   const attempts: SourceAttempt[] = [];
   let finalError: string | undefined;
   let retryAfter: string | undefined;
@@ -387,6 +403,19 @@ function grokStatusForAuthFailure(
 
 function isDefinitiveGrokAuthError(error: string): boolean {
   return error === GROK_SIGN_IN_REQUIRED_ERROR;
+}
+
+function classifyGrokOverrideError(error: unknown): OverrideErrorVerdict {
+  if (error instanceof RateLimitError) {
+    return {
+      kind: "rate_limited",
+      error: error.message,
+      retryAfter: error.retryAfter,
+    };
+  }
+  const message = errorMessage(error);
+  if (message === GROK_SIGN_IN_REQUIRED_ERROR) return { kind: "rejected" };
+  return { kind: "other", error: message };
 }
 
 export function normalizeGrokConsumerPayload(

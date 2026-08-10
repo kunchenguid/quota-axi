@@ -13,6 +13,11 @@ import type {
 } from "../types.js";
 import { VERSION } from "../version.js";
 import {
+  runOverrideFlight,
+  type OverrideErrorVerdict,
+  type OverrideFlightQuota,
+} from "./common.js";
+import {
   createKimiCodeCliCredentialSource,
   KIMI_CODE_CLI_CREDENTIAL_SOURCE,
   type KimiCodeCliCredentialResolution,
@@ -95,7 +100,21 @@ export function createKimiAdapter(
   return {
     id: "kimi",
     label: "Kimi",
-    fetchQuota(_options: ProviderOptions): Promise<ProviderQuota> {
+    fetchQuota(options: ProviderOptions): Promise<ProviderQuota> {
+      // The override flight is exclusive: it skips the in-flight coalescing
+      // of local-source flights, never resolves Pi or Kimi Code CLI
+      // credentials, and never answers from or writes to the quota cache.
+      const override = options.credentialOverrides?.kimi;
+      if (override) {
+        return runOverrideFlight({
+          provider: "kimi",
+          label: "Kimi",
+          token: override.token,
+          fetchWithToken: (token) =>
+            fetchKimiOverrideQuota(dependencies, token),
+          classifyError: classifyKimiOverrideError,
+        });
+      }
       if (inFlight) return inFlight;
       const acquisition = acquireKimiQuota(dependencies).finally(() => {
         if (inFlight === acquisition) inFlight = undefined;
@@ -279,6 +298,52 @@ async function acquireKimiQuota(
   } finally {
     clearTimeout(deadline);
   }
+}
+
+async function fetchKimiOverrideQuota(
+  dependencies: KimiDependencies,
+  token: string,
+): Promise<OverrideFlightQuota> {
+  const controller = new AbortController();
+  const deadline = setTimeout(
+    () => controller.abort(),
+    dependencies.deadlineMs,
+  );
+  try {
+    const payload = await requestKimiQuota(
+      token,
+      controller.signal,
+      dependencies.fetch,
+      dependencies.now,
+    );
+    const normalized = normalizeKimiPayload(payload);
+    return {
+      windows: normalized.windows,
+      refreshedAt: new Date(dependencies.now()).toISOString(),
+    };
+  } finally {
+    clearTimeout(deadline);
+  }
+}
+
+function classifyKimiOverrideError(error: unknown): OverrideErrorVerdict {
+  if (error instanceof KimiFailure) {
+    if (error.code === "provider_auth_rejected") return { kind: "rejected" };
+    if (error.status === "rate_limited") {
+      return {
+        kind: "rate_limited",
+        error: error.code,
+        retryAfter: error.retryAfter,
+      };
+    }
+    return {
+      kind: "other",
+      error: error.code,
+      status: error.status,
+      retryAfter: error.retryAfter,
+    };
+  }
+  return { kind: "other", error: "override_flight_failed" };
 }
 
 async function resolveCredential(

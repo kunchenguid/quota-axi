@@ -463,8 +463,8 @@ A bounding window with no `resetsAt` at all has not been triggered yet (e.g. a C
 | Name                             | Values                                                                       |
 | -------------------------------- | ---------------------------------------------------------------------------- |
 | Provider statuses                | `fresh`, `stale`, `unavailable`, `auth_required`, `rate_limited`, or `error` |
-| Provider sources                 | `oauth`, `cli-rpc`, `api`, `web`, `cache`, or `unavailable`                  |
-| Current provider adapter sources | `oauth`, `cli-rpc`, `api`, `web`, `cache`, and `unavailable`                 |
+| Provider sources                 | `oauth`, `cli-rpc`, `api`, `web`, `cache`, `override`, or `unavailable`      |
+| Current provider adapter sources | `oauth`, `cli-rpc`, `api`, `web`, `cache`, `override`, and `unavailable`     |
 | Window kinds                     | `session`, `weekly`, `monthly`, `model`, `credits`, or `unknown`             |
 | Window pace statuses             | `ahead`, `on_pace`, `behind`, or `unknown`                                   |
 | Effective pace statuses          | `ahead`, `on_pace`, `behind`, `mixed`, or `unknown`                          |
@@ -501,18 +501,34 @@ Default model order is deterministic and non-preferential: provider, then model 
 
 ### `auth --json` shape
 
-| Object               | Fields                                                    |
-| -------------------- | --------------------------------------------------------- |
-| Auth report          | `generatedAt`, `schemaVersion: 1`, and `auth`             |
-| Provider auth report | `provider` and `sources`                                  |
-| Auth source entry    | `source`, optional `path`, `status`, and optional `error` |
+| Object               | Fields                                                        |
+| -------------------- | ------------------------------------------------------------- |
+| Auth report          | `generatedAt`, `schemaVersion: 1`, `capabilities`, and `auth` |
+| Provider auth report | `provider` and `sources`                                      |
+| Auth source entry    | `source`, optional `path`, `status`, and optional `error`     |
 
 Auth source entries can include `credentialPresent` when a non-secret probe confirms a credential item exists.
 
-| Name                 | Values                                                                                                                                    |
-| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| Auth source statuses | `available`, `missing`, `invalid`, `expired`, `skipped`, or `error`                                                                       |
-| Auth source names    | `oauth-file`, `keychain`, `auth-json`, `auth-env`, `apps-json`, `state-vscdb`, `cli-rpc`, `pi:kimi-coding`, `pi:xai`, and `kimi-code-cli` |
+`capabilities.credentialOverride` advertises the envelope schema and transports of the [credential override contract](#credential-overrides) so consumers can feature-detect support instead of trusting a version string.
+
+| Name                 | Values                                                                                                                                                |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Auth source statuses | `available`, `missing`, `invalid`, `expired`, `skipped`, or `error`                                                                                   |
+| Auth source names    | `oauth-file`, `keychain`, `auth-json`, `auth-env`, `apps-json`, `state-vscdb`, `cli-rpc`, `pi:kimi-coding`, `pi:xai`, `kimi-code-cli`, and `override` |
+
+## Credential overrides
+
+Callers that hold their own provider token can get an answer computed from exactly that credential with the uniform, provider-blind override contract: one envelope shape covers every provider, and consumers carry zero per-vendor knowledge. Pass a schema-1 JSON envelope on stdin (preferred) or in a `0600` file named by `$QUOTA_AXI_CREDENTIALS_FILE`:
+
+```sh
+printf '%s' '{"schema":1,"credentials":{"codex":{"kind":"bearer","token":"..."}}}' | quota-axi --provider codex --json
+```
+
+When the envelope names the queried provider, that adapter uses ONLY the override credential for the flight: no local credential source is read, no vendor CLI fallback runs, no stale-cache answer is served, and nothing is written to or retired from the quota cache. A successful flight is attributed `source: "override"` with `state.sourcesTried: ["override"]`; a definitive HTTP 401/403 surfaces truthfully as `state.status: "auth_required"` with `state.error: "override_rejected"`. When no envelope is present, behavior is byte-for-byte unchanged.
+
+Token bytes live only in the caller's and quota-axi's process memory plus the provider's TLS request: never in argv, never in any environment block (including child processes quota-axi spawns), never cached, and never printed or logged. The `QUOTA_AXI_CREDENTIALS_FILE` transport is fail-closed: a missing, oversized, or group/other-readable file is a validation error, and envelope bytes arriving on both transports is one too.
+
+Feature-detect support through `capabilities.credentialOverride` in `quota-axi auth --json` before sending an envelope; builds without that field silently ignore stdin, so the minimum supported version is the first release that advertises it. The full normative contract - envelope validation, exclusivity, attribution, cache behavior, error catalog, and security analysis - lives in [docs/credential-override.md](docs/credential-override.md).
 
 ## Security Posture
 
@@ -583,6 +599,7 @@ Auth source entries can include `credentialPresent` when a non-secret probe conf
 - It sends credential values only to the first-party provider request they authenticate.
 - It never prints, logs, or caches credential values.
 - It never launches the Claude, Grok, Pi, or Kimi CLIs, so it cannot spend quota or mutate provider credentials while measuring them.
+- Credential-override tokens arrive only via stdin pipe or a `0600` file and exist only in process memory: never in argv, never in any environment block (including spawned children), never persisted, and override flights never read local credential sources or answer from the quota cache.
 
 ### Cache
 
@@ -592,7 +609,7 @@ Auth source entries can include `credentialPresent` when a non-secret probe conf
 | Quota cache permissions                | Uses `0600` file permissions.                                                                                                                                                                                                                                                                                                                                         |
 | Quota cache contents                   | Stores normalized non-secret snapshots only.                                                                                                                                                                                                                                                                                                                          |
 | Claude Keychain access marker          | Lives alongside the quota cache as `claude-keychain-access-granted[-<profile-hash>]-account-<account-hash>`; the profile hash is eight hexadecimal characters when applicable and the account hash is sixteen. It uses `0600` file permissions, contains no credential material or raw account name, and legacy service-only markers are ignored rather than deleted. |
-| Cached reports                         | Only fresh provider snapshots with windows are cached.                                                                                                                                                                                                                                                                                                                |
+| Cached reports                         | Only fresh provider snapshots with windows are cached. Override-flight snapshots (`source: "override"`) are never written, and override entries are rejected when reading.                                                                                                                                                                                            |
 | Fresh provider reports with no windows | Clear any cached snapshot for that provider, so entitlement-only reports do not leave stale quota windows behind.                                                                                                                                                                                                                                                     |
 | Reports and details not cached         | Failed providers, stale providers, account identity, and source attempts are not cached.                                                                                                                                                                                                                                                                              |
 | Claude cache fallback                  | Definitive missing/invalid credential and HTTP 401/403 failures retire the snapshot. Only transient failures may use a formerly fresh snapshot, with a seven-day provider bound plus reset and resetless-window pruning.                                                                                                                                              |

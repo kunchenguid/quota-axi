@@ -16,6 +16,104 @@ export function withRemaining(
   };
 }
 
+/** Attribution marker for flights flown on a credential-override token. */
+export const OVERRIDE_SOURCE = "override" as const satisfies ProviderSource;
+
+/** Truthful result when the provider rejects an override token (401/403). */
+export const OVERRIDE_REJECTED_ERROR = "override_rejected";
+
+export type OverrideFlightQuota = {
+  plan?: string;
+  account?: ProviderQuota["account"];
+  windows: QuotaWindow[];
+  credits?: ProviderQuota["credits"];
+  refreshedAt: string;
+};
+
+/**
+ * How an adapter classifies a failed override flight. `rejected` is a
+ * definitive 401/403-style refusal of the override token itself; other kinds
+ * keep the provider's truthful transient failure and never retry locally.
+ */
+export type OverrideErrorVerdict =
+  | { kind: "rejected" }
+  | { kind: "rate_limited"; error: string; retryAfter?: string }
+  | {
+      kind: "other";
+      error: string;
+      status?: ProviderStatus;
+      retryAfter?: string;
+    };
+
+/**
+ * Fly one provider request using ONLY the supplied override credential. The
+ * contract (docs/credential-override.md): no local credential source is
+ * consulted, no stale-cache answer is served, nothing is written to the quota
+ * cache, attribution is `source: "override"`, and a definitive provider
+ * refusal surfaces as `auth_required` with `override_rejected`.
+ */
+export async function runOverrideFlight(args: {
+  provider: ProviderQuota["provider"];
+  label: string;
+  token: string;
+  fetchWithToken: (token: string) => Promise<OverrideFlightQuota>;
+  classifyError: (error: unknown) => OverrideErrorVerdict;
+}): Promise<ProviderQuota> {
+  const attempts: SourceAttempt[] = [
+    { source: OVERRIDE_SOURCE, status: "failed" },
+  ];
+  try {
+    const quota = await args.fetchWithToken(args.token);
+    attempts[0] = { source: OVERRIDE_SOURCE, status: "success" };
+    return successProvider({
+      provider: args.provider,
+      label: args.label,
+      source: OVERRIDE_SOURCE,
+      plan: quota.plan,
+      account: quota.account,
+      windows: quota.windows,
+      credits: quota.credits,
+      refreshedAt: quota.refreshedAt,
+      sourcesTried: [OVERRIDE_SOURCE],
+      attempts,
+    });
+  } catch (error) {
+    const verdict = args.classifyError(error);
+    if (verdict.kind === "rejected") {
+      attempts[0] = {
+        source: OVERRIDE_SOURCE,
+        status: "failed",
+        error: OVERRIDE_REJECTED_ERROR,
+      };
+      return failedProvider({
+        provider: args.provider,
+        label: args.label,
+        status: "auth_required",
+        error: OVERRIDE_REJECTED_ERROR,
+        sourcesTried: [OVERRIDE_SOURCE],
+        attempts,
+      });
+    }
+    attempts[0] = {
+      source: OVERRIDE_SOURCE,
+      status: "failed",
+      error: verdict.error,
+    };
+    return failedProvider({
+      provider: args.provider,
+      label: args.label,
+      status:
+        verdict.kind === "rate_limited"
+          ? "rate_limited"
+          : (verdict.status ?? statusFromError(verdict.error)),
+      error: verdict.error,
+      retryAfter: verdict.retryAfter,
+      sourcesTried: [OVERRIDE_SOURCE],
+      attempts,
+    });
+  }
+}
+
 export function successProvider(
   provider: Omit<ProviderQuota, "state"> & {
     refreshedAt: string;

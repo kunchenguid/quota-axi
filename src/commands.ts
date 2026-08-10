@@ -2,6 +2,10 @@ import { AxiError } from "axi-sdk-js";
 import { annotateQuotaAdvice } from "./advice.js";
 import { parseFlags, parseModelsFlags, type QuotaFlags } from "./args.js";
 import { writeCachedProviders } from "./cache.js";
+import {
+  CREDENTIAL_OVERRIDE_CAPABILITY,
+  resolveCredentialOverrides,
+} from "./credential-override.js";
 import { withQuotaSemantics } from "./interpretation.js";
 import { createModelsResponse, MODEL_CATALOG_PROVIDER_IDS } from "./models.js";
 import { nowIso } from "./lib/time.js";
@@ -34,9 +38,7 @@ export async function quotaCommand(
 ): Promise<string> {
   const binPath = context?.binPath ?? "quota-axi";
   const flags = parseFlags(args);
-  const options: ProviderOptions = {
-    allowKeychainPrompt: flags.allowKeychainPrompt,
-  };
+  const options = providerOptionsWithOverrides(flags);
 
   if (flags.tui) return quotaTuiReport(flags, options);
 
@@ -133,9 +135,7 @@ export async function modelsCommand(
 ): Promise<string> {
   const binPath = context?.binPath ?? "quota-axi";
   const flags = parseModelsFlags(args);
-  const options: ProviderOptions = {
-    allowKeychainPrompt: flags.allowKeychainPrompt,
-  };
+  const options = providerOptionsWithOverrides(flags);
   const quota = await fetchQuota(flags.providers, options);
   writeCachedProvidersBestEffort(quota.providers);
   const response = createModelsResponse(quota, {
@@ -165,18 +165,39 @@ export async function authCommand(
       ["Run `quota-axi --tui` for the human quota report"],
     );
   }
-  const options: ProviderOptions = {
-    allowKeychainPrompt: flags.allowKeychainPrompt,
-  };
+  const options = providerOptionsWithOverrides(flags);
 
   const reports = await inspectAuth(flags.providers, options);
   return flags.json
     ? JSON.stringify(
-        { generatedAt: nowIso(), schemaVersion: 1, auth: reports },
+        {
+          generatedAt: nowIso(),
+          schemaVersion: 1,
+          capabilities: { credentialOverride: CREDENTIAL_OVERRIDE_CAPABILITY },
+          auth: reports,
+        },
         null,
         2,
       )
     : renderAuthToon(reports, binPath);
+}
+
+/**
+ * Build provider options for one invocation, absorbing the optional
+ * credential-override envelope (docs/credential-override.md). When no
+ * envelope is present the options are byte-for-byte the legacy shape.
+ */
+function providerOptionsWithOverrides(flags: {
+  allowKeychainPrompt: boolean;
+}): ProviderOptions {
+  const credentialOverrides = resolveCredentialOverrides();
+  if (!credentialOverrides) {
+    return { allowKeychainPrompt: flags.allowKeychainPrompt };
+  }
+  return {
+    allowKeychainPrompt: flags.allowKeychainPrompt,
+    credentialOverrides,
+  };
 }
 
 export async function fetchQuota(
@@ -200,7 +221,20 @@ async function inspectAuth(
   options: ProviderOptions,
 ): Promise<AuthProviderReport[]> {
   return Promise.all(
-    providers.map((provider) => PROVIDERS[provider].inspectAuth(options)),
+    providers.map(async (provider) => {
+      const report = await PROVIDERS[provider].inspectAuth(options);
+      const override = options.credentialOverrides?.[provider];
+      if (!override) return report;
+      // An override is a per-flight credential, not a local source; report its
+      // presence without exposing it or probing it remotely.
+      return {
+        provider,
+        sources: [
+          ...report.sources,
+          { source: "override", status: "available", credentialPresent: true },
+        ],
+      };
+    }),
   );
 }
 

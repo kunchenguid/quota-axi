@@ -23,10 +23,12 @@ import type {
 } from "../types.js";
 import {
   failedProvider,
+  runOverrideFlight,
   sourceNames,
   statusFromError,
   successProvider,
   withRemaining,
+  type OverrideErrorVerdict,
 } from "./common.js";
 
 const API_URL = "https://api.anthropic.com/api/oauth/usage";
@@ -126,6 +128,17 @@ export const claudeAdapter: ProviderAdapter = {
 export async function fetchQuota(
   options: ProviderOptions,
 ): Promise<ProviderQuota> {
+  const override = options.credentialOverrides?.claude;
+  if (override) {
+    return runOverrideFlight({
+      provider: "claude",
+      label: "Claude",
+      token: override.token,
+      fetchWithToken: (token) => fetchOauthUsage({ accessToken: token }),
+      classifyError: classifyClaudeOverrideError,
+    });
+  }
+
   const attempts: SourceAttempt[] = [];
 
   const credentialStates = await readCredentialStates(options);
@@ -751,7 +764,9 @@ function extractCredentialState(
   };
 }
 
-async function fetchOauthUsage(credentials: ClaudeCredentials): Promise<{
+async function fetchOauthUsage(
+  credentials: Pick<ClaudeCredentials, "accessToken" | "plan">,
+): Promise<{
   plan?: string;
   account?: ProviderQuota["account"];
   identityError?: string;
@@ -789,7 +804,7 @@ async function fetchOauthUsage(credentials: ClaudeCredentials): Promise<{
 }
 
 async function fetchOauthProfile(
-  credentials: ClaudeCredentials,
+  credentials: Pick<ClaudeCredentials, "accessToken">,
 ): Promise<ClaudeIdentityResult> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
@@ -950,6 +965,19 @@ function errorMessage(error: unknown): string {
   if (error instanceof Error && error.name === "AbortError")
     return "Claude quota request timed out";
   return error instanceof Error ? error.message : "Claude quota unavailable";
+}
+
+function classifyClaudeOverrideError(error: unknown): OverrideErrorVerdict {
+  const failure = error instanceof ClaudeFailure ? error : undefined;
+  if (failure?.definitiveAuth) return { kind: "rejected" };
+  if (failure?.status === "rate_limited") {
+    return {
+      kind: "rate_limited",
+      error: failure.code,
+      retryAfter: failure.retryAfter,
+    };
+  }
+  return { kind: "other", error: failure?.code ?? errorMessage(error) };
 }
 
 class ClaudeFailure extends Error {

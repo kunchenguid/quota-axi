@@ -21,6 +21,7 @@ export type ProviderSource =
   | "api"
   | "web"
   | "cache"
+  | "override"
   | "unavailable";
 
 export type ProviderStatus =
@@ -208,8 +209,30 @@ export type QuotaAxiResponse = {
   help?: string[];
 };
 
+/**
+ * A single per-flight credential supplied through the uniform credential
+ * override contract (see docs/credential-override.md). The token value is
+ * never logged, printed, cached, placed in argv, or exported to the
+ * environment of any child process quota-axi spawns.
+ */
+export type CredentialOverride = {
+  kind: "bearer";
+  token: string;
+};
+
+/** Provider-keyed overrides for one flight; absence means local sources. */
+export type CredentialOverrideMap = Partial<
+  Record<ProviderId, CredentialOverride>
+>;
+
 export type ProviderOptions = {
   allowKeychainPrompt: boolean;
+  /**
+   * Parsed credential-override envelope for this invocation. When an entry
+   * exists for a provider, that provider's adapter uses ONLY that credential:
+   * no local-source fallback and no stale-cache answer.
+   */
+  credentialOverrides?: CredentialOverrideMap;
 };
 
 export type ProviderAdapter = {
@@ -230,6 +253,19 @@ export type AuthSourceReport = {
 export type AuthProviderReport = {
   provider: ProviderId;
   sources: AuthSourceReport[];
+};
+
+/**
+ * Feature advertisement in the `auth --json` report so consumers can
+ * feature-detect contract support instead of trusting a version string.
+ */
+export type AuthCapabilities = {
+  credentialOverride: {
+    /** Envelope schema this build accepts (`{"schema": 1, ...}`). */
+    schema: 1;
+    /** Credential-override transports this build accepts. */
+    transports: ("stdin" | "file")[];
+  };
 };
 
 /** A coarse editorial classification relative to the current model frontier. */

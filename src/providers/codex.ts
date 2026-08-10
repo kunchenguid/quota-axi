@@ -21,11 +21,13 @@ import type {
 } from "../types.js";
 import {
   failedProvider,
+  runOverrideFlight,
   sourceNames,
   staleFromCache,
   statusFromError,
   successProvider,
   withRemaining,
+  type OverrideErrorVerdict,
 } from "./common.js";
 
 const ENDPOINTS = [
@@ -75,8 +77,22 @@ export const codexAdapter: ProviderAdapter = {
 };
 
 export async function fetchQuota(
-  _options: ProviderOptions,
+  options: ProviderOptions,
 ): Promise<ProviderQuota> {
+  // The override flight is exclusive: it never reads CODEX_HOME, never spawns
+  // the vendor CLI fallback (which inherits this process's environment), and
+  // never answers from or writes to the quota cache.
+  const override = options.credentialOverrides?.codex;
+  if (override) {
+    return runOverrideFlight({
+      provider: "codex",
+      label: "Codex",
+      token: override.token,
+      fetchWithToken: (token) => fetchOauthUsage({ accessToken: token }),
+      classifyError: classifyCodexOverrideError,
+    });
+  }
+
   const attempts: SourceAttempt[] = [];
   let finalError = "Codex quota unavailable";
   let retryAfter: string | undefined;
@@ -793,6 +809,21 @@ function errorMessage(error: unknown): string {
   if (error instanceof Error && error.name === "AbortError")
     return "Codex quota request timed out";
   return error instanceof Error ? error.message : "Codex quota unavailable";
+}
+
+function classifyCodexOverrideError(error: unknown): OverrideErrorVerdict {
+  if (error instanceof RateLimitError) {
+    return {
+      kind: "rate_limited",
+      error: error.message,
+      retryAfter: error.retryAfter,
+    };
+  }
+  const message = errorMessage(error);
+  // fetchOauthUsage throws "Codex sign-in required" exactly when every
+  // endpoint refused the bearer with HTTP 401/403.
+  if (message === "Codex sign-in required") return { kind: "rejected" };
+  return { kind: "other", error: message };
 }
 
 class RateLimitError extends Error {

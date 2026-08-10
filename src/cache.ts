@@ -9,6 +9,8 @@ import type {
 } from "./types.js";
 import { PROVIDER_IDS } from "./types.js";
 
+// The cache only persists local-source snapshots; an "override" source entry
+// can never be valid cache provenance, so it is deliberately not listed here.
 const PROVIDER_SOURCES = [
   "oauth",
   "cli-rpc",
@@ -109,6 +111,9 @@ function readCacheProviders(): ProviderQuota[] {
 }
 
 function toCacheProvider(provider: ProviderQuota): ProviderQuota | undefined {
+  // Override flights answer only for their own invocation: their snapshots
+  // are never written to the local-source cache.
+  if (provider.source === "override") return undefined;
   if (provider.state.status !== "fresh" || provider.windows.length === 0)
     return undefined;
   return normalizeCachedProvider({

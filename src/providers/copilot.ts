@@ -19,10 +19,12 @@ import type {
 } from "../types.js";
 import {
   failedProvider,
+  runOverrideFlight,
   sourceNames,
   staleFromCache,
   statusFromError,
   successProvider,
+  type OverrideErrorVerdict,
 } from "./common.js";
 
 const USER_URL = "https://api.github.com/copilot_internal/user";
@@ -55,8 +57,19 @@ export const copilotAdapter: ProviderAdapter = {
 };
 
 export async function fetchQuota(
-  _options: ProviderOptions,
+  options: ProviderOptions,
 ): Promise<ProviderQuota> {
+  const override = options.credentialOverrides?.copilot;
+  if (override) {
+    return runOverrideFlight({
+      provider: "copilot",
+      label: "GitHub Copilot",
+      token: override.token,
+      fetchWithToken: (token) => fetchCopilotUser({ oauthToken: token }),
+      classifyError: classifyCopilotOverrideError,
+    });
+  }
+
   const attempts: SourceAttempt[] = [];
   let finalError: string;
   let retryAfter: string | undefined;
@@ -385,6 +398,21 @@ function errorMessage(error: unknown): string {
   return error instanceof Error
     ? error.message
     : "GitHub Copilot quota unavailable";
+}
+
+function classifyCopilotOverrideError(error: unknown): OverrideErrorVerdict {
+  if (error instanceof RateLimitError) {
+    return {
+      kind: "rate_limited",
+      error: error.message,
+      retryAfter: error.retryAfter,
+    };
+  }
+  const message = errorMessage(error);
+  if (message === "GitHub Copilot sign-in required") {
+    return { kind: "rejected" };
+  }
+  return { kind: "other", error: message };
 }
 
 class RateLimitError extends Error {

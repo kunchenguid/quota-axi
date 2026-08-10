@@ -14,11 +14,13 @@ import type {
 } from "../types.js";
 import {
   failedProvider,
+  runOverrideFlight,
   sourceNames,
   staleFromCache,
   statusFromError,
   successProvider,
   withRemaining,
+  type OverrideErrorVerdict,
 } from "./common.js";
 
 const API_URL = "https://api2.cursor.sh";
@@ -48,8 +50,19 @@ export const cursorAdapter: ProviderAdapter = {
 };
 
 export async function fetchQuota(
-  _options: ProviderOptions,
+  options: ProviderOptions,
 ): Promise<ProviderQuota> {
+  const override = options.credentialOverrides?.cursor;
+  if (override) {
+    return runOverrideFlight({
+      provider: "cursor",
+      label: "Cursor",
+      token: override.token,
+      fetchWithToken: (token) => fetchCursorUsage({ accessToken: token }),
+      classifyError: classifyCursorOverrideError,
+    });
+  }
+
   const attempts: SourceAttempt[] = [];
   let finalError: string;
   let retryAfter: string | undefined;
@@ -431,6 +444,19 @@ function errorMessage(error: unknown): string {
   if (error instanceof Error && error.name === "AbortError")
     return "Cursor quota request timed out";
   return error instanceof Error ? error.message : "Cursor quota unavailable";
+}
+
+function classifyCursorOverrideError(error: unknown): OverrideErrorVerdict {
+  if (error instanceof RateLimitError) {
+    return {
+      kind: "rate_limited",
+      error: error.message,
+      retryAfter: error.retryAfter,
+    };
+  }
+  const message = errorMessage(error);
+  if (message === "Cursor sign-in required") return { kind: "rejected" };
+  return { kind: "other", error: message };
 }
 
 class RateLimitError extends Error {
