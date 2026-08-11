@@ -1180,6 +1180,195 @@ describe("Claude credential-state reporting", () => {
     },
   );
 
+  it("does not report a signed-out account when a definitive 401 leaves the present Keychain credential unread", async () => {
+    usePlatform("darwin");
+    const home = useTempHome();
+    writeClaudeCredential(home, {
+      accessToken: "expired-file-token",
+      expiresAt: "2000-01-01T00:00:00.000Z",
+    });
+    const execFileText = vi.fn(async () => "");
+    vi.doMock("../../src/lib/process.js", () => ({ execFileText }));
+    const fetchMock = vi.fn(async () => new Response(null, { status: 401 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { readCachedProvider, writeCachedProviders } =
+      await import("../../src/cache.js");
+    writeCachedProviders([cachedClaudeQuota(34)]);
+    const chunks: string[] = [];
+
+    const { main } = await import("../../src/cli.js");
+    await main({
+      argv: ["--provider", "claude", "--json", "--full"],
+      binPath: "quota-axi",
+      stdout: {
+        write(chunk) {
+          chunks.push(String(chunk));
+          return true;
+        },
+      },
+    });
+
+    const output = JSON.parse(chunks.join("")) as {
+      providers: Array<{
+        state: {
+          status: string;
+          error?: string;
+          reason?: string;
+          remedyCommand?: string;
+        };
+        attempts?: Array<{ source: string; status: string; error?: string }>;
+      }>;
+    };
+    expect(
+      execFileText.mock.calls.some(([, args]) => args.includes("-w")),
+    ).toBe(false);
+    expect(output.providers[0]?.state).toMatchObject({
+      status: "auth_required",
+      error: "keychain_prompt_required",
+      reason: "keychain_access_required",
+      remedyCommand: "quota-axi --allow-keychain-prompt",
+    });
+    expect(output.providers[0]?.attempts).toContainEqual({
+      source: "oauth-file",
+      status: "failed",
+      error: "Claude sign-in required",
+    });
+    // The rejected token is dead; the account is not known to be signed out,
+    // so the cached snapshot must survive for the stale fallback.
+    expect(readCachedProvider("claude")?.windows[0]?.percentUsed).toBe(34);
+  });
+
+  it("serves stale cached windows when a definitive 401 leaves the Keychain unread", async () => {
+    usePlatform("darwin");
+    const home = useTempHome();
+    writeClaudeCredential(home, {
+      accessToken: "expired-file-token",
+      expiresAt: "2000-01-01T00:00:00.000Z",
+    });
+    vi.doMock("../../src/lib/process.js", () => ({
+      execFileText: vi.fn(async () => ""),
+    }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(null, { status: 401 })),
+    );
+    const { writeCachedProviders } = await import("../../src/cache.js");
+    const cached = cachedClaudeQuota(34);
+    writeCachedProviders([
+      {
+        ...cached,
+        windows: [
+          {
+            ...cached.windows[0]!,
+            resetsAt: new Date(Date.now() + 3_600_000).toISOString(),
+          },
+        ],
+        state: {
+          ...cached.state,
+          refreshedAt: new Date(Date.now() - 60_000).toISOString(),
+        },
+      },
+    ]);
+
+    const { fetchQuota } = await import("../../src/providers/claude.js");
+    const result = await fetchQuota({ allowKeychainPrompt: false });
+
+    expect(result.source).toBe("cache");
+    expect(result.state).toMatchObject({
+      status: "stale",
+      stale: true,
+      error: "keychain_prompt_required",
+    });
+    expect(result.windows[0]?.percentUsed).toBe(34);
+  });
+
+  it("keeps a definitive 401 definitive when the Keychain item is absent", async () => {
+    usePlatform("darwin");
+    const home = useTempHome();
+    writeClaudeCredential(home, {
+      accessToken: "expired-file-token",
+      expiresAt: "2000-01-01T00:00:00.000Z",
+    });
+    const missing = Object.assign(new Error("not found"), { code: 44 });
+    vi.doMock("../../src/lib/process.js", () => ({
+      execFileText: vi.fn(async () => {
+        throw missing;
+      }),
+    }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(null, { status: 401 })),
+    );
+    const { readCachedProvider, writeCachedProviders } =
+      await import("../../src/cache.js");
+    writeCachedProviders([cachedClaudeQuota(34)]);
+
+    const { fetchQuota } = await import("../../src/providers/claude.js");
+    const result = await fetchQuota({ allowKeychainPrompt: false });
+
+    expect(result.state).toMatchObject({
+      status: "auth_required",
+      error: "Claude sign-in required",
+    });
+    expect(readCachedProvider("claude")).toBeUndefined();
+  });
+
+  it("reports an unrecognized usage payload instead of the unread Keychain source", async () => {
+    usePlatform("darwin");
+    const home = useTempHome();
+    writeClaudeCredential(home, {
+      accessToken: "file-token",
+      expiresAt: "2035-01-01T00:00:00.000Z",
+    });
+    vi.doMock("../../src/lib/process.js", () => ({
+      execFileText: vi.fn(async () => ""),
+    }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify({}), { status: 200 })),
+    );
+
+    const { fetchQuota } = await import("../../src/providers/claude.js");
+    const { annotateQuotaAdvice } = await import("../../src/advice.js");
+    const result = await fetchQuota({ allowKeychainPrompt: false });
+    const [annotated] = annotateQuotaAdvice({
+      generatedAt: "2026-08-11T18:00:00.000Z",
+      providers: [result],
+    }).providers;
+
+    expect(result.state.error).toBe("Claude quota unavailable");
+    expect(annotated?.state.reason).toBeUndefined();
+  });
+
+  it("advises the Keychain grant when the credential file cannot be parsed", async () => {
+    usePlatform("darwin");
+    const home = useTempHome();
+    mkdirSync(join(home, ".claude"), { recursive: true });
+    writeFileSync(join(home, ".claude", ".credentials.json"), "{not-json");
+    vi.doMock("../../src/lib/process.js", () => ({
+      execFileText: vi.fn(async () => ""),
+    }));
+
+    const { fetchQuota } = await import("../../src/providers/claude.js");
+    const { annotateQuotaAdvice } = await import("../../src/advice.js");
+    const result = await fetchQuota({ allowKeychainPrompt: false });
+    const [annotated] = annotateQuotaAdvice({
+      generatedAt: "2026-08-11T18:00:00.000Z",
+      providers: [result],
+    }).providers;
+
+    expect(result.attempts).toContainEqual({
+      source: "oauth-file",
+      status: "skipped",
+      error: "credentials_invalid",
+    });
+    expect(annotated?.state).toMatchObject({
+      error: "keychain_prompt_required",
+      reason: "keychain_access_required",
+      remedyCommand: "quota-axi --allow-keychain-prompt",
+    });
+  });
+
   it("does not mark keychain prompt required when the keychain item is missing", async () => {
     usePlatform("darwin");
     useTempHome();

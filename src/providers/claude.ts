@@ -129,6 +129,13 @@ export async function fetchQuota(
   const attempts: SourceAttempt[] = [];
 
   const credentialStates = await readCredentialStates(options);
+  // A credential source we never read - the macOS Keychain still behind its
+  // one-time prompt - leaves the account's real sign-in state unknown. A
+  // 401/403 from another source only proves the token we sent is dead, so it
+  // must not be promoted to a definitive sign-out while this source is unread.
+  const unreadSource = credentialStates.find(
+    (state): state is SkippedCredentialState => state.status === "skipped",
+  );
   const credentials = credentialStates
     .filter(
       (
@@ -207,29 +214,29 @@ export async function fetchQuota(
         else transientFailure = failure;
       }
     }
-  } else {
-    const skipped = credentialStates.find(
-      (state): state is SkippedCredentialState => state.status === "skipped",
+  } else if (!unreadSource) {
+    const invalid = credentialStates.some(
+      (state) => state.status === "invalid",
     );
-    if (skipped) {
-      transientFailure = new ClaudeFailure(
-        skipped.source.error ?? "Claude quota unavailable",
-        { staleEligible: true },
-      );
-    } else {
-      const invalid = credentialStates.some(
-        (state) => state.status === "invalid",
-      );
-      definitiveFailure = new ClaudeFailure(
-        invalid ? "credentials_invalid" : "credentials_missing",
-        { status: "auth_required", definitiveAuth: true },
-      );
-    }
+    definitiveFailure = new ClaudeFailure(
+      invalid ? "credentials_invalid" : "credentials_missing",
+      { status: "auth_required", definitiveAuth: true },
+    );
   }
 
+  const unreadFailure = unreadSource
+    ? new ClaudeFailure(
+        unreadSource.source.error ?? "Claude quota unavailable",
+        {
+          staleEligible: true,
+        },
+      )
+    : undefined;
+
   return failureReport(
-    definitiveFailure ??
+    (unreadSource ? undefined : definitiveFailure) ??
       transientFailure ??
+      unreadFailure ??
       new ClaudeFailure("Claude quota unavailable", { staleEligible: true }),
     attempts,
   );

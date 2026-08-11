@@ -391,6 +391,8 @@ When Pi's `xai` credential (or a still-valid Grok CLI session) establishes model
 
 Claude credential failures without a usable access token preserve the precise `credentials_missing` or `credentials_invalid` error. A usage response with HTTP 401/403 reports `Claude sign-in required`. These definitive failures return no windows and retire the Claude cache instead of masking current authentication state with stale quota.
 
+A definitive result requires every local Claude credential source to have been consulted. While a source is still unread - most often the macOS Keychain behind its one-time prompt - a rejected token only proves that token is dead, so `state.error` stays `keychain_prompt_required` with `reason: keychain_access_required`, the cache is preserved, and stale windows may still be served. Callers must not read that state as a signed-out account.
+
 ### Quota windows
 
 | Field set | Fields                                                                                          |
@@ -538,7 +540,8 @@ Auth source entries can include `credentialPresent` when a non-secret probe conf
 - Without the flag or the current marker, quota-axi may perform a non-secret pinned Keychain item presence check so it only suggests Keychain access when the selected Claude credential item exists.
 - In `--full` output, Claude usage attempts identify `oauth-file` or `keychain` as the credential discovery source. They never include the Keychain account.
 - When an access token exists, local `expiresAt` metadata is advisory. quota-axi sends that token only to Anthropic's existing read-only usage request; success returns fresh quota, while HTTP 401/403 is the definitive authentication result.
-- Missing or invalid credentials without a usable access token and usage HTTP 401/403 bypass and best-effort retire Claude cache. Timeout, network, rate-limit, server, and response-compatibility failures may use only a formerly fresh Claude snapshot less than seven days old. Reset-expired windows are removed; resetless session, monthly, and credit windows expire after five hours, resetless weekly and model windows expire after seven days, and resetless unknown windows are rejected.
+- A stale `~/.claude/.credentials.json` left behind by an earlier sign-in is expected on macOS, where Claude Code keeps the live credential in the Keychain. Its HTTP 401/403 does not retire the Claude cache or report sign-out while the Keychain value is unread; quota-axi emits the `keychain_access_required` remedy instead.
+- Missing or invalid credentials without a usable access token and usage HTTP 401/403 bypass and best-effort retire Claude cache once every credential source has been consulted. Timeout, network, rate-limit, server, and response-compatibility failures may use only a formerly fresh Claude snapshot less than seven days old. Reset-expired windows are removed; resetless session, monthly, and credit windows expire after five hours, resetless weekly and model windows expire after seven days, and resetless unknown windows are rejected.
 - After a successful usage read, quota-axi queries Anthropic's first-party OAuth profile endpoint with the same credential. Its authoritative root `account.uuid` is exposed as `account.accountId` only in `--full` output; if that field is absent, `identityStatus` is `unverified` instead of deriving an identity from email, organization data, or cached account metadata.
 
 **Codex**

@@ -1,3 +1,4 @@
+import { statusFromError } from "./providers/common.js";
 import type {
   ProviderQuota,
   QuotaAxiResponse,
@@ -13,6 +14,7 @@ export const GROK_ACCESS_TOKEN_EXPIRED_ERROR = "Grok access token expired";
 
 const BLOCKED_CREDENTIAL_ERRORS = new Set([
   "credentials_expired",
+  "credentials_invalid",
   "credentials_missing",
 ]);
 
@@ -83,10 +85,17 @@ function needsGrokTokenRefreshAdvice(provider: ProviderQuota): boolean {
 }
 
 function isBlockedCredentialAttempt(attempt: SourceAttempt): boolean {
+  if (attempt.source === "keychain" || !attempt.error) return false;
+  if (attempt.status === "skipped")
+    return BLOCKED_CREDENTIAL_ERRORS.has(attempt.error);
+  // A source that was probed and definitively rejected is blocked the same way
+  // a skipped expired one is: its local credential cannot authenticate, so the
+  // unread Keychain credential is the remaining path to live quota. Transport
+  // and rate-limit failures are excluded - reading the Keychain would not fix
+  // them.
   return (
-    attempt.source !== "keychain" &&
-    attempt.status === "skipped" &&
-    Boolean(attempt.error && BLOCKED_CREDENTIAL_ERRORS.has(attempt.error))
+    attempt.status === "failed" &&
+    statusFromError(attempt.error) === "auth_required"
   );
 }
 
