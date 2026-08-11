@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.21](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.20...quota-axi-v0.1.21) (2026-08-11)
+
+
+### Features
+
+* **tui:** label headline bars with binding windows ([#75](https://github.com/kunchenguid/quota-axi/issues/75)) ([de9d0c0](https://github.com/kunchenguid/quota-axi/commit/de9d0c00ef7757244ed419bd7ef3ae3d2fef0491))
+
 ## [0.1.20](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.19...quota-axi-v0.1.20) (2026-08-08)
 
 
