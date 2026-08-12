@@ -20,17 +20,23 @@ const CLI_CONFIG = {
 const originalEnv = {
   CURSOR_STATE_DB: process.env.CURSOR_STATE_DB,
   CURSOR_CLI_CONFIG: process.env.CURSOR_CLI_CONFIG,
+  CURSOR_CLI_AUTH_JSON: process.env.CURSOR_CLI_AUTH_JSON,
   XDG_CACHE_HOME: process.env.XDG_CACHE_HOME,
 };
 let tempDir: string | undefined;
 let cliConfigPath: string;
+let cliAuthJsonPath: string;
 
 beforeEach(() => {
   vi.resetModules();
   tempDir = mkdtempSync(join(tmpdir(), "quota-axi-cursor-cli-"));
   cliConfigPath = join(tempDir, "cli-config.json");
+  // Isolated to a nonexistent-by-default path so these keychain cases never
+  // fall through to a real ~/.config/cursor/auth.json on this machine.
+  cliAuthJsonPath = join(tempDir, "cursor-cli-auth.json");
   process.env.CURSOR_STATE_DB = join(tempDir, "state.vscdb");
   process.env.CURSOR_CLI_CONFIG = cliConfigPath;
+  process.env.CURSOR_CLI_AUTH_JSON = cliAuthJsonPath;
   process.env.XDG_CACHE_HOME = join(tempDir, "cache");
 });
 
@@ -383,6 +389,7 @@ describe("Cursor CLI keychain credential source", () => {
 
     expect(result.sources.map((source) => source.source)).toEqual([
       "state-vscdb",
+      "cursor-cli-auth",
     ]);
     expect(securityCalls(calls)).toEqual([]);
   });
@@ -408,6 +415,11 @@ describe("Cursor editor state.vscdb source (regression)", () => {
         source: "state-vscdb",
         path: process.env.CURSOR_STATE_DB,
         status: "available",
+      },
+      {
+        source: "cursor-cli-auth",
+        path: cliAuthJsonPath,
+        status: "missing",
       },
       {
         source: "cli-keychain",
@@ -452,6 +464,11 @@ describe("Cursor editor state.vscdb source (regression)", () => {
           status: "failed",
           error: "Cursor sign-in required",
         },
+        {
+          source: "cursor-cli-auth",
+          status: "skipped",
+          error: "credentials_missing",
+        },
         { source: "cli-keychain", status: "success" },
       ]);
       const annotated = annotateQuotaAdvice({
@@ -487,6 +504,11 @@ describe("Cursor editor state.vscdb source (regression)", () => {
           source: "state-vscdb",
           status: "failed",
           error: "Cursor sign-in required",
+        },
+        {
+          source: "cursor-cli-auth",
+          status: "skipped",
+          error: "credentials_missing",
         },
         {
           source: "cli-keychain",

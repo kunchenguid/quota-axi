@@ -171,8 +171,7 @@ export async function inspectAuth(
   const sources = [editorState.source, cliAuthState.source];
   if (isCursorCliSourceSupported()) {
     const nonPromptingAvailable =
-      editorState.status === "available" ||
-      cliAuthState.status === "available";
+      editorState.status === "available" || cliAuthState.status === "available";
     sources.push(
       (
         await readCliCredentialState(
