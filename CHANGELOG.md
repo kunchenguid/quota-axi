@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.24](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.23...quota-axi-v0.1.24) (2026-08-12)
+
+
+### Bug Fixes
+
+* **tui:** render unbounded providers as per-window cards ([#82](https://github.com/kunchenguid/quota-axi/issues/82)) ([7caff26](https://github.com/kunchenguid/quota-axi/commit/7caff26e9dfe86580a1d8d54371a2541c1d3076b))
+
 ## [0.1.23](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.22...quota-axi-v0.1.23) (2026-08-12)
 
 
