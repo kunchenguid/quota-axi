@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.22](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.21...quota-axi-v0.1.22) (2026-08-12)
+
+
+### Bug Fixes
+
+* **tui:** align headline marker with binding window ([#78](https://github.com/kunchenguid/quota-axi/issues/78)) ([37a49dc](https://github.com/kunchenguid/quota-axi/commit/37a49dcf8a7d3f54e93787e0efdbcb8807e33e22))
+
 ## [0.1.21](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.20...quota-axi-v0.1.21) (2026-08-11)
 
 
