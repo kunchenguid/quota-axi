@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.23](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.22...quota-axi-v0.1.23) (2026-08-12)
+
+
+### Features
+
+* **cursor:** detect Cursor CLI Keychain auth ([#80](https://github.com/kunchenguid/quota-axi/issues/80)) ([6b7ff55](https://github.com/kunchenguid/quota-axi/commit/6b7ff55041b3b42529639a8ee6e4365822aa542f))
+
 ## [0.1.22](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.21...quota-axi-v0.1.22) (2026-08-12)
 
 
