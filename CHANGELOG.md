@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.26](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.25...quota-axi-v0.1.26) (2026-08-13)
+
+
+### Bug Fixes
+
+* **providers:** prefer verifiably live credentials ([#90](https://github.com/kunchenguid/quota-axi/issues/90)) ([48892fc](https://github.com/kunchenguid/quota-axi/commit/48892fc92816c68f15b13039f5e886d213b7e091))
+
 ## [0.1.25](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.24...quota-axi-v0.1.25) (2026-08-13)
 
 
