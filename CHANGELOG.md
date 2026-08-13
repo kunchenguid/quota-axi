@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.25](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.24...quota-axi-v0.1.25) (2026-08-13)
+
+
+### Bug Fixes
+
+* **cursor:** report CLI Keychain quota attempts and remedies ([#87](https://github.com/kunchenguid/quota-axi/issues/87)) ([bad10f1](https://github.com/kunchenguid/quota-axi/commit/bad10f12ad60b50021243e0ab103d016ff928e32))
+
 ## [0.1.24](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.23...quota-axi-v0.1.24) (2026-08-12)
 
 
