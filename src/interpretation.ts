@@ -93,6 +93,12 @@ function semanticsFor(
         provider.state.untrustedWindowIds ?? [],
         generatedAt,
       );
+    case "zai":
+      return zaiSemantics(
+        provider.windows,
+        provider.state.untrustedWindowIds ?? [],
+        generatedAt,
+      );
     case "cursor":
       return cursorSemantics(provider.windows, generatedAt);
     case "copilot":
@@ -323,6 +329,61 @@ function cursorSemantics(
   return knownSemantics(
     effectiveAvailability,
     "Cursor's included, auto, API usage, and spend-limit windows jointly bound every model, so effective remaining is the minimum across the named windows.",
+  );
+}
+
+function zaiSemantics(
+  windows: QuotaWindow[],
+  untrustedWindowIds: string[],
+  generatedAt: string,
+): QuotaSemantics {
+  const token = windows.filter(
+    ({ id }) => id === "five_hour" || id === "weekly",
+  );
+  const tool = windows.filter(({ id }) => id === "mcp_month");
+  const recognized = new Set([...token, ...tool]);
+  const unresolved = windows.filter((window) => !recognized.has(window));
+  const unresolvedWindowIds = [
+    ...new Set([...unresolved.map(({ id }) => id), ...untrustedWindowIds]),
+  ];
+  if (unresolvedWindowIds.length > 0) {
+    const recognizedWindows = [...token, ...tool];
+    return {
+      status: "partial",
+      description:
+        "Z.AI's five-hour and weekly token windows jointly bound model usage and the monthly tool window is a separate resource, but unfamiliar windows prevent a definitive effective percentage.",
+      effectiveAvailability:
+        recognizedWindows.length > 0
+          ? [
+              {
+                scope: "all_models",
+                status: "unknown",
+                boundedBy: recognizedWindows.map(({ id }) => id),
+                pace: summarizeEffectivePace(recognizedWindows),
+                runway: {
+                  status: "unknown",
+                  unmeasurableWindowIds: [
+                    ...recognizedWindows.map(({ id }) => id),
+                    ...unresolvedWindowIds,
+                  ],
+                },
+              },
+            ]
+          : [],
+      unresolvedWindowIds,
+    };
+  }
+
+  const effectiveAvailability: EffectiveAvailability[] = [];
+  if (token.length > 0) {
+    effectiveAvailability.push(availability("all_models", token, generatedAt));
+  }
+  if (tool.length > 0) {
+    effectiveAvailability.push(availability("tools", tool, generatedAt));
+  }
+  return knownSemantics(
+    effectiveAvailability,
+    "Z.AI's five-hour and weekly token windows jointly bound model usage, so effective remaining is the minimum across the named windows. The monthly tool window is an independent resource.",
   );
 }
 
