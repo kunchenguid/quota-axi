@@ -20,7 +20,7 @@ describe("model catalog", () => {
     expect(() => validateModelCatalog(MODEL_CATALOG)).not.toThrow();
     expect(
       new Set(MODEL_CATALOG.entries.map((entry) => entry.provider)),
-    ).toEqual(new Set(["claude", "codex", "grok", "kimi"]));
+    ).toEqual(new Set(["claude", "codex", "grok", "kimi", "agy"]));
     expect(
       new Set(MODEL_CATALOG.entries.map((entry) => entry.intelligence)),
     ).toEqual(new Set(["high", "medium", "low"]));

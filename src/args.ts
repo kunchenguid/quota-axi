@@ -58,7 +58,7 @@ export function parseModelsFlags(args: string[]): ModelsFlags {
     throw new AxiError(
       `models does not support provider: ${unsupported}`,
       "VALIDATION_ERROR",
-      ["Supported model providers: claude, codex, grok, kimi"],
+      ["Supported model providers: claude, codex, grok, kimi, agy"],
     );
   }
   return flags;
@@ -240,7 +240,9 @@ function parseProviderScope(value: string | undefined): ProviderId[] {
     throw new AxiError(
       error instanceof Error ? error.message : "unsupported provider",
       "VALIDATION_ERROR",
-      ["Supported providers: claude, codex, cursor, copilot, grok, kimi"],
+      [
+        "Supported providers: claude, codex, cursor, copilot, grok, kimi, agy, cline",
+      ],
     );
   }
 }

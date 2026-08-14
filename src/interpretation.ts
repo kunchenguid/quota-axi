@@ -91,6 +91,8 @@ function semanticsFor(
     case "cursor":
       return cursorSemantics(provider.windows, generatedAt);
     case "copilot":
+    case "agy":
+    case "cline":
       return unknownSemantics(
         provider.windows,
         `quota-axi does not know whether ${provider.label}'s reported windows are independent or jointly bounding, so it does not claim an effective remaining percentage.`,

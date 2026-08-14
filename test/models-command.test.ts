@@ -151,7 +151,7 @@ describe("models command", () => {
     });
 
     const json = JSON.parse(await capture(["models", "--json"]));
-    expect(json.models).toHaveLength(12);
+    expect(json.models).toHaveLength(13);
     expect(process.exitCode).toBe(1);
 
     process.exitCode = undefined;

@@ -96,5 +96,12 @@ export const MODEL_CATALOG: ModelCatalog = {
       label: "Kimi K1.5",
       intelligence: "low",
     },
+    {
+      provider: "agy",
+      id: "gemini-3.7-flash",
+      label: "Gemini 3.7 Flash",
+      intelligence: "medium",
+      aliases: ["gemini-flash-latest"],
+    },
   ],
 };
