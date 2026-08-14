@@ -10,6 +10,7 @@ const originalCursor = PROVIDERS.cursor;
 const originalCopilot = PROVIDERS.copilot;
 const originalGrok = PROVIDERS.grok;
 const originalKimi = PROVIDERS.kimi;
+const originalAgy = PROVIDERS.agy;
 
 afterEach(() => {
   PROVIDERS.claude = originalClaude;
@@ -18,6 +19,7 @@ afterEach(() => {
   PROVIDERS.copilot = originalCopilot;
   PROVIDERS.grok = originalGrok;
   PROVIDERS.kimi = originalKimi;
+  PROVIDERS.agy = originalAgy;
   process.exitCode = undefined;
 });
 
@@ -139,7 +141,7 @@ describe("models command", () => {
   });
 
   it("fails when every catalog provider fails and rejects non-catalog scopes", async () => {
-    for (const provider of ["claude", "codex", "grok", "kimi"] as const) {
+    for (const provider of ["claude", "codex", "grok", "kimi", "agy"] as const) {
       PROVIDERS[provider] = adapter(failedQuota(provider));
     }
     PROVIDERS.cursor = adapter({
@@ -185,7 +187,7 @@ function adapter(quota: ProviderQuota): ProviderAdapter {
 }
 
 function failedQuota(
-  provider: "claude" | "codex" | "grok" | "kimi",
+  provider: "claude" | "codex" | "grok" | "kimi" | "agy",
 ): ProviderQuota {
   return {
     provider,
