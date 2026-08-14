@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.28](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.27...quota-axi-v0.1.28) (2026-08-14)
+
+
+### Bug Fixes
+
+* **providers:** resolve Cursor monthly pace and runway ([#94](https://github.com/kunchenguid/quota-axi/issues/94)) ([ff89e7a](https://github.com/kunchenguid/quota-axi/commit/ff89e7a41fe1053781310fc842442182e7389f51))
+
 ## [0.1.27](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.26...quota-axi-v0.1.27) (2026-08-14)
 
 
