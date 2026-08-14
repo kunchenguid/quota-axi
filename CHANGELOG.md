@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.27](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.26...quota-axi-v0.1.27) (2026-08-14)
+
+
+### Features
+
+* **cursor:** report effective remaining across quota windows ([#92](https://github.com/kunchenguid/quota-axi/issues/92)) ([649cede](https://github.com/kunchenguid/quota-axi/commit/649cede0bbad8bf44bbe52668a722b8976f4996d))
+
 ## [0.1.26](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.25...quota-axi-v0.1.26) (2026-08-13)
 
 
