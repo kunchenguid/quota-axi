@@ -71,8 +71,10 @@ or when comparing supported local provider headroom side by side.
    Plain calls then reuse the corresponding account-scoped access marker. Claude's marker is also
    profile-scoped and its Keychain lookup is pinned to Claude Code's validated current-user
    account. Cursor's `cli-keychain` source is used only when its non-prompting editor source has no
-   usable token; quota-axi never reads `cursor-refresh-token`, so an expired CLI access token
-   requires `cursor-agent login`. Legacy Claude markers are not reused.
+   usable token. On Linux, Cursor's `cli-authfile` source reads only `accessToken` from
+   `${CURSOR_CLI_CONFIG}` or the XDG `cursor/auth.json` path. quota-axi never reads a Cursor
+   refresh token, so an expired CLI access token requires `cursor-agent login`. Legacy Claude
+   markers are not reused.
 7. For Grok, read `state.authStatus` before any logout wording. `expired_refreshable` means a
    local session still looks signed in but short-lived access expired and a bounded read-only
    liveness attempt could not validate it (an empirically live stored-expired bearer reports
