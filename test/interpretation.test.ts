@@ -355,14 +355,14 @@ describe("quota semantics", () => {
   });
 
   it("labels unknown and unfamiliar relationships instead of inventing an answer", () => {
-    const cursor = withQuotaSemantics(
-      provider("cursor", [window("included_usage", "monthly", 100)]),
+    const copilot = withQuotaSemantics(
+      provider("copilot", [window("premium_interactions", "monthly", 100)]),
       GENERATED_AT,
     );
-    expect(cursor.quotaSemantics).toMatchObject({
+    expect(copilot.quotaSemantics).toMatchObject({
       status: "unknown",
       effectiveAvailability: [],
-      unresolvedWindowIds: ["included_usage"],
+      unresolvedWindowIds: ["premium_interactions"],
     });
 
     const kimi = withQuotaSemantics(
@@ -383,6 +383,105 @@ describe("quota semantics", () => {
       ],
       unresolvedWindowIds: ["limit:2"],
     });
+  });
+
+  it("bounds Cursor by its lowest recognized window across all models", () => {
+    const result = withQuotaSemantics(
+      provider("cursor", [
+        window("included_usage", "monthly", 58),
+        window("auto_usage", "monthly", 88),
+        window("api_usage", "monthly", 21),
+        window("spend_limit", "credits", 40),
+      ]),
+      GENERATED_AT,
+    );
+
+    expect(result.quotaSemantics?.status).toBe("known");
+    expect(result.quotaSemantics?.unresolvedWindowIds).toBeUndefined();
+    expect(result.quotaSemantics?.effectiveAvailability).toEqual([
+      expect.objectContaining({
+        scope: "all_models",
+        status: "known",
+        effectivePercentRemaining: 21,
+        boundedBy: ["included_usage", "auto_usage", "api_usage", "spend_limit"],
+        limitingWindowIds: ["api_usage"],
+      }),
+    ]);
+  });
+
+  it("bounds Cursor on the recognized windows it actually reports", () => {
+    const result = withQuotaSemantics(
+      provider("cursor", [
+        window("included_usage", "monthly", 58),
+        window("auto_usage", "monthly", 88),
+      ]),
+      GENERATED_AT,
+    );
+
+    expect(result.quotaSemantics?.effectiveAvailability[0]).toMatchObject({
+      scope: "all_models",
+      status: "known",
+      effectivePercentRemaining: 58,
+      boundedBy: ["included_usage", "auto_usage"],
+      limitingWindowIds: ["included_usage"],
+    });
+  });
+
+  it("keeps an unfamiliar Cursor window unresolved and out of the bound", () => {
+    const recognized = [
+      window("included_usage", "monthly", 58),
+      window("auto_usage", "monthly", 88),
+      window("api_usage", "monthly", 21),
+    ];
+    const withoutUnfamiliar = withQuotaSemantics(
+      provider("cursor", recognized),
+      GENERATED_AT,
+    );
+    const result = withQuotaSemantics(
+      provider("cursor", [
+        ...recognized,
+        window("mystery_limit", "unknown", 3),
+      ]),
+      GENERATED_AT,
+    );
+
+    expect(result.quotaSemantics?.status).toBe("partial");
+    expect(result.quotaSemantics?.unresolvedWindowIds).toEqual([
+      "mystery_limit",
+    ]);
+    // The unfamiliar window is the lowest of all, so folding it in would move
+    // the bound; the recognized-only minimum must survive untouched.
+    expect(result.quotaSemantics?.effectiveAvailability).toEqual(
+      withoutUnfamiliar.quotaSemantics?.effectiveAvailability,
+    );
+    expect(
+      result.quotaSemantics?.effectiveAvailability[0]
+        ?.effectivePercentRemaining,
+    ).toBe(21);
+  });
+
+  it("does not fabricate a Cursor bound from an unmeasured window", () => {
+    const result = withQuotaSemantics(
+      provider("cursor", [
+        window("included_usage", "monthly", 58),
+        {
+          id: "spend_limit",
+          label: "spend limit",
+          kind: "credits",
+          limitUsd: 20,
+        },
+      ]),
+      GENERATED_AT,
+    );
+
+    expect(result.quotaSemantics?.effectiveAvailability[0]).toMatchObject({
+      scope: "all_models",
+      status: "unknown",
+      boundedBy: ["included_usage", "spend_limit"],
+    });
+    expect(result.quotaSemantics?.effectiveAvailability[0]).not.toHaveProperty(
+      "effectivePercentRemaining",
+    );
   });
 
   it("still fails Claude effective runway closed when a triggered window's reset already expired", () => {

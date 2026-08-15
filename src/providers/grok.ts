@@ -22,6 +22,12 @@ import {
   successProvider,
 } from "./common.js";
 import {
+  selectCredential,
+  type AttemptOutcome,
+  type CredentialCandidate as SelectionCandidate,
+  type CredentialSelection,
+} from "./credential-selection.js";
+import {
   createPiXaiCredentialBroker,
   type PiXaiCredentialBroker,
   type PiXaiCredentialResolution,
@@ -29,6 +35,12 @@ import {
 
 const CONSUMER_QUOTA_URL =
   "https://grok.com/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig";
+/**
+ * Read-only first-party model-listing endpoint used only as the bounded
+ * liveness probe for a stored-expired Pi xAI bearer. It spends no quota and
+ * its response body is discarded unread.
+ */
+const PI_XAI_LIVENESS_PROBE_URL = "https://api.x.ai/v1/models";
 const API_TIMEOUT_MS = 15_000;
 const RESPONSE_LIMIT_BYTES = 64 * 1024;
 const GRPC_MESSAGE_LIMIT_CHARS = 1_024;
@@ -39,6 +51,8 @@ const GROK_CONSUMER_QUOTA_UNAVAILABLE_ERROR = "Grok consumer quota unavailable";
 const GROK_PI_CREDENTIAL_RESOLUTION_ERROR =
   "Grok Pi credential resolution failed";
 const PI_MODEL_AUTH_ONLY_ERROR = "model_auth_only";
+const PI_MODEL_AUTH_PROBE_LIVE = "model_auth_probe_live";
+const PI_CREDENTIALS_REJECTED_ERROR = "credentials_rejected";
 
 const PRODUCT_NAMES: Record<number, { id: string; label: string }> = {
   0: { id: "unspecified", label: "Other" },
@@ -57,18 +71,25 @@ type GrokCredentials = {
   expiresAt?: string;
 };
 
+type CliCredentialCandidate = {
+  credentials: GrokCredentials;
+  localState: "valid" | "expired";
+  refreshable: boolean;
+};
+
 type CredentialState =
   | {
-      status: "available";
-      credentials: GrokCredentials;
+      status: "available" | "expired";
+      candidates: CliCredentialCandidate[];
       source: AuthSourceReport;
     }
-  | { status: "missing" | "invalid"; source: AuthSourceReport }
-  | {
-      status: "expired";
-      source: AuthSourceReport;
-      refreshable: boolean;
-    };
+  | { status: "missing" | "invalid"; source: AuthSourceReport };
+
+/** Opaque attempt payloads for the shared credential-selection loop. */
+type GrokAttemptCredential =
+  | { kind: "cli"; credentials: GrokCredentials }
+  | { kind: "pi-local" }
+  | { kind: "pi-probe"; token: string };
 
 type CredentialCandidate = GrokCredentials & {
   scope?: string;
@@ -130,81 +151,95 @@ export async function inspectAuth(
 async function fetchQuotaWithDependencies(
   dependencies: GrokDependencies,
 ): Promise<ProviderQuota> {
-  const attempts: SourceAttempt[] = [];
-  let finalError: string | undefined;
-  let retryAfter: string | undefined;
-  let consumerAuthRejected = false;
-  let transientConsumerFailure = false;
-
   const cliState = readCredentialState();
   const piResolution = await dependencies.piXaiBroker.resolve();
-  const piAttempt = piSourceAttempt(piResolution);
 
-  if (cliState.status === "available") {
-    attempts.push({ source: GROK_SOURCE, status: "failed" });
-    try {
-      const quota = await fetchGrokConsumerQuota(cliState.credentials);
-      attempts[attempts.length - 1] = {
+  const candidates: SelectionCandidate<GrokAttemptCredential>[] = [];
+  if (cliState.status === "available" || cliState.status === "expired") {
+    candidates.push(
+      ...cliState.candidates.map((candidate) => ({
         source: GROK_SOURCE,
-        status: "success",
-      };
-      attempts.push(piAttempt);
-      return withAuthStatus(
-        successProvider({
-          provider: "grok",
-          label: "Grok",
-          source: GROK_SOURCE,
-          account: quota.account,
-          windows: quota.windows,
-          credits: quota.credits,
-          refreshedAt: quota.refreshedAt,
-          sourcesTried: sourceNames(attempts),
-          attempts,
-        }),
-        "usable",
-      );
-    } catch (error) {
-      finalError = errorMessage(error);
-      attempts[attempts.length - 1] = {
-        source: GROK_SOURCE,
-        status: "failed",
-        error: finalError,
-      };
-      if (error instanceof RateLimitError) {
-        retryAfter = error.retryAfter;
-        transientConsumerFailure = true;
-      } else if (isDefinitiveGrokAuthError(finalError)) {
-        consumerAuthRejected = true;
-      } else {
-        transientConsumerFailure = true;
-      }
-    }
-  } else {
-    attempts.push({
-      source: cliState.source.source,
-      status: "skipped",
-      error: `credentials_${cliState.status}`,
+        localState: candidate.localState,
+        credential: {
+          kind: "cli" as const,
+          credentials: candidate.credentials,
+        },
+        ...(candidate.localState === "expired"
+          ? { refreshable: candidate.refreshable }
+          : {}),
+      })),
+    );
+  }
+  if (piResolution.status === "available") {
+    candidates.push({
+      source: PI_XAI_CREDENTIAL_SOURCE,
+      localState: "valid",
+      credential: { kind: "pi-local" },
+    });
+  } else if (
+    piResolution.status === "expired" &&
+    piResolution.credential !== undefined
+  ) {
+    candidates.push({
+      source: PI_XAI_CREDENTIAL_SOURCE,
+      localState: "expired",
+      credential: { kind: "pi-probe", token: piResolution.credential },
+      refreshable: piResolution.refreshable,
     });
   }
 
-  attempts.push(piAttempt);
-  const authStatus = classifyGrokAuthStatus(
-    cliState,
-    piResolution,
-    consumerAuthRejected,
+  const selection = await selectCredential(candidates, (candidate) =>
+    attemptGrokCandidate(candidate.credential),
   );
+
+  const attempts = grokAttempts(cliState, piResolution, selection);
+  const cliResults = selection.results.filter(
+    (result) => result.source === GROK_SOURCE,
+  );
+  const cliResult =
+    cliResults.find((result) => result.outcome === "quota") ??
+    cliResults.find((result) => result.outcome === "transient") ??
+    [...cliResults].reverse().find((result) => result.outcome === "rejected") ??
+    cliResults.find((result) => result.outcome !== "not_tried");
+  const cliTransient = cliResult?.outcome === "transient";
+  const consumerError = cliResult?.error;
+  const retryAfter = selection.retryAfter;
+
+  if (selection.outcome === "quota" && selection.result) {
+    const quota = selection.result;
+    return withAuthStatus(
+      successProvider({
+        provider: "grok",
+        label: "Grok",
+        source: GROK_SOURCE,
+        account: quota.account,
+        windows: quota.windows,
+        credits: quota.credits,
+        refreshedAt: quota.refreshedAt,
+        sourcesTried: sourceNames(attempts),
+        attempts,
+      }),
+      "usable",
+    );
+  }
+
+  const authStatus =
+    selection.outcome === "live_no_quota"
+      ? "usable"
+      : classifyGrokAuthStatus(cliState, piResolution, selection);
 
   if (authStatus === "usable") {
     // Valid model auth (CLI and/or Pi) without consumer windows is not logout.
     const cached = readCachedProvider("grok");
     if (
       cached?.source === GROK_SOURCE &&
-      (transientConsumerFailure || cliState.status !== "available")
+      (cliTransient || cliState.status !== "available")
     ) {
       return withAuthStatus(
         staleFromCache(
           cached,
-          finalError ?? GROK_CONSUMER_QUOTA_UNAVAILABLE_ERROR,
+          (cliTransient ? consumerError : undefined) ??
+            GROK_CONSUMER_QUOTA_UNAVAILABLE_ERROR,
           sourceNames(attempts),
           attempts,
         ),
@@ -217,14 +252,14 @@ async function fetchQuotaWithDependencies(
         label: "Grok",
         status: retryAfter
           ? "rate_limited"
-          : transientConsumerFailure
+          : cliTransient
             ? statusFromError(
-                finalError ?? GROK_CONSUMER_QUOTA_UNAVAILABLE_ERROR,
+                consumerError ?? GROK_CONSUMER_QUOTA_UNAVAILABLE_ERROR,
               )
             : "unavailable",
         error:
-          finalError && transientConsumerFailure
-            ? finalError
+          consumerError && cliTransient
+            ? consumerError
             : GROK_CONSUMER_QUOTA_UNAVAILABLE_ERROR,
         retryAfter,
         sourcesTried: sourceNames(attempts),
@@ -234,15 +269,13 @@ async function fetchQuotaWithDependencies(
     );
   }
 
+  let finalError: string;
   if (authStatus === "expired_refreshable") {
-    finalError =
-      cliState.status === "expired" && cliState.refreshable
-        ? GROK_ACCESS_TOKEN_EXPIRED_ERROR
-        : "Pi xAI access token expired";
+    finalError = hasRefreshableCliCandidate(cliState)
+      ? GROK_ACCESS_TOKEN_EXPIRED_ERROR
+      : "Pi xAI access token expired";
   } else if (piResolution.status === "error") {
     finalError = GROK_PI_CREDENTIAL_RESOLUTION_ERROR;
-  } else if (consumerAuthRejected && authStatus === "unusable") {
-    finalError = GROK_SIGN_IN_REQUIRED_ERROR;
   } else {
     finalError = GROK_SIGN_IN_REQUIRED_ERROR;
   }
@@ -269,6 +302,138 @@ async function fetchQuotaWithDependencies(
     }),
     authStatus,
   );
+}
+
+async function attemptGrokCandidate(
+  payload: GrokAttemptCredential,
+): Promise<AttemptOutcome<NormalizedGrokQuota>> {
+  if (payload.kind === "cli") {
+    try {
+      const quota = await fetchGrokConsumerQuota(payload.credentials);
+      return { kind: "quota", result: quota };
+    } catch (error) {
+      const message = errorMessage(error);
+      if (error instanceof RateLimitError) {
+        return {
+          kind: "transient",
+          error: message,
+          retryAfter: error.retryAfter,
+        };
+      }
+      if (isDefinitiveGrokAuthError(message)) {
+        return { kind: "rejected", error: message };
+      }
+      return { kind: "transient", error: message };
+    }
+  }
+  if (payload.kind === "pi-local") {
+    // A stored-valid Pi credential is trusted locally without a model
+    // request, preserving the documented no-Pi-request contract; only a
+    // stored-expired one is probed to avoid a false expired verdict.
+    return { kind: "live_no_quota" };
+  }
+  return probePiXaiLiveness(payload.token);
+}
+
+async function probePiXaiLiveness(
+  token: string,
+): Promise<AttemptOutcome<never>> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
+  try {
+    let response: Response;
+    try {
+      response = await fetch(PI_XAI_LIVENESS_PROBE_URL, {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "application/json",
+        },
+        signal: controller.signal,
+      });
+    } catch (error) {
+      return {
+        kind: "transient",
+        error:
+          isAbortError(error) || controller.signal.aborted
+            ? "Grok liveness probe timed out"
+            : "Grok liveness probe unavailable",
+      };
+    }
+    await response.body?.cancel().catch(() => undefined);
+    if (response.ok) return { kind: "live_no_quota" };
+    if (response.status === 401 || response.status === 403) {
+      return { kind: "rejected", error: PI_CREDENTIALS_REJECTED_ERROR };
+    }
+    if (response.status === 429) {
+      return {
+        kind: "transient",
+        error: "Grok liveness probe rate limited",
+        retryAfter: retryAfterToIso(response.headers.get("retry-after")),
+      };
+    }
+    return { kind: "transient", error: "Grok liveness probe unavailable" };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function grokAttempts(
+  cliState: CredentialState,
+  piResolution: PiXaiCredentialResolution,
+  selection: CredentialSelection<NormalizedGrokQuota>,
+): SourceAttempt[] {
+  const attempts: SourceAttempt[] = [];
+
+  const cliResults = selection.results.filter(
+    (result) => result.source === GROK_SOURCE,
+  );
+  const cliResult =
+    cliResults.find((result) => result.outcome === "quota") ??
+    cliResults.find((result) => result.outcome === "transient") ??
+    [...cliResults].reverse().find((result) => result.outcome === "rejected");
+  if (cliResult) {
+    attempts.push(
+      cliResult.outcome === "quota"
+        ? { source: GROK_SOURCE, status: "success" }
+        : { source: GROK_SOURCE, status: "failed", error: cliResult.error },
+    );
+  } else {
+    attempts.push({
+      source: cliState.source.source,
+      status: "skipped",
+      error: `credentials_${cliState.status}`,
+    });
+  }
+
+  const piResult = selection.results.find(
+    (result) => result.source === PI_XAI_CREDENTIAL_SOURCE,
+  );
+  if (piResult?.localState === "expired") {
+    if (piResult.outcome === "live_no_quota") {
+      attempts.push({
+        source: PI_XAI_CREDENTIAL_SOURCE,
+        status: "skipped",
+        error: PI_MODEL_AUTH_PROBE_LIVE,
+        credentialPresent: true,
+      });
+    } else if (piResult.outcome === "rejected") {
+      attempts.push({
+        source: PI_XAI_CREDENTIAL_SOURCE,
+        status: "failed",
+        error: PI_CREDENTIALS_REJECTED_ERROR,
+        credentialPresent: true,
+      });
+    } else {
+      // Probe transient or not tried: the stored-expired classification
+      // stands, matching the historical attempt shape.
+      attempts.push(piSourceAttempt(piResolution));
+    }
+  } else {
+    attempts.push(piSourceAttempt(piResolution));
+  }
+
+  return attempts;
 }
 
 async function inspectAuthWithDependencies(
@@ -305,18 +470,31 @@ async function inspectAuthWithDependencies(
 function classifyGrokAuthStatus(
   cliState: CredentialState,
   piResolution: PiXaiCredentialResolution,
-  consumerAuthRejected: boolean,
+  selection: CredentialSelection<NormalizedGrokQuota>,
 ): ProviderAuthStatus {
   const piUsable = piResolution.status === "available";
-  // Local CLI presence is not enough after a definitive consumer auth rejection
-  // unless an independent Pi credential still establishes model usability.
-  const cliUsable = cliState.status === "available" && !consumerAuthRejected;
+  const cliUsable = selection.results.some(
+    (result) =>
+      result.source === GROK_SOURCE &&
+      result.localState === "valid" &&
+      result.outcome !== "rejected",
+  );
   if (cliUsable || piUsable) return "usable";
-  const cliRefreshable = cliState.status === "expired" && cliState.refreshable;
   const piRefreshable =
     piResolution.status === "expired" && piResolution.refreshable;
-  if (cliRefreshable || piRefreshable) return "expired_refreshable";
+  if (hasRefreshableCliCandidate(cliState) || piRefreshable)
+    return "expired_refreshable";
   return "unusable";
+}
+
+function hasRefreshableCliCandidate(state: CredentialState): boolean {
+  return (
+    (state.status === "available" || state.status === "expired") &&
+    state.candidates.some(
+      (candidate) =>
+        candidate.localState === "expired" && candidate.refreshable,
+    )
+  );
 }
 
 function piSourceAttempt(resolution: PiXaiCredentialResolution): SourceAttempt {
@@ -845,31 +1023,28 @@ function extractCredentialState(
       status: "invalid",
       source: authSource(source, path, "invalid"),
     };
-  let expired = false;
-  let expiredRefreshable = false;
-  for (const candidate of selectedCredentialCandidates(data)) {
-    const expiresAt = candidate.expiresAt;
-    if (isExpired(expiresAt)) {
-      expired = true;
-      if (candidate.hasRefreshToken) expiredRefreshable = true;
-      continue;
-    }
+  const candidates = selectedCredentialCandidates(data).map((candidate) => ({
+    credentials: {
+      key: candidate.key,
+      email: candidate.email,
+      teamId: candidate.teamId,
+      expiresAt: candidate.expiresAt,
+    },
+    localState: isExpired(candidate.expiresAt)
+      ? ("expired" as const)
+      : ("valid" as const),
+    refreshable: candidate.hasRefreshToken,
+  }));
+  if (candidates.length > 0) {
+    const status = candidates.some(
+      (candidate) => candidate.localState === "valid",
+    )
+      ? "available"
+      : "expired";
     return {
-      status: "available",
-      credentials: {
-        key: candidate.key,
-        email: candidate.email,
-        teamId: candidate.teamId,
-        expiresAt,
-      },
-      source: authSource(source, path, "available"),
-    };
-  }
-  if (expired) {
-    return {
-      status: "expired",
-      source: authSource(source, path, "expired"),
-      refreshable: expiredRefreshable,
+      status,
+      candidates,
+      source: authSource(source, path, status),
     };
   }
   return {

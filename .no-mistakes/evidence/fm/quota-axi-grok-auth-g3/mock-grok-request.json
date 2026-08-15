@@ -1,5 +1,0 @@
-{
-  "url": "https://cli-chat-proxy.grok.com/v1/billing?format=credits",
-  "authorization": "Bearer <fixture-oidc-session-token>",
-  "accept": "application/json"
-}

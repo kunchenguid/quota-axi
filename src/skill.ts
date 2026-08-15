@@ -62,8 +62,8 @@ quota-axi is data only: it never routes, recommends a provider, model, harness, 
 route, proxies, intercepts, logs in, imports browser cookies, or mutates provider state. Default
 output has no ordering preference. The explicit \`models --sort runway\` comparator only orders
 quota evidence, preserves ties, and is never a recommendation. It reads local provider auth sources and calls
-first-party provider quota, usage, billing, or entitlement endpoints; it never launches the
-Claude, Grok, Pi, or Kimi CLIs, so it cannot spend the quota it measures.
+first-party provider quota, usage, billing, entitlement, or read-only credential-liveness endpoints; it never launches the
+Claude, Cursor, Grok, Pi, or Kimi CLIs, so it cannot spend the quota it measures.
 
 ## When to use
 
@@ -96,15 +96,18 @@ or when comparing supported local provider headroom side by side.
 4. Pass \`--full\` to include account identity, per-source attempts, and raw reserve diagnostics.
 5. Run \`npx -y quota-axi auth\` to check local auth-source availability without printing
    secret values.
-6. On macOS, Claude Keychain value reads are pinned to the same validated current-user account
-   Claude Code selects and are skipped by default until the user grants access once.
-   If quota output reports \`reason: keychain_access_required\`, tell your user to run
-   \`quota-axi --allow-keychain-prompt\` once and approve Keychain access ("Always Allow").
-   After that successful grant, plain \`quota-axi\` calls reuse the existing Keychain access
-   marker, scoped to both profile and account, to refresh live Claude quota without requiring
-   the flag. Legacy markers are not reused, so an upgrade may require this one-time grant again.
+6. On macOS, Claude and Cursor CLI Keychain value reads are skipped by default until the user
+   grants access once. If quota output reports \`reason: keychain_access_required\`, tell your user
+   to run \`quota-axi --allow-keychain-prompt\` once and approve Keychain access ("Always Allow").
+   Plain calls then reuse the corresponding account-scoped access marker. Claude's marker is also
+   profile-scoped and its Keychain lookup is pinned to Claude Code's validated current-user
+   account. Cursor's \`cli-keychain\` source is used only when its non-prompting editor source has no
+   usable token; quota-axi never reads \`cursor-refresh-token\`, so an expired CLI access token
+   requires \`cursor-agent login\`. Legacy Claude markers are not reused.
 7. For Grok, read \`state.authStatus\` before any logout wording. \`expired_refreshable\` means a
-   local session still looks signed in but short-lived access expired. Only when quota-axi also
+   local session still looks signed in but short-lived access expired and a bounded read-only
+   liveness attempt could not validate it (an empirically live stored-expired bearer reports
+   fresh quota or \`usable\` instead). Only when quota-axi also
    emits \`reason: credentials_expired\` / \`remedyCommand: grok\` should you tell your user to
    open the Grok CLI once; Pi-only expiry has no Grok remedy because Grok cannot refresh Pi-owned
    credentials. Do not treat soft expiry as full sign-out, and do not ask quota-axi to refresh
@@ -149,7 +152,8 @@ ${TOP_HELP.trimEnd()}
   Claude local expiry metadata is advisory when an access token exists: the existing read-only
   usage request decides validity. Missing or invalid credentials without a usable token and HTTP
   401/403 retire Claude cache; only transient failures may use bounded, reset-pruned stale data.
-  The Claude Keychain access marker lives alongside it, is scoped by hashed profile and
-  account hashes, and contains no credential values or raw account name.
+  Claude and Cursor CLI Keychain access markers live alongside it, use hashed account scope,
+  and contain no credential values or raw account identity. The Claude marker is also
+  profile-scoped.
 `;
 }

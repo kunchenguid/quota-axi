@@ -65,6 +65,17 @@ export function claudeKeychainAccessMarkerPath(
   );
 }
 
+export function cursorCliKeychainAccessMarkerPath(account: string): string {
+  const accountSuffix = createHash("sha256")
+    .update(account)
+    .digest("hex")
+    .slice(0, 16);
+  return join(
+    cacheDirPath(),
+    `cursor-cli-keychain-access-granted-account-${accountSuffix}`,
+  );
+}
+
 function cacheDirPath(): string {
   const base = process.env.XDG_CACHE_HOME || join(homedir(), ".cache");
   return join(base, "quota-axi");

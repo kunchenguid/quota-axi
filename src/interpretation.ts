@@ -89,6 +89,7 @@ function semanticsFor(
         generatedAt,
       );
     case "cursor":
+      return cursorSemantics(provider.windows, generatedAt);
     case "copilot":
       return unknownSemantics(
         provider.windows,
@@ -264,6 +265,49 @@ function kimiSemantics(
   return knownSemantics(
     effectiveAvailability,
     "Kimi's weekly and five-hour account windows jointly bound every model, so effective remaining is the minimum across the named windows.",
+  );
+}
+
+/**
+ * Cursor's recognized windows all draw on the same plan billing cycle, so
+ * quota-axi treats them as jointly bounding rather than independent. That is
+ * the conservative reading: the effective remaining is the minimum across them,
+ * which never overstates headroom even if a window later turns out to be
+ * independent.
+ */
+const CURSOR_RECOGNIZED_WINDOW_IDS = [
+  "included_usage",
+  "auto_usage",
+  "api_usage",
+  "spend_limit",
+];
+
+function cursorSemantics(
+  windows: QuotaWindow[],
+  generatedAt: string,
+): QuotaSemantics {
+  const recognized = windows.filter(({ id }) =>
+    CURSOR_RECOGNIZED_WINDOW_IDS.includes(id),
+  );
+  const unresolved = windows.filter(
+    ({ id }) => !CURSOR_RECOGNIZED_WINDOW_IDS.includes(id),
+  );
+  const effectiveAvailability =
+    recognized.length > 0
+      ? [availability("all_models", recognized, generatedAt)]
+      : [];
+  if (unresolved.length > 0) {
+    return {
+      status: "partial",
+      description:
+        "Cursor's included, auto, API usage, and spend-limit windows jointly bound every model, so effective remaining is the minimum across those named windows. Unfamiliar windows are not folded into that bound, so they stay unresolved.",
+      effectiveAvailability,
+      unresolvedWindowIds: unresolved.map(({ id }) => id),
+    };
+  }
+  return knownSemantics(
+    effectiveAvailability,
+    "Cursor's included, auto, API usage, and spend-limit windows jointly bound every model, so effective remaining is the minimum across the named windows.",
   );
 }
 

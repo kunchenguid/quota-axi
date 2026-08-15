@@ -10,6 +10,7 @@ import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { annotateQuotaAdvice } from "../../src/advice.js";
 import type { ProviderQuota } from "../../src/types.js";
 
 const originalHome = process.env.HOME;
@@ -559,6 +560,54 @@ describe("Claude credential-state reporting", () => {
       ).toEqual(["five_hour"]);
     }
   });
+
+  it.each(["5xx", "timeout"])(
+    "does not advise Keychain access after an oauth-file %s failure",
+    async (failureKind) => {
+      usePlatform("darwin");
+      const home = useTempHome();
+      const fakeToken = "test-claude-oauth-token";
+      writeClaudeCredential(home, {
+        accessToken: fakeToken,
+        expiresAt: "2035-01-01T00:00:00.000Z",
+      });
+      const execFileText = vi.fn(async () => "keychain item metadata\n");
+      vi.doMock("../../src/lib/process.js", () => ({ execFileText }));
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => {
+          if (failureKind === "5xx") return new Response(null, { status: 503 });
+          const error = new Error("aborted");
+          error.name = "AbortError";
+          throw error;
+        }),
+      );
+
+      const { fetchQuota } = await import("../../src/providers/claude.js");
+      const result = await fetchQuota({ allowKeychainPrompt: false });
+      const annotated = annotateQuotaAdvice({
+        generatedAt: new Date().toISOString(),
+        providers: [result],
+      });
+
+      expect(result.attempts).toContainEqual({
+        source: "keychain",
+        status: "skipped",
+        error: "keychain_prompt_required",
+        credentialPresent: true,
+      });
+      expect(result.attempts).toContainEqual(
+        expect.objectContaining({
+          source: "oauth-file",
+          status: "failed",
+        }),
+      );
+      expect(annotated.providers[0]?.state.reason).toBeUndefined();
+      expect(annotated.providers[0]?.state.remedyCommand).toBeUndefined();
+      expect(annotated.help).toBeUndefined();
+      expect(JSON.stringify(annotated)).not.toContain(fakeToken);
+    },
+  );
 
   it("prunes reset-expired windows while retaining an eligible active window", async () => {
     vi.useFakeTimers();

@@ -207,45 +207,11 @@ function buildLiveCard(provider: ProviderQuota, generatedAtMs: number): Card {
   ];
 
   const headline = pickHeadlineAvailability(provider);
-  const effectivePct = headline?.effectivePercentRemaining;
-  const markerPct = effectiveMarkerPercent(provider, headline);
-
-  const left: Line =
-    effectivePct !== undefined
-      ? [
-          {
-            text: `${Math.round(effectivePct)}%`,
-            style: boldHealthStyle(effectivePct),
-          },
-          { text: ` ${scopeLabel(headline?.scope)}`, style: "dim" },
-        ]
-      : [
-          {
-            text: stale ? "stale · effective unknown" : "effective unknown",
-            style: "dim",
-          },
-        ];
-  const verdict = runwayVerdict(headline);
-  lines.push(
-    interior(
-      [
-        { text: "   " },
-        ...padBetween(left, verdict, EFFECTIVE_BAR_WIDTH),
-        { text: "   " },
-      ],
-      "border",
-    ),
-  );
-  lines.push(
-    interior(
-      [
-        { text: "   " },
-        ...thinBar(effectivePct, markerPct, EFFECTIVE_BAR_WIDTH),
-        { text: "   " },
-      ],
-      "border",
-    ),
-  );
+  if (hasWhollyUnknownWindowRelationships(provider)) {
+    lines.push(...windowsOnlyHeadline(stale));
+  } else {
+    lines.push(...effectiveHeadline(provider, headline, stale));
+  }
 
   if (provider.windows.length > 0) {
     lines.push(interior([], "border"));
@@ -266,6 +232,115 @@ function buildLiveCard(provider: ProviderQuota, generatedAtMs: number): Card {
   lines.push(interior([], "border"));
   lines.push(bottomLine("border"));
   return lines;
+}
+
+/**
+ * The standard effective-headroom block: the binding window's percentage, its
+ * runway verdict, and the effective bar. It also preserves the existing
+ * unknown fallback for zero-window and partially understood providers.
+ */
+function effectiveHeadline(
+  provider: ProviderQuota,
+  headline: EffectiveAvailability | undefined,
+  stale: boolean | undefined,
+): Line[] {
+  const lines: Line[] = [];
+  const effectivePct = headline?.effectivePercentRemaining;
+  const markerPct = effectiveMarkerPercent(provider, headline);
+
+  const verdict = runwayVerdict(headline);
+  const percentText =
+    effectivePct === undefined ? undefined : `${Math.round(effectivePct)}%`;
+  const headlineLabelWidth = Math.max(
+    0,
+    EFFECTIVE_BAR_WIDTH -
+      lineWidth(verdict) -
+      1 -
+      displayWidth(percentText ?? "") -
+      1,
+  );
+  const left: Line =
+    effectivePct !== undefined && percentText !== undefined
+      ? [
+          {
+            text: percentText,
+            style: boldHealthStyle(effectivePct),
+          },
+          {
+            text: ` ${headlineLabel(provider, headline, headlineLabelWidth)}`,
+            style: "dim",
+          },
+        ]
+      : [
+          {
+            text: stale ? "stale · effective unknown" : "effective unknown",
+            style: "dim",
+          },
+        ];
+  lines.push(
+    interior(
+      [
+        { text: "   " },
+        ...padBetween(left, verdict, EFFECTIVE_BAR_WIDTH),
+        { text: "   " },
+      ],
+      "border",
+    ),
+  );
+  lines.push(
+    interior(
+      [
+        { text: "   " },
+        ...thinBar(effectivePct, markerPct, EFFECTIVE_BAR_WIDTH),
+        { text: "   " },
+      ],
+      "border",
+    ),
+  );
+  return lines;
+}
+
+/**
+ * The headline block for a provider that reports real per-window usage but no
+ * combinable bound: quota-axi does not know whether those windows are
+ * independent or jointly bounding, so there is no combined
+ * effective percentage, pace, or runway to show. Rendering the empty effective
+ * bar there reads as a failure, so the block is replaced by a single line naming
+ * what the card actually is - the per-window rows below carry the real data.
+ */
+function hasWhollyUnknownWindowRelationships(provider: ProviderQuota): boolean {
+  const semantics = provider.quotaSemantics;
+  if (
+    provider.windows.length === 0 ||
+    semantics?.status !== "unknown" ||
+    semantics.unresolvedWindowIds === undefined
+  ) {
+    return false;
+  }
+  const unresolved = new Set(semantics.unresolvedWindowIds);
+  return provider.windows.every(({ id }) => unresolved.has(id));
+}
+
+function windowsOnlyHeadline(stale: boolean | undefined): Line[] {
+  const left: Line = [
+    {
+      text: stale ? "stale · per-window usage" : "per-window usage",
+      style: "dim",
+    },
+  ];
+  const right: Line = [{ text: "no combined bound", style: "dim" }];
+  // Without the effective bar under it, this line's right edge belongs with the
+  // window rows' reset column rather than the (absent) bar's end.
+  return [
+    interior(
+      [
+        { text: "   " },
+        ...padBetween(left, right, CARD_INTERIOR - 4),
+        { text: " " },
+      ],
+      "border",
+    ),
+  ];
 }
 
 function buildFailedCard(provider: ProviderQuota): Card {
@@ -429,8 +504,10 @@ function effectiveMarkerPercent(
   headline: EffectiveAvailability | undefined,
 ): number | undefined {
   if (!headline) return undefined;
-  const limitingId =
-    headline.runway?.limitingWindowId ?? headline.limitingWindowIds?.[0];
+  // The headline bar represents effective headroom, so its reset marker must
+  // follow that headroom's binding window. A finite runway can be constrained
+  // by another window and is rendered as the separate "empty in" verdict.
+  const limitingId = headline.limitingWindowIds?.[0];
   if (limitingId === undefined) return undefined;
   const limiting = provider.windows.find((window) => window.id === limitingId);
   return limiting?.pace?.timeRemainingPercent;
@@ -473,6 +550,66 @@ function cardNotes(provider: ProviderQuota): string[] {
 function scopeLabel(scope: string | undefined): string {
   if (scope === undefined) return "unknown scope";
   return humanize(scope.replace(/^all_/, "all "));
+}
+
+/** Budget for the headline window name, leaving room for the runway verdict. */
+const HEADLINE_LABEL_WIDTH = 20;
+
+/**
+ * Name the window the headline percent actually is. Effective remaining is the
+ * minimum across the bounded windows, so it always equals one named window's
+ * `percentRemaining` - `limitingWindowIds` is exactly that window (or the tied
+ * set), and its provider label ("week", "session", "credits") is what the
+ * headline bar is showing. Falls back to the model-scope wording when any
+ * limiting window is unresolvable; a model-scoped headline keeps the scope as
+ * a suffix so "week · fable" stays unambiguous.
+ */
+export function headlineLabel(
+  provider: ProviderQuota,
+  headline: EffectiveAvailability | undefined,
+  width = HEADLINE_LABEL_WIDTH,
+): string {
+  const ids = headline?.limitingWindowIds ?? [];
+  const names = ids
+    .map((id) => provider.windows.find((window) => window.id === id)?.label)
+    .map((label) =>
+      label === undefined
+        ? undefined
+        : sanitizeTerminalText(label).toLowerCase(),
+    )
+    .filter((label): label is string => label !== undefined && label !== "");
+  const scope = headline?.scope;
+  if (names.length === 0 || names.length !== ids.length) {
+    return truncate(scopeLabel(scope), width);
+  }
+  const suffix =
+    scope !== undefined && !scope.startsWith("all_")
+      ? ` · ${humanize(scope.replace(/^(?:model|product):/, "")).toLowerCase()}`
+      : "";
+  const joined = names.join(" + ");
+  let windowLabel = joined;
+  if (displayWidth(joined) > width) {
+    const tie = names.length > 1 ? ` +${names.length - 1}` : "";
+    windowLabel = `${compactHeadlineWindowName(
+      names[0],
+      width - displayWidth(tie),
+    )}${tie}`;
+  }
+  return displayWidth(`${windowLabel}${suffix}`) <= width
+    ? `${windowLabel}${suffix}`
+    : windowLabel;
+}
+
+function compactHeadlineWindowName(label: string, width: number): string {
+  const safeLabel = sanitizeTerminalText(label);
+  if (displayWidth(safeLabel) <= width) return safeLabel;
+  const parts = safeLabel.match(/^(.*\S)\s+(\S+)$/u);
+  if (parts === null) return truncate(safeLabel, width);
+  const period = parts[2];
+  const separatorWidth = 1;
+  const prefixWidth = width - displayWidth(period) - separatorWidth;
+  if (prefixWidth <= 0) return truncate(period, width);
+  return `${truncate(parts[1], prefixWidth)} ${period}`;
 }
 
 /**

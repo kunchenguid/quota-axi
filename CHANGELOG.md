@@ -1,5 +1,61 @@
 # Changelog
 
+## [0.1.28](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.27...quota-axi-v0.1.28) (2026-08-14)
+
+
+### Bug Fixes
+
+* **providers:** resolve Cursor monthly pace and runway ([#94](https://github.com/kunchenguid/quota-axi/issues/94)) ([ff89e7a](https://github.com/kunchenguid/quota-axi/commit/ff89e7a41fe1053781310fc842442182e7389f51))
+
+## [0.1.27](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.26...quota-axi-v0.1.27) (2026-08-14)
+
+
+### Features
+
+* **cursor:** report effective remaining across quota windows ([#92](https://github.com/kunchenguid/quota-axi/issues/92)) ([649cede](https://github.com/kunchenguid/quota-axi/commit/649cede0bbad8bf44bbe52668a722b8976f4996d))
+
+## [0.1.26](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.25...quota-axi-v0.1.26) (2026-08-13)
+
+
+### Bug Fixes
+
+* **providers:** prefer verifiably live credentials ([#90](https://github.com/kunchenguid/quota-axi/issues/90)) ([48892fc](https://github.com/kunchenguid/quota-axi/commit/48892fc92816c68f15b13039f5e886d213b7e091))
+
+## [0.1.25](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.24...quota-axi-v0.1.25) (2026-08-13)
+
+
+### Bug Fixes
+
+* **cursor:** report CLI Keychain quota attempts and remedies ([#87](https://github.com/kunchenguid/quota-axi/issues/87)) ([bad10f1](https://github.com/kunchenguid/quota-axi/commit/bad10f12ad60b50021243e0ab103d016ff928e32))
+
+## [0.1.24](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.23...quota-axi-v0.1.24) (2026-08-12)
+
+
+### Bug Fixes
+
+* **tui:** render unbounded providers as per-window cards ([#82](https://github.com/kunchenguid/quota-axi/issues/82)) ([7caff26](https://github.com/kunchenguid/quota-axi/commit/7caff26e9dfe86580a1d8d54371a2541c1d3076b))
+
+## [0.1.23](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.22...quota-axi-v0.1.23) (2026-08-12)
+
+
+### Features
+
+* **cursor:** detect Cursor CLI Keychain auth ([#80](https://github.com/kunchenguid/quota-axi/issues/80)) ([6b7ff55](https://github.com/kunchenguid/quota-axi/commit/6b7ff55041b3b42529639a8ee6e4365822aa542f))
+
+## [0.1.22](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.21...quota-axi-v0.1.22) (2026-08-12)
+
+
+### Bug Fixes
+
+* **tui:** align headline marker with binding window ([#78](https://github.com/kunchenguid/quota-axi/issues/78)) ([37a49dc](https://github.com/kunchenguid/quota-axi/commit/37a49dcf8a7d3f54e93787e0efdbcb8807e33e22))
+
+## [0.1.21](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.20...quota-axi-v0.1.21) (2026-08-11)
+
+
+### Features
+
+* **tui:** label headline bars with binding windows ([#75](https://github.com/kunchenguid/quota-axi/issues/75)) ([de9d0c0](https://github.com/kunchenguid/quota-axi/commit/de9d0c00ef7757244ed419bd7ef3ae3d2fef0491))
+
 ## [0.1.20](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.19...quota-axi-v0.1.20) (2026-08-08)
 
 
