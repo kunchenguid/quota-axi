@@ -439,6 +439,10 @@ describe("quota semantics", () => {
           status: "unknown",
           unmeasurableWindowIds: ["five_hour", "weekly", "limit:3", "limit:4"],
         },
+        selection: {
+          status: "unknown",
+          unmeasurableWindowIds: ["five_hour", "weekly", "limit:3", "limit:4"],
+        },
       },
       {
         scope: "tools",
@@ -450,6 +454,10 @@ describe("quota semantics", () => {
           worstReservePercentPoints: -65,
         }),
         runway: {
+          status: "unknown",
+          unmeasurableWindowIds: ["mcp_month", "limit:3", "limit:4"],
+        },
+        selection: {
           status: "unknown",
           unmeasurableWindowIds: ["mcp_month", "limit:3", "limit:4"],
         },

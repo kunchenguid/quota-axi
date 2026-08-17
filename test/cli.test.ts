@@ -19,6 +19,7 @@ const originalCursorProvider = PROVIDERS.cursor;
 const originalCopilotProvider = PROVIDERS.copilot;
 const originalGrokProvider = PROVIDERS.grok;
 const originalKimiProvider = PROVIDERS.kimi;
+const originalZaiProvider = PROVIDERS.zai;
 const originalXdgCacheHome = process.env.XDG_CACHE_HOME;
 let tempDir: string | undefined;
 
@@ -29,6 +30,7 @@ afterEach(() => {
   PROVIDERS.copilot = originalCopilotProvider;
   PROVIDERS.grok = originalGrokProvider;
   PROVIDERS.kimi = originalKimiProvider;
+  PROVIDERS.zai = originalZaiProvider;
   if (originalXdgCacheHome === undefined) delete process.env.XDG_CACHE_HOME;
   else process.env.XDG_CACHE_HOME = originalXdgCacheHome;
   if (tempDir) rmSync(tempDir, { recursive: true, force: true });
@@ -702,6 +704,7 @@ describe("default TOON decision blocks", () => {
     PROVIDERS.copilot = providerWithQuota(signedOutCopilotQuota());
     PROVIDERS.grok = providerWithQuota(grokModelAuthOnlyQuota());
     PROVIDERS.kimi = providerWithQuota(rateLimitedKimiQuota());
+    PROVIDERS.zai = providerWithQuota(freshZaiQuota());
 
     const output = await capture([]);
     const named = new Set([
@@ -716,6 +719,7 @@ describe("default TOON decision blocks", () => {
       "cursor",
       "grok",
       "kimi",
+      "zai",
     ]);
   });
 
@@ -1414,5 +1418,37 @@ function freshCodexQuota(): ProviderQuota {
       sourcesTried: ["cli-rpc"],
     },
     attempts: [{ source: "cli-rpc", status: "success" }],
+  };
+}
+
+function freshZaiQuota(): ProviderQuota {
+  return {
+    provider: "zai",
+    label: "Z.AI",
+    source: "api",
+    plan: "GLM Coding Max",
+    windows: [
+      {
+        id: "five_hour",
+        label: "session",
+        kind: "session",
+        percentUsed: 10,
+        percentRemaining: 90,
+      },
+      {
+        id: "weekly",
+        label: "week",
+        kind: "weekly",
+        percentUsed: 20,
+        percentRemaining: 80,
+      },
+    ],
+    state: {
+      status: "fresh",
+      stale: false,
+      refreshedAt: "2026-07-06T18:10:00Z",
+      sourcesTried: ["opencode:auth.json"],
+    },
+    attempts: [{ source: "opencode:auth.json", status: "success" }],
   };
 }

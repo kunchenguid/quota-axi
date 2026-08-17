@@ -35,7 +35,7 @@ $ npx -y quota-axi
 bin: ~/.npm/_npx/.../quota-axi
 description: Report local agent-provider quota windows for routing-aware agents
 generatedAt: "2026-03-15T16:42:00.000Z"
-quota[8]{provider,scope,effectivePercentRemaining,spendPriority,runway,confidence,limitedBy,resetsAt}:
+quota[10]{provider,scope,effectivePercentRemaining,spendPriority,runway,confidence,limitedBy,resetsAt}:
   claude,all_models,64,-0.3798,projected_exhaustion,established,seven_day,"2026-03-20T17:59:45.600Z"
   claude,seven_day_opus,64,0.3218,projected_exhaustion,established,seven_day,"2026-03-20T17:59:45.600Z"
   claude,"model:fable",64,-0.0932,projected_exhaustion,established,seven_day,"2026-03-20T17:59:45.600Z"
@@ -44,14 +44,18 @@ quota[8]{provider,scope,effectivePercentRemaining,spendPriority,runway,confidenc
   cursor,all_models,72,1.4067,through_reset,established,included_usage,"2026-04-01T00:00:00.000Z"
   grok,all_products,67,0.5778,through_reset,established,credits,"2026-04-01T00:00:00.000Z"
   kimi,all_models,74,0.2484,through_reset,established,weekly,"2026-03-20T12:17:02.400Z"
-exhaustion[5]{provider,scope,usableRunwaySeconds,projectedExhaustedAt,limitingWindowId}:
+  zai,all_models,50,-1.0046,projected_exhaustion,established,weekly,"2026-03-20T16:42:00.000Z"
+  zai,tools,100,unknown,unknown,unknown,mcp_month,"2026-04-01T00:00:00.000Z"
+exhaustion[6]{provider,scope,usableRunwaySeconds,projectedExhaustedAt,limitingWindowId}:
   claude,all_models,298906,"2026-03-19T03:43:45.600Z",seven_day
   claude,seven_day_opus,298906,"2026-03-19T03:43:45.600Z",seven_day
   claude,"model:fable",298906,"2026-03-19T03:43:45.600Z",seven_day
   codex,all_models,10365,"2026-03-15T19:34:45.428Z",five_hour
   codex,"model:gpt-5.1-codex",10365,"2026-03-15T19:34:45.428Z",five_hour
-attention[1]{provider,scope,kind,detail,remedy}:
+  zai,all_models,172800,"2026-03-17T16:42:00.000Z",weekly
+attention[2]{provider,scope,kind,detail,remedy}:
   copilot,all,unresolved_windows,chat + premium_interactions,none
+  zai,tools,unmeasurable,"mcp_month blocks runway + spendPriority",none
 help[1]:
   Run `quota-axi --full` for windows, pace, reserve, and account evidence
 ```
@@ -188,7 +192,7 @@ $ quota-axi --provider claude --json
 $ quota-axi auth
 bin: ~/.npm/_npx/.../quota-axi
 description: Inspect local quota auth sources without printing secret values
-auth[10]{provider,source,path,status,error}:
+auth[11]{provider,source,path,status,error}:
   claude,oauth-file,~/.claude/.credentials.json,available,none
   claude,keychain,none,skipped,keychain_prompt_required
   codex,auth-json,~/.codex/auth.json,available,none
@@ -199,6 +203,7 @@ auth[10]{provider,source,path,status,error}:
   grok,auth-json,~/.grok/auth.json,available,none
   kimi,pi:kimi-coding,none,available,none
   kimi,kimi-code-cli,none,available,none
+  zai,opencode:auth.json,~/.local/share/opencode/auth.json,available,none
 help[1]:
   Run `quota-axi --allow-keychain-prompt auth` to permit macOS Keychain access
 ```
@@ -289,19 +294,19 @@ It is generated from `src/skill.ts`; update it with `pnpm run build:skill` and v
 
 ### Flags
 
-| Flag                                                    | Description                                                        |
-| -------------------------------------------------------- | ------------------------------------------------------------------ |
-| `--provider claude,codex,cursor,copilot,grok,kimi,zai`  | Scope providers                                                    |
-| `--json`                                                | Emit normalized JSON instead of TOON for quota, auth, or models    |
-| `--full`                                                | Include audit and derivation details                               |
-| `--tui`                                                 | Render the live human terminal report instead of TOON (quota only) |
-| `--refresh 30s\|5m\|1h`                                 | Live `--tui` refresh interval, default 5m (30s-24h)                |
-| `--once`                                                | Render one `--tui` frame and exit instead of staying live          |
-| `--allow-keychain-prompt`                               | Permit macOS provider Keychain access that could prompt            |
-| `--intelligence high\|medium\|low`                      | Filter `models` by editorial intelligence bucket                   |
-| `--sort runway`                                         | Explicitly sort `models` by documented usable-runway evidence      |
-| `-h`, `--help`                                          | Print terse [AXI](https://axi.md) help                             |
-| `-v`, `-V`, `--version`                                 | Print version                                                      |
+| Flag                                                   | Description                                                        |
+| ------------------------------------------------------ | ------------------------------------------------------------------ |
+| `--provider claude,codex,cursor,copilot,grok,kimi,zai` | Scope providers                                                    |
+| `--json`                                               | Emit normalized JSON instead of TOON for quota, auth, or models    |
+| `--full`                                               | Include audit and derivation details                               |
+| `--tui`                                                | Render the live human terminal report instead of TOON (quota only) |
+| `--refresh 30s\|5m\|1h`                                | Live `--tui` refresh interval, default 5m (30s-24h)                |
+| `--once`                                               | Render one `--tui` frame and exit instead of staying live          |
+| `--allow-keychain-prompt`                              | Permit macOS provider Keychain access that could prompt            |
+| `--intelligence high\|medium\|low`                     | Filter `models` by editorial intelligence bucket                   |
+| `--sort runway`                                        | Explicitly sort `models` by documented usable-runway evidence      |
+| `-h`, `--help`                                         | Print terse [AXI](https://axi.md) help                             |
+| `-v`, `-V`, `--version`                                | Print version                                                      |
 
 ### Human terminal report (`--tui`)
 
@@ -462,7 +467,7 @@ reservePercentPoints = percentRemaining - timeRemainingPercent
 Pace is calculated only from trusted cycle evidence:
 
 - Prefer trusted `startsAt` + `resetsAt` pairs (Grok's provider-reported current period; Cursor's monthly billing cycle, whose start comes from the payload's cycle start or the previous renewal date).
-- Otherwise use provider-owned `windowSeconds` with `resetsAt` (Codex durations; Claude fixed 5h/7d; Kimi fixed 5h/weekly).
+- Otherwise use provider-owned `windowSeconds` with `resetsAt` (Codex durations; Claude fixed 5h/7d; Kimi and Z.AI fixed 5h/weekly).
 - Do not infer monthly, rolling, or unlabeled periods.
 
 Every projection quota-axi publishes is cycle-average. There is deliberately no `projectionBasis` field: its absence means `cycle_average`, and a future non-cycle-average basis would name itself.
