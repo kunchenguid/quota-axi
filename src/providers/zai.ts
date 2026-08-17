@@ -356,6 +356,7 @@ function staleZaiReport(
     provider: "zai",
     label: "Z.AI",
     source: "cache",
+    ...(cached.plan ? { plan: cached.plan } : {}),
     windows,
     state: {
       status: "stale",

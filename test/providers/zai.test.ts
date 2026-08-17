@@ -738,6 +738,21 @@ describe("Z.AI cache fallback", () => {
     }
   });
 
+  it("carries the cached plan label into a stale report", async () => {
+    const report = await transientWithCache(cachedQuota());
+
+    expect(report.state.status).toBe("stale");
+    expect(report.plan).toBe("max");
+  });
+
+  it("omits plan on a stale report when the cache has none", async () => {
+    const { plan: _plan, ...withoutPlan } = cachedQuota();
+    const report = await transientWithCache(withoutPlan);
+
+    expect(report.state.status).toBe("stale");
+    expect(report.plan).toBeUndefined();
+  });
+
   it("does not fall back to cache for malformed responses", async () => {
     const report = await testAdapter({
       fetch: vi.fn(
