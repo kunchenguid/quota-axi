@@ -1,5 +1,9 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
+  createOpencodeAuthCredentialSource,
   createZaiAdapter,
   extractZaiCredential,
   normalizeRetryAfter,
@@ -693,6 +697,77 @@ describe("Z.AI credential discovery", () => {
     });
   });
 
+  it("serves stale cache and keeps it when the auth file cannot be read", async () => {
+    const request = vi.fn();
+    const remove = vi.fn();
+    const report = await testAdapter({
+      credentialSource: credentialSource({
+        status: "error",
+        path: PATH,
+        error: "file_read_error",
+      }),
+      fetch: request,
+      deleteCachedProvider: remove,
+      readCachedProvider: () => cachedQuota(),
+    }).fetchQuota(OPTIONS);
+
+    expect(request).not.toHaveBeenCalled();
+    expect(remove).not.toHaveBeenCalled();
+    expect(report.source).toBe("cache");
+    expect(report.state).toMatchObject({
+      status: "stale",
+      stale: true,
+      error: "credential_resolution_failed",
+    });
+    expect(report.windows.length).toBeGreaterThan(0);
+    expect(report.attempts).toEqual([
+      {
+        source: "opencode:auth.json",
+        status: "failed",
+        error: "credential_resolution_failed",
+      },
+    ]);
+  });
+
+  it("resolves an unreadable auth file to an error, not an invalid credential", () => {
+    const directory = mkdtempSync(join(tmpdir(), "quota-axi-zai-"));
+    try {
+      const authFile = join(directory, "auth.json");
+      mkdirSync(authFile);
+      const source = createOpencodeAuthCredentialSource(() => authFile);
+
+      expect(source.resolve()).toEqual({
+        status: "error",
+        path: authFile,
+        error: "file_read_error",
+      });
+      expect(source.inspect()).toEqual({
+        status: "error",
+        path: authFile,
+        error: "file_read_error",
+      });
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves a malformed auth file to an invalid credential", () => {
+    const directory = mkdtempSync(join(tmpdir(), "quota-axi-zai-"));
+    try {
+      const authFile = join(directory, "auth.json");
+      writeFileSync(authFile, "{broken");
+      const source = createOpencodeAuthCredentialSource(() => authFile);
+
+      expect(source.resolve()).toEqual({
+        status: "invalid",
+        path: authFile,
+        error: "json_parse_error",
+      });
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it("resolves the auth path from XDG_DATA_HOME", () => {
     const original = process.env.XDG_DATA_HOME;
     try {
@@ -836,6 +911,7 @@ describe("Z.AI auth inspection", () => {
     ["available", "available", undefined],
     ["missing", "missing", undefined],
     ["invalid", "invalid", "json_parse_error"],
+    ["error", "error", "file_read_error"],
   ] as const)(
     "reports %s credential state with the probed path and no value",
     async (status, expectedStatus, error) => {
@@ -851,7 +927,7 @@ describe("Z.AI auth inspection", () => {
               }
             : status === "missing"
               ? { status: "missing", path }
-              : { status: "invalid", path, error: "json_parse_error" },
+              : { status, path, error: error ?? "json_parse_error" },
         ),
       }).inspectAuth(OPTIONS);
 
@@ -900,7 +976,7 @@ function credentialSource(
       : resolution.status === "missing"
         ? { status: "missing" as const, path: resolution.path }
         : {
-            status: "invalid" as const,
+            status: resolution.status,
             path: resolution.path,
             error: resolution.error,
           };

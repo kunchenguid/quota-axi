@@ -58,12 +58,14 @@ export type NormalizedZaiPayload = {
 export type ZaiCredentialResolution =
   | { status: "available"; apiKey: string; host: string; path: string }
   | { status: "missing"; path: string }
-  | { status: "invalid"; path: string; error: string };
+  | { status: "invalid"; path: string; error: string }
+  | { status: "error"; path: string; error: string };
 
 export type ZaiCredentialInspection =
   | { status: "available"; path: string }
   | { status: "missing"; path: string }
-  | { status: "invalid"; path: string; error: string };
+  | { status: "invalid"; path: string; error: string }
+  | { status: "error"; path: string; error: string };
 
 export type ZaiCredentialSource = {
   resolve(): ZaiCredentialResolution;
@@ -125,7 +127,9 @@ export function createOpencodeAuthCredentialSource(
     const result: JsonFileReadResult = readJsonFileResult(path);
     if (result.status === "missing") return { status: "missing", path };
     if (result.status === "invalid")
-      return { status: "invalid", path, error: result.error };
+      return result.error === "file_read_error"
+        ? { status: "error", path, error: result.error }
+        : { status: "invalid", path, error: result.error };
     return extractZaiCredential(result.value, path);
   }
   return {
@@ -170,7 +174,9 @@ export function createZaiAdapter(
         source: OPENCODE_AUTH_SOURCE,
         path: inspection.path,
         status: inspection.status,
-        ...(inspection.status === "invalid" ? { error: inspection.error } : {}),
+        ...(inspection.status === "invalid" || inspection.status === "error"
+          ? { error: inspection.error }
+          : {}),
       };
       return { provider: "zai", sources: [source] };
     },
@@ -197,7 +203,7 @@ async function acquireZaiQuota(
       const failure = credentialFailureFor(resolution);
       attempts[attempts.length - 1] = {
         source: OPENCODE_AUTH_SOURCE,
-        status: resolution.status === "invalid" ? "failed" : "skipped",
+        status: resolution.status === "missing" ? "skipped" : "failed",
         error: failure.code,
       };
       return failureReport(failure, attempts, dependencies);
@@ -269,6 +275,11 @@ function credentialFailureFor(
     return new ZaiFailure("zai_credential_unavailable", {
       status: "auth_required",
       definitiveAuth: true,
+    });
+  }
+  if (resolution.status === "error") {
+    return new ZaiFailure("credential_resolution_failed", {
+      staleEligible: true,
     });
   }
   return new ZaiFailure("zai_credential_invalid", {
