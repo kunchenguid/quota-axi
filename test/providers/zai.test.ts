@@ -821,7 +821,8 @@ describe("Z.AI cache fallback", () => {
   });
 
   it("omits plan on a stale report when the cache has none", async () => {
-    const { plan: _plan, ...withoutPlan } = cachedQuota();
+    const withoutPlan = cachedQuota();
+    delete withoutPlan.plan;
     const report = await transientWithCache(withoutPlan);
 
     expect(report.state.status).toBe("stale");
