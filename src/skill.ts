@@ -3,7 +3,7 @@ import { DESCRIPTION, TOP_HELP } from "./cli.js";
 // Trigger string Claude Code (and other agents) match against to auto-load the skill.
 // Kept terse and outcome-focused so it fires on "check quota/rate limits" intents.
 export const SKILL_DESCRIPTION =
-  "Report local Claude, Codex, Cursor, GitHub Copilot, Grok, and Kimi quota windows via the quota-axi CLI - remaining " +
+  "Report local Claude, Codex, Cursor, GitHub Copilot, Grok, Kimi, and Z.AI quota windows via the quota-axi CLI - remaining " +
   "effective usable runway, percentages, reset times, cycle-average pace vs the reset clock, a per-scope selection signal, and provider status read from local auth sources, " +
   "with no routing, provider mutation, or default ordering preference. Use before deciding whether it is safe " +
   "to keep spending a provider's quota, when the user asks about usage, rate limits, pace, or " +
@@ -24,6 +24,7 @@ export const HERMES_TAGS = [
   "copilot",
   "grok",
   "kimi",
+  "zai",
   "cli",
 ];
 export const HERMES_CATEGORY = "observability";
@@ -66,7 +67,7 @@ derived per-scope comparative selection signal, \`effectiveAvailability[].select
 computed from figures it already reports; it still ranks nothing and routes nowhere, and the
 consumer decides what to do with it. It reads local provider auth sources and calls
 first-party provider quota, usage, billing, entitlement, or read-only credential-liveness endpoints; it never launches the
-Claude, Cursor, Grok, Pi, or Kimi CLIs, so it cannot spend the quota it measures.
+Claude, Cursor, Grok, Pi, Kimi, or opencode CLIs, so it cannot spend the quota it measures.
 
 ## When to use
 
@@ -90,7 +91,7 @@ or when comparing supported local provider headroom side by side.
    unknown or stale headroom gets no \`quota[]\` row at all - read its \`attention[]\` row instead
    of inferring a number. If that scope has finite runway, the attention detail preserves the
    runway verdict and limiting window without creating an orphan \`exhaustion[]\` row.
-2. Scope to one provider with \`--provider claude\` or to a subset with \`--provider cursor,copilot,grok,kimi\`.
+2. Scope to one provider with \`--provider claude\` or to a subset with \`--provider cursor,copilot,grok,kimi,zai\`.
 3. Pass \`--json\` for the normalized machine-readable model instead of TOON. Read
    \`quotaSemantics.effectiveAvailability\` rather than treating a model window in isolation:
    account windows can bound every model, and \`boundedBy\` names every window included in the
@@ -164,6 +165,12 @@ or when comparing supported local provider headroom side by side.
    Grok also reads that same Pi auth file for an independent \`xai\` OAuth or literal API-key
    entry and treats Grok as usable when either the Grok CLI session or Pi \`xai\` credential is
    valid.
+10. For Z.AI, quota-axi reads the Coding Plan API key from opencode's \`auth.json\`
+    (\`zai-coding-plan\`, plus \`zai\`/\`zhipu\` aliases). It reports the five-hour and weekly token
+    windows as one \`all_models\` bound and the monthly MCP tool window as a separate \`tools\`
+    scope; because the endpoint is undocumented, limits quota-axi cannot identify degrade to
+    untrusted \`unknown\` windows and turn the provider's semantics \`partial\` instead of
+    producing a confident wrong percentage.
 
 ## Usage
 

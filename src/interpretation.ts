@@ -251,29 +251,11 @@ function kimiSemantics(
       effectiveAvailability:
         recognized.length > 0
           ? [
-              {
-                scope: "all_models",
-                status: "unknown",
-                boundedBy: recognized.map(({ id }) => id),
-                pace: summarizeEffectivePace(recognized),
-                runway: {
-                  status: "unknown",
-                  unmeasurableWindowIds: [
-                    ...recognized.map(({ id }) => id),
-                    ...unresolvedWindowIds,
-                  ],
-                },
-                // Unrecognized limits may add bounds this scope cannot see, so
-                // the selection scalar would be computed over an incomplete
-                // bound set. Report it unmeasurable rather than optimistic.
-                selection: {
-                  status: "unknown",
-                  unmeasurableWindowIds: [
-                    ...recognized.map(({ id }) => id),
-                    ...unresolvedWindowIds,
-                  ],
-                },
-              },
+              unresolvedAvailability(
+                "all_models",
+                recognized,
+                unresolvedWindowIds,
+              ),
             ]
           : [],
       unresolvedWindowIds,
@@ -347,29 +329,22 @@ function zaiSemantics(
     ...new Set([...unresolved.map(({ id }) => id), ...untrustedWindowIds]),
   ];
   if (unresolvedWindowIds.length > 0) {
-    const recognizedWindows = [...token, ...tool];
+    const effectiveAvailability: EffectiveAvailability[] = [];
+    if (token.length > 0) {
+      effectiveAvailability.push(
+        unresolvedAvailability("all_models", token, unresolvedWindowIds),
+      );
+    }
+    if (tool.length > 0) {
+      effectiveAvailability.push(
+        unresolvedAvailability("tools", tool, unresolvedWindowIds),
+      );
+    }
     return {
       status: "partial",
       description:
         "Z.AI's five-hour and weekly token windows jointly bound model usage and the monthly tool window is a separate resource, but unfamiliar windows prevent a definitive effective percentage.",
-      effectiveAvailability:
-        recognizedWindows.length > 0
-          ? [
-              {
-                scope: "all_models",
-                status: "unknown",
-                boundedBy: recognizedWindows.map(({ id }) => id),
-                pace: summarizeEffectivePace(recognizedWindows),
-                runway: {
-                  status: "unknown",
-                  unmeasurableWindowIds: [
-                    ...recognizedWindows.map(({ id }) => id),
-                    ...unresolvedWindowIds,
-                  ],
-                },
-              },
-            ]
-          : [],
+      effectiveAvailability,
       unresolvedWindowIds,
     };
   }
@@ -385,6 +360,42 @@ function zaiSemantics(
     effectiveAvailability,
     "Z.AI's five-hour and weekly token windows jointly bound model usage, so effective remaining is the minimum across the named windows. The monthly tool window is an independent resource.",
   );
+}
+
+/**
+ * Report a scope whose recognized windows are real bounds while unfamiliar
+ * windows may add further bounds, so the effective percentage stays unknown and
+ * every window that could bind the scope is named as unmeasurable.
+ *
+ * @param scope effective-availability scope name
+ * @param windows recognized windows bounding this scope only
+ * @param unresolvedWindowIds windows quota-axi could not place
+ * @returns non-definitive availability entry for the scope
+ */
+function unresolvedAvailability(
+  scope: string,
+  windows: QuotaWindow[],
+  unresolvedWindowIds: string[],
+): EffectiveAvailability {
+  const boundedBy = windows.map(({ id }) => id);
+  const unmeasurableWindowIds = [...boundedBy, ...unresolvedWindowIds];
+  return {
+    scope,
+    status: "unknown",
+    boundedBy,
+    pace: summarizeEffectivePace(windows),
+    runway: {
+      status: "unknown",
+      unmeasurableWindowIds,
+    },
+    // Unrecognized limits may add bounds this scope cannot see, so the
+    // selection scalar would be computed over an incomplete bound set.
+    // Report it unmeasurable rather than optimistic.
+    selection: {
+      status: "unknown",
+      unmeasurableWindowIds,
+    },
+  };
 }
 
 function availability(

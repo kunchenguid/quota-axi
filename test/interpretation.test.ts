@@ -45,6 +45,36 @@ function weeklyResetsAt(elapsedFraction: number): string {
   ).toISOString();
 }
 
+function offsetFromGeneratedAt(seconds: number): string {
+  return new Date(Date.parse(GENERATED_AT) + seconds * 1000).toISOString();
+}
+
+const MONTH_SECONDS = 30 * 24 * 60 * 60;
+
+/** Halfway through a five-hour cycle with 40% of the token budget left. */
+function zaiSessionWindow(): QuotaWindow {
+  return window("five_hour", "session", 40, {
+    windowSeconds: 18_000,
+    resetsAt: offsetFromGeneratedAt(9_000),
+  });
+}
+
+/** Halfway through the weekly cycle with 30% of the token budget left. */
+function zaiWeeklyWindow(): QuotaWindow {
+  return window("weekly", "weekly", 30, {
+    windowSeconds: WEEK_SECONDS,
+    resetsAt: offsetFromGeneratedAt(WEEK_SECONDS / 2),
+  });
+}
+
+/** A quarter into the MCP month with only 10% of the tool budget left. */
+function zaiToolWindow(): QuotaWindow {
+  return window("mcp_month", "monthly", 10, {
+    startsAt: offsetFromGeneratedAt(-MONTH_SECONDS * 0.25),
+    resetsAt: offsetFromGeneratedAt(MONTH_SECONDS * 0.75),
+  });
+}
+
 describe("quota semantics", () => {
   it("keeps every stale provider's effective availability unknown", () => {
     const cases: Array<[ProviderQuota["provider"], QuotaWindow[]]> = [
@@ -52,6 +82,7 @@ describe("quota semantics", () => {
       ["codex", [window("weekly", "weekly", 38)]],
       ["grok", [window("credits", "credits", 44)]],
       ["kimi", [window("weekly", "weekly", 59)]],
+      ["zai", [window("weekly", "weekly", 42)]],
       ["cursor", [window("included_usage", "monthly", 72)]],
       ["copilot", [window("premium_interactions", "monthly", 81)]],
     ];
@@ -339,6 +370,91 @@ describe("quota semantics", () => {
       ],
       unresolvedWindowIds: ["limit:2"],
     });
+  });
+
+  it("reports Z.AI token and tool headroom as separate resources", () => {
+    const result = withQuotaSemantics(
+      provider("zai", [zaiSessionWindow(), zaiWeeklyWindow(), zaiToolWindow()]),
+      GENERATED_AT,
+    );
+
+    expect(result.quotaSemantics?.status).toBe("known");
+    expect(result.quotaSemantics?.effectiveAvailability).toEqual([
+      expect.objectContaining({
+        scope: "all_models",
+        status: "known",
+        effectivePercentRemaining: 30,
+        boundedBy: ["five_hour", "weekly"],
+        limitingWindowIds: ["weekly"],
+        pace: expect.objectContaining({
+          status: "ahead",
+          aheadWindowIds: ["five_hour", "weekly"],
+          worstReserveWindowId: "weekly",
+          worstReservePercentPoints: -20,
+        }),
+      }),
+      expect.objectContaining({
+        scope: "tools",
+        status: "known",
+        effectivePercentRemaining: 10,
+        boundedBy: ["mcp_month"],
+        limitingWindowIds: ["mcp_month"],
+        pace: expect.objectContaining({
+          status: "ahead",
+          worstReserveWindowId: "mcp_month",
+          worstReservePercentPoints: -65,
+        }),
+      }),
+    ]);
+  });
+
+  it("keeps the Z.AI tool window out of the all-models bound when limits are unresolved", () => {
+    const zai = provider("zai", [
+      zaiSessionWindow(),
+      zaiWeeklyWindow(),
+      zaiToolWindow(),
+      window("limit:3", "unknown", 50),
+    ]);
+    zai.state.untrustedWindowIds = ["limit:3", "limit:4"];
+
+    const result = withQuotaSemantics(zai, GENERATED_AT);
+
+    expect(result.quotaSemantics?.status).toBe("partial");
+    expect(result.quotaSemantics?.unresolvedWindowIds).toEqual([
+      "limit:3",
+      "limit:4",
+    ]);
+    expect(result.quotaSemantics?.effectiveAvailability).toEqual([
+      {
+        scope: "all_models",
+        status: "unknown",
+        boundedBy: ["five_hour", "weekly"],
+        pace: expect.objectContaining({
+          status: "ahead",
+          aheadWindowIds: ["five_hour", "weekly"],
+          worstReserveWindowId: "weekly",
+          worstReservePercentPoints: -20,
+        }),
+        runway: {
+          status: "unknown",
+          unmeasurableWindowIds: ["five_hour", "weekly", "limit:3", "limit:4"],
+        },
+      },
+      {
+        scope: "tools",
+        status: "unknown",
+        boundedBy: ["mcp_month"],
+        pace: expect.objectContaining({
+          status: "ahead",
+          worstReserveWindowId: "mcp_month",
+          worstReservePercentPoints: -65,
+        }),
+        runway: {
+          status: "unknown",
+          unmeasurableWindowIds: ["mcp_month", "limit:3", "limit:4"],
+        },
+      },
+    ]);
   });
 
   it("applies Grok shared credits to product windows", () => {

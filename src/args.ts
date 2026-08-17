@@ -1,7 +1,12 @@
 import { AxiError } from "axi-sdk-js";
 import { MODEL_CATALOG_PROVIDER_IDS } from "./models.js";
 import { parseProviders } from "./providers/index.js";
-import type { IntelligenceBucket, ModelSortKey, ProviderId } from "./types.js";
+import {
+  PROVIDER_IDS,
+  type IntelligenceBucket,
+  type ModelSortKey,
+  type ProviderId,
+} from "./types.js";
 
 export type QuotaFlags = {
   providers: ProviderId[];
@@ -58,7 +63,7 @@ export function parseModelsFlags(args: string[]): ModelsFlags {
     throw new AxiError(
       `models does not support provider: ${unsupported}`,
       "VALIDATION_ERROR",
-      ["Supported model providers: claude, codex, grok, kimi"],
+      [`Supported model providers: ${MODEL_CATALOG_PROVIDER_IDS.join(", ")}`],
     );
   }
   return flags;
@@ -240,7 +245,7 @@ function parseProviderScope(value: string | undefined): ProviderId[] {
     throw new AxiError(
       error instanceof Error ? error.message : "unsupported provider",
       "VALIDATION_ERROR",
-      ["Supported providers: claude, codex, cursor, copilot, grok, kimi"],
+      [`Supported providers: ${PROVIDER_IDS.join(", ")}`],
     );
   }
 }

@@ -460,7 +460,53 @@ describe("Z.AI payload normalization", () => {
         ],
       },
     });
-    expect(normalized.windows.map(({ id }) => id)).toEqual([
+    expect(normalized.windows).toEqual([
+      expect.objectContaining({
+        id: "five_hour",
+        kind: "session",
+        windowSeconds: 18_000,
+      }),
+      expect.objectContaining({
+        id: "limit:2",
+        label: "limit 2",
+        kind: "unknown",
+        percentUsed: 80,
+        percentRemaining: 20,
+      }),
+    ]);
+    expect(normalized.windows[1].windowSeconds).toBeUndefined();
+    expect(normalized.diagnostics).toEqual([
+      { code: "entry_unrecognized", index: 2 },
+    ]);
+  });
+
+  it("flags a duplicate recognized window as untrusted in the provider report", async () => {
+    const report = await testAdapter({
+      fetch: (async () =>
+        jsonResponse({
+          data: {
+            limits: [
+              {
+                type: "TOKENS_LIMIT",
+                unit: 3,
+                number: 5,
+                percentage: 12,
+                nextResetTime: RESET_FIVE_HOUR,
+              },
+              {
+                type: "TOKENS_LIMIT",
+                unit: 3,
+                number: 5,
+                percentage: 80,
+                nextResetTime: RESET_FIVE_HOUR,
+              },
+            ],
+          },
+        })) as unknown as typeof fetch,
+    }).fetchQuota(OPTIONS);
+
+    expect(report.state.untrustedWindowIds).toEqual(["limit:2"]);
+    expect(report.windows.map(({ id }) => id)).toEqual([
       "five_hour",
       "limit:2",
     ]);
@@ -563,6 +609,37 @@ describe("Z.AI credential discovery", () => {
     expect(extractZaiCredential({ zai: { type: "api" } }, PATH)).toEqual({
       status: "missing",
       path: PATH,
+    });
+  });
+
+  it.each([
+    ["a control byte", { zai: { key: "line-one\nline-two" } }],
+    ["an environment reference", { zai: { key: "${ZAI_API_KEY}" } }],
+    ["a command reference", { zai: { key: "!op read op://zai/key" } }],
+    ["a blank value", { zai: { key: "   " } }],
+    ["a bare string with a control byte", { zai: "line-one\rline-two" }],
+  ])("rejects a key holding %s", (_label, entry) => {
+    expect(extractZaiCredential(entry, PATH)).toEqual({
+      status: "missing",
+      path: PATH,
+    });
+  });
+
+  it("makes no request when the stored key is not a usable literal secret", async () => {
+    const request = vi.fn();
+    const report = await testAdapter({
+      credentialSource: credentialSource(
+        extractZaiCredential({ zai: { key: "bad\nkey" } }, PATH),
+      ),
+      fetch: request,
+      readCachedProvider: () => cachedQuota(),
+    }).fetchQuota(OPTIONS);
+
+    expect(request).not.toHaveBeenCalled();
+    expect(report.state).toMatchObject({
+      status: "auth_required",
+      stale: false,
+      error: "zai_credential_unavailable",
     });
   });
 

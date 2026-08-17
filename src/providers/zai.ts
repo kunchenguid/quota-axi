@@ -10,6 +10,7 @@ import {
   readCachedProvider as readCachedProviderFromDisk,
 } from "../cache.js";
 import { readJsonFileResult, type JsonFileReadResult } from "../lib/fs.js";
+import { usableLiteralSecret } from "../lib/secret.js";
 import type {
   AuthProviderReport,
   AuthSourceReport,
@@ -592,14 +593,13 @@ export function normalizeZaiPayload(payload: unknown): NormalizedZaiPayload {
       continue;
     }
     const mapped = mapLimitEntry(entry, index);
-    if (mapped.unrecognized) {
+    const duplicate = seenIds.has(mapped.window.id);
+    if (!mapped.recognized || duplicate) {
       diagnostics.push({ code: "entry_unrecognized", index });
     }
-    const id = mapped.window.id;
-    const window: QuotaWindow =
-      seenIds.has(id) && mapped.recognized
-        ? { ...mapped.window, id: `limit:${index}`, label: `limit ${index}` }
-        : mapped.window;
+    const window = duplicate
+      ? unknownWindow(mapped.measurements, index)
+      : mapped.window;
     seenIds.add(window.id);
     windows.push(window);
   }
@@ -615,11 +615,29 @@ export function normalizeZaiPayload(payload: unknown): NormalizedZaiPayload {
   };
 }
 
+type WindowMeasurements = {
+  percentUsed?: number;
+  percentRemaining?: number;
+  resetsAt?: string;
+};
+
 type MappedEntry = {
   window: QuotaWindow;
+  measurements: WindowMeasurements;
   recognized: boolean;
-  unrecognized: boolean;
 };
+
+function unknownWindow(
+  measurements: WindowMeasurements,
+  index: number,
+): QuotaWindow {
+  return {
+    id: `limit:${index}`,
+    label: `limit ${index}`,
+    kind: "unknown",
+    ...measurements,
+  };
+}
 
 function mapLimitEntry(
   entry: Record<string, unknown>,
@@ -634,7 +652,7 @@ function mapLimitEntry(
   const resetsAt = resolveResetsAt(entry.nextResetTime);
 
   const identity = identifyWindow(type, unit, number);
-  const baseWindow = {
+  const measurements: WindowMeasurements = {
     ...(percentUsed !== undefined ? { percentUsed } : {}),
     ...(percentRemaining !== undefined ? { percentRemaining } : {}),
     ...(resetsAt ? { resetsAt } : {}),
@@ -643,12 +661,12 @@ function mapLimitEntry(
   if (identity) {
     return {
       recognized: true,
-      unrecognized: false,
+      measurements,
       window: {
         id: identity.id,
         label: identity.label,
         kind: identity.kind,
-        ...baseWindow,
+        ...measurements,
         ...(identity.windowSeconds !== undefined
           ? { windowSeconds: identity.windowSeconds }
           : {}),
@@ -658,13 +676,8 @@ function mapLimitEntry(
 
   return {
     recognized: false,
-    unrecognized: true,
-    window: {
-      id: `limit:${index}`,
-      label: `limit ${index}`,
-      kind: "unknown",
-      ...baseWindow,
-    },
+    measurements,
+    window: unknownWindow(measurements, index),
   };
 }
 
@@ -770,12 +783,12 @@ export function normalizeRetryAfter(
 }
 
 function extractKey(entry: unknown): string | undefined {
-  if (typeof entry === "string") return entry.length > 0 ? entry : undefined;
+  if (typeof entry === "string") return usableLiteralSecret(entry);
   const obj = objectValue(entry);
   if (!obj) return undefined;
   for (const key of CREDENTIAL_KEYS) {
-    const value = obj[key];
-    if (typeof value === "string" && value.length > 0) return value;
+    const value = usableLiteralSecret(obj[key]);
+    if (value !== undefined) return value;
   }
   return undefined;
 }
