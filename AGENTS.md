@@ -3,7 +3,7 @@
 This file is the project's committed home for project-intrinsic agent knowledge: build, test, release, architecture, and sharp-edge notes that should travel with the code.
 
 - quota-axi is data only.
-- It reports local Claude, Codex, Cursor, GitHub Copilot, Grok, and Kimi quota windows, and it must never route, recommend, rank a winner, order providers preferentially, proxy, intercept, log in, import browser cookies, or mutate provider state.
+- It reports local Claude, Codex, Cursor, GitHub Copilot, Grok, Kimi, and Z.AI quota windows, and it must never route, recommend, rank a winner, order providers preferentially, proxy, intercept, log in, import browser cookies, or mutate provider state.
 - Data-only reconciliation: quota-axi does publish one derived per-scope comparative selection signal (`effectiveAvailability[].selection`), computed purely from figures it already reports. That is data, not routing - the consumer does any routing or ranking. Keep this distinction in `src/skill.ts` and README wording; never claim quota-axi recommends or ranks.
 - Claude quota windows can include `five_hour`, `seven_day`, `seven_day_opus`, and `extra_usage`. When the OAuth usage response includes a `limits` array, that array is the authoritative, self-describing source and is preferred over the fixed top-level fields: it surfaces every active limit, including ones scoped to a specific model (e.g. Fable) via `scope.model.display_name`, with a `model:<slug>` window id.
 - Claude credential-validity and cache-fallback contracts are documented in [README Security Posture](README.md#security-posture).
