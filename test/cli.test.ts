@@ -19,6 +19,7 @@ const originalCursorProvider = PROVIDERS.cursor;
 const originalCopilotProvider = PROVIDERS.copilot;
 const originalGrokProvider = PROVIDERS.grok;
 const originalKimiProvider = PROVIDERS.kimi;
+const originalZaiProvider = PROVIDERS.zai;
 const originalXdgCacheHome = process.env.XDG_CACHE_HOME;
 let tempDir: string | undefined;
 
@@ -29,6 +30,7 @@ afterEach(() => {
   PROVIDERS.copilot = originalCopilotProvider;
   PROVIDERS.grok = originalGrokProvider;
   PROVIDERS.kimi = originalKimiProvider;
+  PROVIDERS.zai = originalZaiProvider;
   if (originalXdgCacheHome === undefined) delete process.env.XDG_CACHE_HOME;
   else process.env.XDG_CACHE_HOME = originalXdgCacheHome;
   if (tempDir) rmSync(tempDir, { recursive: true, force: true });
@@ -46,6 +48,7 @@ describe("CLI flag parsing", () => {
       "copilot",
       "grok",
       "kimi",
+      "zai",
     ]);
   });
 
@@ -66,7 +69,15 @@ describe("CLI flag parsing", () => {
   it("collects the boolean flags", () => {
     expect(parseFlags(["--json", "--full", "--allow-keychain-prompt"])).toEqual(
       {
-        providers: ["claude", "codex", "cursor", "copilot", "grok", "kimi"],
+        providers: [
+          "claude",
+          "codex",
+          "cursor",
+          "copilot",
+          "grok",
+          "kimi",
+          "zai",
+        ],
         json: true,
         full: true,
         tui: false,
@@ -618,6 +629,47 @@ describe("CLI quota rendering", () => {
     );
   });
 
+  it("renders Z.AI model and MCP tool scopes in compact TOON and normalized JSON", async () => {
+    useTempCache();
+    PROVIDERS.zai = providerWithQuota(freshZaiQuota());
+
+    const toon = await capture(["--provider", "zai"]);
+    expect(toon).toContain("zai,pro,api,fresh");
+    expect(toon).toMatch(
+      /zai,five_hour,session,47,"2026-08-17T09:05:06\.000Z",[^,]+,fresh/,
+    );
+    expect(toon).toMatch(
+      /zai,weekly,week,89,"2026-08-20T02:03:28\.999Z",[^,]+,fresh/,
+    );
+    expect(toon).toMatch(/zai,mcp_monthly,mcp tools,100,/);
+    expect(toon).not.toContain("synthetic-zai-key");
+
+    const json = JSON.parse(
+      await capture(["--provider", "zai", "--json"]),
+    ) as QuotaAxiResponse;
+    expect(json.providers[0].quotaSemantics).toMatchObject({
+      status: "known",
+      effectiveAvailability: [
+        {
+          scope: "all_models",
+          status: "known",
+          effectivePercentRemaining: 47,
+          boundedBy: ["five_hour", "weekly"],
+          limitingWindowIds: ["five_hour"],
+        },
+        {
+          scope: "mcp_tools",
+          status: "known",
+          effectivePercentRemaining: 100,
+          boundedBy: ["mcp_monthly"],
+        },
+      ],
+    });
+    expect(JSON.stringify(json)).not.toMatch(
+      /recommend|prefer provider|switch to|route to/i,
+    );
+  });
+
   it("renders the card-grid report for --tui and composes with --provider", async () => {
     useTempCache();
     PROVIDERS.codex = providerWithQuota(freshCodexQuota());
@@ -679,6 +731,7 @@ describe("CLI plumbing via the axi SDK", () => {
     PROVIDERS.copilot = providerWithAuth("copilot", "GitHub Copilot");
     PROVIDERS.grok = providerWithAuth("grok", "Grok");
     PROVIDERS.kimi = providerWithAuth("kimi", "Kimi");
+    PROVIDERS.zai = providerWithAuth("zai", "Z.AI");
 
     const output = await capture(["--allow-keychain-prompt", "auth"]);
     expect(output).toContain(
@@ -868,6 +921,50 @@ function freshKimiQuota(): ProviderQuota {
       sourcesTried: ["pi:kimi-coding"],
     },
     attempts: [{ source: "pi:kimi-coding", status: "success" }],
+  };
+}
+
+function freshZaiQuota(): ProviderQuota {
+  return {
+    provider: "zai",
+    label: "Z.AI",
+    source: "api",
+    plan: "pro",
+    windows: [
+      {
+        id: "five_hour",
+        label: "session",
+        kind: "session",
+        percentUsed: 53,
+        percentRemaining: 47,
+        resetsAt: "2026-08-17T09:05:06.000Z",
+        windowSeconds: 18_000,
+      },
+      {
+        id: "weekly",
+        label: "week",
+        kind: "weekly",
+        percentUsed: 11,
+        percentRemaining: 89,
+        resetsAt: "2026-08-20T02:03:28.999Z",
+        windowSeconds: 604_800,
+      },
+      {
+        id: "mcp_monthly",
+        label: "mcp tools",
+        kind: "monthly",
+        percentUsed: 0,
+        percentRemaining: 100,
+        resetsAt: "2026-09-14T02:03:28.999Z",
+      },
+    ],
+    state: {
+      status: "fresh",
+      stale: false,
+      refreshedAt: "2026-08-17T04:05:06.000Z",
+      sourcesTried: ["pi:zai"],
+    },
+    attempts: [{ source: "pi:zai", status: "success" }],
   };
 }
 

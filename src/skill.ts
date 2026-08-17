@@ -3,7 +3,7 @@ import { DESCRIPTION, TOP_HELP } from "./cli.js";
 // Trigger string Claude Code (and other agents) match against to auto-load the skill.
 // Kept terse and outcome-focused so it fires on "check quota/rate limits" intents.
 export const SKILL_DESCRIPTION =
-  "Report local Claude, Codex, Cursor, GitHub Copilot, Grok, and Kimi quota windows via the quota-axi CLI - remaining " +
+  "Report local Claude, Codex, Cursor, GitHub Copilot, Grok, Kimi, and Z.AI quota windows via the quota-axi CLI - remaining " +
   "effective usable runway, percentages, reset times, cycle-average pace vs the reset clock, and provider status read from local auth sources, " +
   "with no routing, provider mutation, or default ordering preference. Use before deciding whether it is safe " +
   "to keep spending a provider's quota, when the user asks about usage, rate limits, pace, or " +
@@ -24,6 +24,7 @@ export const HERMES_TAGS = [
   "copilot",
   "grok",
   "kimi",
+  "zai",
   "cli",
 ];
 export const HERMES_CATEGORY = "observability";
@@ -74,7 +75,7 @@ or when comparing supported local provider headroom side by side.
 ## Workflow
 
 1. Run \`npx -y quota-axi\` for compact TOON output covering supported providers' quota windows.
-2. Scope to one provider with \`--provider claude\` or to a subset with \`--provider cursor,copilot,grok,kimi\`.
+2. Scope to one provider with \`--provider claude\` or to a subset with \`--provider cursor,copilot,grok,kimi,zai\`.
 3. Pass \`--json\` for the normalized machine-readable model instead of TOON. Read
    \`quotaSemantics.effectiveAvailability\` rather than treating a model window in isolation:
    account windows can bound every model, and \`boundedBy\` names every window included in the
@@ -127,6 +128,11 @@ or when comparing supported local provider headroom side by side.
    Grok also reads that same Pi auth file for an independent \`xai\` OAuth or literal API-key
    entry and treats Grok as usable when either the Grok CLI session or Pi \`xai\` credential is
    valid.
+10. For Z.AI, quota-axi reads Pi's \`zai\` entry from the same auth file for a literal GLM Coding
+   Plan API key or unexpired OAuth access token. It reports the \`five_hour\` and \`weekly\` token
+   windows as jointly bounding every model and the \`mcp_monthly\` tool-call window as a separate
+   \`mcp_tools\` scope; a limit whose self-described type or period quota-axi does not recognize
+   keeps its percentage as an untrusted \`unknown\` window instead of being folded into a bound.
 
 ## Usage
 

@@ -15,7 +15,7 @@ Quota CLI for agents - designed with [AXI](https://axi.md) (Agent eXperience Int
 Agents need quota state before they choose where work can safely run.
 Vendor dashboards are not shaped for shell automation, and local CLIs expose different windows, resets, and auth sources.
 
-quota-axi reports local Claude, Codex, Cursor, GitHub Copilot, Grok, and Kimi quota windows in one [AXI](https://axi.md)-shaped call.
+quota-axi reports local Claude, Codex, Cursor, GitHub Copilot, Grok, Kimi, and Z.AI quota windows in one [AXI](https://axi.md)-shaped call.
 It is data only: it never routes, recommends a provider, model, harness, credential, or route, proxies, intercepts, logs in, imports browser cookies, or mutates provider state. Default output has no ordering preference. The opt-in `models --sort runway` surface applies only its documented deterministic comparator to quota evidence, preserves all evidence and explicit ties, and is not a recommendation.
 
 - **Official sources** - quota-axi reads local provider auth sources and calls first-party quota, usage, billing, entitlement, or read-only credential-liveness endpoints used by the local agents, with a read-only Codex app-server probe as fallback.
@@ -35,14 +35,15 @@ $ npx -y quota-axi
 bin: ~/.npm/_npx/.../quota-axi
 description: Report local agent-provider quota windows for routing-aware agents
 generatedAt: "2026-03-15T16:42:00.000Z"
-providers[6]{provider,plan,source,status,authStatus,refreshedAt}:
+providers[7]{provider,plan,source,status,authStatus,refreshedAt}:
   claude,pro,oauth,fresh,unknown,"2026-03-15T16:41:55.000Z"
   codex,plus,cli-rpc,fresh,unknown,"2026-03-15T16:41:58.000Z"
   cursor,pro,api,fresh,unknown,"2026-03-15T16:41:59.000Z"
   copilot,individual,api,fresh,unknown,"2026-03-15T16:42:00.000Z"
   grok,unknown,web,fresh,usable,"2026-03-15T16:42:00.000Z"
   kimi,unknown,api,fresh,unknown,"2026-03-15T16:42:00.000Z"
-windows[15]{provider,id,label,percentRemaining,resetsAt,pace,state}:
+  zai,pro,api,fresh,unknown,"2026-03-15T16:42:00.000Z"
+windows[18]{provider,id,label,percentRemaining,resetsAt,pace,state}:
   claude,five_hour,session,82,"2026-03-15T20:10:48.000Z",behind,fresh
   claude,seven_day,week,64,"2026-03-20T17:59:45.600Z",ahead,fresh
   claude,seven_day_opus,opus week,93,"2026-03-20T17:29:31.200Z",behind,fresh
@@ -58,7 +59,10 @@ windows[15]{provider,id,label,percentRemaining,resetsAt,pace,state}:
   grok,credits,credits,67,"2026-04-01T00:00:00.000Z",behind,fresh
   kimi,weekly,week,74,"2026-03-20T12:17:02.400Z",behind,fresh
   kimi,five_hour,session,88,"2026-03-15T20:45:00.000Z",behind,fresh
-effective[9]{provider,scope,effectivePercentRemaining,boundedBy,limitingWindowIds,runway,usableRunwaySeconds,projectedExhaustedAt,limitingWindowId,projectionConfidence,projectionBasis,unmeasurableWindowIds,unresolvedWindowIds,relationshipStatus}:
+  zai,five_hour,session,98,"2026-03-15T20:23:00.000Z",on_pace,fresh
+  zai,weekly,week,99,"2026-03-22T02:03:28.998Z",ahead,fresh
+  zai,mcp_monthly,mcp tools,100,"2026-03-18T02:03:28.998Z",unknown,fresh
+effective[11]{provider,scope,effectivePercentRemaining,boundedBy,limitingWindowIds,runway,usableRunwaySeconds,projectedExhaustedAt,limitingWindowId,projectionConfidence,projectionBasis,unmeasurableWindowIds,unresolvedWindowIds,relationshipStatus}:
   claude,all_models,64,"five_hour + seven_day",seven_day,projected_exhaustion,298906,"2026-03-19T03:43:45.600Z",seven_day,established,cycle_average,none,none,known
   claude,"model:fable",64,"five_hour + seven_day + model:fable",seven_day,projected_exhaustion,298906,"2026-03-19T03:43:45.600Z",seven_day,established,cycle_average,none,none,known
   claude,seven_day_opus,64,"five_hour + seven_day + seven_day_opus",seven_day,projected_exhaustion,298906,"2026-03-19T03:43:45.600Z",seven_day,established,cycle_average,none,none,known
@@ -68,6 +72,8 @@ effective[9]{provider,scope,effectivePercentRemaining,boundedBy,limitingWindowId
   copilot,unresolved,unknown,none,unknown,unknown,unknown,unknown,unknown,unknown,unknown,none,"chat + premium_interactions",unknown
   grok,all_products,67,credits,credits,through_reset,unknown,unknown,unknown,established,cycle_average,none,none,known
   kimi,all_models,74,"weekly + five_hour",weekly,through_reset,unknown,unknown,unknown,established,cycle_average,none,none,known
+  zai,all_models,98,"five_hour + weekly",five_hour,through_reset,unknown,unknown,unknown,established,cycle_average,none,none,known
+  zai,mcp_tools,100,mcp_monthly,mcp_monthly,unknown,unknown,unknown,unknown,unknown,unknown,mcp_monthly,none,known
 help[4]:
   Default TOON reports effective headroom and usable runway; use --json or --full for reserve diagnostics
   Run `quota-axi --provider claude --json` for JSON output
@@ -218,7 +224,7 @@ $ quota-axi --provider claude --json
 $ quota-axi auth
 bin: ~/.npm/_npx/.../quota-axi
 description: Inspect local quota auth sources without printing secret values
-auth[10]{provider,source,path,status,error}:
+auth[11]{provider,source,path,status,error}:
   claude,oauth-file,~/.claude/.credentials.json,available,none
   claude,keychain,none,skipped,keychain_prompt_required
   codex,auth-json,~/.codex/auth.json,available,none
@@ -229,6 +235,7 @@ auth[10]{provider,source,path,status,error}:
   grok,auth-json,~/.grok/auth.json,available,none
   kimi,pi:kimi-coding,none,available,none
   kimi,kimi-code-cli,none,available,none
+  zai,"pi:zai",none,available,none
 help[1]:
   Run `quota-axi --allow-keychain-prompt auth` to permit macOS Keychain access
 ```
@@ -319,19 +326,19 @@ It is generated from `src/skill.ts`; update it with `pnpm run build:skill` and v
 
 ### Flags
 
-| Flag                                               | Description                                                        |
-| -------------------------------------------------- | ------------------------------------------------------------------ |
-| `--provider claude,codex,cursor,copilot,grok,kimi` | Scope providers                                                    |
-| `--json`                                           | Emit normalized JSON instead of TOON for quota, auth, or models    |
-| `--full`                                           | Include account, source attempts, and reserve details              |
-| `--tui`                                            | Render the live human terminal report instead of TOON (quota only) |
-| `--refresh 30s\|5m\|1h`                            | Live `--tui` refresh interval, default 5m (30s-24h)                |
-| `--once`                                           | Render one `--tui` frame and exit instead of staying live          |
-| `--allow-keychain-prompt`                          | Permit macOS provider Keychain access that could prompt            |
-| `--intelligence high\|medium\|low`                 | Filter `models` by editorial intelligence bucket                   |
-| `--sort runway`                                    | Explicitly sort `models` by documented usable-runway evidence      |
-| `-h`, `--help`                                     | Print terse [AXI](https://axi.md) help                             |
-| `-v`, `-V`, `--version`                            | Print version                                                      |
+| Flag                                                   | Description                                                        |
+| ------------------------------------------------------ | ------------------------------------------------------------------ |
+| `--provider claude,codex,cursor,copilot,grok,kimi,zai` | Scope providers                                                    |
+| `--json`                                               | Emit normalized JSON instead of TOON for quota, auth, or models    |
+| `--full`                                               | Include account, source attempts, and reserve details              |
+| `--tui`                                                | Render the live human terminal report instead of TOON (quota only) |
+| `--refresh 30s\|5m\|1h`                                | Live `--tui` refresh interval, default 5m (30s-24h)                |
+| `--once`                                               | Render one `--tui` frame and exit instead of staying live          |
+| `--allow-keychain-prompt`                              | Permit macOS provider Keychain access that could prompt            |
+| `--intelligence high\|medium\|low`                     | Filter `models` by editorial intelligence bucket                   |
+| `--sort runway`                                        | Explicitly sort `models` by documented usable-runway evidence      |
+| `-h`, `--help`                                         | Print terse [AXI](https://axi.md) help                             |
+| `-v`, `-V`, `--version`                                | Print version                                                      |
 
 ### Human terminal report (`--tui`)
 
@@ -482,20 +489,21 @@ Source attempts can include `credentialPresent` when a non-secret probe confirms
 
 ### Provider windows
 
-| Provider               | Windows and capabilities                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Claude                 | Can report `five_hour`, `seven_day`, optional `seven_day_opus`, and optional `extra_usage` windows. Trusted session/weekly/model windows emit fixed `windowSeconds` (18,000 or 604,800) for pace; `extra_usage` does not invent a monthly duration.                                                                                                                                                                                                                                                                                                                                                              |
-| Claude scoped `limits` | When the account's usage response includes a scoped `limits` list, quota-axi surfaces every active window it describes instead, including model-scoped ones (e.g. Fable) as a `model:<slug>` window with the same trusted weekly duration.                                                                                                                                                                                                                                                                                                                                                                       |
-| Codex                  | Identifies exact 18,000-second and 604,800-second periods as `five_hour` and `weekly`, regardless of source slot; periods without a duration retain their positional identity. Additional model- or feature-scoped limits use `model:<id>:5h` / `model:<id>:7d`, and code-review limits use `code_review_five_hour` / `code_review_weekly`. Unfamiliar durations remain honest `<hours>h` windows instead of being classified as known periods. Duplicate derived IDs are preserved with `_2`, `_3`, and later suffixes. Optional credit balance data can also appear.                                           |
-| Cursor                 | Can report `included_usage`, `auto_usage`, `api_usage`, and optional `spend_limit` windows. Their effective-availability interpretation is documented in [Quota windows](#quota-windows). Monthly labels alone are not trusted cycle evidence, but the billing cycle is: the monthly windows take `startsAt` from a reported `billingCycleStart`, or - with only `billingCycleEnd` - from the previous renewal date one calendar month earlier (clamped to the last day of that month), so pace uses `starts_at_resets_at`. With neither field the cycle stays unresolved; no fixed 30-day duration is invented. |
-| GitHub Copilot         | Can report quota snapshot windows such as `chat`, `completions`, and `premium_interactions`; when the first-party endpoint exposes entitlement but no numeric quota windows, quota-axi reports a fresh provider state with an empty `windows` list rather than inventing percentages. Pace stays `unknown` without trusted cycle boundaries.                                                                                                                                                                                                                                                                     |
-| Grok                   | With a usable Grok CLI session bearer, can report the shared `credits` window, optional product-scoped `product:<slug>` windows, the current-period `startsAt` and reset, and optional prepaid credit balance from the consumer Usage-page operation. Pi `xai` auth alone establishes usability but cannot provide these consumer windows. Top-level `credits.remaining` is prepaid/on-demand balance, distinct from the shared period `windows` credits percentage used for effective availability. Pace prefers the startsAt/resetsAt pair.                                                                    |
-| Grok proto3 zero       | For the exact consumer operation only, an omitted usage float is the official proto3 zero when a valid weekly or monthly current period proves the config is present; quota-axi reports `0` used and `100` remaining rather than deriving usage from money.                                                                                                                                                                                                                                                                                                                                                      |
-| Kimi                   | Reports the principal `weekly` subscription window (with trusted 604,800s duration) plus every valid self-described limit in wire order. Only a limit whose normalized duration is exactly 18,000 seconds is identified as `five_hour`; future limits remain `limit:<index>` unknown windows.                                                                                                                                                                                                                                                                                                                    |
+| Provider               | Windows and capabilities                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Claude                 | Can report `five_hour`, `seven_day`, optional `seven_day_opus`, and optional `extra_usage` windows. Trusted session/weekly/model windows emit fixed `windowSeconds` (18,000 or 604,800) for pace; `extra_usage` does not invent a monthly duration.                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| Claude scoped `limits` | When the account's usage response includes a scoped `limits` list, quota-axi surfaces every active window it describes instead, including model-scoped ones (e.g. Fable) as a `model:<slug>` window with the same trusted weekly duration.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| Codex                  | Identifies exact 18,000-second and 604,800-second periods as `five_hour` and `weekly`, regardless of source slot; periods without a duration retain their positional identity. Additional model- or feature-scoped limits use `model:<id>:5h` / `model:<id>:7d`, and code-review limits use `code_review_five_hour` / `code_review_weekly`. Unfamiliar durations remain honest `<hours>h` windows instead of being classified as known periods. Duplicate derived IDs are preserved with `_2`, `_3`, and later suffixes. Optional credit balance data can also appear.                                                                                                                                                         |
+| Cursor                 | Can report `included_usage`, `auto_usage`, `api_usage`, and optional `spend_limit` windows. Their effective-availability interpretation is documented in [Quota windows](#quota-windows). Monthly labels alone are not trusted cycle evidence, but the billing cycle is: the monthly windows take `startsAt` from a reported `billingCycleStart`, or - with only `billingCycleEnd` - from the previous renewal date one calendar month earlier (clamped to the last day of that month), so pace uses `starts_at_resets_at`. With neither field the cycle stays unresolved; no fixed 30-day duration is invented.                                                                                                               |
+| GitHub Copilot         | Can report quota snapshot windows such as `chat`, `completions`, and `premium_interactions`; when the first-party endpoint exposes entitlement but no numeric quota windows, quota-axi reports a fresh provider state with an empty `windows` list rather than inventing percentages. Pace stays `unknown` without trusted cycle boundaries.                                                                                                                                                                                                                                                                                                                                                                                   |
+| Grok                   | With a usable Grok CLI session bearer, can report the shared `credits` window, optional product-scoped `product:<slug>` windows, the current-period `startsAt` and reset, and optional prepaid credit balance from the consumer Usage-page operation. Pi `xai` auth alone establishes usability but cannot provide these consumer windows. Top-level `credits.remaining` is prepaid/on-demand balance, distinct from the shared period `windows` credits percentage used for effective availability. Pace prefers the startsAt/resetsAt pair.                                                                                                                                                                                  |
+| Grok proto3 zero       | For the exact consumer operation only, an omitted usage float is the official proto3 zero when a valid weekly or monthly current period proves the config is present; quota-axi reports `0` used and `100` remaining rather than deriving usage from money.                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| Kimi                   | Reports the principal `weekly` subscription window (with trusted 604,800s duration) plus every valid self-described limit in wire order. Only a limit whose normalized duration is exactly 18,000 seconds is identified as `five_hour`; future limits remain `limit:<index>` unknown windows.                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| Z.AI                   | Identifies each self-described limit by its `(type, unit, number)` triple, never by array position: a five-hour token or credit limit is `five_hour`, a one-week limit is `weekly`, and the monthly MCP tool-call cap is `mcp_monthly`. Percent used comes from the exact `currentValue`/`usage` ratio when both are present, otherwise the reported percentage. A recognized period quota-axi has no relationship for keeps an honest `<number><unit>` id with `unknown` kind; an unknown unit, unknown limit type, or a limit with no usable numbers becomes `limit:<index>` / `invalid:<index>` in `untrustedWindowIds`. Calendar months get no invented duration, so the MCP window has `resetsAt` but no `windowSeconds`. |
 
 ### Model catalog and `models`
 
-`quota-axi models [--intelligence high|medium|low] [--sort runway] [--provider ...] [--json|--full]` joins a reviewed catalog of native Claude, Codex, Grok, and Kimi models to the provider's effective quota evidence. It queries those four catalog-backed providers by default and accepts only those providers in an explicit models scope. Cursor and Copilot are excluded from this first catalog because their hosted model availability is plan-dependent; Copilot's quota relationships are also currently unknown.
+`quota-axi models [--intelligence high|medium|low] [--sort runway] [--provider ...] [--json|--full]` joins a reviewed catalog of native Claude, Codex, Grok, and Kimi models to the provider's effective quota evidence. It queries those four catalog-backed providers by default and accepts only those providers in an explicit models scope. Cursor, Copilot, and Z.AI are excluded from this first catalog because their hosted model availability is plan-dependent; Copilot's quota relationships are also currently unknown.
 
 Catalog buckets are coarse editorial classifications relative to the current frontier, not scores. They are curated from public provider material and public leaderboards, including [Artificial Analysis](https://artificialanalysis.ai/) as an informing source. quota-axi does not reproduce Artificial Analysis scores, has no runtime Artificial Analysis dependency, and never commits an Artificial Analysis key. `scripts/refresh-model-kb.ts` is a maintainer-only review aid: it may use a private `AA_API_KEY` to suggest changes, but it never writes the catalog.
 
@@ -513,10 +521,10 @@ Default model order is deterministic and non-preferential: provider, then model 
 
 Auth source entries can include `credentialPresent` when a non-secret probe confirms a credential item exists.
 
-| Name                 | Values                                                                                                                                                    |
-| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Auth source statuses | `available`, `missing`, `invalid`, `expired`, `skipped`, or `error`                                                                                       |
-| Auth source names    | `oauth-file`, `keychain`, `auth-json`, `auth-env`, `apps-json`, `state-vscdb`, `cli-keychain`, `cli-rpc`, `pi:kimi-coding`, `pi:xai`, and `kimi-code-cli` |
+| Name                 | Values                                                                                                                                                              |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Auth source statuses | `available`, `missing`, `invalid`, `expired`, `skipped`, or `error`                                                                                                 |
+| Auth source names    | `oauth-file`, `keychain`, `auth-json`, `auth-env`, `apps-json`, `state-vscdb`, `cli-keychain`, `cli-rpc`, `pi:kimi-coding`, `pi:xai`, `pi:zai`, and `kimi-code-cli` |
 
 ## Security Posture
 
@@ -530,6 +538,7 @@ Auth source entries can include `credentialPresent` when a non-secret probe conf
 | GitHub Copilot | `$GITHUB_COPILOT_APPS_JSON` when set or the local Copilot apps auth file                                                                                                                                                                                                                                                                                                    |
 | Grok           | Grok CLI session auth from `$GROK_AUTH_JSON`, inline `$GROK_AUTH`, `$GROK_AUTH_PATH`, or `$GROK_HOME/auth.json` / `~/.grok/auth.json`, plus Pi's independent `$PI_CODING_AGENT_DIR/auth.json` `xai` entry (default `~/.pi/agent/auth.json`) for OAuth or literal API-key model auth                                                                                         |
 | Kimi           | Pi's `$PI_CODING_AGENT_DIR/auth.json` (default `~/.pi/agent/auth.json`) for a literal `kimi-coding` API key or unexpired OAuth access token first, then a fresh official Kimi Code CLI access token from `$KIMI_CODE_HOME/credentials/kimi-code.json` (default `$HOME/.kimi-code/credentials/kimi-code.json`)                                                               |
+| Z.AI           | Pi's `$PI_CODING_AGENT_DIR/auth.json` (default `~/.pi/agent/auth.json`) for a literal `zai` GLM Coding Plan API key or unexpired OAuth access token                                                                                                                                                                                                                         |
 
 ### Provider notes
 
@@ -584,6 +593,14 @@ Auth source entries can include `credentialPresent` when a non-secret probe conf
 - It sends one redirect-disabled `GET` to the fixed `https://api.kimi.com/coding/v1/usages` endpoint with a 15 second total deadline and a 262,144-byte decoded-body cap.
 - It never uses `refresh_token`, accepts a custom Kimi origin, launches Pi or Kimi, makes a model request, refreshes or writes credentials, creates a device ID, imports cookies, sends device identity, retains raw responses, or exposes account, plan, token, or fingerprint data.
 - Definitive credential absence or rejection retires Kimi cache data. Transient fallback drops reset-expired windows and applies five-hour or seven-day age bounds to windows without resets.
+
+**Z.AI**
+
+- It reads Pi's `zai` entry from `$PI_CODING_AGENT_DIR/auth.json` (default `~/.pi/agent/auth.json`) with the same read-only, size-capped contract as the Kimi source: `type: "api_key"` with a literal `key`, or `type: "oauth"` with a literal `access` token whose optional `expires` is still in the future. An expired OAuth record is reported as expired and never refreshed, and environment, template, or command references are not resolved. Ambient `ZAI_API_KEY` is not a credential source.
+- It sends one redirect-disabled `GET` to the fixed `https://api.z.ai/api/monitor/usage/quota/limit` endpoint with a 15 second total deadline and a 262,144-byte body cap. That endpoint is not a documented public REST contract; it is the same first-party quota endpoint the vendor's own console and open-source quota trackers read, and its response shape is treated as untrusted input.
+- Schema drift is loud, never guessed: a rejected envelope (`success: false` or a non-200 `code`) and a missing or non-array `data.limits` are errors, and any limit quota-axi cannot identify keeps its percentage as an `unknown` window listed in `state.untrustedWindowIds` instead of being folded into an effective bound.
+- Definitive credential absence or rejection (HTTP 401/403) retires Z.AI cache data. Timeout, network, rate-limit, and server failures may fall back only to a formerly fresh `api` snapshot.
+- It never launches Pi or a Z.AI CLI, makes a model request, refreshes or writes credentials, sends cookies, or retains raw responses.
 
 ### Safety guarantees
 

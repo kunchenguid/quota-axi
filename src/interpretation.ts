@@ -90,6 +90,12 @@ function semanticsFor(
       );
     case "cursor":
       return cursorSemantics(provider.windows, generatedAt);
+    case "zai":
+      return zaiSemantics(
+        provider.windows,
+        provider.state.untrustedWindowIds ?? [],
+        generatedAt,
+      );
     case "copilot":
       return unknownSemantics(
         provider.windows,
@@ -265,6 +271,51 @@ function kimiSemantics(
   return knownSemantics(
     effectiveAvailability,
     "Kimi's weekly and five-hour account windows jointly bound every model, so effective remaining is the minimum across the named windows.",
+  );
+}
+
+const ZAI_MODEL_WINDOW_IDS = ["five_hour", "weekly"];
+const ZAI_TOOL_WINDOW_IDS = ["mcp_monthly"];
+
+function zaiSemantics(
+  windows: QuotaWindow[],
+  untrustedWindowIds: string[],
+  generatedAt: string,
+): QuotaSemantics {
+  const models = windows.filter(({ id }) => ZAI_MODEL_WINDOW_IDS.includes(id));
+  const tools = windows.filter(({ id }) => ZAI_TOOL_WINDOW_IDS.includes(id));
+  const unresolvedWindowIds = [
+    ...new Set([
+      ...windows
+        .filter(
+          ({ id }) =>
+            !ZAI_MODEL_WINDOW_IDS.includes(id) &&
+            !ZAI_TOOL_WINDOW_IDS.includes(id),
+        )
+        .map(({ id }) => id),
+      ...untrustedWindowIds,
+    ]),
+  ];
+
+  const effectiveAvailability: EffectiveAvailability[] = [];
+  if (models.length > 0) {
+    effectiveAvailability.push(availability("all_models", models, generatedAt));
+  }
+  if (tools.length > 0) {
+    effectiveAvailability.push(availability("mcp_tools", tools, generatedAt));
+  }
+  if (unresolvedWindowIds.length > 0) {
+    return {
+      status: "partial",
+      description:
+        "Z.AI's five-hour and weekly token windows jointly bound every model and the monthly MCP tool window bounds tool calls only. Unrecognized or unparsed limits are not folded into those bounds, so they stay unresolved.",
+      effectiveAvailability,
+      unresolvedWindowIds,
+    };
+  }
+  return knownSemantics(
+    effectiveAvailability,
+    "Z.AI's five-hour and weekly token windows jointly bound every model, so effective remaining is the minimum across them. The monthly MCP tool window describes a separate workload and is not folded into model availability.",
   );
 }
 

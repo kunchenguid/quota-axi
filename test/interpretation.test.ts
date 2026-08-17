@@ -50,6 +50,7 @@ describe("quota semantics", () => {
       ["kimi", [window("weekly", "weekly", 59)]],
       ["cursor", [window("included_usage", "monthly", 72)]],
       ["copilot", [window("premium_interactions", "monthly", 81)]],
+      ["zai", [window("weekly", "weekly", 63)]],
     ];
 
     for (const [providerId, windows] of cases) {
@@ -303,6 +304,57 @@ describe("quota semantics", () => {
         pace: expect.objectContaining({ status: "unknown" }),
       }),
     ]);
+  });
+
+  it("separates Z.AI model bounds from the MCP tool window", () => {
+    const result = withQuotaSemantics(
+      provider("zai", [
+        window("five_hour", "session", 47),
+        window("weekly", "weekly", 89),
+        window("mcp_monthly", "monthly", 100),
+      ]),
+      GENERATED_AT,
+    );
+
+    expect(result.quotaSemantics?.status).toBe("known");
+    expect(result.quotaSemantics?.effectiveAvailability).toEqual([
+      expect.objectContaining({
+        scope: "all_models",
+        status: "known",
+        effectivePercentRemaining: 47,
+        boundedBy: ["five_hour", "weekly"],
+        limitingWindowIds: ["five_hour"],
+      }),
+      expect.objectContaining({
+        scope: "mcp_tools",
+        status: "known",
+        effectivePercentRemaining: 100,
+        boundedBy: ["mcp_monthly"],
+      }),
+    ]);
+  });
+
+  it("keeps recognized Z.AI bounds while marking unrecognized limits partial", () => {
+    const zai = provider("zai", [
+      window("weekly", "weekly", 63),
+      window("3d", "unknown", 20),
+    ]);
+    zai.state.untrustedWindowIds = ["3d", "invalid:3"];
+
+    const result = withQuotaSemantics(zai, GENERATED_AT);
+
+    expect(result.quotaSemantics).toMatchObject({
+      status: "partial",
+      unresolvedWindowIds: ["3d", "invalid:3"],
+      effectiveAvailability: [
+        expect.objectContaining({
+          scope: "all_models",
+          status: "known",
+          effectivePercentRemaining: 63,
+          boundedBy: ["weekly"],
+        }),
+      ],
+    });
   });
 
   it("keeps valid Kimi bounds while marking unparsed limits partial", () => {

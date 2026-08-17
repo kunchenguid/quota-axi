@@ -1,0 +1,29 @@
+{
+  "code": 200,
+  "msg": "Operation successful",
+  "data": {
+    "limits": [
+      {
+        "type": "CREDIT_LIMIT",
+        "unit": 3,
+        "number": 5,
+        "usage": 2000,
+        "currentValue": 0,
+        "remaining": 2000,
+        "percentage": 0
+      },
+      {
+        "type": "CREDIT_LIMIT",
+        "unit": 6,
+        "number": 1,
+        "usage": 10000,
+        "currentValue": 9855,
+        "remaining": 145,
+        "percentage": 98,
+        "nextResetTime": 1786685679998
+      }
+    ],
+    "level": "lite"
+  },
+  "success": true
+}
