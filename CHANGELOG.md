@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.29](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.28...quota-axi-v0.1.29) (2026-08-18)
+
+
+### Features
+
+* **cli:** consolidate quota output for agent decisions ([#102](https://github.com/kunchenguid/quota-axi/issues/102)) ([e3e7939](https://github.com/kunchenguid/quota-axi/commit/e3e793995bedb855f42d754d0bdad7abd998759c))
+
 ## [0.1.28](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.27...quota-axi-v0.1.28) (2026-08-14)
 
 
