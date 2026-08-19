@@ -11,18 +11,21 @@ import type { AuthSourceReport, ProviderOptions } from "../types.js";
 
 /**
  * The Cursor CLI (`cursor-agent`) keeps sign-in identity in a plain
- * `cli-config.json` and the tokens themselves in the macOS login Keychain,
- * unlike the Cursor editor which keeps both in its `state.vscdb`. This module
- * reads only the access token, only on macOS, and only through the same
- * `--allow-keychain-prompt` gate the Claude keychain source uses.
+ * `cli-config.json` and the tokens themselves in the macOS login Keychain, or
+ * in `auth.json` on Linux, unlike the Cursor editor which keeps both in its
+ * `state.vscdb`. This module reads only the access token. The macOS Keychain
+ * path uses the same `--allow-keychain-prompt` gate as the Claude keychain
+ * source; the Linux auth file is read directly without any refresh behavior.
  *
- * Access-token refresh is intentionally not implemented: the sibling
- * `cursor-refresh-token` item is never read, because quota-axi does not mutate
- * provider state and has no first-party refresh contract to rely on. An expired
- * access token therefore surfaces as `Cursor sign-in required`, whose remedy is
- * running `cursor-agent login` again.
+ * Access-token refresh is intentionally not implemented: neither the Linux
+ * `refreshToken` field nor the macOS `cursor-refresh-token` item is read,
+ * because quota-axi does not mutate provider state and has no first-party
+ * refresh contract to rely on. A rejected access token can therefore use an
+ * eligible stale snapshot or report that authentication is required; recovery
+ * is running `cursor-agent login` again.
  */
 export const CURSOR_CLI_SOURCE = "cli-keychain";
+export const CURSOR_CLI_AUTHFILE_SOURCE = "cli-authfile";
 export const CURSOR_CLI_KEYCHAIN_SERVICE = "cursor-access-token";
 export const CURSOR_CLI_KEYCHAIN_ACCOUNT = "cursor-user";
 
@@ -48,9 +51,9 @@ type IdentityResult =
 
 type KeychainItemPresence = "present" | "missing" | "unknown";
 
-/** The Cursor CLI token store is the macOS login Keychain only. */
+/** The Cursor CLI token store is the macOS Keychain or Linux auth file. */
 export function isCursorCliSourceSupported(): boolean {
-  return process.platform === "darwin";
+  return process.platform === "darwin" || process.platform === "linux";
 }
 
 export function cursorCliConfigPath(): string {
@@ -58,12 +61,25 @@ export function cursorCliConfigPath(): string {
   return join(homedir(), ".cursor", "cli-config.json");
 }
 
+export function cursorCliAuthFilePath(): string {
+  if (process.env.CURSOR_CLI_CONFIG) return process.env.CURSOR_CLI_CONFIG;
+  return join(
+    process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config"),
+    "cursor",
+    "auth.json",
+  );
+}
+
 export async function readCursorCliCredentialState(
   options: ProviderOptions,
   presenceOnly = false,
 ): Promise<CursorCliCredentialState> {
+  if (process.platform === "linux") {
+    return readLinuxAuthFileCredentialState(cursorCliAuthFilePath());
+  }
   const path = cursorCliConfigPath();
-  if (!isCursorCliSourceSupported()) return missingState(path);
+  if (!isCursorCliSourceSupported())
+    return missingState(path, CURSOR_CLI_SOURCE);
 
   const identityResult = readCursorCliIdentity(path);
   if (identityResult.status === "missing") return missingState(path);
@@ -87,6 +103,38 @@ export async function readCursorCliCredentialState(
     return skippedKeychainState(path, await readKeychainItemPresence());
   }
   return readKeychainAccessToken(path, identity);
+}
+
+function readLinuxAuthFileCredentialState(
+  path: string,
+): CursorCliCredentialState {
+  const raw = readJsonFileResult(path);
+  if (raw.status === "missing")
+    return missingState(path, CURSOR_CLI_AUTHFILE_SOURCE);
+  if (raw.status === "invalid") {
+    return {
+      status: "invalid",
+      source: {
+        source: CURSOR_CLI_AUTHFILE_SOURCE,
+        path,
+        status: "invalid",
+        error: raw.error,
+      },
+    };
+  }
+  const accessToken = trimmedStringValue(objectValue(raw.value)?.accessToken);
+  if (!accessToken) return missingState(path, CURSOR_CLI_AUTHFILE_SOURCE);
+  return {
+    status: "available",
+    accessToken,
+    identity: {},
+    source: {
+      source: CURSOR_CLI_AUTHFILE_SOURCE,
+      path,
+      status: "available",
+      credentialPresent: true,
+    },
+  };
 }
 
 /** Identity only: `cli-config.json` never holds a token. */
@@ -223,10 +271,13 @@ function keychainFailureState(
   };
 }
 
-function missingState(path: string): CursorCliCredentialState {
+function missingState(
+  path: string,
+  source: string = CURSOR_CLI_SOURCE,
+): CursorCliCredentialState {
   return {
     status: "missing",
-    source: { source: CURSOR_CLI_SOURCE, path, status: "missing" },
+    source: { source, path, status: "missing" },
   };
 }
 
@@ -270,4 +321,9 @@ function objectValue(value: unknown): Record<string, unknown> | undefined {
 
 function stringValue(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function trimmedStringValue(value: unknown): string | undefined {
+  const trimmed = stringValue(value)?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : undefined;
 }

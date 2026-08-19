@@ -6,9 +6,9 @@ import type { ProviderQuota } from "../../src/types.js";
 
 /**
  * A CLI-only Cursor machine has no editor `state.vscdb` at all, so these cases
- * cover the quota refresh that has to run on the `cursor-agent` Keychain token
- * alone. The token value is a stand-in string here so every case can also
- * assert that it never reaches the report.
+ * cover quota refresh from the platform `cursor-agent` credential store alone.
+ * The token value is a stand-in string here so every case can also assert that
+ * it never reaches the report.
  */
 const CLI_TOKEN = "cli-keychain-token-stand-in";
 const EDITOR_TOKEN = "editor-token-stand-in";
@@ -50,11 +50,31 @@ async function onDarwin<T>(callback: () => Promise<T>): Promise<T> {
   }
 }
 
+async function onLinux<T>(callback: () => Promise<T>): Promise<T> {
+  const descriptor = Object.getOwnPropertyDescriptor(process, "platform");
+  Object.defineProperty(process, "platform", { value: "linux" });
+  try {
+    return await callback();
+  } finally {
+    if (descriptor) Object.defineProperty(process, "platform", descriptor);
+  }
+}
+
 function writeCliConfig(): void {
   writeFileSync(
     process.env.CURSOR_CLI_CONFIG!,
     JSON.stringify({
       authInfo: { email: "person@example.invalid", userId: "cursor-user-1" },
+    }),
+  );
+}
+
+function writeCliAuthFile(): void {
+  writeFileSync(
+    process.env.CURSOR_CLI_CONFIG!,
+    JSON.stringify({
+      accessToken: CLI_TOKEN,
+      refreshToken: "refresh-token-must-not-be-used",
     }),
   );
 }
@@ -151,6 +171,75 @@ async function seedCache(): Promise<void> {
 }
 
 describe("Cursor CLI-only quota refresh", () => {
+  it("refreshes quota from the Linux CLI auth file when the editor database is absent", async () => {
+    writeCliAuthFile();
+    mockProcess({});
+    const { bearers } = mockUsageApi();
+
+    await onLinux(async () => {
+      await seedCache();
+      const { fetchQuota } = await import("../../src/providers/cursor.js");
+      const result = await fetchQuota({ allowKeychainPrompt: false });
+
+      expect(result.state.status).toBe("fresh");
+      expect(result.state.stale).toBe(false);
+      expect(result.state.sourcesTried).toEqual([
+        "state-vscdb",
+        "cli-authfile",
+      ]);
+      expect(result.attempts).toEqual([
+        {
+          source: "state-vscdb",
+          status: "skipped",
+          error: "credentials_missing",
+        },
+        { source: "cli-authfile", status: "success" },
+      ]);
+      expect(result.windows).toMatchObject([
+        { id: "included_usage", percentUsed: 12, percentRemaining: 88 },
+      ]);
+      expect(bearers).toEqual([`Bearer ${CLI_TOKEN}`, `Bearer ${CLI_TOKEN}`]);
+      expect(JSON.stringify(result)).not.toContain(
+        "refresh-token-must-not-be-used",
+      );
+    });
+  });
+
+  it("falls back to stale quota when the Linux auth-file token is rejected", async () => {
+    writeCliAuthFile();
+    mockProcess({});
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("{}", { status: 401 })),
+    );
+
+    await onLinux(async () => {
+      await seedCache();
+      const { fetchQuota } = await import("../../src/providers/cursor.js");
+      const result = await fetchQuota({ allowKeychainPrompt: false });
+
+      expect(result.state.status).toBe("stale");
+      expect(result.state.error).toBe("Cursor sign-in required");
+      expect(result.state.sourcesTried).toEqual([
+        "state-vscdb",
+        "cli-authfile",
+        "cache",
+      ]);
+      expect(result.attempts).toEqual([
+        {
+          source: "state-vscdb",
+          status: "skipped",
+          error: "credentials_missing",
+        },
+        {
+          source: "cli-authfile",
+          status: "failed",
+          error: "Cursor sign-in required",
+        },
+      ]);
+    });
+  });
+
   it("refreshes quota from the CLI Keychain token when the editor database is absent", async () => {
     writeCliConfig();
     mockProcess({ keychainToken: CLI_TOKEN });

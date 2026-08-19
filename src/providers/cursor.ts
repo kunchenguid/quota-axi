@@ -21,6 +21,8 @@ import {
   withRemaining,
 } from "./common.js";
 import {
+  CURSOR_CLI_AUTHFILE_SOURCE,
+  CURSOR_CLI_SOURCE,
   isCursorCliSourceSupported,
   readCursorCliCredentialState,
 } from "./cursor-cli-credential.js";
@@ -78,9 +80,11 @@ export async function fetchQuota(
   if (resolution.credentials) {
     // The editor-credential fetch keeps its established `api` attempt name; a
     // CLI-resolved fetch is named for its credential store so `sourcesTried`
-    // shows that the Keychain token, not the absent editor store, answered.
+    // shows which CLI store, not the absent editor store, answered.
     const quotaSource =
-      resolution.source === "cli-keychain" ? "cli-keychain" : "api";
+      resolution.source === undefined || resolution.source === "state-vscdb"
+        ? "api"
+        : resolution.source;
     attempts.push({ source: quotaSource, status: "failed" });
     try {
       const quota = await fetchCursorUsage(resolution.credentials);
@@ -108,18 +112,21 @@ export async function fetchQuota(
         };
         const cliState = await readCliCredentialState(options);
         if (cliState.status === "available") {
-          attempts.push({ source: "cli-keychain", status: "failed" });
+          attempts.push({
+            source: cliState.source.source,
+            status: "failed",
+          });
           try {
             const quota = await fetchCursorUsage(cliState.credentials);
             attempts[attempts.length - 1] = {
-              source: "cli-keychain",
+              source: cliState.source.source,
               status: "success",
             };
             return cursorSuccess(quota, attempts);
           } catch (cliError) {
             finalError = errorMessage(cliError);
             attempts[attempts.length - 1] = {
-              source: "cli-keychain",
+              source: cliState.source.source,
               status: "failed",
               error: finalError,
             };
@@ -185,14 +192,17 @@ export async function inspectAuth(
 /**
  * The Cursor editor and CLI keep credentials in different stores, and either
  * source is enough, so a CLI-only machine with no editor `state.vscdb` can
- * still refresh quota after Keychain access is granted. Quota fetching tries
- * the non-prompting editor store first;
- * it reads the CLI Keychain value when the editor token is absent, unreadable,
- * or rejected by Cursor.
+ * still refresh quota after the CLI credential is available. Quota fetching
+ * tries the non-prompting editor store first; it reads the platform CLI
+ * credential source when the editor token is absent, unreadable, or rejected
+ * by Cursor.
  */
 async function resolveCredentials(options: ProviderOptions): Promise<{
   credentials?: CursorCredentials;
-  source?: "state-vscdb" | "cli-keychain";
+  source?:
+    | "state-vscdb"
+    | typeof CURSOR_CLI_SOURCE
+    | typeof CURSOR_CLI_AUTHFILE_SOURCE;
   unavailable: UnavailableCredentialState[];
 }> {
   const unavailable: UnavailableCredentialState[] = [];
@@ -211,7 +221,9 @@ async function resolveCredentials(options: ProviderOptions): Promise<{
   if (cliState.status === "available") {
     return {
       credentials: cliState.credentials,
-      source: "cli-keychain",
+      source: cliState.source.source as
+        | typeof CURSOR_CLI_SOURCE
+        | typeof CURSOR_CLI_AUTHFILE_SOURCE,
       unavailable,
     };
   }
