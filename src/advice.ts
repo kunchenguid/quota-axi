@@ -11,11 +11,6 @@ export const CREDENTIALS_EXPIRED_REASON = "credentials_expired";
 export const GROK_TOKEN_REFRESH_REMEDY_COMMAND = "grok";
 export const GROK_ACCESS_TOKEN_EXPIRED_ERROR = "Grok access token expired";
 
-const BLOCKED_CREDENTIAL_ERRORS = new Set([
-  "credentials_expired",
-  "credentials_missing",
-]);
-
 export function annotateQuotaAdvice(
   response: Omit<QuotaAxiResponse, "schemaVersion">,
 ): QuotaAxiResponse {
@@ -23,19 +18,20 @@ export function annotateQuotaAdvice(
   const help = providers.flatMap(providerHelpLines);
   return {
     generatedAt: response.generatedAt,
-    schemaVersion: 3,
+    schemaVersion: 5,
     providers,
     ...(help.length > 0 ? { help } : {}),
   };
 }
 
+/**
+ * Situational advice stays first because it is actionable; only the tier hint
+ * is worth repeating on every invocation.
+ */
 export function quotaHelpLines(response: QuotaAxiResponse): string[] {
   return [
     ...(response.help ?? []),
-    "Default TOON reports effective headroom and usable runway; use --json or --full for reserve diagnostics",
-    "Run `quota-axi --provider claude --json` for JSON output",
-    "Run `quota-axi --full` to include account, source-attempt, and reserve details",
-    "Run `quota-axi auth` to inspect local auth source availability without printing secrets",
+    "Run `quota-axi --full` for windows, pace, reserve, and account evidence",
   ];
 }
 
@@ -83,16 +79,32 @@ function needsGrokTokenRefreshAdvice(provider: ProviderQuota): boolean {
 }
 
 function isBlockedCredentialAttempt(attempt: SourceAttempt): boolean {
+  if (isKeychainSource(attempt.source)) return false;
+  if (attempt.status === "skipped") return true;
   return (
-    attempt.source !== "keychain" &&
-    attempt.status === "skipped" &&
-    Boolean(attempt.error && BLOCKED_CREDENTIAL_ERRORS.has(attempt.error))
+    attempt.status === "failed" &&
+    isDefinitiveCredentialRejection(attempt.error)
   );
+}
+
+function isDefinitiveCredentialRejection(error: string | undefined): boolean {
+  if (!error) return false;
+  return (
+    /^credentials_(?:missing|invalid|expired)$/i.test(error) ||
+    /\bsign-in required\b/i.test(error) ||
+    /\b(?:unauthorized|forbidden)\b/i.test(error) ||
+    /(?:^|\D)(?:401|403)(?:\D|$)/.test(error)
+  );
+}
+
+/** Providers name their Keychain source `keychain` or `<store>-keychain`. */
+function isKeychainSource(source: string): boolean {
+  return source === "keychain" || source.endsWith("-keychain");
 }
 
 function isPromptBlockedKeychainAttempt(attempt: SourceAttempt): boolean {
   return (
-    attempt.source === "keychain" &&
+    isKeychainSource(attempt.source) &&
     attempt.status === "skipped" &&
     attempt.error === "keychain_prompt_required" &&
     attempt.credentialPresent === true

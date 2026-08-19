@@ -9,8 +9,14 @@ We require this to reduce the maintainer's burden of reviewing and merging contr
 `no-mistakes` puts a local git proxy in front of your real remote.
 Pushing through it runs an AI-driven review/test/lint pipeline in an isolated worktree, forwards the push upstream only after every check passes, and opens a clean PR automatically.
 
-A GitHub Actions check (`Require no-mistakes`) runs on PRs targeting `main` and fails if the body is missing the deterministic signature that no-mistakes writes.
-The release and dependency bots are exempt so their automation keeps working, but regular contributor PRs without the signature will not be reviewed or merged.
+For ordinary PRs targeting `main`, the `Require no-mistakes` workflow publishes the `PR must be raised via no-mistakes` status and fails if the body is missing the deterministic signature that no-mistakes writes. Release PRs opened with `GITHUB_TOKEN` cannot produce that pull-request check, so the push-triggered release workflow publishes the same context after applying the structural exemption below.
+
+The repository's `main` ruleset must require this context for enforcement; the workflow alone is advisory. Once required, a human-authored PR without the signature cannot be merged without an authorized ruleset bypass.
+
+Two exemptions exist, and both are decided by one script, [`.github/scripts/no-mistakes-gate.sh`](.github/scripts/no-mistakes-gate.sh):
+
+- `dependabot[bot]`, so dependency updates keep flowing.
+- release-please's own release PR, identified **structurally** rather than by author login: a `release-please--` (or legacy `release-please/`) head branch, a same-repository (non-fork) head, and release-please's generated body footer. All three must hold, so a fork or a hand-written PR cannot claim the exemption by copying a branch name or a body.
 
 ## Workflow
 

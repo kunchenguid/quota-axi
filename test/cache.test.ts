@@ -11,18 +11,23 @@ import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   deleteCachedProvider,
+  readCachedClaudeProvider,
   readCachedProvider,
   writeCachedProviders,
 } from "../src/cache.js";
-import { cacheFilePath } from "../src/lib/fs.js";
+import { cacheFilePath, claudeCredentialContextId } from "../src/lib/fs.js";
 import type { ProviderId, ProviderQuota } from "../src/types.js";
 
 const originalXdgCacheHome = process.env.XDG_CACHE_HOME;
+const originalClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
 let tempDir: string | undefined;
 
 afterEach(() => {
   if (originalXdgCacheHome === undefined) delete process.env.XDG_CACHE_HOME;
   else process.env.XDG_CACHE_HOME = originalXdgCacheHome;
+  if (originalClaudeConfigDir === undefined)
+    delete process.env.CLAUDE_CONFIG_DIR;
+  else process.env.CLAUDE_CONFIG_DIR = originalClaudeConfigDir;
   if (tempDir) rmSync(tempDir, { recursive: true, force: true });
   tempDir = undefined;
 });
@@ -152,6 +157,24 @@ describe("quota cache", () => {
     expect(payload.providers.every((provider) => !provider.account)).toBe(true);
   });
 
+  it("stores Claude cache provenance as an opaque context identifier", () => {
+    useTempCache();
+    const contextDir = join(tempDir!, "synthetic-claude-context");
+    process.env.CLAUDE_CONFIG_DIR = contextDir;
+
+    writeCachedProviders([quota("claude", 42)]);
+
+    const payload = JSON.parse(readFileSync(cacheFilePath(), "utf8")) as {
+      schemaVersion: number;
+      providers: Array<{ credentialContext?: string }>;
+    };
+    const contextId = payload.providers[0]?.credentialContext;
+    expect(payload.schemaVersion).toBe(2);
+    expect(contextId).toMatch(/^[a-f0-9]{64}$/);
+    expect(JSON.stringify(payload)).not.toContain(contextDir);
+    expect(readCachedClaudeProvider(claudeCredentialContextId())).toBeDefined();
+  });
+
   it("writes normalized cache data with mode 0600 and no attempts or sentinel secret", () => {
     useTempCache();
     const sentinel = "CACHE-SENTINEL-KIMI-612704";
@@ -197,7 +220,6 @@ describe("quota cache", () => {
       pace: {
         status: "ahead",
         reservePercentPoints: -20,
-        projectionBasis: "cycle_average",
       },
     };
 
@@ -244,6 +266,7 @@ describe("quota cache", () => {
 function useTempCache(): void {
   tempDir = mkdtempSync(join(tmpdir(), "quota-axi-cache-"));
   process.env.XDG_CACHE_HOME = tempDir;
+  process.env.CLAUDE_CONFIG_DIR = join(tempDir, "synthetic-claude-context");
 }
 
 function quota(provider: ProviderId, percentUsed: number): ProviderQuota {
@@ -282,6 +305,7 @@ function providerLabel(provider: ProviderId): string {
   if (provider === "cursor") return "Cursor";
   if (provider === "copilot") return "GitHub Copilot";
   if (provider === "grok") return "Grok";
+  if (provider === "zai") return "Z.AI";
   if (provider === "agy") return "Antigravity";
   return "Kimi";
 }

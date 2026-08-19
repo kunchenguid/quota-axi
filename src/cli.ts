@@ -1,25 +1,36 @@
 import { runAxiCli } from "axi-sdk-js";
-import { authCommand, quotaCommand, type QuotaContext } from "./commands.js";
+import {
+  authCommand,
+  modelsCommand,
+  quotaCommand,
+  type QuotaContext,
+} from "./commands.js";
+import { PROVIDER_IDS } from "./types.js";
 import { VERSION } from "./version.js";
 
 export const DESCRIPTION =
-  "Report local agent-provider quota windows for routing-aware agents.";
+  "Report local agent-provider quota windows and model quota evidence.";
 
-export const TOP_HELP = `usage: quota-axi [auth] [flags]
-commands[2]:
-  (none)=quota, auth
+export const TOP_HELP = `usage: quota-axi [quota|auth|models] [flags]
+commands[3]:
+  (none)=quota, auth, models
 output:
-  Default TOON reports effective headroom and usable-runway evidence; use --full or --json for reserve diagnostics.
-flags[6]:
-  --provider <claude,codex,cursor,copilot,grok,kimi,agy>, --json, --full, --allow-keychain-prompt, --help, -v/--version
+  Default TOON reports local quota evidence. models is a deterministic data join; --sort runway is explicit opt-in ordering. --tui renders a live human terminal report instead (q quits).
+flags[11]:
+  --provider <${PROVIDER_IDS.join(",")}>, --json, --full, --tui, --refresh <30s-24h>, --once, --allow-keychain-prompt, --intelligence <high|medium|low>, --sort <runway>, --help, -v/--version
 examples:
   quota-axi
   quota-axi --provider claude
   quota-axi --provider agy
-  quota-axi --provider cursor,copilot,grok,kimi,agy
+  quota-axi --provider cursor,copilot,grok,kimi,zai
   quota-axi --json
   quota-axi --full
+  quota-axi --tui
+  quota-axi --tui --refresh 1m
+  quota-axi --tui --once
   quota-axi auth
+  quota-axi models --intelligence high
+  quota-axi models --sort runway
 `;
 
 type MainOptions = {
@@ -41,13 +52,16 @@ export async function main(options: MainOptions = {}): Promise<void> {
     commands: {
       quota: quotaCommand,
       auth: authCommand,
+      models: modelsCommand,
     },
     // `quota` is the implicit default command, so the bare-invocation home view
     // is never reached (see normalizeArgv); wiring it keeps the SDK contract.
     home: quotaCommand,
     resolveContext: () => ({ binPath }),
     getCommandHelp: (command) =>
-      command === "quota" || command === "auth" ? TOP_HELP : undefined,
+      command === "quota" || command === "auth" || command === "models"
+        ? TOP_HELP
+        : undefined,
   });
 }
 
@@ -79,7 +93,12 @@ export function normalizeArgv(raw: string[]): string[] {
   if (raw.length === 1 && isTopLevelFlag(first)) {
     return raw;
   }
-  if (first === "quota" || first === "auth" || first === "update") {
+  if (
+    first === "quota" ||
+    first === "auth" ||
+    first === "models" ||
+    first === "update"
+  ) {
     return raw;
   }
   if (first.startsWith("-")) {
@@ -118,7 +137,14 @@ function findCommand(raw: string[]): number {
       index++;
       continue;
     }
-    if (arg === "quota" || arg === "auth" || arg === "update") return index;
+    if (
+      arg === "quota" ||
+      arg === "auth" ||
+      arg === "models" ||
+      arg === "update"
+    ) {
+      return index;
+    }
   }
   return -1;
 }

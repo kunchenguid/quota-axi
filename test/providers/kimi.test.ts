@@ -110,6 +110,41 @@ describe("Kimi request transport", () => {
     expect(cliSource.resolve).not.toHaveBeenCalled();
   });
 
+  it("sends a Pi OAuth access token as the bearer without touching the CLI", async () => {
+    const request = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        jsonResponse(SUCCESS_PAYLOAD),
+    );
+    const cliSource = cliCredentialSource({
+      status: "available",
+      accessToken: "lower-priority-cli-token",
+    });
+
+    const report = await createKimiAdapter({
+      broker: broker({
+        status: "available",
+        kind: "oauth",
+        credential: "pi-oauth-access-483",
+      }),
+      cliCredentialSource: cliSource,
+      fetch: request,
+      readCachedProvider: () => undefined,
+      deleteCachedProvider: () => undefined,
+      now: () => NOW,
+    }).fetchQuota(OPTIONS);
+
+    const headers = new Headers(request.mock.calls[0][1]?.headers);
+    expect(headers.get("authorization")).toBe("Bearer pi-oauth-access-483");
+    expect(cliSource.resolve).not.toHaveBeenCalled();
+    expect(report).toMatchObject({
+      source: "api",
+      state: { status: "fresh", sourcesTried: ["pi:kimi-coding"] },
+      attempts: [{ source: "pi:kimi-coding", status: "success" }],
+    });
+    expect(report.windows.length).toBeGreaterThan(0);
+    expect(JSON.stringify(report)).not.toContain("pi-oauth-access-483");
+  });
+
   it("propagates malformed limit entries as untrusted window ids", async () => {
     const report = await testAdapter({
       fetch: vi.fn(async () =>
@@ -946,6 +981,7 @@ describe("Kimi credential outcomes and cache policy", () => {
         "unsupported",
         { status: "invalid", error: "unsupported_credential_type" },
       ],
+      ["expired", { status: "expired", error: "pi_kimi_credential_expired" }],
       ["error", { status: "invalid", error: "credential_resolution_failed" }],
     ] as const) {
       const report = await testAdapter({
@@ -1015,6 +1051,55 @@ describe("Kimi credential outcomes and cache policy", () => {
     },
   );
 
+  it("falls through to the CLI when the Pi OAuth record is expired", async () => {
+    const request = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        jsonResponse(SUCCESS_PAYLOAD),
+    );
+    const report = await testAdapter({
+      broker: broker({ status: "expired", refreshable: true }),
+      cliCredentialSource: cliCredentialSource({
+        status: "available",
+        accessToken: "cli-token-after-pi-expiry",
+      }),
+      fetch: request,
+    }).fetchQuota(OPTIONS);
+
+    const headers = new Headers(request.mock.calls[0][1]?.headers);
+    expect(headers.get("authorization")).toBe(
+      "Bearer cli-token-after-pi-expiry",
+    );
+    expect(report.state).toMatchObject({
+      status: "fresh",
+      sourcesTried: ["pi:kimi-coding", "kimi-code-cli"],
+    });
+    expect(report.attempts).toEqual([
+      {
+        source: "pi:kimi-coding",
+        status: "skipped",
+        error: "pi_kimi_credential_expired",
+      },
+      { source: "kimi-code-cli", status: "success" },
+    ]);
+  });
+
+  it("reports Pi OAuth expiry when no other credential is usable", async () => {
+    const request = vi.fn();
+    const report = await testAdapter({
+      broker: broker({ status: "expired", refreshable: false }),
+      cliCredentialSource: cliCredentialSource({ status: "missing" }),
+      fetch: request,
+    }).fetchQuota(OPTIONS);
+
+    expect(request).not.toHaveBeenCalled();
+    expect(report.state).toMatchObject({
+      status: "auth_required",
+      stale: false,
+      error: "pi_kimi_credential_expired",
+      sourcesTried: ["pi:kimi-coding", "kimi-code-cli"],
+    });
+  });
+
   it("preserves stale cache after a CLI credential read failure", async () => {
     const remove = vi.fn();
     const report = await testAdapter({
@@ -1050,7 +1135,11 @@ describe("Kimi credential outcomes and cache policy", () => {
   it("never exposes a sentinel credential through reports or attempts", async () => {
     const sentinel = "KIMI-SENTINEL-DO-NOT-LEAK-938475";
     const report = await testAdapter({
-      broker: broker({ status: "available", apiKey: sentinel }),
+      broker: broker({
+        status: "available",
+        kind: "api_key",
+        credential: sentinel,
+      }),
       fetch: vi.fn(
         async () =>
           new Response(`provider body includes ${sentinel}`, { status: 500 }),
@@ -1074,7 +1163,8 @@ function testAdapter(
   return createKimiAdapter({
     broker: broker({
       status: "available",
-      apiKey: "synthetic-kimi-key-741",
+      kind: "api_key",
+      credential: "synthetic-kimi-key-741",
     }),
     cliCredentialSource: cliCredentialSource({ status: "missing" }),
     fetch: vi.fn(async () =>

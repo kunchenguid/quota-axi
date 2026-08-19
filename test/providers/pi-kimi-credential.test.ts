@@ -36,7 +36,8 @@ describe("Pi Kimi credential broker", () => {
 
     await expect(createPiKimiCredentialBroker().resolve()).resolves.toEqual({
       status: "available",
-      apiKey: "literal-fixture-key-917",
+      kind: "api_key",
+      credential: "literal-fixture-key-917",
     });
     expectAuthUnchanged(fixture);
   });
@@ -63,7 +64,8 @@ describe("Pi Kimi credential broker", () => {
 
     await expect(broker.resolve()).resolves.toEqual({
       status: "available",
-      apiKey: "runtime-managed-fixture-key-264",
+      kind: "api_key",
+      credential: "runtime-managed-fixture-key-264",
     });
     expectSnapshotEqual(authPath, before);
     expect(readdirSync(home)).toEqual([".pi"]);
@@ -96,7 +98,8 @@ describe("Pi Kimi credential broker", () => {
 
     await expect(createPiKimiCredentialBroker().resolve()).resolves.toEqual({
       status: "available",
-      apiKey: "exact-provider-fixture-key-615",
+      kind: "api_key",
+      credential: "exact-provider-fixture-key-615",
     });
     expect(() => statSync(markerPath)).toThrow();
   });
@@ -244,7 +247,8 @@ describe("Pi Kimi credential broker", () => {
 
     await expect(createPiKimiCredentialBroker().resolve()).resolves.toEqual({
       status: "available",
-      apiKey: "mtime-fixture-key-441",
+      kind: "api_key",
+      credential: "mtime-fixture-key-441",
     });
 
     expectSnapshotEqual(fixture.authPath, before);
@@ -274,7 +278,8 @@ describe("Pi Kimi credential broker", () => {
 
     await expect(broker.resolve()).resolves.toEqual({
       status: "available",
-      apiKey: "tilde-fixture-key-326",
+      kind: "api_key",
+      credential: "tilde-fixture-key-326",
     });
   });
 
@@ -309,7 +314,8 @@ describe("Pi Kimi credential broker", () => {
         }).resolve(),
       ).resolves.toEqual({
         status: "available",
-        apiKey: "windows-tilde-fixture-key-326",
+        kind: "api_key",
+        credential: "windows-tilde-fixture-key-326",
       });
       expectSnapshotEqual(authPath, before);
     } finally {
@@ -335,7 +341,86 @@ describe("Pi Kimi credential broker", () => {
     expect(implementation).toContain('open(path, "r")');
   });
 
-  it("does not resolve or refresh a stored non-API-key credential", async () => {
+  it("resolves a stored OAuth access token without refreshing it", async () => {
+    const fixture = piOauthFixture({
+      access: "pi-oauth-fixture-access-538",
+      refresh: "must-not-be-refreshed",
+      expires: Date.now() + 3_600_000,
+    });
+    process.env.KIMI_API_KEY = "ambient-must-not-win";
+
+    const resolution = await createPiKimiCredentialBroker().resolve();
+
+    expect(resolution).toEqual({
+      status: "available",
+      kind: "oauth",
+      credential: "pi-oauth-fixture-access-538",
+    });
+    expect(JSON.stringify(resolution)).not.toContain("must-not-be-refreshed");
+    expect(JSON.stringify(resolution)).not.toContain("ambient-must-not-win");
+    expectSnapshotEqual(fixture.authPath, fixture.before);
+  });
+
+  it("accepts an OAuth record with no stored expiry", async () => {
+    const fixture = piOauthFixture({
+      access: "pi-oauth-no-expiry-241",
+      refresh: "must-not-be-refreshed",
+    });
+
+    await expect(createPiKimiCredentialBroker().resolve()).resolves.toEqual({
+      status: "available",
+      kind: "oauth",
+      credential: "pi-oauth-no-expiry-241",
+    });
+    expectSnapshotEqual(fixture.authPath, fixture.before);
+  });
+
+  it("reports an expired OAuth record as expired instead of refreshing it", async () => {
+    const fixture = piOauthFixture({
+      access: "pi-oauth-expired-access-770",
+      refresh: "must-not-be-refreshed",
+      expires: Date.now() - 1_000,
+    });
+
+    const resolution = await createPiKimiCredentialBroker().resolve();
+
+    expect(resolution).toEqual({ status: "expired", refreshable: true });
+    expect(JSON.stringify(resolution)).not.toContain(
+      "pi-oauth-expired-access-770",
+    );
+    expect(JSON.stringify(resolution)).not.toContain("must-not-be-refreshed");
+    await expect(createPiKimiCredentialBroker().inspect()).resolves.toBe(
+      "expired",
+    );
+    expectSnapshotEqual(fixture.authPath, fixture.before);
+  });
+
+  it("reports an expired OAuth record with no refresh token as unrefreshable", async () => {
+    piOauthFixture({
+      access: "pi-oauth-terminal-access-119",
+      expires: Date.now() - 1_000,
+    });
+
+    await expect(createPiKimiCredentialBroker().resolve()).resolves.toEqual({
+      status: "expired",
+      refreshable: false,
+    });
+  });
+
+  it.each([
+    ["absent access token", { refresh: "r", expires: Date.now() + 3_600_000 }],
+    ["environment reference", { access: "$KIMI_OAUTH_ACCESS" }],
+    ["unparseable expiry", { access: "usable-access", expires: "soon" }],
+  ])("reports an OAuth record with an %s as missing", async (_label, entry) => {
+    const fixture = piOauthFixture(entry);
+
+    await expect(createPiKimiCredentialBroker().resolve()).resolves.toEqual({
+      status: "missing",
+    });
+    expectSnapshotEqual(fixture.authPath, fixture.before);
+  });
+
+  it("does not resolve a credential type it does not understand", async () => {
     const home = temporaryDirectory();
     const authPath = join(home, ".pi", "agent", "auth.json");
     mkdirSync(dirname(authPath), { recursive: true, mode: 0o700 });
@@ -343,7 +428,7 @@ describe("Pi Kimi credential broker", () => {
       authPath,
       JSON.stringify({
         "kimi-coding": {
-          type: "oauth",
+          type: "device_code",
           access: "must-not-be-used",
           refresh: "must-not-be-refreshed",
         },
@@ -454,7 +539,7 @@ describe("Pi Kimi credential broker", () => {
     writeFileSync(
       unsupportedPath,
       JSON.stringify({
-        "kimi-coding": { type: "oauth", access: "secret" },
+        "kimi-coding": { type: "device_code", access: "secret" },
       }),
       { mode: 0o600 },
     );
@@ -475,7 +560,8 @@ describe("Pi Kimi credential broker", () => {
 
     await expect(createPiKimiCredentialBroker().resolve()).resolves.toEqual({
       status: "available",
-      apiKey: "descriptor-fixture-key-118",
+      kind: "api_key",
+      credential: "descriptor-fixture-key-118",
     });
     await expect(createPiKimiCredentialBroker().inspect()).resolves.toBe(
       "available",
@@ -505,6 +591,23 @@ function piAuthFixture(
     JSON.stringify({
       "kimi-coding": { type: "api_key", key },
     }),
+    { mode: 0o600 },
+  );
+  process.env.HOME = home;
+  process.env.PI_CODING_AGENT_DIR = dirname(authPath);
+  return { authPath, before: snapshot(authPath) };
+}
+
+function piOauthFixture(entry: Record<string, unknown>): {
+  authPath: string;
+  before: FileSnapshot;
+} {
+  const home = temporaryDirectory();
+  const authPath = join(home, ".pi", "agent", "auth.json");
+  mkdirSync(dirname(authPath), { recursive: true, mode: 0o700 });
+  writeFileSync(
+    authPath,
+    JSON.stringify({ "kimi-coding": { type: "oauth", ...entry } }),
     { mode: 0o600 },
   );
   process.env.HOME = home;

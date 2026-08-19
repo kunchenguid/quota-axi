@@ -90,7 +90,9 @@ describe("Pi xAI credential broker", () => {
     await expect(broker.resolve()).resolves.toEqual({
       status: "expired",
       refreshable: true,
+      credential: "expired-access",
     });
+    // Inspection reports classification only, never the probe credential.
     await expect(broker.inspect()).resolves.toEqual({
       status: "expired",
       refreshable: true,
@@ -111,6 +113,7 @@ describe("Pi xAI credential broker", () => {
     await expect(broker.resolve()).resolves.toEqual({
       status: "expired",
       refreshable: false,
+      credential: "expired-access",
     });
   });
 
@@ -131,6 +134,7 @@ describe("Pi xAI credential broker", () => {
       await expect(broker.resolve()).resolves.toEqual({
         status: "expired",
         refreshable: false,
+        credential: "expired-access",
       });
     },
   );

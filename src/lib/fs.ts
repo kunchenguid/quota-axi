@@ -1,7 +1,7 @@
 import { mkdirSync, readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, relative, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 export type JsonFileReadResult =
   | { status: "success"; value: unknown }
@@ -48,6 +48,21 @@ export function cacheFilePath(): string {
   return join(cacheDirPath(), "quotas.json");
 }
 
+/**
+ * An opaque, deterministic cache-provenance identifier for the Claude profile
+ * selected by the current process. The selected path never leaves this helper.
+ */
+export function claudeCredentialContextId(): string {
+  const configDir = resolve(
+    (process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude")).normalize(
+      "NFC",
+    ),
+  );
+  return createHash("sha256")
+    .update(`claude-config-dir:${configDir}`)
+    .digest("hex");
+}
+
 export function claudeKeychainAccessMarkerPath(
   account: string,
   configDir?: string,
@@ -62,6 +77,17 @@ export function claudeKeychainAccessMarkerPath(
   return join(
     cacheDirPath(),
     `claude-keychain-access-granted${profileSuffix}-account-${accountSuffix}`,
+  );
+}
+
+export function cursorCliKeychainAccessMarkerPath(account: string): string {
+  const accountSuffix = createHash("sha256")
+    .update(account)
+    .digest("hex")
+    .slice(0, 16);
+  return join(
+    cacheDirPath(),
+    `cursor-cli-keychain-access-granted-account-${accountSuffix}`,
   );
 }
 

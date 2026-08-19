@@ -2,8 +2,9 @@ import { chmodSync, existsSync, renameSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { homedir, userInfo } from "node:os";
 import { join } from "node:path";
-import { deleteCachedProvider, readCachedProvider } from "../cache.js";
+import { deleteCachedProvider, readCachedClaudeProvider } from "../cache.js";
 import {
+  claudeCredentialContextId,
   claudeKeychainAccessMarkerPath,
   ensurePrivateParent,
   readJsonFileResult,
@@ -127,6 +128,7 @@ export async function fetchQuota(
   options: ProviderOptions,
 ): Promise<ProviderQuota> {
   const attempts: SourceAttempt[] = [];
+  const credentialContextId = claudeCredentialContextId();
 
   const credentialStates = await readCredentialStates(options);
   const credentials = credentialStates
@@ -232,12 +234,14 @@ export async function fetchQuota(
       transientFailure ??
       new ClaudeFailure("Claude quota unavailable", { staleEligible: true }),
     attempts,
+    credentialContextId,
   );
 }
 
 function failureReport(
   failure: ClaudeFailure,
   attempts: SourceAttempt[],
+  credentialContextId: string,
 ): ProviderQuota {
   if (failure.definitiveAuth) {
     try {
@@ -249,7 +253,7 @@ function failureReport(
 
   if (failure.staleEligible) {
     try {
-      const cached = readCachedProvider("claude");
+      const cached = readCachedClaudeProvider(credentialContextId);
       const stale = cached
         ? staleClaudeReport(cached, failure, attempts, Date.now())
         : undefined;

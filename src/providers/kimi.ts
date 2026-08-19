@@ -113,9 +113,11 @@ export function createKimiAdapter(
       const piError =
         piInspection === "unsupported"
           ? "unsupported_credential_type"
-          : piInspection === "error"
-            ? "credential_resolution_failed"
-            : undefined;
+          : piInspection === "expired"
+            ? "pi_kimi_credential_expired"
+            : piInspection === "error"
+              ? "credential_resolution_failed"
+              : undefined;
 
       let cliInspection;
       try {
@@ -140,9 +142,11 @@ export function createKimiAdapter(
             status:
               piInspection === "available"
                 ? "available"
-                : piError
-                  ? "invalid"
-                  : "missing",
+                : piInspection === "expired"
+                  ? "expired"
+                  : piError
+                    ? "invalid"
+                    : "missing",
             ...(piError ? { error: piError } : {}),
           },
           {
@@ -177,7 +181,7 @@ async function acquireKimiQuota(
     let credentialSource: string;
 
     if (piResolution.status === "available") {
-      credential = piResolution.apiKey;
+      credential = piResolution.credential;
       credentialSource = PI_KIMI_CREDENTIAL_SOURCE;
       attempts = [{ source: credentialSource, status: "failed" }];
     } else {
@@ -316,6 +320,12 @@ function credentialFailureFor(
   }
   if (resolution.status === "unsupported") {
     return new KimiFailure("unsupported_credential_type", {
+      status: "auth_required",
+      definitiveAuth: true,
+    });
+  }
+  if (resolution.status === "expired") {
+    return new KimiFailure("pi_kimi_credential_expired", {
       status: "auth_required",
       definitiveAuth: true,
     });

@@ -699,6 +699,48 @@ describe("Grok auth discovery", () => {
     });
   });
 
+  it("continues after a rejected valid session to a later live session", async () => {
+    writeAuth({
+      rejected_session_fixture: {
+        key: "rejected-session-token-fixture",
+        expires_at: "2035-01-01T00:00:00.000Z",
+      },
+      live_session_fixture: {
+        key: "live-session-token-fixture",
+        email: "live@example.invalid",
+        expires_at: "2035-01-01T00:00:00.000Z",
+      },
+    });
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      const authorization = (init?.headers as Record<string, string>)
+        ?.Authorization;
+      return authorization === "Bearer rejected-session-token-fixture"
+        ? grpcResponse(new Uint8Array(), { status: 403 })
+        : grpcResponse();
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await fetchQuota({ allowKeychainPrompt: false });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(result).toMatchObject({
+      source: "web",
+      account: { email: "live@example.invalid" },
+      state: { status: "fresh", stale: false, authStatus: "usable" },
+      attempts: [
+        { source: "web", status: "success" },
+        {
+          source: "pi:xai",
+          status: "skipped",
+          error: "credentials_missing",
+        },
+      ],
+    });
+    expect(result.windows.length).toBeGreaterThan(0);
+    expect(result.state.error).toBeUndefined();
+    expect(JSON.stringify(result)).not.toContain("session-token-fixture");
+  });
+
   it("prefers session-scoped auth over API-key entries", async () => {
     writeAuth({
       "https://api.x.ai/v1": {
@@ -830,7 +872,7 @@ describe("Grok auth discovery", () => {
 });
 
 describe("Grok expired access-token classification", () => {
-  it("classifies expired OIDC session with refresh token as access-token expired without fetching", async () => {
+  it("probes a stored-expired OIDC session and keeps access-token expired only on definitive rejection", async () => {
     writeAuth({
       "https://auth.x.ai::fixture-client": {
         key: "expired-access-token",
@@ -841,7 +883,9 @@ describe("Grok expired access-token classification", () => {
         refresh_token: "fixture-refresh-token",
       },
     });
-    const fetchMock = vi.fn();
+    const fetchMock = vi.fn(async () =>
+      grpcResponse(new Uint8Array(), { status: 403 }),
+    );
     vi.stubGlobal("fetch", fetchMock);
     const binDir = join(tempDir!, "bin");
     const marker = join(tempDir!, "grok-launched");
@@ -874,9 +918,9 @@ describe("Grok expired access-token classification", () => {
       },
       attempts: [
         {
-          source: "auth-json",
-          status: "skipped",
-          error: "credentials_expired",
+          source: "web",
+          status: "failed",
+          error: "Grok sign-in required",
         },
         {
           source: "pi:xai",
@@ -889,12 +933,101 @@ describe("Grok expired access-token classification", () => {
     expect(result.state.status).not.toBe("auth_required");
     // Shared helper still maps the phrase to auth_required; Grok owns soft expiry.
     expect(statusFromError(result.state.error!)).toBe("auth_required");
-    expect(fetchMock).not.toHaveBeenCalled();
+    // Stored expiry is advisory: the read-only consumer operation is the
+    // liveness probe, using the stored session bearer exactly once.
+    expect(fetchMock).toHaveBeenCalledOnce();
+    const [probeUrl, probeInit] = fetchMock.mock.calls[0] as unknown as [
+      string,
+      RequestInit,
+    ];
+    expect(probeUrl).toBe(CONSUMER_QUOTA_URL);
+    expect((probeInit.headers as Record<string, string>).Authorization).toBe(
+      "Bearer expired-access-token",
+    );
     expect(existsSync(marker)).toBe(false);
     expect(readFileSync(authPath)).toEqual(before);
   });
 
-  it("keeps true sign-in required when expired session has no refresh token", async () => {
+  it("returns fresh consumer quota when the stored-expired session token is empirically live", async () => {
+    writeAuth({
+      "https://auth.x.ai::fixture-client": {
+        key: "expired-access-token",
+        auth_mode: "oidc",
+        email: "person@example.invalid",
+        team_id: "team_fixture",
+        expires_at: "2020-01-01T00:00:00.000Z",
+        refresh_token: "fixture-refresh-token",
+      },
+    });
+    const fetchMock = stubSuccessfulFetch();
+
+    const result = await fetchQuota({ allowKeychainPrompt: false });
+
+    expect(result).toMatchObject({
+      source: "web",
+      state: {
+        status: "fresh",
+        stale: false,
+        authStatus: "usable",
+      },
+      attempts: [
+        { source: "web", status: "success" },
+        {
+          source: "pi:xai",
+          status: "skipped",
+          error: "credentials_missing",
+        },
+      ],
+    });
+    expect(result.windows.length).toBeGreaterThan(0);
+    expect(result.state.error).toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(JSON.stringify(result)).not.toContain("expired-access-token");
+    expect(JSON.stringify(result)).not.toContain("fixture-refresh-token");
+  });
+
+  it("tries each stored-expired session until one returns fresh quota", async () => {
+    writeAuth({
+      rejected_expired_session_fixture: {
+        key: "rejected-expired-session-token-fixture",
+        expires_at: "2020-01-01T00:00:00.000Z",
+      },
+      live_expired_session_fixture: {
+        key: "live-expired-session-token-fixture",
+        email: "live@example.invalid",
+        expires_at: "2021-01-01T00:00:00.000Z",
+      },
+    });
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      const authorization = (init?.headers as Record<string, string>)
+        ?.Authorization;
+      return authorization === "Bearer rejected-expired-session-token-fixture"
+        ? grpcResponse(new Uint8Array(), { status: 403 })
+        : grpcResponse();
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await fetchQuota({ allowKeychainPrompt: false });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(result).toMatchObject({
+      source: "web",
+      account: { email: "live@example.invalid" },
+      state: { status: "fresh", stale: false, authStatus: "usable" },
+      attempts: [
+        { source: "web", status: "success" },
+        {
+          source: "pi:xai",
+          status: "skipped",
+          error: "credentials_missing",
+        },
+      ],
+    });
+    expect(result.windows.length).toBeGreaterThan(0);
+    expect(JSON.stringify(result)).not.toContain("session-token-fixture");
+  });
+
+  it("keeps true sign-in required when a rejected expired session has no refresh token", async () => {
     writeAuth({
       "https://auth.x.ai::fixture-client": {
         key: "expired-access-token",
@@ -902,7 +1035,9 @@ describe("Grok expired access-token classification", () => {
         expires_at: "2020-01-01T00:00:00.000Z",
       },
     });
-    const fetchMock = vi.fn();
+    const fetchMock = vi.fn(async () =>
+      grpcResponse(new Uint8Array(), { status: 403 }),
+    );
     vi.stubGlobal("fetch", fetchMock);
 
     const result = await fetchQuota({ allowKeychainPrompt: false });
@@ -916,9 +1051,9 @@ describe("Grok expired access-token classification", () => {
       },
       attempts: [
         {
-          source: "auth-json",
-          status: "skipped",
-          error: "credentials_expired",
+          source: "web",
+          status: "failed",
+          error: "Grok sign-in required",
         },
         {
           source: "pi:xai",
@@ -927,7 +1062,7 @@ describe("Grok expired access-token classification", () => {
         },
       ],
     });
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledOnce();
   });
 
   it("keeps true sign-in required when auth is missing", async () => {
@@ -959,7 +1094,7 @@ describe("Grok expired access-token classification", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("retains expired-token classification on stale web cache fallback", async () => {
+  it("retains expired-token classification on stale web cache fallback after probe rejection", async () => {
     writeAuth({
       "https://auth.x.ai::fixture-client": {
         key: "expired-access-token",
@@ -969,7 +1104,9 @@ describe("Grok expired access-token classification", () => {
       },
     });
     writeCachedProviders([cachedGrok("web")]);
-    const fetchMock = vi.fn();
+    const fetchMock = vi.fn(async () =>
+      grpcResponse(new Uint8Array(), { status: 403 }),
+    );
     vi.stubGlobal("fetch", fetchMock);
 
     const result = await fetchQuota({ allowKeychainPrompt: false });
@@ -982,13 +1119,13 @@ describe("Grok expired access-token classification", () => {
         stale: true,
         error: "Grok access token expired",
         authStatus: "expired_refreshable",
-        sourcesTried: ["auth-json", "pi:xai", "cache"],
+        sourcesTried: ["web", "pi:xai", "cache"],
       },
       attempts: [
         {
-          source: "auth-json",
-          status: "skipped",
-          error: "credentials_expired",
+          source: "web",
+          status: "failed",
+          error: "Grok sign-in required",
         },
         {
           source: "pi:xai",
@@ -998,7 +1135,7 @@ describe("Grok expired access-token classification", () => {
       ],
     });
     expect(result.state.error).not.toMatch(/sign-in/i);
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledOnce();
   });
 
   it("exposes credentials_expired reason in default JSON without --full", async () => {
@@ -1019,7 +1156,6 @@ describe("Grok expired access-token classification", () => {
 
     expect(grok).toMatchObject({
       provider: "grok",
-      source: "cache",
       state: {
         status: "stale",
         stale: true,
@@ -1030,6 +1166,8 @@ describe("Grok expired access-token classification", () => {
       },
     });
     expect(grok.attempts).toBeUndefined();
+    // `source` is a default-tier demotion, not a loss: `--full` still has it.
+    expect(grok.source).toBeUndefined();
     expect(grok.quotaSemantics).toMatchObject({
       status: "unknown",
       effectiveAvailability: [
@@ -1054,11 +1192,14 @@ describe("Grok expired access-token classification", () => {
       "--full",
     ]);
     const full = JSON.parse(fullText) as QuotaAxiResponse;
+    expect(full.providers[0]?.source).toBe("cache");
+    // The probe of the stored-expired session failed transiently (no
+    // definitive rejection), so the stored expired classification stands.
     expect(full.providers[0]?.attempts).toEqual([
       {
-        source: "auth-json",
-        status: "skipped",
-        error: "credentials_expired",
+        source: "web",
+        status: "failed",
+        error: "Grok quota unavailable",
       },
       {
         source: "pi:xai",
@@ -1067,10 +1208,13 @@ describe("Grok expired access-token classification", () => {
       },
     ]);
 
+    // The remedy rides the provider's `attention[]` row; soft expiry keeps its
+    // positive auth fact because the scope produces no `quota[]` row.
     const toon = await captureCli(["--provider", "grok"]);
-    expect(toon).toContain("advice[1]{provider,reason,remedyCommand}:");
-    expect(toon).toContain("grok,credentials_expired,grok");
-    expect(toon).toMatch(/grok,unknown,cache,stale,expired_refreshable/);
+    expect(toon).toContain(
+      'grok,all,stale,"last refreshed 2026-07-20T00:00:00.000Z · reason credentials_expired (auth expired_refreshable)",grok',
+    );
+    expect(toon).toContain("grok,all_products,headroom_unknown,credits,none");
   });
 });
 
@@ -1128,7 +1272,9 @@ describe("Grok dual-source CLI and Pi xAI usability", () => {
         key: "pi-xai-api-key-fixture-value",
       },
     });
-    const fetchMock = vi.fn();
+    const fetchMock = vi.fn(async () =>
+      grpcResponse(new Uint8Array(), { status: 403 }),
+    );
     vi.stubGlobal("fetch", fetchMock);
 
     const result = await fetchQuota({ allowKeychainPrompt: false });
@@ -1139,9 +1285,9 @@ describe("Grok dual-source CLI and Pi xAI usability", () => {
     expect(result.state.reason).toBeUndefined();
     expect(result.attempts).toEqual([
       {
-        source: "auth-json",
-        status: "skipped",
-        error: "credentials_expired",
+        source: "web",
+        status: "failed",
+        error: "Grok sign-in required",
       },
       {
         source: "pi:xai",
@@ -1150,7 +1296,9 @@ describe("Grok dual-source CLI and Pi xAI usability", () => {
         credentialPresent: true,
       },
     ]);
-    expect(fetchMock).not.toHaveBeenCalled();
+    // Only the stored-expired session probe hit the network; the valid Pi
+    // api_key is trusted locally without a model request.
+    expect(fetchMock).toHaveBeenCalledOnce();
     expect(JSON.stringify(result)).not.toContain(
       "pi-xai-api-key-fixture-value",
     );
@@ -1206,6 +1354,135 @@ describe("Grok dual-source CLI and Pi xAI usability", () => {
       },
     });
     expect(result.state.status).not.toBe("auth_required");
+  });
+
+  it("probes a stored-expired Pi xAI token and reports usable model auth when it is live", async () => {
+    writePiXaiAuth({
+      xai: {
+        type: "oauth",
+        access: "expired-pi-access",
+        refresh: "expired-pi-refresh",
+        expires: Date.now() - 60_000,
+      },
+    });
+    const fetchMock = vi.fn(async () => new Response("{}", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await fetchQuota({ allowKeychainPrompt: false });
+
+    expect(result.state.authStatus).toBe("usable");
+    expect(result.state.status).toBe("unavailable");
+    expect(result.state.error).toBe("Grok consumer quota unavailable");
+    expect(result.state.status).not.toBe("auth_required");
+    expect(result.state.error).not.toMatch(/expired|sign-in/i);
+    expect(result.attempts).toEqual([
+      {
+        source: "auth-json",
+        status: "skipped",
+        error: "credentials_missing",
+      },
+      {
+        source: "pi:xai",
+        status: "skipped",
+        error: "model_auth_probe_live",
+        credentialPresent: true,
+      },
+    ]);
+    expect(fetchMock).toHaveBeenCalledOnce();
+    const [probeUrl, probeInit] = fetchMock.mock.calls[0] as unknown as [
+      string,
+      RequestInit,
+    ];
+    expect(probeUrl).toBe("https://api.x.ai/v1/models");
+    expect((probeInit.headers as Record<string, string>).Authorization).toBe(
+      "Bearer expired-pi-access",
+    );
+    expect(JSON.stringify(result)).not.toContain("expired-pi-access");
+    expect(JSON.stringify(result)).not.toContain("expired-pi-refresh");
+  });
+
+  it("keeps Pi expiry classification when the liveness probe is definitively rejected", async () => {
+    writePiXaiAuth({
+      xai: {
+        type: "oauth",
+        access: "expired-pi-access",
+        refresh: "expired-pi-refresh",
+        expires: Date.now() - 60_000,
+      },
+    });
+    const fetchMock = vi.fn(async () => new Response("{}", { status: 403 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await fetchQuota({ allowKeychainPrompt: false });
+
+    expect(result.state).toMatchObject({
+      status: "unavailable",
+      error: "Pi xAI access token expired",
+      authStatus: "expired_refreshable",
+    });
+    expect(result.attempts).toEqual([
+      {
+        source: "auth-json",
+        status: "skipped",
+        error: "credentials_missing",
+      },
+      {
+        source: "pi:xai",
+        status: "failed",
+        error: "credentials_rejected",
+        credentialPresent: true,
+      },
+    ]);
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(JSON.stringify(result)).not.toContain("expired-pi-access");
+  });
+
+  it("recovers usable Grok when the CLI session is rejected but the expired Pi token probes live", async () => {
+    writeAuth({
+      "https://auth.x.ai::fixture-client": {
+        key: "expired-access-token",
+        auth_mode: "oidc",
+        expires_at: "2020-01-01T00:00:00.000Z",
+        refresh_token: "fixture-refresh-token",
+      },
+    });
+    writePiXaiAuth({
+      xai: {
+        type: "oauth",
+        access: "expired-pi-access",
+        refresh: "expired-pi-refresh",
+        expires: Date.now() - 60_000,
+      },
+    });
+    const fetchMock = vi.fn(async (url: string) =>
+      url === "https://api.x.ai/v1/models"
+        ? new Response("{}", { status: 200 })
+        : grpcResponse(new Uint8Array(), { status: 403 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await fetchQuota({ allowKeychainPrompt: false });
+
+    expect(result.state.authStatus).toBe("usable");
+    expect(result.state.status).toBe("unavailable");
+    expect(result.state.error).toBe("Grok consumer quota unavailable");
+    expect(result.state.error).not.toMatch(/expired|sign-in/i);
+    expect(result.attempts).toEqual([
+      {
+        source: "web",
+        status: "failed",
+        error: "Grok sign-in required",
+      },
+      {
+        source: "pi:xai",
+        status: "skipped",
+        error: "model_auth_probe_live",
+        credentialPresent: true,
+      },
+    ]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(JSON.stringify(result)).not.toContain("expired-access-token");
+    expect(JSON.stringify(result)).not.toContain("expired-pi-access");
   });
 
   it("preserves malformed Pi auth JSON as a resolution error", async () => {
@@ -1378,9 +1655,11 @@ describe("Grok dual-source CLI and Pi xAI usability", () => {
     expect(json.providers[0]?.state.reason).toBeUndefined();
     expect(JSON.stringify(json)).not.toContain("pi-xai-access-token-fixture");
 
+    // A provider with no quota row still states its positive auth fact.
     const toon = await captureCli(["--provider", "grok"]);
-    expect(toon).toContain("authStatus");
-    expect(toon).toMatch(/grok,unknown,unavailable,unavailable,usable/);
+    expect(toon).toContain(
+      "grok,all,unavailable,Grok consumer quota unavailable (auth usable),none",
+    );
     expect(toon).not.toContain("credentials_expired");
     expect(toon).not.toContain("pi-xai-access-token-fixture");
   });
@@ -1457,7 +1736,12 @@ describe("Grok CLI rendering regression", () => {
       vi.fn(async () => grpcResponse(payload)),
     );
 
-    const jsonText = await captureCli(["--provider", "grok", "--json"]);
+    const jsonText = await captureCli([
+      "--provider",
+      "grok",
+      "--json",
+      "--full",
+    ]);
     const json = JSON.parse(jsonText) as QuotaAxiResponse;
     expect(json.providers[0]).toMatchObject({
       provider: "grok",
@@ -1471,9 +1755,12 @@ describe("Grok CLI rendering regression", () => {
       ],
     });
 
-    const toon = await captureCli(["--provider", "grok"]);
+    const toon = await captureCli(["--provider", "grok", "--full"]);
     expect(toon).toContain("grok,credits,credits,100");
     expect(toon).not.toContain("grok,credits,credits,unknown");
+    expect(await captureCli(["--provider", "grok"])).toContain(
+      "grok,all_products,100",
+    );
   });
 });
 

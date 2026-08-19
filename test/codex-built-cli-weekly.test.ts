@@ -1,7 +1,6 @@
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,
-  existsSync,
   mkdirSync,
   mkdtempSync,
   rmSync,
@@ -9,23 +8,11 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import type { QuotaAxiResponse } from "../src/types.js";
 
 const BUILT_CLI_ENTRYPOINT = resolve("dist/bin/quota-axi.js");
-const TSC_ENTRYPOINT = resolve("node_modules/typescript/bin/tsc");
 let temporaryDirectories: string[] = [];
-
-beforeAll(() => {
-  const result = spawnSync(
-    process.execPath,
-    [TSC_ENTRYPOINT, "--pretty", "false"],
-    { cwd: process.cwd(), encoding: "utf8", timeout: 30_000 },
-  );
-  if (result.error) throw result.error;
-  expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
-  expect(existsSync(BUILT_CLI_ENTRYPOINT)).toBe(true);
-});
 
 afterEach(() => {
   for (const directory of temporaryDirectories) {
@@ -76,9 +63,8 @@ process.stdin.on("data", (chunk) => {
     );
     chmodSync(codex, 0o700);
 
-    const run = (json: boolean) => {
-      const args = [BUILT_CLI_ENTRYPOINT, "--provider", "codex"];
-      if (json) args.push("--json");
+    const run = (...flags: string[]) => {
+      const args = [BUILT_CLI_ENTRYPOINT, "--provider", "codex", ...flags];
       const result = spawnSync(process.execPath, args, {
         encoding: "utf8",
         timeout: 10_000,
@@ -95,11 +81,14 @@ process.stdin.on("data", (chunk) => {
       return result.stdout;
     };
 
-    const toon = run(false);
+    expect(run()).toContain("codex,all_models,100");
+
+    // Window identity lives in the `--full` audit tier.
+    const toon = run("--full");
     expect(toon).toContain("codex,weekly,week,100");
     expect(toon).not.toContain("codex,five_hour,session");
 
-    const json = JSON.parse(run(true)) as QuotaAxiResponse;
+    const json = JSON.parse(run("--json", "--full")) as QuotaAxiResponse;
     expect(json.providers[0]).toMatchObject({
       provider: "codex",
       source: "cli-rpc",

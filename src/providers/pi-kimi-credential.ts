@@ -6,8 +6,14 @@ const PI_PROVIDER_ID = "kimi-coding";
 const AUTH_FILE_LIMIT_BYTES = 64 * 1024;
 
 export type KimiCredentialResolution =
-  | { status: "available"; apiKey: string }
+  | {
+      status: "available";
+      kind: "oauth" | "api_key";
+      /** Present only for in-memory probe use; never log or render. */
+      credential: string;
+    }
   | { status: "missing" }
+  | { status: "expired"; refreshable: boolean }
   | { status: "unsupported" }
   | { status: "error" };
 
@@ -24,6 +30,7 @@ type BrokerDependencies = {
   environment: Readonly<Record<string, string | undefined>>;
   homeDirectory: () => string;
   readFile: (path: string, maxBytes: number) => Promise<Buffer>;
+  now: () => number;
 };
 
 export function createPiKimiCredentialBroker(
@@ -33,6 +40,7 @@ export function createPiKimiCredentialBroker(
     environment: process.env,
     homeDirectory: homedir,
     readFile: readBoundedFile,
+    now: () => Date.now(),
     ...overrides,
   };
 
@@ -74,17 +82,33 @@ async function resolveCredential(
   const entry = objectValue(root[PI_PROVIDER_ID]);
   if (!entry) return { status: "missing" };
 
-  if (typeof entry.type === "string" && entry.type !== "api_key") {
-    return { status: "unsupported" };
+  // Pi stores a `kimi-coding` login as either a literal API key or the OAuth
+  // record it received from Kimi. Both are read in place: an expired OAuth
+  // record is reported as expired rather than refreshed, because refreshing
+  // would mutate Pi's auth state.
+  const type = stringValue(entry.type)?.toLowerCase();
+  if (type === "api_key") {
+    const apiKey = usableLiteralSecret(entry.key);
+    return apiKey !== undefined
+      ? { status: "available", kind: "api_key", credential: apiKey }
+      : { status: "missing" };
   }
-  if (entry.type !== "api_key") {
-    return { status: "missing" };
+  if (type === "oauth") {
+    const access = usableLiteralSecret(entry.access);
+    if (access === undefined) return { status: "missing" };
+    const hasExpiry = Object.hasOwn(entry, "expires");
+    const expiresMs = timestampMs(entry.expires);
+    if (hasExpiry && expiresMs === undefined) return { status: "missing" };
+    if (expiresMs !== undefined && expiresMs <= dependencies.now()) {
+      return {
+        status: "expired",
+        refreshable: usableLiteralSecret(entry.refresh) !== undefined,
+      };
+    }
+    return { status: "available", kind: "oauth", credential: access };
   }
-
-  const apiKey = usableApiKey(entry.key);
-  return apiKey !== undefined
-    ? { status: "available", apiKey }
-    : { status: "missing" };
+  if (type === undefined) return { status: "missing" };
+  return { status: "unsupported" };
 }
 
 function authFilePath(dependencies: BrokerDependencies): string {
@@ -108,7 +132,7 @@ function piAgentDirectory(dependencies: BrokerDependencies): string {
   return configured;
 }
 
-function usableApiKey(value: unknown): string | undefined {
+function usableLiteralSecret(value: unknown): string | undefined {
   if (typeof value !== "string" || value.trim().length === 0) {
     return undefined;
   }
@@ -151,8 +175,28 @@ async function readBoundedFile(
   }
 }
 
+function timestampMs(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    // Pi stores OAuth expiry as epoch milliseconds.
+    return value < 1_000_000_000_000 ? value * 1000 : value;
+  }
+  if (typeof value === "string" && value.trim() !== "") {
+    const asNumber = Number(value);
+    if (Number.isFinite(asNumber)) {
+      return asNumber < 1_000_000_000_000 ? asNumber * 1000 : asNumber;
+    }
+    const parsed = Date.parse(value);
+    return Number.isNaN(parsed) ? undefined : parsed;
+  }
+  return undefined;
+}
+
 function nonempty(value: string | undefined): string | undefined {
   return value && value.length > 0 ? value : undefined;
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
 }
 
 function objectValue(value: unknown): Record<string, unknown> | undefined {

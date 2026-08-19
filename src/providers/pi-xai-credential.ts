@@ -18,6 +18,12 @@ export type PiXaiCredentialResolution =
   | {
       status: "expired";
       refreshable: boolean;
+      /**
+       * The stored access token, present so a bounded read-only liveness
+       * probe can test it despite the stored expiry field. Probe use only;
+       * never log or render.
+       */
+      credential?: string;
     }
   | { status: "error" };
 
@@ -130,6 +136,7 @@ async function resolveCredential(
       return {
         status: "expired",
         refreshable: usableLiteralSecret(entry.refresh) !== undefined,
+        credential: access,
       };
     }
     return { status: "available", kind: "oauth", credential: access };

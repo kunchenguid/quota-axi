@@ -1,12 +1,24 @@
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const originalXdgCacheHome = process.env.XDG_CACHE_HOME;
+const originalClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
+const originalCwd = process.cwd();
+let tempDir: string | undefined;
 
 afterEach(() => {
   vi.doUnmock("node:os");
   vi.resetModules();
   if (originalXdgCacheHome === undefined) delete process.env.XDG_CACHE_HOME;
   else process.env.XDG_CACHE_HOME = originalXdgCacheHome;
+  if (originalClaudeConfigDir === undefined)
+    delete process.env.CLAUDE_CONFIG_DIR;
+  else process.env.CLAUDE_CONFIG_DIR = originalClaudeConfigDir;
+  process.chdir(originalCwd);
+  if (tempDir) rmSync(tempDir, { recursive: true, force: true });
+  tempDir = undefined;
 });
 
 async function importFsWithHome(home: string) {
@@ -73,5 +85,29 @@ describe("cache paths", () => {
     expect(defaultBob).not.toBe(defaultAlice);
     expect(defaultAlice).not.toContain("alice");
     expect(defaultBob).not.toContain("bob");
+  });
+});
+
+describe("claudeCredentialContextId", () => {
+  it("separates identical relative config dirs resolved from different directories", async () => {
+    const { claudeCredentialContextId } = await importFsWithHome("/Users/kun");
+    tempDir = realpathSync(mkdtempSync(join(tmpdir(), "quota-axi-context-")));
+    const first = join(tempDir, "first");
+    const second = join(tempDir, "second");
+    mkdirSync(join(first, ".claude-profile"), { recursive: true });
+    mkdirSync(join(second, ".claude-profile"), { recursive: true });
+    process.env.CLAUDE_CONFIG_DIR = ".claude-profile";
+
+    process.chdir(first);
+    const firstId = claudeCredentialContextId();
+    process.chdir(second);
+    const secondId = claudeCredentialContextId();
+
+    expect(firstId).toMatch(/^[a-f0-9]{64}$/);
+    expect(secondId).toMatch(/^[a-f0-9]{64}$/);
+    expect(secondId).not.toBe(firstId);
+
+    process.env.CLAUDE_CONFIG_DIR = join(second, ".claude-profile");
+    expect(claudeCredentialContextId()).toBe(secondId);
   });
 });
