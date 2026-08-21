@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.1.30](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.29...quota-axi-v0.1.30) (2026-08-21)
+
+
+### Features
+
+* **providers:** add Antigravity quota support ([#60](https://github.com/kunchenguid/quota-axi/issues/60)) ([9d7f942](https://github.com/kunchenguid/quota-axi/commit/9d7f942c73ddcf4cd795408ff9439f87f9a61274))
+* **providers:** add Linux Cursor CLI credential source ([#2](https://github.com/kunchenguid/quota-axi/issues/2)) ([#98](https://github.com/kunchenguid/quota-axi/issues/98)) ([8c1d99e](https://github.com/kunchenguid/quota-axi/commit/8c1d99e52961384ac9b0ec499851a27bdb5c7401))
+
+
+### Bug Fixes
+
+* **cache:** scope Claude stale quota fallback to the current credential context ([#62](https://github.com/kunchenguid/quota-axi/issues/62)) ([edb9358](https://github.com/kunchenguid/quota-axi/commit/edb9358821e21ad03cba0312d5c342428ff0297f))
+
 ## [0.1.29](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.28...quota-axi-v0.1.29) (2026-08-18)
 
 
