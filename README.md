@@ -15,7 +15,7 @@ Quota CLI for agents - designed with [AXI](https://axi.md) (Agent eXperience Int
 Agents need quota state before they choose where work can safely run.
 Vendor dashboards are not shaped for shell automation, and local CLIs expose different windows, resets, and auth sources.
 
-quota-axi reports local Claude, Codex, Cursor, GitHub Copilot, Grok, Kimi, Z.AI, and Antigravity (`agy`) quota windows in one [AXI](https://axi.md)-shaped call.
+quota-axi reports local Claude, Codex, Cursor, GitHub Copilot, Grok, Kimi, Z.AI, Antigravity (`agy`), and Kiro quota windows in one [AXI](https://axi.md)-shaped call.
 It is data only: it never routes, recommends a provider, model, harness, credential, or route, proxies, intercepts, logs in, imports browser cookies, or mutates provider state. Default output has no ordering preference. The opt-in `models --sort runway` surface applies only its documented deterministic comparator to quota evidence, preserves all evidence and explicit ties, and is not a recommendation. It publishes one derived per-scope comparative selection signal, [`selection`](#per-scope-selection-signal), as data computed from figures it already reports; the consumer, not quota-axi, does any routing or ranking with it.
 
 - **Official sources** - quota-axi reads local provider auth sources and calls first-party quota, usage, billing, entitlement, local loopback, or read-only credential-liveness endpoints used by the local agents, with a read-only Codex app-server probe as fallback.
@@ -296,19 +296,19 @@ It is generated from `src/skill.ts`; update it with `pnpm run build:skill` and v
 
 ### Flags
 
-| Flag                                                       | Description                                                        |
-| ---------------------------------------------------------- | ------------------------------------------------------------------ |
-| `--provider claude,codex,cursor,copilot,grok,kimi,zai,agy` | Scope providers                                                    |
-| `--json`                                                   | Emit normalized JSON instead of TOON for quota, auth, or models    |
-| `--full`                                                   | Include audit and derivation details                               |
-| `--tui`                                                    | Render the live human terminal report instead of TOON (quota only) |
-| `--refresh 30s\|5m\|1h`                                    | Live `--tui` refresh interval, default 5m (30s-24h)                |
-| `--once`                                                   | Render one `--tui` frame and exit instead of staying live          |
-| `--allow-keychain-prompt`                                  | Permit macOS provider Keychain access that could prompt            |
-| `--intelligence high\|medium\|low`                         | Filter `models` by editorial intelligence bucket                   |
-| `--sort runway`                                            | Explicitly sort `models` by documented usable-runway evidence      |
-| `-h`, `--help`                                             | Print terse [AXI](https://axi.md) help                             |
-| `-v`, `-V`, `--version`                                    | Print version                                                      |
+| Flag                                                            | Description                                                        |
+| --------------------------------------------------------------- | ------------------------------------------------------------------ |
+| `--provider claude,codex,cursor,copilot,grok,kimi,zai,agy,kiro` | Scope providers                                                    |
+| `--json`                                                        | Emit normalized JSON instead of TOON for quota, auth, or models    |
+| `--full`                                                        | Include audit and derivation details                               |
+| `--tui`                                                         | Render the live human terminal report instead of TOON (quota only) |
+| `--refresh 30s\|5m\|1h`                                         | Live `--tui` refresh interval, default 5m (30s-24h)                |
+| `--once`                                                        | Render one `--tui` frame and exit instead of staying live          |
+| `--allow-keychain-prompt`                                       | Permit macOS provider Keychain access that could prompt            |
+| `--intelligence high\|medium\|low`                              | Filter `models` by editorial intelligence bucket                   |
+| `--sort runway`                                                 | Explicitly sort `models` by documented usable-runway evidence      |
+| `-h`, `--help`                                                  | Print terse [AXI](https://axi.md) help                             |
+| `-v`, `-V`, `--version`                                         | Print version                                                      |
 
 ### Human terminal report (`--tui`)
 
@@ -565,6 +565,7 @@ Source attempts can include `credentialPresent` when a non-secret probe confirms
 | Grok proto3 zero       | For the exact consumer operation only, an omitted usage float is the official proto3 zero when a valid weekly or monthly current period proves the config is present; quota-axi reports `0` used and `100` remaining rather than deriving usage from money.                                                                                                                                                                                                                                                                                                                                                      |
 | Kimi                   | Reports the principal `weekly` subscription window (with trusted 604,800s duration) plus every valid self-described limit in wire order. Only a limit whose normalized duration is exactly 18,000 seconds is identified as `five_hour`; future limits remain `limit:<index>` unknown windows.                                                                                                                                                                                                                                                                                                                    |
 | Z.AI                   | Can report the Coding Plan `five_hour` and `weekly` token windows (with trusted 18,000s and 604,800s durations) plus the `mcp_month` tool window, whose duration is not invented. The two token limits are identified by the endpoint's own `unit`/`number` values rather than array position; any other limit, or a repeat of an already reported one, degrades to an untrusted `limit:<index>` unknown window named in `state.untrustedWindowIds`.                                                                                                                                                             |
+| Kiro                   | Reports the Kiro credit window from the first-party `GetUsageLimits` response, including the current plan, credits remaining, and provider reset time. It reads the local CLI token store without modifying it; use `KIRO_CLI_DB`, `KIRO_REGION`, and optional `KIRO_PROFILE_ARN` for non-default installations.                                                                                                                                                                                                                                                                                                 |
 | Antigravity (`agy`)    | On macOS and Linux, can report `gemini_5h`, `gemini_weekly`, `claude_gpt_5h`, and `claude_gpt_weekly` from an already-running Antigravity app or `agy` loopback quota summary. If only model config quota is exposed, quota-axi reports model-scoped `model:<slug>` windows instead of inventing grouped windows. Antigravity v1 snapshots do not expose enough history for honest burn-rate pace, so pace stays `unknown`.                                                                                                                                                                                      |
 
 ### Model catalog and `models`
@@ -587,10 +588,10 @@ Default model order is deterministic and non-preferential: provider, then model 
 
 Auth source entries can include `credentialPresent` when a non-secret probe confirms a credential item exists.
 
-| Name                 | Values                                                                                                                                                                                                      |
-| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Auth source statuses | `available`, `missing`, `invalid`, `expired`, `skipped`, or `error`                                                                                                                                         |
-| Auth source names    | `oauth-file`, `keychain`, `auth-json`, `auth-env`, `apps-json`, `state-vscdb`, `cli-keychain`, `cli-authfile`, `cli-rpc`, `pi:kimi-coding`, `pi:xai`, `kimi-code-cli`, `opencode:auth.json`, and `loopback` |
+| Name                 | Values                                                                                                                                                                                                                     |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Auth source statuses | `available`, `missing`, `invalid`, `expired`, `skipped`, or `error`                                                                                                                                                        |
+| Auth source names    | `oauth-file`, `keychain`, `auth-json`, `auth-env`, `apps-json`, `state-vscdb`, `cli-keychain`, `cli-authfile`, `cli-rpc`, `kiro-sqlite`, `pi:kimi-coding`, `pi:xai`, `kimi-code-cli`, `opencode:auth.json`, and `loopback` |
 
 ## Security Posture
 
@@ -605,6 +606,7 @@ Auth source entries can include `credentialPresent` when a non-secret probe conf
 | Grok           | Grok CLI session auth from `$GROK_AUTH_JSON`, inline `$GROK_AUTH`, `$GROK_AUTH_PATH`, or `$GROK_HOME/auth.json` / `~/.grok/auth.json`, plus Pi's independent `$PI_CODING_AGENT_DIR/auth.json` `xai` entry (default `~/.pi/agent/auth.json`) for OAuth or literal API-key model auth                                                                                                                                            |
 | Kimi           | Pi's `$PI_CODING_AGENT_DIR/auth.json` (default `~/.pi/agent/auth.json`) for a literal `kimi-coding` API key or unexpired OAuth access token first, then a fresh official Kimi Code CLI access token from `$KIMI_CODE_HOME/credentials/kimi-code.json` (default `$HOME/.kimi-code/credentials/kimi-code.json`)                                                                                                                  |
 | Z.AI           | opencode's `auth.json` (`$XDG_DATA_HOME/opencode/auth.json` when set, otherwise `~/.local/share/opencode/auth.json`) for a literal Coding Plan API key under `zai-coding-plan`, `zai`, `z-ai`, `z.ai`, `zhipu`, or `zhipuai`                                                                                                                                                                                                   |
+| Kiro           | The current user's Kiro CLI SQLite auth store at `$KIRO_CLI_DB` or `~/.local/share/kiro-cli/data.sqlite3`; quota-axi reads only the `kirocli:odic:token` access-token record read-only. `KIRO_REGION` overrides the token's region and `KIRO_PROFILE_ARN` optionally selects an IAM/profile account.                                                                                                                           |
 | Antigravity    | No credential files; discovers already-running Antigravity or `agy` processes and reads only their 127.0.0.1 read-only loopback endpoints                                                                                                                                                                                                                                                                                      |
 
 ### Provider notes
@@ -661,6 +663,12 @@ Auth source entries can include `credentialPresent` when a non-secret probe conf
 - It never uses `refresh_token`, accepts a custom Kimi origin, launches Pi or Kimi, makes a model request, refreshes or writes credentials, creates a device ID, imports cookies, sends device identity, retains raw responses, or exposes account, plan, token, or fingerprint data.
 - Definitive credential absence or rejection retires Kimi cache data. Transient fallback drops reset-expired windows and applies five-hour or seven-day age bounds to windows without resets.
 
+**Kiro**
+
+- It opens the current user's Kiro CLI SQLite database read-only and reads only the `kirocli:odic:token` record. `KIRO_CLI_DB` overrides the default path; `KIRO_REGION` overrides the stored region; and optional `KIRO_PROFILE_ARN` is included only when configured.
+- It sends the short-lived access token only as a bearer to Kiro's first-party `AmazonCodeWhispererService.GetUsageLimits` endpoint, with a fixed read-only request body and no cookies. The response is normalized to the Kiro credit usage window, plan, balance, and reset time.
+- It never refreshes, writes, or deletes Kiro credentials; it never launches `kiro-cli`; and token, email, profile ARN, and refresh-token values are excluded from reports, cache, errors, and tests. When the access token is expired or missing, sign in with Kiro again outside quota-axi.
+
 **Z.AI**
 
 - It reads opencode's `auth.json` (`$XDG_DATA_HOME/opencode/auth.json` when set, otherwise `~/.local/share/opencode/auth.json`; `%LOCALAPPDATA%\opencode\auth.json` on Windows) and accepts only a nonempty, control-byte-free literal string key under a known Coding Plan provider id, taken from `key`, `apiKey`, `api_key`, `token`, `accessToken`, or `auth_token`, or from a bare string entry. Environment, template, and command references are not resolved or executed, so an entry that holds one is treated as no credential rather than sent as a header value. quota-axi never writes or manages opencode state.
@@ -683,7 +691,7 @@ Auth source entries can include `credentialPresent` when a non-secret probe conf
 - The user-initiated `update` command is the only outbound non-provider network surface, and it is not part of quota measurement.
 - It sends credential values only to the first-party provider request they authenticate.
 - It never prints, logs, or caches credential values.
-- It never launches the Claude, Cursor, Grok, Pi, Kimi, opencode, or Antigravity/`agy` CLIs, so it cannot spend quota or mutate provider credentials while measuring them.
+- It never launches the Claude, Cursor, Grok, Pi, Kimi, opencode, Antigravity/`agy`, or Kiro CLIs, so it cannot spend quota or mutate provider credentials while measuring them.
 - It never routes, ranks a winner, or orders providers preferentially. Derived comparative signals, including `effectiveAvailability[].selection`, are published as data for the consumer to act on.
 
 ### Cache

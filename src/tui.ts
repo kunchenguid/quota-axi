@@ -75,6 +75,7 @@ const ACCENTS: Record<ProviderId, StyleSpec> = {
   kimi: { rgb: [245, 194, 231], ansi16: "95", bold: true },
   zai: { rgb: [129, 216, 209], ansi16: "96", bold: true },
   agy: { rgb: [232, 184, 109], ansi16: "93", bold: true },
+  kiro: { rgb: [155, 140, 255], ansi16: "95", bold: true },
 };
 
 const STYLES: Record<Exclude<StyleName, `accent:${ProviderId}`>, StyleSpec> = {
