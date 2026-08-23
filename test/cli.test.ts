@@ -21,6 +21,7 @@ const originalGrokProvider = PROVIDERS.grok;
 const originalKimiProvider = PROVIDERS.kimi;
 const originalZaiProvider = PROVIDERS.zai;
 const originalAgyProvider = PROVIDERS.agy;
+const originalKiroProvider = PROVIDERS.kiro;
 const originalXdgCacheHome = process.env.XDG_CACHE_HOME;
 let tempDir: string | undefined;
 
@@ -33,6 +34,7 @@ afterEach(() => {
   PROVIDERS.kimi = originalKimiProvider;
   PROVIDERS.zai = originalZaiProvider;
   PROVIDERS.agy = originalAgyProvider;
+  PROVIDERS.kiro = originalKiroProvider;
   if (originalXdgCacheHome === undefined) delete process.env.XDG_CACHE_HOME;
   else process.env.XDG_CACHE_HOME = originalXdgCacheHome;
   if (tempDir) rmSync(tempDir, { recursive: true, force: true });
@@ -52,6 +54,7 @@ describe("CLI flag parsing", () => {
       "kimi",
       "zai",
       "agy",
+      "kiro",
     ]);
   });
 
@@ -87,6 +90,7 @@ describe("CLI flag parsing", () => {
           "kimi",
           "zai",
           "agy",
+          "kiro",
         ],
         json: true,
         full: true,
@@ -716,6 +720,13 @@ describe("default TOON decision blocks", () => {
     PROVIDERS.kimi = providerWithQuota(rateLimitedKimiQuota());
     PROVIDERS.zai = providerWithQuota(freshZaiQuota());
     PROVIDERS.agy = providerWithQuota(unavailableAgyQuota());
+    PROVIDERS.kiro = providerWithQuota({
+      provider: "kiro",
+      label: "Kiro",
+      source: "unavailable",
+      windows: [],
+      state: { status: "unavailable", stale: false, sourcesTried: [] },
+    });
 
     const output = await capture([]);
     const named = new Set([
@@ -731,6 +742,7 @@ describe("default TOON decision blocks", () => {
       "cursor",
       "grok",
       "kimi",
+      "kiro",
       "zai",
     ]);
   });

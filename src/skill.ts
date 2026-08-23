@@ -3,7 +3,7 @@ import { DESCRIPTION, TOP_HELP } from "./cli.js";
 // Trigger string Claude Code (and other agents) match against to auto-load the skill.
 // Kept terse and outcome-focused so it fires on "check quota/rate limits" intents.
 export const SKILL_DESCRIPTION =
-  "Report local Claude, Codex, Cursor, GitHub Copilot, Grok, Kimi, Z.AI, and Antigravity quota windows via the quota-axi CLI - remaining " +
+  "Report local Claude, Codex, Cursor, GitHub Copilot, Grok, Kimi, Z.AI, Antigravity, and Kiro quota windows via the quota-axi CLI - remaining " +
   "effective usable runway, percentages, reset times, cycle-average pace vs the reset clock, a per-scope selection signal, and provider status read from local auth sources, " +
   "with no routing, provider mutation, or default ordering preference. Use before deciding whether it is safe " +
   "to keep spending a provider's quota, when the user asks about usage, rate limits, pace, or " +
@@ -26,6 +26,7 @@ export const HERMES_TAGS = [
   "kimi",
   "zai",
   "agy",
+  "kiro",
   "antigravity",
   "cli",
 ];
@@ -74,7 +75,7 @@ derived per-scope comparative selection signal, \`effectiveAvailability[].select
 computed from figures it already reports; it still ranks nothing and routes nowhere, and the
 consumer decides what to do with it. It reads local provider auth sources and calls
 first-party provider quota, usage, billing, entitlement, local loopback, or read-only credential-liveness endpoints; it never launches the
-Claude, Cursor, Grok, Pi, Kimi, opencode, or Antigravity/agy CLIs, so it cannot spend the quota it measures.
+Claude, Cursor, Grok, Pi, Kimi, opencode, Antigravity/agy, or Kiro CLIs, so it cannot spend the quota it measures.
 
 ## When to use
 
@@ -98,7 +99,7 @@ or when comparing supported local provider headroom side by side.
    unknown or stale headroom gets no \`quota[]\` row at all - read its \`attention[]\` row instead
    of inferring a number. If that scope has finite runway, the attention detail preserves the
    runway verdict and limiting window without creating an orphan \`exhaustion[]\` row.
-2. Scope to one provider with \`--provider claude\` or to a subset with \`--provider cursor,copilot,grok,kimi,zai,agy\`.
+2. Scope to one provider with \`--provider claude\` or to a subset with \`--provider cursor,copilot,grok,kimi,zai,agy,kiro\`.
 3. Pass \`--json\` for the normalized machine-readable model instead of TOON. Read
    \`quotaSemantics.effectiveAvailability\` rather than treating a model window in isolation:
    account windows can bound every model, and \`boundedBy\` names every window included in the
@@ -185,6 +186,13 @@ or when comparing supported local provider headroom side by side.
     \`remainingFraction\`/\`resetTime\` (or model config fallbacks). Window relationships are
     unknown, so there is no combined remaining percentage. Pace stays unknown because the
     snapshot has no honest burn-rate history.
+12. For Kiro, quota-axi reads the current user's Kiro CLI SQLite auth store in
+    \`~/.local/share/kiro-cli/data.sqlite3\` (override with \`KIRO_CLI_DB\`) without modifying it.
+    It sends the stored short-lived access token only to Kiro's first-party
+    CodeWhisperer \`GetUsageLimits\` endpoint, reports the returned credit usage and reset, and
+    never prints or includes token, email, profile ARN, or refresh-token values. Use
+    \`KIRO_REGION\` for non-default regional installs and sign in with Kiro again when the
+    stored access token is expired.
 
 ## Usage
 
