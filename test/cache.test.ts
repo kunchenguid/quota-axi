@@ -306,6 +306,7 @@ function providerLabel(provider: ProviderId): string {
   if (provider === "copilot") return "GitHub Copilot";
   if (provider === "grok") return "Grok";
   if (provider === "zai") return "Z.AI";
+  if (provider === "opencode-go") return "OpenCode Go";
   if (provider === "agy") return "Antigravity";
   return "Kimi";
 }

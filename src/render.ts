@@ -508,6 +508,7 @@ export function quotaJsonReport(
       ...provider,
       label: undefined,
       source: undefined,
+      useBalance: undefined,
       windows: provider.windows.map(demotedWindow),
       ...(provider.quotaSemantics
         ? { quotaSemantics: demotedSemantics(provider.quotaSemantics) }

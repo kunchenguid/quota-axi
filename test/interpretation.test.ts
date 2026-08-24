@@ -83,6 +83,7 @@ describe("quota semantics", () => {
       ["grok", [window("credits", "credits", 44)]],
       ["kimi", [window("weekly", "weekly", 59)]],
       ["zai", [window("weekly", "weekly", 42)]],
+      ["opencode-go", [window("five_hour", "session", 42)]],
       ["agy", [window("gemini_weekly", "weekly", 98)]],
       ["cursor", [window("included_usage", "monthly", 72)]],
       ["copilot", [window("premium_interactions", "monthly", 81)]],
@@ -370,6 +371,97 @@ describe("quota semantics", () => {
         },
       ],
       unresolvedWindowIds: ["limit:2"],
+    });
+  });
+  it("computes OpenCode Go availability from all three joint allowance windows", () => {
+    const result = withQuotaSemantics(
+      provider("opencode-go", [
+        window("five_hour", "session", 80, {
+          windowSeconds: 18_000,
+          resetsAt: offsetFromGeneratedAt(12_345),
+        }),
+        window("weekly", "weekly", 60, {
+          windowSeconds: WEEK_SECONDS,
+          resetsAt: offsetFromGeneratedAt(345_678),
+        }),
+        window("monthly", "monthly", 65, {
+          resetsAt: offsetFromGeneratedAt(1_234_567),
+        }),
+      ]),
+      GENERATED_AT,
+    );
+
+    expect(result.quotaSemantics?.effectiveAvailability).toEqual([
+      expect.objectContaining({
+        scope: "all_models",
+        status: "known",
+        effectivePercentRemaining: 60,
+        boundedBy: ["five_hour", "weekly", "monthly"],
+        limitingWindowIds: ["weekly"],
+      }),
+    ]);
+    expect(result.windows[2].pace).toMatchObject({
+      status: "unknown",
+      reason: "missing_cycle",
+    });
+  });
+
+  it("keeps OpenCode Go partial when a required allowance window is untrusted", () => {
+    const opencode = provider("opencode-go", [
+      window("five_hour", "session", 80),
+      window("weekly", "weekly", 60),
+    ]);
+    opencode.state.untrustedWindowIds = ["monthly"];
+
+    const semantics = withQuotaSemantics(opencode, GENERATED_AT).quotaSemantics;
+
+    expect(semantics).toMatchObject({
+      status: "partial",
+      unresolvedWindowIds: ["monthly"],
+      effectiveAvailability: [
+        {
+          scope: "all_models",
+          status: "unknown",
+          boundedBy: ["five_hour", "weekly"],
+        },
+      ],
+    });
+  });
+
+  it("does not claim exhausted runway when OpenCode Go balance fallback is enabled", () => {
+    const opencode = provider("opencode-go", [
+      window("five_hour", "session", 0),
+      window("weekly", "weekly", 0),
+      window("monthly", "monthly", 0),
+    ]);
+    opencode.useBalance = true;
+
+    const availability = withQuotaSemantics(opencode, GENERATED_AT)
+      .quotaSemantics?.effectiveAvailability[0];
+
+    expect(availability).toMatchObject({
+      effectivePercentRemaining: 0,
+      runway: { status: "unknown" },
+    });
+  });
+
+  it("does not claim projected exhaustion when OpenCode Go balance fallback is enabled", () => {
+    const opencode = provider("opencode-go", [
+      window("five_hour", "session", 10, {
+        windowSeconds: 18_000,
+        resetsAt: new Date(Date.parse(GENERATED_AT) + 9_000_000).toISOString(),
+      }),
+      window("weekly", "weekly", 100),
+      window("monthly", "monthly", 100),
+    ]);
+    opencode.useBalance = true;
+
+    const availability = withQuotaSemantics(opencode, GENERATED_AT)
+      .quotaSemantics?.effectiveAvailability[0];
+
+    expect(availability).toMatchObject({
+      effectivePercentRemaining: 10,
+      runway: { status: "unknown" },
     });
   });
 

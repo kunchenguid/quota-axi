@@ -3,13 +3,15 @@
 // and the vendor plugin zai-org/zai-coding-plugins. No third-party code is
 // vendored here; the HTTP layer and normalization are an original implementation.
 
-import { homedir } from "node:os";
-import { join } from "node:path";
 import {
   deleteCachedProvider as deleteCachedProviderFromDisk,
   readCachedProvider as readCachedProviderFromDisk,
 } from "../cache.js";
-import { readJsonFileResult, type JsonFileReadResult } from "../lib/fs.js";
+import {
+  opencodeAuthFilePath,
+  OPENCODE_AUTH_SOURCE,
+  readOpencodeAuthFile,
+} from "./opencode-auth.js";
 import { usableLiteralSecret } from "../lib/secret.js";
 import type {
   AuthProviderReport,
@@ -22,7 +24,7 @@ import type {
   SourceAttempt,
 } from "../types.js";
 import { VERSION } from "../version.js";
-
+export { opencodeAuthFilePath };
 const ZAI_QUOTA_PATH = "/api/monitor/usage/quota/limit";
 const OPERATION_DEADLINE_MS = 15_000;
 const RESPONSE_LIMIT_BYTES = 262_144;
@@ -31,7 +33,6 @@ const WEEK_SECONDS = 7 * 24 * 60 * 60;
 const MONTH_SECONDS = 30 * 24 * 60 * 60;
 const ZAI_HOST = "api.z.ai";
 const ZHIPU_HOST = "open.bigmodel.cn";
-const OPENCODE_AUTH_SOURCE = "opencode:auth.json";
 const USER_AGENT = `quota-axi/${VERSION}`;
 
 const ZAI_PROVIDER_IDS = ["zai-coding-plan", "zai", "z-ai", "z.ai"];
@@ -93,16 +94,6 @@ type ResponseBodyLifetime = {
   cancel(action?: () => Promise<unknown> | undefined): Promise<void>;
 };
 
-export function opencodeAuthFilePath(): string {
-  const xdg = stringValue(process.env.XDG_DATA_HOME);
-  if (xdg) return join(xdg, "opencode", "auth.json");
-  if (process.platform === "win32") {
-    const localAppData = stringValue(process.env.LOCALAPPDATA);
-    if (localAppData) return join(localAppData, "opencode", "auth.json");
-  }
-  return join(homedir(), ".local", "share", "opencode", "auth.json");
-}
-
 export function extractZaiCredential(
   value: unknown,
   path: string,
@@ -124,7 +115,7 @@ export function createOpencodeAuthCredentialSource(
 ): ZaiCredentialSource {
   function resolve(): ZaiCredentialResolution {
     const path = filePath();
-    const result: JsonFileReadResult = readJsonFileResult(path);
+    const result = readOpencodeAuthFile(path);
     if (result.status === "missing") return { status: "missing", path };
     if (result.status === "invalid")
       return result.error === "file_read_error"

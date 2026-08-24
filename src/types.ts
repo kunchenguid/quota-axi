@@ -6,6 +6,7 @@ export type ProviderId =
   | "grok"
   | "kimi"
   | "zai"
+  | "opencode-go"
   | "agy";
 
 export const PROVIDER_IDS = [
@@ -16,6 +17,7 @@ export const PROVIDER_IDS = [
   "grok",
   "kimi",
   "zai",
+  "opencode-go",
   "agy",
 ] as const satisfies readonly ProviderId[];
 
@@ -210,6 +212,7 @@ export type ProviderQuota = {
   /** Report provenance. Omitted from default `--json`; see `--full`. */
   source?: ProviderSource;
   plan?: string;
+  useBalance?: boolean;
   account?: {
     email?: string;
     organization?: string;

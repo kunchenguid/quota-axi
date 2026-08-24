@@ -21,6 +21,7 @@ const originalCopilotProvider = PROVIDERS.copilot;
 const originalGrokProvider = PROVIDERS.grok;
 const originalKimiProvider = PROVIDERS.kimi;
 const originalZaiProvider = PROVIDERS.zai;
+const originalOpencodeGoProvider = PROVIDERS["opencode-go"];
 const originalAgyProvider = PROVIDERS.agy;
 const originalXdgCacheHome = process.env.XDG_CACHE_HOME;
 let tempDir: string | undefined;
@@ -33,6 +34,7 @@ afterEach(() => {
   PROVIDERS.grok = originalGrokProvider;
   PROVIDERS.kimi = originalKimiProvider;
   PROVIDERS.zai = originalZaiProvider;
+  PROVIDERS["opencode-go"] = originalOpencodeGoProvider;
   PROVIDERS.agy = originalAgyProvider;
   if (originalXdgCacheHome === undefined) delete process.env.XDG_CACHE_HOME;
   else process.env.XDG_CACHE_HOME = originalXdgCacheHome;
@@ -52,6 +54,7 @@ describe("CLI flag parsing", () => {
       "grok",
       "kimi",
       "zai",
+      "opencode-go",
       "agy",
     ]);
   });
@@ -87,6 +90,7 @@ describe("CLI flag parsing", () => {
           "grok",
           "kimi",
           "zai",
+          "opencode-go",
           "agy",
         ],
         json: true,
@@ -731,6 +735,47 @@ describe("CLI quota rendering", () => {
       /recommend|prefer provider|switch to|route to/i,
     );
   });
+  it("renders OpenCode Go windows for an explicit provider scope", async () => {
+    useTempCache();
+    PROVIDERS["opencode-go"] = providerWithQuota(freshOpencodeGoQuota());
+
+    const toon = await capture(["--provider", "opencode-go"]);
+    expect(toon).toContain("opencode-go,all_models,60");
+
+    const json = JSON.parse(
+      await capture(["--provider", "opencode-go", "--json"]),
+    ) as QuotaAxiResponse;
+    expect(json.providers[0]?.plan).toBe("go");
+    expect(json.providers[0]?.useBalance).toBeUndefined();
+    expect(json.providers[0]?.windows.map(({ id }) => id)).toEqual([
+      "five_hour",
+      "weekly",
+      "monthly",
+    ]);
+
+    const fullJson = JSON.parse(
+      await capture(["--provider", "opencode-go", "--full", "--json"]),
+    ) as QuotaAxiResponse;
+    expect(fullJson.providers[0]?.useBalance).toBe(true);
+  });
+
+  it("names the balance-suppressed OpenCode Go bound in attention[]", async () => {
+    useTempCache();
+    const quota = freshOpencodeGoQuota();
+    quota.windows[0] = {
+      ...quota.windows[0]!,
+      percentUsed: 100,
+      percentRemaining: 0,
+    };
+    PROVIDERS["opencode-go"] = providerWithQuota(quota);
+
+    const output = await capture(["--provider", "opencode-go"]);
+
+    expect(toonRows(output, "exhaustion")).toEqual([]);
+    expect(output).toContain(
+      "opencode-go,all_models,unmeasurable,five_hour blocks runway",
+    );
+  });
 
   it("renders the card-grid report for --tui and composes with --provider", async () => {
     useTempCache();
@@ -782,6 +827,7 @@ describe("default TOON decision blocks", () => {
     PROVIDERS.grok = providerWithQuota(grokModelAuthOnlyQuota());
     PROVIDERS.kimi = providerWithQuota(rateLimitedKimiQuota());
     PROVIDERS.zai = providerWithQuota(freshZaiQuota());
+    PROVIDERS["opencode-go"] = providerWithQuota(unavailableOpencodeGoQuota());
     PROVIDERS.agy = providerWithQuota(unavailableAgyQuota());
 
     const output = await capture([]);
@@ -798,6 +844,7 @@ describe("default TOON decision blocks", () => {
       "cursor",
       "grok",
       "kimi",
+      "opencode-go",
       "zai",
     ]);
   });
@@ -1130,6 +1177,7 @@ describe("CLI plumbing via the axi SDK", () => {
     PROVIDERS.grok = providerWithAuth("grok", "Grok");
     PROVIDERS.kimi = providerWithAuth("kimi", "Kimi");
     PROVIDERS.zai = providerWithAuth("zai", "Z.AI");
+    PROVIDERS["opencode-go"] = providerWithAuth("opencode-go", "OpenCode Go");
     PROVIDERS.agy = providerWithAuth("agy", "Antigravity");
 
     const output = await capture(["--allow-keychain-prompt", "auth"]);
@@ -1580,6 +1628,67 @@ function freshZaiQuota(): ProviderQuota {
       sourcesTried: ["opencode:auth.json"],
     },
     attempts: [{ source: "opencode:auth.json", status: "success" }],
+  };
+}
+
+function freshOpencodeGoQuota(): ProviderQuota {
+  return {
+    provider: "opencode-go",
+    label: "OpenCode Go",
+    source: "api",
+    plan: "go",
+    useBalance: true,
+    windows: [
+      {
+        id: "five_hour",
+        label: "session",
+        kind: "session",
+        percentUsed: 10,
+        percentRemaining: 90,
+        windowSeconds: 18_000,
+        resetsAt: "2026-08-24T17:00:00Z",
+      },
+      {
+        id: "weekly",
+        label: "week",
+        kind: "weekly",
+        percentUsed: 40,
+        percentRemaining: 60,
+        windowSeconds: 604_800,
+        resetsAt: "2026-08-31T12:00:00Z",
+      },
+      {
+        id: "monthly",
+        label: "month",
+        kind: "monthly",
+        percentUsed: 35,
+        percentRemaining: 65,
+        resetsAt: "2026-09-12T12:00:00Z",
+      },
+    ],
+    state: {
+      status: "fresh",
+      stale: false,
+      refreshedAt: "2026-08-24T12:00:00Z",
+      sourcesTried: ["opencode:auth.json"],
+    },
+    attempts: [{ source: "opencode:auth.json", status: "success" }],
+  };
+}
+
+function unavailableOpencodeGoQuota(): ProviderQuota {
+  return {
+    provider: "opencode-go",
+    label: "OpenCode Go",
+    source: "unavailable",
+    plan: "go",
+    windows: [],
+    state: {
+      status: "auth_required",
+      stale: false,
+      error: "opencode_go_credential_unavailable",
+      sourcesTried: ["opencode:auth.json"],
+    },
   };
 }
 

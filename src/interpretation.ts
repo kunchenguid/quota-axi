@@ -99,6 +99,13 @@ function semanticsFor(
         provider.state.untrustedWindowIds ?? [],
         generatedAt,
       );
+    case "opencode-go":
+      return opencodeGoSemantics(
+        provider.windows,
+        provider.state.untrustedWindowIds ?? [],
+        generatedAt,
+        provider.useBalance === true,
+      );
     case "cursor":
       return cursorSemantics(provider.windows, generatedAt);
     case "copilot":
@@ -269,6 +276,78 @@ function kimiSemantics(
   return knownSemantics(
     effectiveAvailability,
     "Kimi's weekly and five-hour account windows jointly bound every model, so effective remaining is the minimum across the named windows.",
+  );
+}
+
+const OPENCODE_GO_RECOGNIZED_WINDOW_IDS = ["five_hour", "weekly", "monthly"];
+
+function opencodeGoSemantics(
+  windows: QuotaWindow[],
+  untrustedWindowIds: string[],
+  generatedAt: string,
+  useBalance: boolean,
+): QuotaSemantics {
+  const recognized = windows.filter(({ id }) =>
+    OPENCODE_GO_RECOGNIZED_WINDOW_IDS.includes(id),
+  );
+  const missing =
+    recognized.length > 0
+      ? OPENCODE_GO_RECOGNIZED_WINDOW_IDS.filter(
+          (id) => !recognized.some((window) => window.id === id),
+        )
+      : [];
+  const unresolved = windows.filter(
+    ({ id }) => !OPENCODE_GO_RECOGNIZED_WINDOW_IDS.includes(id),
+  );
+  const unresolvedWindowIds = [
+    ...new Set([
+      ...missing,
+      ...unresolved.map(({ id }) => id),
+      ...untrustedWindowIds,
+    ]),
+  ];
+  if (unresolvedWindowIds.length > 0) {
+    return {
+      status: "partial",
+      description:
+        "OpenCode Go's five-hour, weekly, and monthly allowance windows jointly bound every model. Missing, malformed, or unfamiliar windows may add a bound, so effective remaining is unknown.",
+      effectiveAvailability:
+        recognized.length > 0
+          ? [
+              unresolvedAvailability(
+                "all_models",
+                recognized,
+                unresolvedWindowIds,
+              ),
+            ]
+          : [],
+      unresolvedWindowIds,
+    };
+  }
+  const effectiveAvailability =
+    recognized.length > 0
+      ? [availability("all_models", recognized, generatedAt)]
+      : [];
+  const balanceBackedAvailability = effectiveAvailability[0];
+  if (
+    useBalance &&
+    (balanceBackedAvailability?.runway?.status === "exhausted_now" ||
+      balanceBackedAvailability?.runway?.status === "projected_exhaustion")
+  ) {
+    const limitingWindowId = balanceBackedAvailability.runway?.limitingWindowId;
+    effectiveAvailability[0] = {
+      ...balanceBackedAvailability,
+      runway: {
+        status: "unknown",
+        unmeasurableWindowIds: limitingWindowId
+          ? [limitingWindowId]
+          : recognized.map(({ id }) => id),
+      },
+    };
+  }
+  return knownSemantics(
+    effectiveAvailability,
+    "OpenCode Go's five-hour, weekly, and monthly allowance windows jointly bound every model, so effective remaining is the minimum across the named windows. A Zen balance fallback, when enabled by the provider, is not quantified by the usage endpoint.",
   );
 }
 
