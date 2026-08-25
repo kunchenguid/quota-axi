@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.1.31](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.30...quota-axi-v0.1.31) (2026-08-25)
+
+
+### Features
+
+* **cursor:** report Grok Bot weekly usage as its own scope ([#113](https://github.com/kunchenguid/quota-axi/issues/113)) ([600da6f](https://github.com/kunchenguid/quota-axi/commit/600da6fc08111a64efb35eeeaf76f1184b446b24))
+* fetch Grok credits via Pi OAuth and fix Claude failure handling ([#116](https://github.com/kunchenguid/quota-axi/issues/116)) ([b371079](https://github.com/kunchenguid/quota-axi/commit/b371079fe5613f6773d51b34ea704aadb47e954f))
+
+
+### Bug Fixes
+
+* defer skill guidance to the live CLI ([#114](https://github.com/kunchenguid/quota-axi/issues/114)) ([5aa046d](https://github.com/kunchenguid/quota-axi/commit/5aa046d6fb6605fbed4753e5a9cbebec2ffa8136))
+
 ## [0.1.30](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.29...quota-axi-v0.1.30) (2026-08-21)
 
 
