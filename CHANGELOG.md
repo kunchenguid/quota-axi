@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.32](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.31...quota-axi-v0.1.32) (2026-08-25)
+
+
+### Features
+
+* **providers:** delegate expired credential refresh to vendor CLIs ([#118](https://github.com/kunchenguid/quota-axi/issues/118)) ([3e29259](https://github.com/kunchenguid/quota-axi/commit/3e29259d41cadaa7547b3d4e93c8048b06d736d3))
+
 ## [0.1.31](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.30...quota-axi-v0.1.31) (2026-08-25)
 
 
