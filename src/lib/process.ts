@@ -13,8 +13,9 @@ export function execFileText(
       command,
       args,
       { timeout: timeoutMs, maxBuffer: 1024 * 1024 },
-      (error, stdout) => {
+      (error, stdout, stderr) => {
         if (error) {
+          Object.assign(error, { stderr: String(stderr) });
           reject(error);
           return;
         }

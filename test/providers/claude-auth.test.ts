@@ -1503,7 +1503,7 @@ describe("Claude credential-state reporting", () => {
     );
   });
 
-  it("does not treat Keychain exit 44 as signed-out or retire the Claude cache", async () => {
+  it("treats errSecItemNotFound as signed-out and retires the Claude cache", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-06T20:00:00.000Z"));
     usePlatform("darwin");
@@ -1512,7 +1512,11 @@ describe("Claude credential-state reporting", () => {
       await import("../../src/cache.js");
     writeCachedProviders([cachedClaudeQuota(34)]);
     const execFileText = vi.fn(async () => {
-      throw Object.assign(new Error("not found"), { code: 44 });
+      throw Object.assign(new Error("security failed"), {
+        code: 44,
+        stderr:
+          "security: SecKeychainSearchCopyNext: The specified item could not be found in the keychain. (-25300)",
+      });
     });
     vi.doMock("../../src/lib/process.js", () => ({ execFileText }));
     const { fetchQuota } = await import("../../src/providers/claude.js");
@@ -1520,13 +1524,9 @@ describe("Claude credential-state reporting", () => {
       allowKeychainPrompt: true,
       refreshCredentials: false,
     });
-    expect(result.state.status).not.toBe("auth_required");
-    expect(result.state.error).toBe("keychain_unreachable");
-    expect(result.source).toBe("cache");
-    expect(readCachedProvider("claude")).toMatchObject({
-      provider: "claude",
-      source: "oauth",
-    });
+    expect(result.state.status).toBe("auth_required");
+    expect(result.source).toBe("unavailable");
+    expect(readCachedProvider("claude")).toBeUndefined();
   });
 
   it("says so when Keychain is denied and does not offer a prompt that cannot help", async () => {
