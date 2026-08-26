@@ -461,7 +461,7 @@ async function requestOpencodeGoUsage(
       throw new OpencodeGoFailure("malformed_json", { staleEligible: true });
     }
   } finally {
-    await lifetime.cancel();
+    void lifetime.cancel();
   }
 }
 
@@ -553,18 +553,17 @@ async function readBodyChunk(
 ): Promise<ReadableStreamReadResult<Uint8Array>> {
   const cancelReader = () => lifetime.cancel(() => reader.cancel());
   if (signal.aborted) {
-    await cancelReader();
+    void cancelReader();
     throw new OpencodeGoFailure("request_timeout", { staleEligible: true });
   }
   return new Promise((resolve, reject) => {
     let aborted = false;
     const abort = () => {
       aborted = true;
-      cancelReader().then(() => {
-        reject(
-          new OpencodeGoFailure("request_timeout", { staleEligible: true }),
-        );
-      });
+      void cancelReader();
+      reject(
+        new OpencodeGoFailure("request_timeout", { staleEligible: true }),
+      );
     };
     signal.addEventListener("abort", abort, { once: true });
     reader.read().then(

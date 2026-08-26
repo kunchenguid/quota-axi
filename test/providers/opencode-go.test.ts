@@ -418,6 +418,36 @@ describe("OpenCode Go request and failure handling", () => {
       error: "provider_entitlement_required",
     });
   });
+
+  it("does not wait for a hanging stream cancellation after the deadline", async () => {
+    const reader = {
+      read: vi.fn(
+        () => new Promise<ReadableStreamReadResult<Uint8Array>>(() => {}),
+      ),
+      cancel: vi.fn(() => new Promise<void>(() => {})),
+      releaseLock: vi.fn(),
+    } as unknown as ReadableStreamDefaultReader<Uint8Array>;
+    const response = {
+      status: 200,
+      headers: new Headers({ "content-type": "application/json" }),
+      body: { getReader: () => reader },
+    } as unknown as Response;
+    const startedAt = Date.now();
+
+    const report = await testAdapter({
+      deadlineMs: 5,
+      fetch: vi.fn(async () => response),
+    }).fetchQuota(OPTIONS);
+
+    expect(Date.now() - startedAt).toBeLessThan(1_000);
+    expect(reader.cancel).toHaveBeenCalledTimes(1);
+    expect(reader.releaseLock).toHaveBeenCalledTimes(1);
+    expect(report).toMatchObject({
+      source: "unavailable",
+      windows: [],
+      state: { status: "error", error: "request_timeout" },
+    });
+  });
 });
 
 function testAdapter(
