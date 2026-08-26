@@ -561,9 +561,7 @@ async function readBodyChunk(
     const abort = () => {
       aborted = true;
       void cancelReader();
-      reject(
-        new OpencodeGoFailure("request_timeout", { staleEligible: true }),
-      );
+      reject(new OpencodeGoFailure("request_timeout", { staleEligible: true }));
     };
     signal.addEventListener("abort", abort, { once: true });
     reader.read().then(
