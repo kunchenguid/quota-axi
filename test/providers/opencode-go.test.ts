@@ -330,6 +330,40 @@ describe("OpenCode Go request and failure handling", () => {
     expect(report.state.refreshedAt).toBe(new Date(later).toISOString());
   });
 
+  it("validates resets against body completion time", async () => {
+    const completedAt = NOW + 10_000;
+    const now = vi
+      .fn<() => number>()
+      .mockReturnValueOnce(NOW)
+      .mockReturnValue(completedAt);
+    const report = await testAdapter({
+      fetch: vi.fn(async () =>
+        jsonResponse({
+          ...SUCCESS_PAYLOAD,
+          usage: {
+            ...SUCCESS_PAYLOAD.usage,
+            rolling: {
+              ...SUCCESS_PAYLOAD.usage.rolling,
+              resetsAt: new Date(NOW + 2_000).toISOString(),
+            },
+          },
+        }),
+      ),
+      now,
+    }).fetchQuota(OPTIONS);
+    const interpreted = withQuotaSemantics(
+      report,
+      new Date(completedAt).toISOString(),
+    );
+
+    expect(report.state.refreshedAt).toBe(new Date(completedAt).toISOString());
+    expect(report.state.untrustedWindowIds).toEqual(["five_hour"]);
+    expect(interpreted.quotaSemantics).toMatchObject({
+      status: "partial",
+      unresolvedWindowIds: ["five_hour"],
+    });
+  });
+
   it("keeps balance-backed exhaustion non-definitive", async () => {
     const exhausted = {
       ...SUCCESS_PAYLOAD,
@@ -350,6 +384,28 @@ describe("OpenCode Go request and failure handling", () => {
       status: "known",
       effectivePercentRemaining: 0,
       runway: { status: "unknown" },
+    });
+  });
+
+  it("rejects malformed balance fallback metadata", async () => {
+    const report = await testAdapter({
+      fetch: vi.fn(async () =>
+        jsonResponse({
+          ...SUCCESS_PAYLOAD,
+          useBalance: "true",
+          usage: {
+            rolling: { ...SUCCESS_PAYLOAD.usage.rolling, percent: 100 },
+            weekly: { ...SUCCESS_PAYLOAD.usage.weekly, percent: 100 },
+            monthly: { ...SUCCESS_PAYLOAD.usage.monthly, percent: 100 },
+          },
+        }),
+      ),
+    }).fetchQuota(OPTIONS);
+
+    expect(report).toMatchObject({
+      source: "unavailable",
+      windows: [],
+      state: { status: "error", error: "schema_invalid" },
     });
   });
 

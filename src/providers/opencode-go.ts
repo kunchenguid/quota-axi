@@ -94,7 +94,7 @@ type OpencodeGoUsageResponse = {
 
 type OpencodeGoUsageAcquisition = {
   payload: OpencodeGoUsageResponse;
-  receivedAt: number;
+  completedAt: number;
 };
 
 export function extractOpencodeGoCredential(
@@ -215,12 +215,12 @@ async function acquireOpencodeGoQuota(
     );
     const normalized = normalizeOpencodeGoPayload(
       acquisition.payload,
-      acquisition.receivedAt,
+      acquisition.completedAt,
     );
     const untrustedWindowIds = normalized.diagnostics.map(
       ({ windowId }) => windowId,
     );
-    const refreshedAt = new Date(dependencies.now()).toISOString();
+    const refreshedAt = new Date(acquisition.completedAt).toISOString();
     attempts[0] = { source: OPENCODE_AUTH_SOURCE, status: "success" };
     return {
       provider: "opencode-go",
@@ -424,8 +424,8 @@ async function requestOpencodeGoUsage(
 
   const lifetime = createResponseBodyLifetime(response);
   try {
-    const receivedAt = now();
-    rejectHttpFailure(response, receivedAt);
+    const headerReceivedAt = now();
+    rejectHttpFailure(response, headerReceivedAt);
     const mediaType = response.headers
       .get("content-type")
       ?.split(";", 1)[0]
@@ -469,7 +469,7 @@ async function requestOpencodeGoUsage(
     try {
       return {
         payload: JSON.parse(text) as OpencodeGoUsageResponse,
-        receivedAt,
+        completedAt: now(),
       };
     } catch {
       throw new OpencodeGoFailure("malformed_json", { staleEligible: true });
@@ -621,6 +621,12 @@ export function normalizeOpencodeGoPayload(
   if (!root || !usage) {
     throw new OpencodeGoFailure("schema_invalid", { staleEligible: true });
   }
+  if (
+    Object.prototype.hasOwnProperty.call(root, "useBalance") &&
+    typeof root.useBalance !== "boolean"
+  ) {
+    throw new OpencodeGoFailure("schema_invalid", { staleEligible: true });
+  }
   const diagnostics: OpencodeGoDiagnostic[] = [];
   const windows: QuotaWindow[] = [];
   const definitions = [
@@ -704,8 +710,7 @@ export function normalizeOpencodeGoPayload(
   if (windows.length === 0) {
     throw new OpencodeGoFailure("schema_invalid", { staleEligible: true });
   }
-  const useBalance =
-    typeof root.useBalance === "boolean" ? root.useBalance : undefined;
+  const useBalance = root.useBalance as boolean | undefined;
   return {
     windows,
     diagnostics,
