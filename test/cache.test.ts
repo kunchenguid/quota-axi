@@ -236,6 +236,19 @@ describe("quota cache", () => {
     expect(cachedWindow?.pace).toBeUndefined();
   });
 
+  it("retains OpenCode Go balance fallback state", () => {
+    useTempCache();
+    const opencodeGo = {
+      ...quota("opencode-go", 100),
+      source: "api" as const,
+      useBalance: true,
+    };
+
+    writeCachedProviders([opencodeGo]);
+
+    expect(readCachedProvider("opencode-go")?.useBalance).toBe(true);
+  });
+
   it("deletes a definitive-auth provider while retaining other snapshots", () => {
     useTempCache();
     writeCachedProviders([quota("claude", 10), quota("kimi", 20)]);

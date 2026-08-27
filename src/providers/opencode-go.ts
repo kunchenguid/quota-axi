@@ -364,6 +364,9 @@ function staleOpencodeGoReport(
     label: "OpenCode Go",
     source: "cache",
     plan: "go",
+    ...(cached.useBalance === undefined
+      ? {}
+      : { useBalance: cached.useBalance }),
     windows,
     state: {
       status: "stale",

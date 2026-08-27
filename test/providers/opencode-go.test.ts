@@ -374,7 +374,7 @@ describe("OpenCode Go request and failure handling", () => {
   });
 
   it("reuses reset-valid stale cache for a transient provider failure", async () => {
-    const cached = cachedReport();
+    const cached = { ...cachedReport(), useBalance: true };
     const report = await testAdapter({
       fetch: vi.fn(async () => new Response(null, { status: 503 })),
       readCachedProvider: () => cached,
@@ -384,6 +384,7 @@ describe("OpenCode Go request and failure handling", () => {
     expect(report).toMatchObject({
       provider: "opencode-go",
       source: "cache",
+      useBalance: true,
       state: { status: "stale", stale: true, error: "provider_unavailable" },
     });
     expect(report.windows).toHaveLength(3);

@@ -156,6 +156,7 @@ function toCacheProvider(provider: ProviderQuota): CachedProvider | undefined {
       label: provider.label,
       source: provider.source,
       plan: provider.plan,
+      useBalance: provider.useBalance,
       windows: provider.windows,
       credits: provider.credits,
       state: {
@@ -229,10 +230,12 @@ function normalizeCachedProvider(
     },
   };
   const plan = stringValue(data.plan);
+  const useBalance = booleanValue(data.useBalance);
   const refreshedAt = stringValue(state.refreshedAt);
   const untrustedWindowIds = stringArrayValue(state.untrustedWindowIds);
   const credits = normalizeCachedCredits(data.credits);
   if (plan) snapshot.plan = plan;
+  if (useBalance !== undefined) snapshot.useBalance = useBalance;
   if (refreshedAt) snapshot.state.refreshedAt = refreshedAt;
   if (untrustedWindowIds)
     snapshot.state.untrustedWindowIds = untrustedWindowIds;
