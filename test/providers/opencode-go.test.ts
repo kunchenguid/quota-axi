@@ -94,7 +94,7 @@ describe("OpenCode Go credential discovery", () => {
 
 describe("OpenCode Go usage normalization", () => {
   it("normalizes all three windows from the verified live response shape", () => {
-    const normalized = normalizeOpencodeGoPayload(SUCCESS_PAYLOAD);
+    const normalized = normalizeOpencodeGoPayload(SUCCESS_PAYLOAD, NOW);
 
     expect(normalized).toMatchObject({ diagnostics: [] });
     expect(normalized.useBalance).toBeUndefined();
@@ -129,7 +129,7 @@ describe("OpenCode Go usage normalization", () => {
   });
 
   it("does not infer a monthly 30-day cycle or fabricate a cycle start", () => {
-    const monthly = normalizeOpencodeGoPayload(SUCCESS_PAYLOAD).windows[2];
+    const monthly = normalizeOpencodeGoPayload(SUCCESS_PAYLOAD, NOW).windows[2];
 
     expect(monthly.id).toBe("monthly");
     expect(monthly.resetsAt).toBe("2026-09-12T12:00:00.000Z");
@@ -138,35 +138,41 @@ describe("OpenCode Go usage normalization", () => {
   });
 
   it("canonicalizes a non-ISO resetsAt to an ISO timestamp", () => {
-    const normalized = normalizeOpencodeGoPayload({
-      ...SUCCESS_PAYLOAD,
-      usage: {
-        ...SUCCESS_PAYLOAD.usage,
-        monthly: {
-          status: "ok",
-          percent: 40,
-          resetsAt: "Sat, 12 Sep 2026 12:00:00 GMT",
+    const normalized = normalizeOpencodeGoPayload(
+      {
+        ...SUCCESS_PAYLOAD,
+        usage: {
+          ...SUCCESS_PAYLOAD.usage,
+          monthly: {
+            status: "ok",
+            percent: 40,
+            resetsAt: "Sat, 12 Sep 2026 12:00:00 GMT",
+          },
         },
       },
-    });
+      NOW,
+    );
 
     expect(normalized.windows[2]?.resetsAt).toBe("2026-09-12T12:00:00.000Z");
   });
 
   it("keeps valid windows but marks missing or unfamiliar usage conservatively", () => {
-    const normalized = normalizeOpencodeGoPayload({
-      ...SUCCESS_PAYLOAD,
-      usage: {
-        ...SUCCESS_PAYLOAD.usage,
-        weekly: undefined,
-        dailyQuota: {
-          status: "ok",
-          percent: 1,
-          resetsAt: "2026-08-25T12:00:00.000Z",
+    const normalized = normalizeOpencodeGoPayload(
+      {
+        ...SUCCESS_PAYLOAD,
+        usage: {
+          ...SUCCESS_PAYLOAD.usage,
+          weekly: undefined,
+          dailyQuota: {
+            status: "ok",
+            percent: 1,
+            resetsAt: "2026-08-25T12:00:00.000Z",
+          },
+          dailyUsage: { status: "pending" },
         },
-        dailyUsage: { status: "pending" },
       },
-    });
+      NOW,
+    );
 
     expect(normalized.windows.map(({ id }) => id)).toEqual([
       "five_hour",
@@ -180,10 +186,13 @@ describe("OpenCode Go usage normalization", () => {
   });
 
   it("retains useBalance without inventing credits or a balance amount", () => {
-    const normalized = normalizeOpencodeGoPayload({
-      ...SUCCESS_PAYLOAD,
-      useBalance: true,
-    });
+    const normalized = normalizeOpencodeGoPayload(
+      {
+        ...SUCCESS_PAYLOAD,
+        useBalance: true,
+      },
+      NOW,
+    );
 
     expect(normalized.useBalance).toBe(true);
     expect(normalized).not.toHaveProperty("credits");
@@ -270,6 +279,37 @@ describe("OpenCode Go request and failure handling", () => {
           scope: "all_models",
           status: "unknown",
           boundedBy: ["five_hour", "weekly", "monthly"],
+        },
+      ],
+    });
+  });
+
+  it("keeps availability partial when a reported window already expired", async () => {
+    const report = await testAdapter({
+      fetch: vi.fn(async () =>
+        jsonResponse({
+          ...SUCCESS_PAYLOAD,
+          usage: {
+            ...SUCCESS_PAYLOAD.usage,
+            rolling: {
+              ...SUCCESS_PAYLOAD.usage.rolling,
+              resetsAt: "2026-08-23T17:00:00.000Z",
+            },
+          },
+        }),
+      ),
+    }).fetchQuota(OPTIONS);
+    const interpreted = withQuotaSemantics(report, new Date(NOW).toISOString());
+
+    expect(report.state.untrustedWindowIds).toEqual(["five_hour"]);
+    expect(interpreted.quotaSemantics).toMatchObject({
+      status: "partial",
+      unresolvedWindowIds: ["five_hour"],
+      effectiveAvailability: [
+        {
+          scope: "all_models",
+          status: "unknown",
+          boundedBy: ["weekly", "monthly"],
         },
       ],
     });
@@ -519,7 +559,7 @@ function cachedReport(): ProviderQuota {
     label: "OpenCode Go",
     source: "api",
     plan: "go",
-    windows: normalizeOpencodeGoPayload(SUCCESS_PAYLOAD).windows,
+    windows: normalizeOpencodeGoPayload(SUCCESS_PAYLOAD, NOW).windows,
     state: {
       status: "fresh",
       stale: false,

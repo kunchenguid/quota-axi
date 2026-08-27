@@ -92,6 +92,11 @@ type OpencodeGoUsageResponse = {
   useBalance?: unknown;
 };
 
+type OpencodeGoUsageAcquisition = {
+  payload: OpencodeGoUsageResponse;
+  receivedAt: number;
+};
+
 export function extractOpencodeGoCredential(
   value: unknown,
   path: string,
@@ -202,13 +207,16 @@ async function acquireOpencodeGoQuota(
       return failureReport(failure, attempts, dependencies);
     }
 
-    const payload = await requestOpencodeGoUsage(
+    const acquisition = await requestOpencodeGoUsage(
       resolution.apiKey,
       controller.signal,
       dependencies.fetch,
       dependencies.now,
     );
-    const normalized = normalizeOpencodeGoPayload(payload);
+    const normalized = normalizeOpencodeGoPayload(
+      acquisition.payload,
+      acquisition.receivedAt,
+    );
     const untrustedWindowIds = normalized.diagnostics.map(
       ({ windowId }) => windowId,
     );
@@ -388,7 +396,7 @@ async function requestOpencodeGoUsage(
   signal: AbortSignal,
   fetchImplementation: typeof globalThis.fetch,
   now: () => number,
-): Promise<OpencodeGoUsageResponse> {
+): Promise<OpencodeGoUsageAcquisition> {
   let response: Response;
   try {
     response = await waitForDeadline(
@@ -459,7 +467,10 @@ async function requestOpencodeGoUsage(
       });
     }
     try {
-      return JSON.parse(text) as OpencodeGoUsageResponse;
+      return {
+        payload: JSON.parse(text) as OpencodeGoUsageResponse,
+        receivedAt,
+      };
     } catch {
       throw new OpencodeGoFailure("malformed_json", { staleEligible: true });
     }
@@ -603,6 +614,7 @@ function createResponseBodyLifetime(response: Response): ResponseBodyLifetime {
 
 export function normalizeOpencodeGoPayload(
   payload: unknown,
+  receivedAt: number,
 ): NormalizedOpencodeGoPayload {
   const root = objectValue(payload);
   const usage = objectValue(root?.usage);
@@ -651,9 +663,12 @@ export function normalizeOpencodeGoPayload(
       continue;
     }
     const percentUsed = numericScalar(detail.percent);
+    const resetMilliseconds =
+      typeof detail.resetsAt === "string"
+        ? Date.parse(detail.resetsAt)
+        : Number.NaN;
     const resetsAt =
-      typeof detail.resetsAt === "string" &&
-      Number.isFinite(Date.parse(detail.resetsAt))
+      Number.isFinite(resetMilliseconds) && resetMilliseconds > receivedAt
         ? parseEpochOrIso(detail.resetsAt)
         : undefined;
     if (
