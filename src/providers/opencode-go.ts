@@ -678,10 +678,7 @@ export function normalizeOpencodeGoPayload(
     });
   }
   for (const key of Object.keys(usage)) {
-    if (
-      !definitions.some(({ key: knownKey }) => knownKey === key) &&
-      (/usage$/i.test(key) || isUsageBlock(usage[key]))
-    ) {
+    if (!definitions.some(({ key: knownKey }) => knownKey === key)) {
       diagnostics.push({
         windowId: `unknown:${key}`,
         code: "usage_invalid",
@@ -699,11 +696,6 @@ export function normalizeOpencodeGoPayload(
     diagnostics,
     ...(useBalance === undefined ? {} : { useBalance }),
   };
-}
-
-function isUsageBlock(value: unknown): boolean {
-  const detail = objectValue(value);
-  return Boolean(detail && ("percent" in detail || "resetsAt" in detail));
 }
 
 function duplicateJsonKeys(text: string): string[] {

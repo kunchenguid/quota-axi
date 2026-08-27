@@ -247,6 +247,34 @@ describe("OpenCode Go request and failure handling", () => {
     expect(interpreted.windows[2].windowSeconds).toBeUndefined();
   });
 
+  it("keeps availability partial for every unfamiliar usage member", async () => {
+    const report = await testAdapter({
+      fetch: vi.fn(async () =>
+        jsonResponse({
+          ...SUCCESS_PAYLOAD,
+          usage: {
+            ...SUCCESS_PAYLOAD.usage,
+            daily: { status: "ok", remaining: 5 },
+          },
+        }),
+      ),
+    }).fetchQuota(OPTIONS);
+    const interpreted = withQuotaSemantics(report, new Date(NOW).toISOString());
+
+    expect(report.state.untrustedWindowIds).toEqual(["unknown:daily"]);
+    expect(interpreted.quotaSemantics).toMatchObject({
+      status: "partial",
+      unresolvedWindowIds: ["unknown:daily"],
+      effectiveAvailability: [
+        {
+          scope: "all_models",
+          status: "unknown",
+          boundedBy: ["five_hour", "weekly", "monthly"],
+        },
+      ],
+    });
+  });
+
   it("preserves absolute reset timestamps regardless of the local clock", async () => {
     const later = NOW + 10_000;
     const now = vi
