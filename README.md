@@ -394,12 +394,12 @@ Everything a consumer branches on stays in the default tier: `state.status`, `st
 
 ### Quota report shape
 
-| Object                        | Fields                                                                                                            |
-| ----------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| Quota report                  | `providers`                                                                                                       |
-| Provider report               | `provider`, `windows`, `quotaSemantics`, `state`, optional `plan`, and optional `credits`                         |
-| Provider report with `--full` | Also `label`, `source`, optional OpenCode Go `useBalance`, optional `account` identity, and per-source `attempts` |
-| Account identity (`--full`)   | Optional `email`, `organization`, `accountId`, and `identityStatus`                                               |
+| Object                        | Fields                                                                                                                                         |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| Quota report                  | `providers`                                                                                                                                    |
+| Provider report               | `provider`, `windows`, `quotaSemantics`, `state`, optional `plan`, and optional `credits`                                                      |
+| Provider report with `--full` | Also `label`, `source`, optional `account` identity, and per-source `attempts`; `--full --json` also exposes optional OpenCode Go `useBalance` |
+| Account identity (`--full`)   | Optional `email`, `organization`, `accountId`, and `identityStatus`                                                                            |
 
 Account identity and per-source `attempts` are omitted unless `--full` is passed.
 Claude `identityStatus` is `verified` only when Anthropic returns an authoritative account identifier; `email` and `organization` are display-only and must not be used for duplicate detection.
@@ -686,7 +686,7 @@ Auth source entries can include `credentialPresent` when a non-secret probe conf
 - It reads OpenCode's local `auth.json` (`$XDG_DATA_HOME/opencode/auth.json` when set, otherwise `~/.local/share/opencode/auth.json`; `%LOCALAPPDATA%\opencode\auth.json` on Windows) read-only and accepts only the `opencode-go` entry with `type: "api"` and a nonempty, control-byte-free literal `key`. Environment, template, and command references are not resolved or executed.
 - It sends one redirect-disabled `GET` to `https://opencode.ai/zen/go/v1/usage` with `Authorization: Bearer <key>`, a 15 second total deadline, and a 262,144-byte decoded-body cap. It requires JSON and does not scrape the dashboard, open a browser, send cookies, or launch OpenCode.
 - HTTP 401 is an invalid/auth-required credential result and retires the cached Go snapshot. HTTP 403 is an entitlement-required result; transient transport, timeout, 408, 429, 5xx, decoding, and schema failures may reuse reset-valid stale windows under the normal cache rules.
-- The usage endpoint nests Go allowance windows under `usage`; each `rolling`, `weekly`, or `monthly` block reports `percent` used and an absolute `resetsAt`, which quota-axi republishes canonicalized to ISO 8601. Monthly reset timing follows the provider's subscription anniversary and month-end handling through that absolute timestamp; quota-axi does not synthesize a cycle start or fixed monthly duration. `useBalance: true` is retained as a derivation input and exposed only with `--full`; because the endpoint does not expose the Zen monetary balance, quota-axi reports no balance amount, credit window, or known extra runway, and leaves exhausted or projected-exhaustion runway unknown when that fallback is enabled, naming the suppressed bound in `runway.unmeasurableWindowIds` so the suppression still surfaces as an `attention[]` fact.
+- The usage endpoint nests Go allowance windows under `usage`; each `rolling`, `weekly`, or `monthly` block reports `percent` used and an absolute `resetsAt`, which quota-axi republishes canonicalized to ISO 8601. Monthly reset timing follows the provider's subscription anniversary and month-end handling through that absolute timestamp; quota-axi does not synthesize a cycle start or fixed monthly duration. `useBalance: true` is retained as a derivation input and exposed only in the `--full --json` machine audit; because the endpoint does not expose the Zen monetary balance, quota-axi reports no balance amount, credit window, or known extra runway, and leaves exhausted or projected-exhaustion runway unknown when that fallback is enabled, naming the suppressed bound in `runway.unmeasurableWindowIds` so the suppression still surfaces as an `attention[]` fact.
 - Duplicate keys at any JSON depth, or a present non-boolean `useBalance`, reject the response as schema-invalid. A missing or malformed known usage block, an unfamiliar member under `usage`, or a `resetsAt` already expired when the response body completes is named as an untrusted window and makes effective headroom non-definitive; if no valid allowance window remains, the whole response is schema-invalid.
 
 **Antigravity**
