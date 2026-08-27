@@ -453,7 +453,7 @@ async function requestOpencodeGoUsage(
         staleEligible: true,
       });
     }
-    if (duplicateTopLevelJsonKeys(text).length > 0) {
+    if (duplicateJsonKeys(text).length > 0) {
       throw new OpencodeGoFailure("schema_invalid", {
         staleEligible: true,
       });
@@ -706,45 +706,34 @@ function isUsageBlock(value: unknown): boolean {
   return Boolean(detail && ("percent" in detail || "resetsAt" in detail));
 }
 
-function duplicateTopLevelJsonKeys(text: string): string[] {
-  let index = skipJsonWhitespace(text, 0);
-  if (text[index] !== "{") return [];
-  index = skipJsonWhitespace(text, index + 1);
-  const seen = new Set<string>();
+function duplicateJsonKeys(text: string): string[] {
   const duplicates = new Set<string>();
-  if (text[index] === "}") return [];
-  while (index < text.length) {
-    const key = scanJsonString(text, index);
-    if (!key) return [];
-    if (seen.has(key.value)) duplicates.add(key.value);
-    seen.add(key.value);
-    index = skipJsonWhitespace(text, key.next);
-    if (text[index] !== ":") return [];
-    const valueEnd = skipJsonValue(text, index + 1);
-    if (valueEnd === undefined) return [];
-    index = skipJsonWhitespace(text, valueEnd);
-    if (text[index] === "}") return [...duplicates];
-    if (text[index] !== ",") return [];
-    index = skipJsonWhitespace(text, index + 1);
-  }
-  return [];
+  skipJsonValue(text, 0, duplicates);
+  return [...duplicates];
 }
 
 const JSON_SCALAR_PATTERN =
   /(?:true|false|null|-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?)/y;
 
-function skipJsonValue(text: string, start: number): number | undefined {
+function skipJsonValue(
+  text: string,
+  start: number,
+  duplicates?: Set<string>,
+): number | undefined {
   let index = skipJsonWhitespace(text, start);
   if (text[index] === '"') return scanJsonString(text, index)?.next;
   if (text[index] === "{") {
+    const seen = new Set<string>();
     index = skipJsonWhitespace(text, index + 1);
     if (text[index] === "}") return index + 1;
     while (index < text.length) {
       const key = scanJsonString(text, index);
       if (!key) return undefined;
+      if (seen.has(key.value)) duplicates?.add(key.value);
+      seen.add(key.value);
       index = skipJsonWhitespace(text, key.next);
       if (text[index] !== ":") return undefined;
-      const valueEnd = skipJsonValue(text, index + 1);
+      const valueEnd = skipJsonValue(text, index + 1, duplicates);
       if (valueEnd === undefined) return undefined;
       index = skipJsonWhitespace(text, valueEnd);
       if (text[index] === "}") return index + 1;
@@ -757,7 +746,7 @@ function skipJsonValue(text: string, start: number): number | undefined {
     index = skipJsonWhitespace(text, index + 1);
     if (text[index] === "]") return index + 1;
     while (index < text.length) {
-      const valueEnd = skipJsonValue(text, index);
+      const valueEnd = skipJsonValue(text, index, duplicates);
       if (valueEnd === undefined) return undefined;
       index = skipJsonWhitespace(text, valueEnd);
       if (text[index] === "]") return index + 1;

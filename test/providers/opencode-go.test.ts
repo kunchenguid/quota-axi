@@ -343,34 +343,49 @@ describe("OpenCode Go request and failure handling", () => {
     }
   });
 
-  it("rejects duplicate top-level response keys before JSON parsing", async () => {
-    const duplicatePayload = `{
-      "usage": {
-        "rolling": {"status":"ok","percent":0,"resetsAt":"2026-08-24T17:00:00.000Z"},
-        "weekly": {"status":"ok","percent":3,"resetsAt":"2026-08-30T12:00:00.000Z"},
-        "monthly": {"status":"ok","percent":73,"resetsAt":"2026-09-12T12:00:00.000Z"}
-      },
-      "usage": {
-        "rolling": {"status":"ok","percent":90,"resetsAt":"2026-08-24T17:00:00.000Z"},
-        "weekly": {"status":"ok","percent":3,"resetsAt":"2026-08-30T12:00:00.000Z"},
-        "monthly": {"status":"ok","percent":73,"resetsAt":"2026-09-12T12:00:00.000Z"}
-      }
-    }`;
-    const report = await testAdapter({
-      fetch: vi.fn(
-        async () =>
-          new Response(duplicatePayload, {
-            status: 200,
-            headers: { "content-type": "application/json" },
-          }),
-      ),
-    }).fetchQuota(OPTIONS);
+  it("rejects duplicate response keys at every object depth", async () => {
+    const duplicatePayloads = [
+      `{
+        "usage": {},
+        "usage": {
+          "rolling": {"status":"ok","percent":90,"resetsAt":"2026-08-24T17:00:00.000Z"}
+        }
+      }`,
+      `{
+        "usage": {
+          "rolling": {"status":"ok","percent":0,"resetsAt":"2026-08-24T17:00:00.000Z"},
+          "rolling": {"status":"ok","percent":90,"resetsAt":"2026-08-24T17:00:00.000Z"}
+        }
+      }`,
+      `{
+        "usage": {
+          "rolling": {
+            "status":"ok",
+            "percent":0,
+            "percent":90,
+            "resetsAt":"2026-08-24T17:00:00.000Z"
+          }
+        }
+      }`,
+    ];
 
-    expect(report).toMatchObject({
-      source: "unavailable",
-      windows: [],
-      state: { status: "error", error: "schema_invalid" },
-    });
+    for (const duplicatePayload of duplicatePayloads) {
+      const report = await testAdapter({
+        fetch: vi.fn(
+          async () =>
+            new Response(duplicatePayload, {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            }),
+        ),
+      }).fetchQuota(OPTIONS);
+
+      expect(report).toMatchObject({
+        source: "unavailable",
+        windows: [],
+        state: { status: "error", error: "schema_invalid" },
+      });
+    }
   });
 
   it("reuses reset-valid stale cache for a transient provider failure", async () => {
