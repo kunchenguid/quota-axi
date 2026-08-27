@@ -43,7 +43,8 @@ const CLAUDE_CODE_USER_AGENT = "claude-code/2.1.202";
 const API_TIMEOUT_MS = 15_000;
 const KEYCHAIN_PROMPT_TIMEOUT_MS = 60_000;
 const KEYCHAIN_PRESENCE_TIMEOUT_MS = 5_000;
-const KEYCHAIN_ITEM_NOT_FOUND_EXIT_CODE = 44;
+/** `security` exit 44 is cannot-reach (locked, TCC, daemon), not item-absent. */
+const KEYCHAIN_ITEM_UNREACHABLE_EXIT_CODE = 44;
 const KEYCHAIN_UNREACHABLE_ERROR = "keychain_unreachable";
 const DEFAULT_KEYCHAIN_SERVICE = "Claude Code-credentials";
 const DEFAULT_KEYCHAIN_ACCOUNT = "claude-code-user";
@@ -673,8 +674,8 @@ async function readKeychainItemPresence(
       KEYCHAIN_PRESENCE_TIMEOUT_MS,
     );
     return "present";
-  } catch (error) {
-    return isKeychainItemNotFound(error) ? "missing" : "unknown";
+  } catch {
+    return "unknown";
   }
 }
 
@@ -785,18 +786,10 @@ function keychainServiceForConfigDir(configDir?: string): string {
   return `${DEFAULT_KEYCHAIN_SERVICE}-${suffix}`;
 }
 
-function isKeychainItemNotFound(error: unknown): boolean {
-  const failure = error as {
-    code?: number | string | null;
-    message?: string;
-    stderr?: string;
-  };
-  if (failure.code !== KEYCHAIN_ITEM_NOT_FOUND_EXIT_CODE) return false;
-  const detail = `${failure.stderr ?? ""}\n${failure.message ?? ""}`;
+function isKeychainItemUnreachable(error: unknown): boolean {
   return (
-    /errSecItemNotFound/i.test(detail) ||
-    /-25300\b/.test(detail) ||
-    /specified item could not be found in the keychain/i.test(detail)
+    (error as { code?: number | string | null }).code ===
+    KEYCHAIN_ITEM_UNREACHABLE_EXIT_CODE
   );
 }
 
@@ -816,13 +809,7 @@ function keychainFailureState(error: unknown): CredentialState {
       },
     };
   }
-  if (isKeychainItemNotFound(error)) {
-    return {
-      status: "missing",
-      source: { source: "keychain", status: "missing" },
-    };
-  }
-  if (failure.code === KEYCHAIN_ITEM_NOT_FOUND_EXIT_CODE) {
+  if (isKeychainItemUnreachable(error)) {
     return {
       status: "skipped",
       source: {
