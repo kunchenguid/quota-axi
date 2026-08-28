@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.33](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.32...quota-axi-v0.1.33) (2026-08-28)
+
+
+### Bug Fixes
+
+* prevent unsafe Claude credential refresh ([#128](https://github.com/kunchenguid/quota-axi/issues/128)) ([7fbe64c](https://github.com/kunchenguid/quota-axi/commit/7fbe64c2fdad35b6d4a3c952f7c78fc36282e7ac))
+* **tui:** make the live report reachable in short terminals ([#125](https://github.com/kunchenguid/quota-axi/issues/125)) ([a539fb0](https://github.com/kunchenguid/quota-axi/commit/a539fb0b51b46bc4cb14a0a2abdc6677c87874f9))
+
 ## [0.1.32](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.31...quota-axi-v0.1.32) (2026-08-25)
 
 
