@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.1.34](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.33...quota-axi-v0.1.34) (2026-08-29)
+
+
+### Features
+
+* **providers:** add Alibaba and OpenCode Go quota reporting ([#124](https://github.com/kunchenguid/quota-axi/issues/124)) ([02cc64c](https://github.com/kunchenguid/quota-axi/commit/02cc64cfa4f00fe8248c30119c9a0d6c2fa77b52))
+
+
+### Bug Fixes
+
+* keep TUI viewport within terminal bounds ([#129](https://github.com/kunchenguid/quota-axi/issues/129)) ([14270a8](https://github.com/kunchenguid/quota-axi/commit/14270a8e502adf0e753ddfe7b59b1080fc251e5d))
+
 ## [0.1.33](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.32...quota-axi-v0.1.33) (2026-08-28)
 
 
