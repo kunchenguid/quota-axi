@@ -632,7 +632,7 @@ describe("Codex credential-state reporting", () => {
     expect(spawn).toHaveBeenCalledOnce();
   });
 
-  it("reports refreshable Pi expiry without using or refreshing the token", async () => {
+  it("reports refreshable Pi expiry without exchanging or exposing the refresh token", async () => {
     writePiAuth(
       piOauthEntry({
         access: "expired-pi-access-token",
