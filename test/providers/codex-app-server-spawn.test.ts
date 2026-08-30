@@ -55,7 +55,10 @@ afterEach(() => {
   tempDir = undefined;
 });
 
-describe("Codex app-server spawn", () => {
+// POSIX-only by design, matching the delegate suites in
+// `delegated-refresh.test.ts`: the shim is a shebang executable, so Windows
+// skips it explicitly rather than failing to launch it.
+describe.skipIf(process.platform === "win32")("Codex app-server spawn", () => {
   it("launches the app-server with an approval policy codex accepts", async () => {
     process.env.QUOTA_AXI_SHIM_APPROVAL_VALUES = ACCEPTED_BY_CODEX;
 
