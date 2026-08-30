@@ -515,6 +515,52 @@ describe("Codex credential-state reporting", () => {
     ]);
   });
 
+  it.each([401, 429])(
+    "keeps a transient native probe failure over an available Pi credential rejected with %i",
+    async (piStatus) => {
+      const nativeToken = jwt({ exp: Math.floor(Date.now() / 1000) + 3600 });
+      writeAuth({ tokens: { access_token: nativeToken } });
+      writePiAuth(piOauthEntry());
+      const timeout = () => {
+        const error = new Error("The operation was aborted");
+        error.name = "AbortError";
+        return error;
+      };
+      const fetchMock = vi.fn(
+        async (_url: string | URL | Request, init?: RequestInit) => {
+          const authorization = (init?.headers as Record<string, string>)
+            ?.authorization;
+          if (authorization === `Bearer ${nativeToken}`) throw timeout();
+          return new Response(null, {
+            status: piStatus,
+            headers:
+              piStatus === 429
+                ? { "retry-after": "2030-01-01T00:00:00.000Z" }
+                : undefined,
+          });
+        },
+      );
+      vi.stubGlobal("fetch", fetchMock);
+
+      const { fetchQuota } = await import("../../src/providers/codex.js");
+      const result = await fetchQuota({ allowKeychainPrompt: false });
+
+      expect(result.state.status).toBe("error");
+      expect(result.state.error).toBe("Codex quota request timed out");
+      expect(result.state.status).not.toBe("auth_required");
+      expect(result.state.status).not.toBe("rate_limited");
+      expect(result.state.retryAfter).toBeUndefined();
+      expect(result.attempts).toContainEqual({
+        source: "pi:openai-codex",
+        status: "failed",
+        error:
+          piStatus === 429
+            ? "Codex quota endpoint rate limited"
+            : "Codex sign-in required",
+      });
+    },
+  );
+
   it("keeps an unusable native credential over an expired Pi credential", async () => {
     writeAuth({ tokens: { access_token: jwt({ exp: 1 }) } });
     writePiAuth(

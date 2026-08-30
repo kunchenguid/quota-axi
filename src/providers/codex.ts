@@ -201,13 +201,15 @@ async function fetchQuotaWithDependencies(
         status: "failed",
         error: message,
       };
-      if (error instanceof RateLimitError) {
-        finalError = message;
-        errorIsDefault = false;
-        retryAfter = error.retryAfter;
-      } else if (!retryAfter) {
-        finalError = message;
-        errorIsDefault = false;
+      if (errorIsDefault) {
+        if (error instanceof RateLimitError) {
+          finalError = message;
+          errorIsDefault = false;
+          retryAfter = error.retryAfter;
+        } else if (!retryAfter) {
+          finalError = message;
+          errorIsDefault = false;
+        }
       }
     }
   } else {

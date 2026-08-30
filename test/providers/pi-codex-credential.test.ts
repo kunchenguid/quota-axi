@@ -1,7 +1,10 @@
 import {
+  chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -228,15 +231,43 @@ describe("Pi Codex credential broker", () => {
     });
   });
 
-  it("uses bounded read-only file access without Pi SDK or mutation APIs", () => {
-    const implementation = readFileSync(
-      new URL("../../src/providers/pi-codex-credential.ts", import.meta.url),
-      "utf8",
-    );
+  it("uses bounded read-only access without changing or creating Pi state", async () => {
+    const home = temporaryDirectory();
+    const agentDirectory = join(home, ".pi", "agent");
+    const authPath = join(agentDirectory, "auth.json");
+    const refreshToken = "refresh-value-must-stay-private";
+    writeAuth(authPath, {
+      "openai-codex": oauthEntry({ refresh: refreshToken }),
+    });
+    chmodSync(authPath, 0o400);
+    const before = snapshot(authPath);
+    const broker = createPiCodexCredentialBroker({
+      environment: { HOME: home },
+      homeDirectory: () => home,
+      now: () => NOW,
+    });
 
-    expect(implementation).toContain('open(path, "r")');
-    expect(implementation).not.toMatch(/@earendil-works\/pi-/);
-    expect(implementation).not.toMatch(/writeFile|rename|chmod|refreshToken/);
+    const resolution = await broker.resolve();
+    const inspection = await broker.inspect();
+
+    expect(resolution).toMatchObject({ status: "available" });
+    expect(inspection).toEqual({ path: authPath, status: "available" });
+    expect(JSON.stringify({ resolution, inspection })).not.toContain(
+      refreshToken,
+    );
+    expectSnapshotEqual(authPath, before);
+    expect(readdirSync(agentDirectory)).toEqual(["auth.json"]);
+
+    const emptyHome = temporaryDirectory();
+    const emptyBroker = createPiCodexCredentialBroker({
+      environment: { HOME: emptyHome },
+      homeDirectory: () => emptyHome,
+      now: () => NOW,
+    });
+    await expect(emptyBroker.inspect()).resolves.toMatchObject({
+      status: "missing",
+    });
+    expect(existsSync(join(emptyHome, ".pi"))).toBe(false);
   });
 });
 
