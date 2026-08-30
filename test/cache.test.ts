@@ -94,6 +94,20 @@ describe("quota cache", () => {
     }
   });
 
+  it("retains the additive Pi Codex provider source", () => {
+    useTempCache();
+    const codex = quota("codex", 20);
+    codex.source = "pi:openai-codex";
+    codex.state.sourcesTried = ["oauth", "pi:openai-codex"];
+
+    writeCachedProviders([codex]);
+
+    expect(readCachedProvider("codex")).toMatchObject({
+      source: "pi:openai-codex",
+      state: { sourcesTried: ["oauth", "pi:openai-codex"] },
+    });
+  });
+
   it("retains exact known and unfamiliar Codex cache identities", () => {
     useTempCache();
     const codex = quota("codex", 20);

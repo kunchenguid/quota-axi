@@ -27,6 +27,12 @@ import {
   successProvider,
   withRemaining,
 } from "./common.js";
+import {
+  createPiCodexCredentialBroker,
+  type PiCodexCredentialBroker,
+  type PiCodexCredentialInspection,
+  type PiCodexCredentialResolution,
+} from "./pi-codex-credential.js";
 
 const ENDPOINTS = [
   "https://chatgpt.com/backend-api/wham/usage",
@@ -36,6 +42,7 @@ const API_TIMEOUT_MS = 15_000;
 const CLI_TIMEOUT_MS = 15_000;
 const RPC_TIMEOUT_MS = 8_000;
 const CODEX_BINARY_ENV = "QUOTA_AXI_CODEX_BINARY";
+const PI_CODEX_CREDENTIAL_SOURCE = "pi:openai-codex";
 
 type CodexBinaryState =
   | { status: "available"; path: string }
@@ -67,18 +74,48 @@ type RawWindow = {
   windowDurationMins?: unknown;
 };
 
-export const codexAdapter: ProviderAdapter = {
-  id: "codex",
-  label: "Codex",
-  fetchQuota,
-  inspectAuth,
+type CodexDependencies = {
+  piCodexBroker: PiCodexCredentialBroker;
 };
+
+const defaultCodexDependencies: CodexDependencies = {
+  piCodexBroker: createPiCodexCredentialBroker(),
+};
+
+export function createCodexAdapter(
+  overrides: Partial<CodexDependencies> = {},
+): ProviderAdapter {
+  const dependencies: CodexDependencies = {
+    ...defaultCodexDependencies,
+    ...overrides,
+  };
+  return {
+    id: "codex",
+    label: "Codex",
+    fetchQuota: (_options) => fetchQuotaWithDependencies(dependencies),
+    inspectAuth: (_options) => inspectAuthWithDependencies(dependencies),
+  };
+}
+
+export const codexAdapter = createCodexAdapter();
 
 export async function fetchQuota(
   _options: ProviderOptions,
 ): Promise<ProviderQuota> {
+  return fetchQuotaWithDependencies(defaultCodexDependencies);
+}
+
+async function fetchQuotaWithDependencies(
+  dependencies: CodexDependencies,
+): Promise<ProviderQuota> {
   const attempts: SourceAttempt[] = [];
   let finalError = "Codex quota unavailable";
+  // False once a source has recorded a real failure. Sources are consulted in
+  // priority order, so a lower-priority one may only name the failure while
+  // this still holds: a native probe that timed out has already explained the
+  // run, and letting an expired Pi entry restate it as an auth problem would
+  // make statusFromError advise a sign-in for what is a network outage.
+  let errorIsDefault = true;
   let retryAfter: string | undefined;
 
   const credentialState = readCredentialState();
@@ -100,7 +137,11 @@ export async function fetchQuota(
         attempts,
       });
     } catch (error) {
-      finalError = errorMessage(error);
+      finalError = credentialSafeErrorMessage(
+        error,
+        credentialState.credentials.accessToken,
+      );
+      errorIsDefault = false;
       attempts[attempts.length - 1] = {
         source: "oauth",
         status: "failed",
@@ -114,8 +155,75 @@ export async function fetchQuota(
       status: "skipped",
       error: `credentials_${credentialState.status}`,
     });
-    if (credentialState.status !== "missing")
+    if (credentialState.status !== "missing") {
       finalError = "Codex sign-in required";
+      errorIsDefault = false;
+    }
+  }
+
+  let piResolution: PiCodexCredentialResolution;
+  try {
+    piResolution = await dependencies.piCodexBroker.resolve();
+  } catch {
+    piResolution = { status: "error" };
+  }
+  if (piResolution.status === "available") {
+    attempts.push({ source: PI_CODEX_CREDENTIAL_SOURCE, status: "failed" });
+    const credentials: CodexCredentials = {
+      accessToken: piResolution.credentials.accessToken,
+      accountId: piResolution.credentials.accountId,
+    };
+    try {
+      const quota = await fetchOauthUsage(credentials);
+      attempts[attempts.length - 1] = {
+        source: PI_CODEX_CREDENTIAL_SOURCE,
+        status: "success",
+      };
+      return successProvider({
+        provider: "codex",
+        label: "Codex",
+        source: PI_CODEX_CREDENTIAL_SOURCE,
+        plan: quota.plan,
+        account: quota.account,
+        windows: quota.windows,
+        credits: quota.credits,
+        refreshedAt: quota.refreshedAt,
+        sourcesTried: sourceNames(attempts),
+        attempts,
+      });
+    } catch (error) {
+      const message = credentialSafeErrorMessage(
+        error,
+        credentials.accessToken,
+      );
+      attempts[attempts.length - 1] = {
+        source: PI_CODEX_CREDENTIAL_SOURCE,
+        status: "failed",
+        error: message,
+      };
+      if (error instanceof RateLimitError) {
+        finalError = message;
+        errorIsDefault = false;
+        retryAfter = error.retryAfter;
+      } else if (!retryAfter) {
+        finalError = message;
+        errorIsDefault = false;
+      }
+    }
+  } else {
+    attempts.push(piSourceAttempt(piResolution));
+    if (!retryAfter && errorIsDefault) {
+      if (piResolution.status === "expired") {
+        finalError = "Pi Codex access token expired";
+        errorIsDefault = false;
+      } else if (piResolution.status === "error") {
+        finalError = "Codex Pi credential resolution failed";
+        errorIsDefault = false;
+      } else if (piResolution.status !== "missing") {
+        finalError = "Codex sign-in required";
+        errorIsDefault = false;
+      }
+    }
   }
 
   attempts.push({ source: "cli-rpc", status: "failed" });
@@ -141,8 +249,11 @@ export async function fetchQuota(
       status: "failed",
       error: message,
     };
-    finalError =
-      finalError === "Codex quota unavailable" ? message : finalError;
+    // cli-rpc is the last source, so this deliberately does not clear
+    // errorIsDefault. Add a source after it and the flag has to be cleared here.
+    if (errorIsDefault) {
+      finalError = message;
+    }
   }
 
   const cached = readCachedProvider("codex");
@@ -164,13 +275,30 @@ export async function fetchQuota(
 export async function inspectAuth(
   _options: ProviderOptions,
 ): Promise<AuthProviderReport> {
+  return inspectAuthWithDependencies(defaultCodexDependencies);
+}
+
+async function inspectAuthWithDependencies(
+  dependencies: CodexDependencies,
+): Promise<AuthProviderReport> {
   const authFile = codexAuthFile();
   const credentialState = readCredentialState(authFile);
+  let piSource: AuthSourceReport;
+  try {
+    piSource = piInspectionSource(await dependencies.piCodexBroker.inspect());
+  } catch {
+    piSource = {
+      source: PI_CODEX_CREDENTIAL_SOURCE,
+      status: "error",
+      error: "credential_resolution_failed",
+    };
+  }
   const binary = await resolveCodexBinary();
   return {
     provider: "codex",
     sources: [
       credentialState.source,
+      piSource,
       {
         source: "cli-rpc",
         path: binary.path,
@@ -178,6 +306,57 @@ export async function inspectAuth(
         error: binary.status === "missing" ? binary.error : undefined,
       },
     ],
+  };
+}
+
+function piSourceAttempt(
+  resolution: Exclude<PiCodexCredentialResolution, { status: "available" }>,
+): SourceAttempt {
+  if (resolution.status === "error") {
+    return {
+      source: PI_CODEX_CREDENTIAL_SOURCE,
+      status: "failed",
+      error: "credential_resolution_failed",
+    };
+  }
+  if (resolution.status === "expired") {
+    return {
+      source: PI_CODEX_CREDENTIAL_SOURCE,
+      status: "skipped",
+      error: resolution.refreshable
+        ? "credentials_expired_refreshable"
+        : "credentials_expired",
+      credentialPresent: true,
+    };
+  }
+  const error =
+    resolution.status === "missing"
+      ? "credentials_missing"
+      : resolution.status === "unsupported"
+        ? "unsupported_credential_type"
+        : "credentials_invalid";
+  return {
+    source: PI_CODEX_CREDENTIAL_SOURCE,
+    status: "skipped",
+    error,
+  };
+}
+
+function piInspectionSource(
+  inspection: PiCodexCredentialInspection,
+): AuthSourceReport {
+  const status: AuthSourceReport["status"] =
+    inspection.status === "available" ||
+    inspection.status === "missing" ||
+    inspection.status === "expired" ||
+    inspection.status === "error"
+      ? inspection.status
+      : "invalid";
+  return {
+    source: PI_CODEX_CREDENTIAL_SOURCE,
+    path: inspection.path,
+    status,
+    ...(inspection.error ? { error: inspection.error } : {}),
   };
 }
 
@@ -787,6 +966,13 @@ function numberValue(value: unknown): number | undefined {
     if (Number.isFinite(parsed)) return parsed;
   }
   return undefined;
+}
+
+function credentialSafeErrorMessage(
+  error: unknown,
+  credential: string,
+): string {
+  return errorMessage(error).replaceAll(credential, "[redacted]");
 }
 
 function errorMessage(error: unknown): string {
