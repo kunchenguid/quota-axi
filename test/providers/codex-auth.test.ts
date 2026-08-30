@@ -88,7 +88,7 @@ describe("Codex credential-state reporting", () => {
     expect(findCommandPath).not.toHaveBeenCalledWith("codex");
     expect(spawn).toHaveBeenCalledWith(
       binary,
-      ["-s", "read-only", "-a", "untrusted", "app-server"],
+      ["-s", "read-only", "-a", "never", "app-server"],
       expect.any(Object),
     );
   });

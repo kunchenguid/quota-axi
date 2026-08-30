@@ -36,6 +36,18 @@ const API_TIMEOUT_MS = 15_000;
 const CLI_TIMEOUT_MS = 15_000;
 const RPC_TIMEOUT_MS = 8_000;
 const CODEX_BINARY_ENV = "QUOTA_AXI_CODEX_BINARY";
+// codex-cli accepts only `on-request` and `never` for `--ask-for-approval`
+// (verified against codex-cli 0.151.0; the previously shipped `untrusted` is
+// rejected outright and the child exits before answering). The probe starts no
+// session and sends no model request, so nothing can ever ask for approval:
+// `never` is the value that expresses the observe-only posture without leaving
+// a prompt path open, and it pairs with the `read-only` sandbox.
+const APP_SERVER_ARGS = ["-s", "read-only", "-a", "never", "app-server"];
+// The child's stderr is retained only to explain a premature exit. Bounded so a
+// chatty binary cannot grow the buffer, and collapsed to one line so the
+// attempt error stays renderable in TOON.
+const STDERR_CAPTURE_LIMIT = 4_096;
+const STDERR_REPORT_LIMIT = 400;
 
 type CodexBinaryState =
   | { status: "available"; path: string }
@@ -527,14 +539,10 @@ async function probeCodexCli(): Promise<{
   if (binary.status === "missing") {
     throw new Error(codexBinaryErrorMessage(binary));
   }
-  const child = spawn(
-    binary.path,
-    ["-s", "read-only", "-a", "untrusted", "app-server"],
-    {
-      stdio: ["pipe", "pipe", "pipe"],
-      env: { ...process.env, NO_COLOR: "1", TERM: "dumb" },
-    },
-  );
+  const child = spawn(binary.path, APP_SERVER_ARGS, {
+    stdio: ["pipe", "pipe", "pipe"],
+    env: { ...process.env, NO_COLOR: "1", TERM: "dumb" },
+  });
 
   let nextId = 1;
   let buffer = "";
@@ -559,10 +567,20 @@ async function probeCodexCli(): Promise<{
     waiters.clear();
   };
 
+  // Retained rather than discarded: a rejected flag, an outage and a sign-out
+  // all surface as a premature `close`, and only the child's own diagnostics
+  // tell them apart.
+  let stderrText = "";
   child.stdin.on("error", () => {});
-  child.stderr.resume();
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk: string) => {
+    if (stderrText.length >= STDERR_CAPTURE_LIMIT) return;
+    stderrText = (stderrText + chunk).slice(0, STDERR_CAPTURE_LIMIT);
+  });
   child.on("error", () => failAll(new Error("Codex quota unavailable")));
-  child.on("close", () => failAll(new Error("Codex quota unavailable")));
+  child.on("close", (code, signal) =>
+    failAll(new Error(appServerExitMessage(code, signal, stderrText))),
+  );
 
   child.stdout.on("data", (chunk) => {
     buffer += String(chunk);
@@ -671,6 +689,25 @@ function codexBinaryErrorMessage(
     return "Configured Codex binary is not executable";
   }
   return "Codex quota unavailable";
+}
+
+/**
+ * The app-server exited before answering. Name the exit status and whatever the
+ * child said on stderr, so a rejected flag reads differently from an outage or
+ * a sign-out. Collapsed to a single bounded line for the attempt `error` field.
+ */
+function appServerExitMessage(
+  code: number | null,
+  signal: NodeJS.Signals | null,
+  stderrText: string,
+): string {
+  const status = signal
+    ? `signal ${signal}`
+    : `exit ${code === null ? "unknown" : code}`;
+  const detail = stderrText.replace(/\s+/gu, " ").trim();
+  return detail
+    ? `Codex app-server exited (${status}): ${detail.slice(0, STDERR_REPORT_LIMIT)}`
+    : `Codex app-server exited (${status})`;
 }
 
 function sendRpc(
