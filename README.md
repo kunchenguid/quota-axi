@@ -742,7 +742,7 @@ Providers with no established non-interactive rotation command stay read-only on
 - It sends credential values only to the first-party provider request they authenticate.
 - It never prints, logs, or caches credential values.
 - It never mints, rotates, or writes a credential, and never performs a refresh-token exchange. Credential renewal is always delegated to the vendor CLI that owns the store (see [Delegated credential refresh](#delegated-credential-refresh)).
-- It never reads a refresh token's value. Only its presence is checked, as evidence that the vendor can still recover.
+- Refresh token values are never retained, printed, logged, rendered, cached, sent, or exchanged. Outside the Pi credential brokers, only presence is checked when a path checks refreshability. Matching the already-merged sibling Pi brokers, those brokers examine a stored refresh entry solely to derive whether it is a usable literal secret rather than an environment, template, or command reference, then immediately discard the value.
 - It never launches the Cursor, Pi, Kimi, or OpenCode CLIs. It runs the read-only Alibaba `bl` usage command, the declared read-only Codex app-server probe, and the two declared refresh delegates (`claude doctor`, `grok models`); none starts a session or spends the quota being measured. Antigravity/`agy` is never launched.
 - It never signals or kills a delegated refresh. A vendor that outruns quota-axi's wait is left to finish its own token exchange, and quota-axi reports an unconfirmed refresh instead of a credential verdict.
 - It never routes, ranks a winner, or orders providers preferentially. Derived comparative signals, including `effectiveAvailability[].selection`, are published as data for the consumer to act on.
