@@ -384,8 +384,14 @@ describe("Codex credential-state reporting", () => {
 
     const { fetchQuota, inspectAuth } =
       await import("../../src/providers/codex.js");
-    const auth = await inspectAuth({ allowKeychainPrompt: false });
-    const result = await fetchQuota({ allowKeychainPrompt: false });
+    const auth = await inspectAuth({
+      allowKeychainPrompt: false,
+      refreshCredentials: false,
+    });
+    const result = await fetchQuota({
+      allowKeychainPrompt: false,
+      refreshCredentials: false,
+    });
 
     expect(auth.sources[1]).toEqual({
       source: "pi:openai-codex",
@@ -434,7 +440,10 @@ describe("Codex credential-state reporting", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const { fetchQuota } = await import("../../src/providers/codex.js");
-    const result = await fetchQuota({ allowKeychainPrompt: false });
+    const result = await fetchQuota({
+      allowKeychainPrompt: false,
+      refreshCredentials: false,
+    });
 
     expect(result.source).toBe("oauth");
     expect(result.state.sourcesTried).toEqual(["oauth"]);
@@ -462,7 +471,10 @@ describe("Codex credential-state reporting", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const { fetchQuota } = await import("../../src/providers/codex.js");
-    const result = await fetchQuota({ allowKeychainPrompt: false });
+    const result = await fetchQuota({
+      allowKeychainPrompt: false,
+      refreshCredentials: false,
+    });
 
     expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(result.source).toBe("pi:openai-codex");
@@ -492,7 +504,10 @@ describe("Codex credential-state reporting", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const { fetchQuota } = await import("../../src/providers/codex.js");
-    const result = await fetchQuota({ allowKeychainPrompt: false });
+    const result = await fetchQuota({
+      allowKeychainPrompt: false,
+      refreshCredentials: false,
+    });
 
     // The native credential was never rejected - the network was. Advising a
     // sign-in here sends the reader to fix a credential that is fine.
@@ -543,7 +558,10 @@ describe("Codex credential-state reporting", () => {
       vi.stubGlobal("fetch", fetchMock);
 
       const { fetchQuota } = await import("../../src/providers/codex.js");
-      const result = await fetchQuota({ allowKeychainPrompt: false });
+      const result = await fetchQuota({
+        allowKeychainPrompt: false,
+        refreshCredentials: false,
+      });
 
       expect(result.state.status).toBe("error");
       expect(result.state.error).toBe("Codex quota request timed out");
@@ -573,7 +591,10 @@ describe("Codex credential-state reporting", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const { fetchQuota } = await import("../../src/providers/codex.js");
-    const result = await fetchQuota({ allowKeychainPrompt: false });
+    const result = await fetchQuota({
+      allowKeychainPrompt: false,
+      refreshCredentials: false,
+    });
 
     expect(result.state.error).toBe("Codex sign-in required");
     expect(result.state.status).toBe("auth_required");
@@ -591,7 +612,10 @@ describe("Codex credential-state reporting", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const { fetchQuota } = await import("../../src/providers/codex.js");
-    const result = await fetchQuota({ allowKeychainPrompt: false });
+    const result = await fetchQuota({
+      allowKeychainPrompt: false,
+      refreshCredentials: false,
+    });
 
     // The guard above must not silence the diagnostic that is genuinely the
     // best explanation available.
@@ -612,7 +636,10 @@ describe("Codex credential-state reporting", () => {
     }));
 
     const { fetchQuota } = await import("../../src/providers/codex.js");
-    const result = await fetchQuota({ allowKeychainPrompt: false });
+    const result = await fetchQuota({
+      allowKeychainPrompt: false,
+      refreshCredentials: false,
+    });
 
     expect(result.source).toBe("cli-rpc");
     expect(result.state.sourcesTried).toEqual([
@@ -645,8 +672,14 @@ describe("Codex credential-state reporting", () => {
 
     const { fetchQuota, inspectAuth } =
       await import("../../src/providers/codex.js");
-    const auth = await inspectAuth({ allowKeychainPrompt: false });
-    const result = await fetchQuota({ allowKeychainPrompt: false });
+    const auth = await inspectAuth({
+      allowKeychainPrompt: false,
+      refreshCredentials: false,
+    });
+    const result = await fetchQuota({
+      allowKeychainPrompt: false,
+      refreshCredentials: false,
+    });
 
     expect(auth.sources[1]).toMatchObject({
       source: "pi:openai-codex",
@@ -674,7 +707,10 @@ describe("Codex credential-state reporting", () => {
     writeFileSync(piAuthFile(), "{malformed", { mode: 0o600 });
     const { inspectAuth } = await import("../../src/providers/codex.js");
 
-    const malformedAuth = await inspectAuth({ allowKeychainPrompt: false });
+    const malformedAuth = await inspectAuth({
+      allowKeychainPrompt: false,
+      refreshCredentials: false,
+    });
     expect(malformedAuth.sources[1]).toMatchObject({
       source: "pi:openai-codex",
       status: "invalid",
@@ -684,7 +720,10 @@ describe("Codex credential-state reporting", () => {
     writeFileSync(piAuthFile(), Buffer.alloc(64 * 1024 + 1, 0x61), {
       mode: 0o600,
     });
-    const oversizedAuth = await inspectAuth({ allowKeychainPrompt: false });
+    const oversizedAuth = await inspectAuth({
+      allowKeychainPrompt: false,
+      refreshCredentials: false,
+    });
     expect(oversizedAuth.sources[1]).toMatchObject({
       source: "pi:openai-codex",
       status: "invalid",
@@ -699,8 +738,14 @@ describe("Codex credential-state reporting", () => {
     const { fetchQuota, inspectAuth } =
       await import("../../src/providers/codex.js");
 
-    const apiKeyAuth = await inspectAuth({ allowKeychainPrompt: false });
-    const apiKeyResult = await fetchQuota({ allowKeychainPrompt: false });
+    const apiKeyAuth = await inspectAuth({
+      allowKeychainPrompt: false,
+      refreshCredentials: false,
+    });
+    const apiKeyResult = await fetchQuota({
+      allowKeychainPrompt: false,
+      refreshCredentials: false,
+    });
     expect(apiKeyAuth.sources[1]).toMatchObject({
       source: "pi:openai-codex",
       status: "invalid",
@@ -719,8 +764,14 @@ describe("Codex credential-state reporting", () => {
         expires: Date.now() - 1,
       }),
     );
-    const expiredAuth = await inspectAuth({ allowKeychainPrompt: false });
-    const expiredResult = await fetchQuota({ allowKeychainPrompt: false });
+    const expiredAuth = await inspectAuth({
+      allowKeychainPrompt: false,
+      refreshCredentials: false,
+    });
+    const expiredResult = await fetchQuota({
+      allowKeychainPrompt: false,
+      refreshCredentials: false,
+    });
     expect(expiredAuth.sources[1]).toMatchObject({
       source: "pi:openai-codex",
       status: "expired",
@@ -756,8 +807,14 @@ describe("Codex credential-state reporting", () => {
 
     const { fetchQuota, inspectAuth } =
       await import("../../src/providers/codex.js");
-    const auth = await inspectAuth({ allowKeychainPrompt: false });
-    const result = await fetchQuota({ allowKeychainPrompt: false });
+    const auth = await inspectAuth({
+      allowKeychainPrompt: false,
+      refreshCredentials: false,
+    });
+    const result = await fetchQuota({
+      allowKeychainPrompt: false,
+      refreshCredentials: false,
+    });
     const rendered = JSON.stringify({ auth, result });
 
     expect(rendered).not.toContain(accessToken);
