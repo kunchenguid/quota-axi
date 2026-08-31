@@ -30,7 +30,7 @@ It never performs the refresh exchange itself, because these refresh tokens rota
 A delegated command is declared in this tree, is fixed argv rather than anything assembled at runtime, gets no interactive surface, and is chosen only when its own behavior is established from that vendor's CLI rather than assumed. quota-axi bounds how long it waits, but never terminates a delegate that may be mid-exchange; an over-budget run is left to the vendor and reported as unconfirmed.
 A provider whose vendor CLI has no such command stays read-only and keeps honest advice instead; not renewing is always allowed, and forcing a renewal through an unsafe path never is.
 A credential value leaves the process only as the bearer of the first-party request it authenticates, and is never printed, logged, cached, written into a test fixture, or exchanged for another credential.
-A refresh token is not read at all: its presence is evidence that a vendor can recover, never a value quota-axi handles.
+A refresh token may be inspected only as narrowly as the [Security Posture](README.md#security-posture) allows, and is never retained or used by quota-axi as credential material.
 A credential the user supplies explicitly is as legitimate a source as one discovered on disk, because people run this in more shapes than one machine with one seat.
 
 ## Absent data stays absent
