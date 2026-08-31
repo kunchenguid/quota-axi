@@ -141,7 +141,7 @@ async function resolveCredential(
   if (expiresAtMs <= dependencies.now()) {
     return {
       status: "expired",
-      refreshable: Object.hasOwn(entry, "refresh"),
+      refreshable: usableLiteral(entry.refresh) !== undefined,
     };
   }
 

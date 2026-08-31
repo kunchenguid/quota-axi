@@ -185,14 +185,14 @@ describe("Pi Codex credential broker", () => {
   });
 
   it.each([null, false, { opaque: true }, "$REFRESH_TOKEN"])(
-    "checks only whether the refresh field is present",
+    "does not classify an unusable refresh value as refreshable",
     async (refresh) => {
       const fixture = authFixture({
         "openai-codex": oauthEntry({ expires: NOW - 1, refresh }),
       });
       await expect(brokerFor(fixture).resolve()).resolves.toEqual({
         status: "expired",
-        refreshable: true,
+        refreshable: false,
       });
     },
   );
