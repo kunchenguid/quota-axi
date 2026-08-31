@@ -636,11 +636,23 @@ Auth source entries can include `credentialPresent` when a non-secret probe conf
 
 **Codex**
 
-- Codex checks native `$CODEX_HOME/auth.json` or `~/.codex/auth.json` OAuth first. If that does not return quota, it checks the exact `openai-codex` entry in Pi's `$PI_CODING_AGENT_DIR/auth.json` (default `~/.pi/agent/auth.json`) before the CLI fallback. A successful Pi-backed probe reports source `pi:openai-codex`.
+- Codex checks native `$CODEX_HOME/auth.json` or `~/.codex/auth.json` OAuth first.
+  If that does not return quota, it checks the exact `openai-codex` entry in Pi's `$PI_CODING_AGENT_DIR/auth.json` (default `~/.pi/agent/auth.json`) before the CLI fallback.
+  A successful Pi-backed probe reports source `pi:openai-codex`.
 - Native Codex `auth.json` support is OAuth-token only; API key values such as `OPENAI_API_KEY` are treated as invalid for quota usage calls and are not sent to ChatGPT usage endpoints.
-- Access-token JWT usability is authoritative for the native OAuth bearer probe. An expired `id_token` alone does not mark `auth-json` expired or skip OAuth; identity-token expiry is diagnostic metadata only. A missing or expired `access_token` still skips OAuth and preserves the Pi and read-only CLI fallbacks.
-- The Pi broker opens `auth.json` read-only with a strict 64 KiB cap and guaranteed descriptor cleanup. It accepts only Pi's literal ChatGPT subscription OAuth shape: nonempty, control-byte-free `access` and `accountId` strings plus a numeric millisecond `expires` value. Strings containing `$` or beginning with `!` are rejected rather than resolved. Pi `api_key` entries are unsupported because platform API billing is not ChatGPT subscription quota. Malformed, unsupported, expired-refreshable, and expired-non-refreshable states remain distinct diagnostics.
-- quota-axi reads Pi's refresh value only to derive a usability boolean and does not retain it beyond credential inspection. It never performs a refresh-token exchange, refreshes Pi OAuth, launches Pi, or writes credential state. Pi owns refresh; quota-axi only reads the current entry and sends an unexpired access token and account ID to the existing read-only ChatGPT usage endpoint. Refresh token values are never logged, rendered, cached, or sent. Access token values are never logged, rendered, or cached.
+- Access-token JWT usability is authoritative for the native OAuth bearer probe.
+  An expired `id_token` alone does not mark `auth-json` expired or skip OAuth; identity-token expiry is diagnostic metadata only.
+  A missing or expired `access_token` still skips OAuth and preserves the Pi and read-only CLI fallbacks.
+- The Pi broker opens `auth.json` read-only with a strict 64 KiB cap and guaranteed descriptor cleanup.
+  It accepts only Pi's literal ChatGPT subscription OAuth shape: nonempty, control-byte-free `access` and `accountId` strings plus a numeric millisecond `expires` value.
+  Strings containing `$` or beginning with `!` are rejected rather than resolved.
+  Pi `api_key` entries are unsupported because platform API billing is not ChatGPT subscription quota.
+  Malformed, unsupported, expired-refreshable, and expired-non-refreshable states remain distinct diagnostics.
+- quota-axi reads Pi's refresh value only to derive a usability boolean and does not retain it beyond credential inspection.
+  It never performs a refresh-token exchange, refreshes Pi OAuth, launches Pi, or writes credential state.
+  Pi owns refresh; quota-axi only reads the current entry and sends an unexpired access token and account ID to the existing read-only ChatGPT usage endpoint.
+  Refresh token values are never logged, rendered, cached, or sent.
+  Access token values are never logged, rendered, or cached.
 - It may run `codex -s read-only -a untrusted app-server` for Codex JSON-RPC fallback. That probe is also Codex's delegated refresh: the Codex CLI renews its own expired OAuth session and rewrites `auth.json` before answering, so an expired stored token still reports live quota without quota-axi touching the refresh token or spawning a second command. Codex rotates the refresh token on use, which is why the exchange stays the vendor's.
 - Set `QUOTA_AXI_CODEX_BINARY` to an absolute executable path when the fallback must use a specific Codex installation. Auth inspection and the app-server probe resolve the same path, and an invalid override fails closed instead of consulting `PATH`.
 
