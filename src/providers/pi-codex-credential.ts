@@ -102,8 +102,7 @@ async function resolveCredential(
       ? { status: "missing" }
       : { status: "error" };
   }
-  // An over-cap file cannot be parsed within the read bound, so it is reported
-  // as invalid rather than as a distinct status, matching the Pi xai broker.
+  // Match the Pi xai broker's invalid status for over-cap files
   if (contents.byteLength > AUTH_FILE_LIMIT_BYTES) {
     return { status: "invalid" };
   }
