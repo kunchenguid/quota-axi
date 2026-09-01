@@ -24,6 +24,8 @@ const originalZaiProvider = PROVIDERS.zai;
 const originalAgyProvider = PROVIDERS.agy;
 const originalAlibabaProvider = PROVIDERS.alibaba;
 const originalOpenCodeGoProvider = PROVIDERS["opencode-go"];
+const originalMinimaxProvider = PROVIDERS.minimax;
+const originalMimoProvider = PROVIDERS.mimo;
 const originalXdgCacheHome = process.env.XDG_CACHE_HOME;
 let tempDir: string | undefined;
 
@@ -38,6 +40,8 @@ afterEach(() => {
   PROVIDERS.agy = originalAgyProvider;
   PROVIDERS.alibaba = originalAlibabaProvider;
   PROVIDERS["opencode-go"] = originalOpenCodeGoProvider;
+  PROVIDERS.minimax = originalMinimaxProvider;
+  PROVIDERS.mimo = originalMimoProvider;
   if (originalXdgCacheHome === undefined) delete process.env.XDG_CACHE_HOME;
   else process.env.XDG_CACHE_HOME = originalXdgCacheHome;
   if (tempDir) rmSync(tempDir, { recursive: true, force: true });
@@ -59,6 +63,8 @@ describe("CLI flag parsing", () => {
       "agy",
       "alibaba",
       "opencode-go",
+      "minimax",
+      "mimo",
     ]);
   });
 
@@ -96,6 +102,8 @@ describe("CLI flag parsing", () => {
           "agy",
           "alibaba",
           "opencode-go",
+          "minimax",
+          "mimo",
         ],
         json: true,
         full: true,
@@ -777,6 +785,55 @@ describe("CLI quota rendering", () => {
   });
 });
 
+describe("new provider public quota output", () => {
+  it("renders MiniMax model-scoped effective availability in JSON", async () => {
+    useTempCache();
+    PROVIDERS.minimax = providerWithQuota({
+      provider: "minimax",
+      label: "MiniMax",
+      source: "api",
+      windows: [
+        {
+          id: "model:minimax-m3:5h",
+          label: "MiniMax-M3 5h",
+          kind: "model",
+          percentUsed: 20,
+          percentRemaining: 80,
+          windowSeconds: 18_000,
+        },
+        {
+          id: "model:minimax-m3:7d",
+          label: "MiniMax-M3 7d",
+          kind: "model",
+          percentUsed: 40,
+          percentRemaining: 60,
+          windowSeconds: 604_800,
+        },
+      ],
+      state: { status: "fresh", stale: false },
+    });
+
+    const json = JSON.parse(await capture(["--provider", "minimax", "--json"]));
+    expect(json.providers[0]).toMatchObject({
+      provider: "minimax",
+      windows: [
+        { id: "model:minimax-m3:5h" },
+        { id: "model:minimax-m3:7d" },
+      ],
+      quotaSemantics: {
+        status: "known",
+        effectiveAvailability: [
+          {
+            scope: "model:minimax-m3",
+            status: "known",
+            effectivePercentRemaining: 60,
+          },
+        ],
+      },
+    });
+  });
+});
+
 describe("default TOON decision blocks", () => {
   it("names every requested provider in quota[] or attention[]", async () => {
     useTempCache();
@@ -793,6 +850,10 @@ describe("default TOON decision blocks", () => {
     PROVIDERS.agy = providerWithQuota(unavailableAgyQuota());
     PROVIDERS.alibaba = providerWithQuota(freshAlibabaQuota());
     PROVIDERS["opencode-go"] = providerWithQuota(freshOpenCodeGoQuota());
+    PROVIDERS.minimax = providerWithQuota(
+      emptyFreshQuota("minimax", "MiniMax"),
+    );
+    PROVIDERS.mimo = providerWithQuota(emptyFreshQuota("mimo", "MiMo"));
 
     const output = await capture([]);
     const named = new Set([
@@ -809,6 +870,8 @@ describe("default TOON decision blocks", () => {
       "cursor",
       "grok",
       "kimi",
+      "mimo",
+      "minimax",
       "opencode-go",
       "zai",
     ]);
@@ -1145,6 +1208,8 @@ describe("CLI plumbing via the axi SDK", () => {
     PROVIDERS.agy = providerWithAuth("agy", "Antigravity");
     PROVIDERS.alibaba = providerWithAuth("alibaba", "Alibaba Coding Plan");
     PROVIDERS["opencode-go"] = providerWithAuth("opencode-go", "OpenCode Go");
+    PROVIDERS.minimax = providerWithAuth("minimax", "MiniMax");
+    PROVIDERS.mimo = providerWithAuth("mimo", "MiMo");
 
     const output = await capture(["--allow-keychain-prompt", "auth"]);
     expect(output).toContain(
@@ -1272,6 +1337,19 @@ describe("terminal height and the machine output paths", () => {
     });
   }
 });
+
+function emptyFreshQuota(
+  provider: ProviderQuota["provider"],
+  label: string,
+): ProviderQuota {
+  return {
+    provider,
+    label,
+    source: "api",
+    windows: [],
+    state: { status: "fresh", stale: false },
+  };
+}
 
 function providerWithQuota(quota: ProviderQuota): ProviderAdapter {
   return {
