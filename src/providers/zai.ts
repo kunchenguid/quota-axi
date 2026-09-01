@@ -25,7 +25,7 @@ import type {
 } from "../types.js";
 import { VERSION } from "../version.js";
 
-const ZAI_QUOTA_PATH = "/api/monitor/usage/quota/limit";
+export const ZAI_USAGE_PATH = "/api/monitor/usage";
 const OPERATION_DEADLINE_MS = 15_000;
 const RESPONSE_LIMIT_BYTES = 262_144;
 const FIVE_HOURS_SECONDS = 18_000;
@@ -499,7 +499,7 @@ async function requestZaiQuota(
   let response: Response;
   try {
     response = await waitForDeadline(
-      fetchImplementation(`https://${host}${ZAI_QUOTA_PATH}`, {
+      fetchImplementation(`https://${host}${ZAI_USAGE_PATH}`, {
         method: "GET",
         headers: {
           Authorization: apiKey,
@@ -757,7 +757,9 @@ function mapLimitEntry(
   const percentUsed = resolvePercentUsed(entry);
   const percentRemaining =
     percentUsed !== undefined ? clampPercent(100 - percentUsed) : undefined;
-  const resetsAt = resolveResetsAt(entry.nextResetTime);
+  const resetsAt = resolveResetsAt(
+    entry.nextResetTime ?? entry.resetTime ?? entry.reset_time,
+  );
 
   const identity = identifyWindow(type, unit, number);
   const measurements: WindowMeasurements = {
@@ -837,7 +839,16 @@ function resolvePercentUsed(
   const percentage = numericScalar(entry.percentage);
   if (percentage !== undefined) return clampPercent(percentage);
   const currentValue = numericScalar(entry.currentValue);
+  const remaining = numericScalar(entry.remaining);
   const usage = numericScalar(entry.usage);
+  if (
+    usage !== undefined &&
+    usage > 0 &&
+    remaining !== undefined &&
+    remaining >= 0
+  ) {
+    return clampPercent(100 - (remaining / usage) * 100);
+  }
   if (usage !== undefined && usage > 0 && currentValue !== undefined) {
     return clampPercent((currentValue / usage) * 100);
   }

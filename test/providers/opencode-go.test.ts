@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import {
   createOpenCodeGoAdapter,
@@ -95,6 +96,38 @@ describe("OpenCode Go provider", () => {
       state: { status: "fresh", stale: false },
     });
     expect(JSON.stringify(report)).not.toContain(KEY);
+  });
+
+  it("normalizes the current flat usage response", () => {
+    const payload = JSON.parse(
+      readFileSync("test/fixtures/opencode-go/usage-flat.json", "utf8"),
+    );
+    expect(
+      normalizeOpenCodeGoPayload(
+        payload,
+        Date.parse("2026-09-01T00:00:00.000Z"),
+      ).windows,
+    ).toEqual([
+      expect.objectContaining({
+        id: "rolling",
+        kind: "unknown",
+        percentUsed: 18,
+        percentRemaining: 82,
+        resetsAt: "2026-09-01T01:00:00.000Z",
+      }),
+      expect.objectContaining({
+        id: "weekly",
+        percentUsed: 42,
+        percentRemaining: 58,
+        resetsAt: "2026-09-08T00:00:00.000Z",
+      }),
+      expect.objectContaining({
+        id: "monthly",
+        percentUsed: 7,
+        percentRemaining: 93,
+        resetsAt: "2026-10-01T00:00:00.000Z",
+      }),
+    ]);
   });
 
   it("accepts remaining percentages and fails safely on rejected or malformed data", async () => {

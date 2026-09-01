@@ -1,0 +1,36 @@
+{
+  "code": 200,
+  "msg": "Operation successful",
+  "data": {
+    "level": "Coding Plan",
+    "limits": [
+      {
+        "type": "CREDIT_LIMIT",
+        "unit": 3,
+        "number": 5,
+        "usage": 2000,
+        "currentValue": 1653,
+        "remaining": 346,
+        "nextResetTime": 1788282000000
+      },
+      {
+        "type": "CREDIT_LIMIT",
+        "unit": 6,
+        "number": 1,
+        "usage": 10000,
+        "currentValue": 4200,
+        "remaining": 5800,
+        "nextResetTime": 1788292800000
+      },
+      {
+        "type": "TIME_LIMIT",
+        "unit": 4,
+        "number": 1,
+        "usage": 100,
+        "currentValue": 15,
+        "remaining": 85,
+        "nextResetTime": 1788372000000
+      }
+    ]
+  }
+}

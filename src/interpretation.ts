@@ -128,6 +128,13 @@ function semanticsFor(
       return alibabaSemantics(provider.windows, generatedAt);
     case "opencode-go":
       return opencodeGoSemantics(provider.windows, generatedAt);
+    case "minimax":
+      return minimaxSemantics(provider.windows, generatedAt);
+    case "mimo":
+      return unknownSemantics(
+        provider.windows,
+        "MiMo exposes local API authentication, but no first-party read-only quota endpoint is established, so model headroom remains unknown.",
+      );
   }
 }
 
@@ -171,11 +178,53 @@ function opencodeGoSemantics(
           : [],
       unresolvedWindowIds,
     };
-  }
   return knownSemantics(
     plan.length > 0 ? [availability("all_models", plan, generatedAt)] : [],
     "OpenCode Go's rolling, weekly, and monthly windows are stacked plan caps ($12 per rolling 5 hours, $30 per week, $60 per month) that jointly bound Go-plan usage, so effective remaining is the minimum across the named windows. A zeroed plan window blocks Go-plan requests; the vendor's free-model fallback or an opted-in Zen balance may still serve past it, which this endpoint does not report.",
   );
+}
+
+function minimaxSemantics(
+  windows: QuotaWindow[],
+  generatedAt: string,
+): QuotaSemantics {
+  const modelWindows = windows.filter(
+    ({ id, kind }) => kind === "model" && id.startsWith("model:"),
+  );
+  const unresolved = windows.filter((window) => !modelWindows.includes(window));
+  const models = new Map<string, QuotaWindow[]>();
+  for (const window of modelWindows) {
+    const scope = minimaxModelScope(window.id);
+    const scoped = models.get(scope) ?? [];
+    scoped.push(window);
+    models.set(scope, scoped);
+  }
+  const effectiveAvailability = [...models].map(([scope, scoped]) =>
+    unresolved.length > 0
+      ? unresolvedAvailability(
+          scope,
+          scoped,
+          unresolved.map(({ id }) => id),
+        )
+      : availability(scope, scoped, generatedAt),
+  );
+  if (unresolved.length > 0) {
+    return {
+      status: "partial",
+      description:
+        "MiniMax reports quota rows for named models. Unrecognized rows are not assigned to a model, so effective model headroom remains unknown.",
+      effectiveAvailability,
+      unresolvedWindowIds: unresolved.map(({ id }) => id),
+    };
+  }
+  return knownSemantics(
+    effectiveAvailability,
+    "MiniMax reports five-hour and weekly quota windows for each named model. Each model scope is bounded only by the windows the provider reports for that model; no account-wide bound is inferred.",
+  );
+}
+
+function minimaxModelScope(id: string): string {
+  return id.replace(/:(?:5h|7d|window:[^:]+)$/, "");
 }
 
 function alibabaSemantics(

@@ -75,6 +75,8 @@ const ACCENTS: Record<ProviderId, StyleSpec> = {
   agy: { rgb: [232, 184, 109], ansi16: "93", bold: true },
   alibaba: { rgb: [255, 155, 120], ansi16: "91", bold: true },
   "opencode-go": { rgb: [160, 210, 255], ansi16: "96", bold: true },
+  minimax: { rgb: [255, 196, 112], ansi16: "93", bold: true },
+  mimo: { rgb: [174, 214, 241], ansi16: "96", bold: true },
 };
 
 const STYLES: Record<Exclude<StyleName, `accent:${ProviderId}`>, StyleSpec> = {
