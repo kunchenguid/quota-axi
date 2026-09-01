@@ -816,10 +816,7 @@ describe("new provider public quota output", () => {
     const json = JSON.parse(await capture(["--provider", "minimax", "--json"]));
     expect(json.providers[0]).toMatchObject({
       provider: "minimax",
-      windows: [
-        { id: "model:minimax-m3:5h" },
-        { id: "model:minimax-m3:7d" },
-      ],
+      windows: [{ id: "model:minimax-m3:5h" }, { id: "model:minimax-m3:7d" }],
       quotaSemantics: {
         status: "known",
         effectiveAvailability: [
