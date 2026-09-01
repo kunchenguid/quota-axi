@@ -193,7 +193,7 @@ $ quota-axi --provider claude --json
 $ quota-axi auth
 bin: ~/.npm/_npx/.../quota-axi
 description: Inspect local quota auth sources without printing secret values
-auth[15]{provider,source,path,status,error}:
+auth[17]{provider,source,path,status,error}:
   claude,oauth-file,~/.claude/.credentials.json,available,none
   claude,keychain,none,skipped,keychain_prompt_required
   codex,auth-json,~/.codex/auth.json,available,none
@@ -209,6 +209,8 @@ auth[15]{provider,source,path,status,error}:
   agy,loopback,none,available,none
   alibaba,bl-cli,none,available,none
   opencode-go,opencode:auth.json,~/.local/share/opencode/auth.json,available,none
+  minimax,pi:minimax,~/.pi/agent/auth.json,available,none
+  mimo,env:MIMO_API_KEY,none,available,none
 help[1]:
   Run `quota-axi --allow-keychain-prompt auth` to permit macOS Keychain access
 ```
