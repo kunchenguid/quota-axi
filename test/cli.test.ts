@@ -1,4 +1,10 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -27,6 +33,10 @@ const originalOpenCodeGoProvider = PROVIDERS["opencode-go"];
 const originalMinimaxProvider = PROVIDERS.minimax;
 const originalMimoProvider = PROVIDERS.mimo;
 const originalXdgCacheHome = process.env.XDG_CACHE_HOME;
+const originalMinimaxApiKey = process.env.MINIMAX_API_KEY;
+const originalMimoApiKey = process.env.MIMO_API_KEY;
+const originalPiCodingAgentDir = process.env.PI_CODING_AGENT_DIR;
+const originalMmxConfigDir = process.env.MMX_CONFIG_DIR;
 let tempDir: string | undefined;
 
 afterEach(() => {
@@ -42,8 +52,13 @@ afterEach(() => {
   PROVIDERS["opencode-go"] = originalOpenCodeGoProvider;
   PROVIDERS.minimax = originalMinimaxProvider;
   PROVIDERS.mimo = originalMimoProvider;
+  vi.unstubAllGlobals();
   if (originalXdgCacheHome === undefined) delete process.env.XDG_CACHE_HOME;
   else process.env.XDG_CACHE_HOME = originalXdgCacheHome;
+  restoreEnvironment("MINIMAX_API_KEY", originalMinimaxApiKey);
+  restoreEnvironment("MIMO_API_KEY", originalMimoApiKey);
+  restoreEnvironment("PI_CODING_AGENT_DIR", originalPiCodingAgentDir);
+  restoreEnvironment("MMX_CONFIG_DIR", originalMmxConfigDir);
   if (tempDir) rmSync(tempDir, { recursive: true, force: true });
   tempDir = undefined;
   process.exitCode = undefined;
@@ -786,48 +801,157 @@ describe("CLI quota rendering", () => {
 });
 
 describe("new provider public quota output", () => {
-  it("renders MiniMax model-scoped effective availability in JSON", async () => {
+  it("renders registered MiniMax model scopes through the JSON CLI", async () => {
     useTempCache();
-    PROVIDERS.minimax = providerWithQuota({
-      provider: "minimax",
-      label: "MiniMax",
-      source: "api",
-      windows: [
-        {
-          id: "model:minimax-m3:5h",
-          label: "MiniMax-M3 5h",
-          kind: "model",
-          percentUsed: 20,
-          percentRemaining: 80,
-          windowSeconds: 18_000,
-        },
-        {
-          id: "model:minimax-m3:7d",
-          label: "MiniMax-M3 7d",
-          kind: "model",
-          percentUsed: 40,
-          percentRemaining: 60,
-          windowSeconds: 604_800,
-        },
-      ],
-      state: { status: "fresh", stale: false },
-    });
-
-    const json = JSON.parse(await capture(["--provider", "minimax", "--json"]));
-    expect(json.providers[0]).toMatchObject({
-      provider: "minimax",
-      windows: [{ id: "model:minimax-m3:5h" }, { id: "model:minimax-m3:7d" }],
-      quotaSemantics: {
-        status: "known",
-        effectiveAvailability: [
-          {
-            scope: "model:minimax-m3",
-            status: "known",
-            effectivePercentRemaining: 60,
-          },
-        ],
+    const key = "synthetic-minimax-cli-key";
+    process.env.MINIMAX_API_KEY = key;
+    const payload = JSON.parse(
+      readFileSync("test/fixtures/minimax/quota.json", "utf8"),
+    );
+    const fetch = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        expect(String(input)).toBe(
+          "https://api.minimax.io/v1/token_plan/remains",
+        );
+        expect(new Headers(init?.headers).get("authorization")).toBe(
+          `Bearer ${key}`,
+        );
+        return new Response(JSON.stringify(payload), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
       },
+    );
+    vi.stubGlobal("fetch", fetch);
+
+    const json = JSON.parse(
+      await capture(["--provider", "minimax", "--json", "--full"]),
+    ) as QuotaAxiResponse;
+    const provider = json.providers[0];
+
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(provider).toMatchObject({
+      provider: "minimax",
+      source: "api",
+      state: {
+        status: "fresh",
+        stale: false,
+        sourcesTried: ["env:MINIMAX_API_KEY"],
+      },
+      attempts: [{ source: "env:MINIMAX_API_KEY", status: "success" }],
     });
+    expect(provider?.windows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "model:minimax-m3:5h",
+          percentRemaining: 91,
+          windowSeconds: 18_000,
+        }),
+        expect.objectContaining({
+          id: "model:minimax-m3:7d",
+          percentRemaining: 70,
+          windowSeconds: 604_800,
+        }),
+      ]),
+    );
+    expect(provider?.quotaSemantics?.effectiveAvailability).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          scope: "model:minimax-m3",
+          status: "known",
+          effectivePercentRemaining: 70,
+        }),
+        expect.objectContaining({
+          scope: "model:minimax-m2.7-highspeed",
+          status: "known",
+          effectivePercentRemaining: 50,
+        }),
+      ]),
+    );
+    expect(JSON.stringify(json)).not.toContain(key);
+  });
+
+  it("keeps registered MiMo authentication without a fabricated quota scope", async () => {
+    useTempCache();
+    const auth = JSON.parse(
+      readFileSync("test/fixtures/mimo/auth.json", "utf8"),
+    ) as { key: string };
+    process.env.MIMO_API_KEY = auth.key;
+
+    const json = JSON.parse(
+      await capture(["--provider", "mimo", "--json", "--full"]),
+    ) as QuotaAxiResponse;
+    expect(json.providers).toEqual([
+      expect.objectContaining({
+        provider: "mimo",
+        source: "api",
+        windows: [],
+        state: expect.objectContaining({
+          status: "fresh",
+          stale: false,
+          authStatus: "usable",
+          sourcesTried: ["env:MIMO_API_KEY"],
+        }),
+        quotaSemantics: expect.objectContaining({
+          status: "unknown",
+          effectiveAvailability: [],
+          description: expect.stringContaining("No quota windows"),
+        }),
+      }),
+    ]);
+  });
+
+  it("reports missing registered MiMo authentication through JSON", async () => {
+    useTempCache();
+    delete process.env.MIMO_API_KEY;
+
+    const json = JSON.parse(
+      await capture(["--provider", "mimo", "--json", "--full"]),
+    ) as QuotaAxiResponse;
+    expect(json.providers).toEqual([
+      expect.objectContaining({
+        provider: "mimo",
+        source: "unavailable",
+        windows: [],
+        state: {
+          status: "auth_required",
+          stale: false,
+          error: "mimo_credential_unavailable",
+          sourcesTried: ["env:MIMO_API_KEY"],
+        },
+      }),
+    ]);
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("reports invalid MiniMax file authentication through the auth CLI", async () => {
+    useTempCache();
+    delete process.env.MINIMAX_API_KEY;
+    process.env.PI_CODING_AGENT_DIR = join(tempDir!, "pi-agent");
+    process.env.MMX_CONFIG_DIR = join(tempDir!, "mmx");
+    mkdirSync(process.env.PI_CODING_AGENT_DIR, { recursive: true });
+    writeFileSync(
+      join(process.env.PI_CODING_AGENT_DIR, "auth.json"),
+      JSON.stringify({ minimax: { type: "api_key" } }),
+    );
+
+    const json = JSON.parse(
+      await capture(["auth", "--provider", "minimax", "--json"]),
+    ) as {
+      auth: Array<{ provider: string; sources: Array<Record<string, string>> }>;
+    };
+    expect(json.auth).toEqual([
+      expect.objectContaining({
+        provider: "minimax",
+        sources: [
+          expect.objectContaining({
+            source: "pi:minimax",
+            status: "invalid",
+            error: "credential_missing",
+          }),
+        ],
+      }),
+    ]);
   });
 });
 
@@ -1383,6 +1507,11 @@ function providerWithAuth(
 function useTempCache(): void {
   tempDir = mkdtempSync(join(tmpdir(), "quota-axi-cli-cache-"));
   process.env.XDG_CACHE_HOME = tempDir;
+}
+
+function restoreEnvironment(name: string, value: string | undefined): void {
+  if (value === undefined) delete process.env[name];
+  else process.env[name] = value;
 }
 
 function freshClaudeQuota(): ProviderQuota {
