@@ -873,10 +873,7 @@ describe("new provider public quota output", () => {
 
   it("keeps registered MiMo authentication without a fabricated quota scope", async () => {
     useTempCache();
-    const auth = JSON.parse(
-      readFileSync("test/fixtures/mimo/auth.json", "utf8"),
-    ) as { key: string };
-    process.env.MIMO_API_KEY = auth.key;
+    process.env.MIMO_API_KEY = "synthetic-mimo-cli-key";
 
     const json = JSON.parse(
       await capture(["--provider", "mimo", "--json", "--full"]),
