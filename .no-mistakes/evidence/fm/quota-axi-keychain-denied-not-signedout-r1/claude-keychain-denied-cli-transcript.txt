@@ -1,0 +1,27 @@
+[?25l
+ RUN  v3.0.0 /Users/kunchen/.no-mistakes/worktrees/6eca570dbcdb/01M1FEP4XSC8384CSJ1RN41W0J
+
+stdout | test/providers/claude-auth.test.ts > Claude credential-state reporting > does not treat a denied Keychain plus sidecar 401 as signed-out or retire the cache
+$ quota-axi --provider claude
+bin: quota-axi
+description: Report local agent-provider quota windows for routing-aware agents
+generatedAt: "2026-07-06T20:00:00.000Z"
+quota[0]:
+exhaustion[0]:
+attention[1]{provider,scope,kind,detail,remedy}:
+  claude,all,stale,"last refreshed 2026-07-06T18:10:00Z · keychain_access_denied",none
+help[1]:
+  Run `quota-axi --full` for windows, pace, reserve, and account evidence
+
+cache_preserved: true
+provider_status: stale
+provider_error: keychain_access_denied
+
+ ✓ test/providers/claude-auth.test.ts > Claude credential-state reporting > does not treat a denied Keychain plus sidecar 401 as signed-out or retire the cache
+
+ Test Files  1 passed (1)
+      Tests  1 passed | 40 skipped (41)
+   Start at  14:42:15
+   Duration  272ms (transform 92ms, setup 6ms, collect 89ms, tests 32ms, environment 0ms, prepare 30ms)
+
+[?25h
