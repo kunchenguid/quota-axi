@@ -165,9 +165,11 @@ export function resolveMiniMaxCredential(): MiniMaxCredentialResolution {
 
   const piPath = miniMaxPiAuthFilePath();
   const piResult = readBoundedJsonFile(piPath);
+  let invalidPiResolution: MiniMaxCredentialResolution | undefined;
   if (piResult.status === "success") {
     const resolution = extractMiniMaxCredential(piResult.value, piPath);
     if (resolution.status === "available") return resolution;
+    if (resolution.status === "invalid") invalidPiResolution = resolution;
   } else if (
     piResult.status === "invalid" &&
     piResult.error === "file_read_error"
@@ -193,7 +195,13 @@ export function resolveMiniMaxCredential(): MiniMaxCredentialResolution {
     };
   }
 
-  return { status: "missing", source: MINIMAX_CLI_SOURCE, path: cliPath };
+  return (
+    invalidPiResolution ?? {
+      status: "missing",
+      source: MINIMAX_CLI_SOURCE,
+      path: cliPath,
+    }
+  );
 }
 
 export function createMiniMaxAdapter(
