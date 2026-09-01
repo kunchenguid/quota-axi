@@ -420,12 +420,27 @@ async function attemptClaudeQuota(
     }
   }
 
+  const keychainDenied = credentialStates.some(
+    (state) =>
+      state.status === "skipped" &&
+      state.source.source === "keychain" &&
+      state.source.error === "keychain_access_denied",
+  );
+  let failure =
+    definitiveFailure ??
+    transientFailure ??
+    new ClaudeFailure("Claude quota unavailable", { staleEligible: true });
+  // A denied Keychain read never saw the live session. A 401 from a leftover
+  // oauth-file sidecar is not evidence the user is signed out of Claude.
+  if (keychainDenied && failure.definitiveAuth) {
+    failure = new ClaudeFailure("keychain_access_denied", {
+      staleEligible: true,
+    });
+  }
+
   return {
     kind: "failure",
-    failure:
-      definitiveFailure ??
-      transientFailure ??
-      new ClaudeFailure("Claude quota unavailable", { staleEligible: true }),
+    failure,
     refreshableExpiredRejected,
     keychainWithheld: credentialStates.some(
       (state) =>

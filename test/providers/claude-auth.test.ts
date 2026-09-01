@@ -1567,6 +1567,54 @@ describe("Claude credential-state reporting", () => {
     });
   });
 
+  it("does not treat a denied Keychain plus sidecar 401 as signed-out or retire the cache", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-06T20:00:00.000Z"));
+    usePlatform("darwin");
+    const home = useTempHome();
+    writeClaudeCredential(home, {
+      accessToken: "expired-sidecar",
+      expiresAt: "2000-01-01T00:00:00.000Z",
+    });
+    const { readCachedProvider, writeCachedProviders } =
+      await import("../../src/cache.js");
+    writeCachedProviders([cachedClaudeQuota(34)]);
+    const execFileText = vi.fn(async () => {
+      throw Object.assign(new Error("auth failed"), { code: 51 });
+    });
+    vi.doMock("../../src/lib/process.js", () => ({ execFileText }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(null, { status: 401 })),
+    );
+    const { fetchQuota } = await import("../../src/providers/claude.js");
+    const { renderQuotaToon } = await import("../../src/render.js");
+    const result = await fetchQuota({
+      allowKeychainPrompt: true,
+      refreshCredentials: false,
+    });
+    const annotated = annotateQuotaAdvice({
+      generatedAt: "2026-07-06T20:00:00.000Z",
+      providers: [result],
+    });
+    const toon = renderQuotaToon(annotated, "quota-axi", false);
+
+    expect(result.state.status).not.toBe("auth_required");
+    expect(result.state.error).toBe("keychain_access_denied");
+    expect(result.source).toBe("cache");
+    expect(readCachedProvider("claude")).toMatchObject({
+      provider: "claude",
+      source: "oauth",
+    });
+    expect(annotated.providers[0]?.state.remedyCommand).toBeUndefined();
+    expect(annotated.help?.join("\n") ?? "").not.toContain(
+      "--allow-keychain-prompt",
+    );
+    expect(toon).toContain("keychain_access_denied");
+    expect(toon).not.toContain("Claude sign-in required");
+    expect(toon).not.toContain("sign-in required");
+  });
+
   it("says so when Keychain is denied and does not offer a prompt that cannot help", async () => {
     usePlatform("darwin");
     useTempHome();
