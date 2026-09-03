@@ -1,6 +1,6 @@
 {
   "name": "quota-axi",
-  "version": "0.1.35",
+  "version": "0.1.36",
   "packageManager": "pnpm@11.1.1",
   "description": "AXI CLI that reports local agent-provider quota windows without routing or credential minting",
   "type": "module",
