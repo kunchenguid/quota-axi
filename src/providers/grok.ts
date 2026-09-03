@@ -643,16 +643,9 @@ function appendGrokCliAttempt(
   const cliResults = pass.selection.results.filter(
     (result) => result.source === GROK_SOURCE,
   );
-  const cliResult =
-    cliResults.find((result) => result.outcome === "quota") ??
-    cliResults.find((result) => result.outcome === "transient") ??
-    [...cliResults].reverse().find((result) => result.outcome === "rejected");
-  if (cliResult) {
-    attempts.push(
-      cliResult.outcome === "quota"
-        ? { source: GROK_SOURCE, status: "success" }
-        : { source: GROK_SOURCE, status: "failed", error: cliResult.error },
-    );
+  const quotaResult = cliResults.find((result) => result.outcome === "quota");
+  if (quotaResult) {
+    attempts.push({ source: GROK_SOURCE, status: "success" });
     return;
   }
   const liveResult = cliResults.find(
@@ -664,6 +657,17 @@ function appendGrokCliAttempt(
       status: "skipped",
       error: MODEL_AUTH_PROBE_LIVE,
       credentialPresent: true,
+    });
+    return;
+  }
+  const cliResult =
+    cliResults.find((result) => result.outcome === "transient") ??
+    [...cliResults].reverse().find((result) => result.outcome === "rejected");
+  if (cliResult) {
+    attempts.push({
+      source: GROK_SOURCE,
+      status: "failed",
+      error: cliResult.error,
     });
     return;
   }

@@ -1191,6 +1191,58 @@ describe("Grok expired access-token classification", () => {
     expect(JSON.stringify(result)).not.toContain("fixture-refresh-token");
   });
 
+  it("reports the live official candidate in attempts[] when another CLI candidate was rejected", async () => {
+    writeAuth({
+      "https://accounts.x.ai/sign-in": {
+        key: "rejected-session-token-fixture",
+        expires_at: "2035-01-01T00:00:00.000Z",
+      },
+      "https://auth.x.ai::fixture-client": {
+        key: "live-oidc-token-fixture",
+        auth_mode: "oidc",
+        expires_at: "2020-01-01T00:00:00.000Z",
+        refresh_token: "fixture-refresh-token",
+      },
+    });
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === GROK_BUILD_MODELS_URL) {
+        const authorization = (init?.headers as Record<string, string>)
+          ?.Authorization;
+        return authorization === "Bearer live-oidc-token-fixture"
+          ? new Response(JSON.stringify({ object: "list", data: [] }), {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            })
+          : grpcResponse(new Uint8Array(), { status: 403 });
+      }
+      return grpcResponse(new Uint8Array(), { status: 403 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await fetchQuota({
+      allowKeychainPrompt: false,
+      refreshCredentials: false,
+    });
+
+    expect(result.state).toMatchObject({
+      authStatus: "usable",
+      error: "Grok model access available; quota unavailable",
+    });
+    expect(result.attempts).toContainEqual({
+      source: "web",
+      status: "skipped",
+      error: "model_auth_probe_live",
+      credentialPresent: true,
+    });
+    expect(result.attempts).not.toContainEqual(
+      expect.objectContaining({ source: "web", status: "failed" }),
+    );
+    expect(JSON.stringify(result)).not.toContain("live-oidc-token-fixture");
+    expect(JSON.stringify(result)).not.toContain(
+      "rejected-session-token-fixture",
+    );
+  });
+
   it("tries each stored-expired session until one returns fresh quota", async () => {
     writeAuth({
       rejected_expired_session_fixture: {
