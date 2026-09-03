@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.36](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.35...quota-axi-v0.1.36) (2026-09-03)
+
+
+### Bug Fixes
+
+* **agy:** discover Antigravity processes on Linux ([#141](https://github.com/kunchenguid/quota-axi/issues/141)) ([9797056](https://github.com/kunchenguid/quota-axi/commit/9797056378557a2c190beb204e875d05b4870b93))
+* **claude:** preserve quota cache when Keychain access is denied ([#139](https://github.com/kunchenguid/quota-axi/issues/139)) ([de1d184](https://github.com/kunchenguid/quota-axi/commit/de1d18420365ffc57f208ab62f3269ce7a26aefc))
+
 ## [0.1.35](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.34...quota-axi-v0.1.35) (2026-09-01)
 
 
