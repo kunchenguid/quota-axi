@@ -391,6 +391,85 @@ describe("Z.AI payload normalization", () => {
     expect(byId.mcp_month.kind).toBe("monthly");
   });
 
+  it("identifies CREDIT_LIMIT windows by the same unit and number magic values", () => {
+    const normalized = normalizeZaiPayload({
+      data: {
+        limits: [
+          {
+            type: "CREDIT_LIMIT",
+            unit: 3,
+            number: 5,
+            percentage: 10,
+            nextResetTime: RESET_FIVE_HOUR,
+          },
+          {
+            type: "CREDIT_LIMIT",
+            unit: 6,
+            number: 1,
+            percentage: 47,
+            nextResetTime: RESET_WEEKLY,
+          },
+        ],
+        level: "max",
+      },
+    });
+    expect(normalized.diagnostics).toEqual([]);
+    expect(normalized.windows).toEqual([
+      {
+        id: "five_hour",
+        label: "session",
+        kind: "session",
+        percentUsed: 10,
+        percentRemaining: 90,
+        windowSeconds: 18_000,
+        resetsAt: new Date(RESET_FIVE_HOUR).toISOString(),
+      },
+      {
+        id: "weekly",
+        label: "week",
+        kind: "weekly",
+        percentUsed: 47,
+        percentRemaining: 53,
+        windowSeconds: 604_800,
+        resetsAt: new Date(RESET_WEEKLY).toISOString(),
+      },
+    ]);
+  });
+
+  it("reports CREDIT_LIMIT windows as trusted in the provider report", async () => {
+    const report = await testAdapter({
+      fetch: (async () =>
+        jsonResponse({
+          data: {
+            limits: [
+              {
+                type: "CREDIT_LIMIT",
+                unit: 3,
+                number: 5,
+                percentage: 10,
+                nextResetTime: RESET_FIVE_HOUR,
+              },
+              {
+                type: "CREDIT_LIMIT",
+                unit: 6,
+                number: 1,
+                percentage: 47,
+                nextResetTime: RESET_WEEKLY,
+              },
+            ],
+            level: "max",
+          },
+        })) as unknown as typeof fetch,
+    }).fetchQuota(OPTIONS);
+
+    expect(report.state.status).toBe("fresh");
+    expect(report.state.untrustedWindowIds).toBeUndefined();
+    expect(report.windows.map(({ id, kind }) => ({ id, kind }))).toEqual([
+      { id: "five_hour", kind: "session" },
+      { id: "weekly", kind: "weekly" },
+    ]);
+  });
+
   it("derives MCP percentage from currentValue/usage when percentage is absent", () => {
     const normalized = normalizeZaiPayload({
       data: {

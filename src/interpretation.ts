@@ -403,7 +403,7 @@ function zaiSemantics(
     return {
       status: "partial",
       description:
-        "Z.AI's five-hour and weekly token windows jointly bound model usage and the monthly tool window is a separate resource, but unfamiliar windows prevent a definitive effective percentage.",
+        "Z.AI's five-hour and weekly usage windows jointly bound model usage and the monthly tool window is a separate resource, but unfamiliar windows prevent a definitive effective percentage.",
       effectiveAvailability,
       unresolvedWindowIds,
     };
@@ -418,7 +418,7 @@ function zaiSemantics(
   }
   return knownSemantics(
     effectiveAvailability,
-    "Z.AI's five-hour and weekly token windows jointly bound model usage, so effective remaining is the minimum across the named windows. The monthly tool window is an independent resource.",
+    "Z.AI's five-hour and weekly usage windows jointly bound model usage, so effective remaining is the minimum across the named windows. The monthly tool window is an independent resource.",
   );
 }
 
