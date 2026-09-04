@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.37](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.36...quota-axi-v0.1.37) (2026-09-04)
+
+
+### Bug Fixes
+
+* **grok:** treat consumer-billing rejection as unmeasurable, not sign-out, for SuperGrok OAuth ([#142](https://github.com/kunchenguid/quota-axi/issues/142)) ([069379f](https://github.com/kunchenguid/quota-axi/commit/069379fcd5a80d8a6f39bffbbbfb8774f5d4a43f))
+
 ## [0.1.36](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.35...quota-axi-v0.1.36) (2026-09-03)
 
 
