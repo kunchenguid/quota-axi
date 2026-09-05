@@ -1,7 +1,6 @@
-import { homedir } from "node:os";
-import { join } from "node:path";
 import { readJsonFileResult, type JsonFileReadResult } from "../lib/fs.js";
 import { providerFetch } from "../lib/http.js";
+import { piAuthFilePath } from "./pi-auth.js";
 import { usableLiteralSecret } from "../lib/secret.js";
 import type {
   AuthProviderReport,
@@ -27,7 +26,7 @@ type CredentialResolution =
 
 type Dependencies = {
   credential: () => CredentialResolution;
-  fetch: typeof globalThis.fetch;
+  fetch: typeof providerFetch;
   now: () => number;
   deadlineMs: number;
 };
@@ -36,56 +35,13 @@ export type NormalizedOpenRouterPayload = {
   label?: string;
   limit?: number;
   remaining?: number;
-  usage: number;
-  usageDaily: number;
-  usageWeekly: number;
-  usageMonthly: number;
   period?: string;
-  isFreeTier: boolean;
-  hasCap: boolean;
+  unlimited: boolean;
 };
-
-export function openrouterAuthFilePath(): string {
-  const configured = process.env.PI_CODING_AGENT_DIR?.trim();
-  const home = process.env.HOME?.trim() || homedir();
-  const directory =
-    configured === undefined || configured === ""
-      ? join(home, ".pi", "agent")
-      : configured === "~"
-        ? home
-        : configured.startsWith("~/")
-          ? join(home, configured.slice(2))
-          : configured;
-  return join(directory, "auth.json");
-}
-
-export function extractOpenRouterCredential(
-  value: unknown,
-  path: string,
-): CredentialResolution {
-  const root = objectValue(value);
-  if (!root) return { status: "invalid", source: OPENROUTER_PI_SOURCE, path };
-  for (const name of ["openrouter"]) {
-    const entry = objectValue(root[name]);
-    if (!entry) continue;
-    const key = [
-      entry.key,
-      entry.apiKey,
-      entry.api_key,
-      entry.access,
-      entry.token,
-    ]
-      .map(usableLiteralSecret)
-      .find((candidate): candidate is string => candidate !== undefined);
-    if (key)
-      return { status: "available", key, source: OPENROUTER_PI_SOURCE, path };
-  }
-  return { status: "missing", source: OPENROUTER_PI_SOURCE, path };
-}
 
 export function resolveOpenRouterCredential(
   environment: Readonly<Record<string, string | undefined>> = process.env,
-  path = openrouterAuthFilePath(),
+  path = piAuthFilePath(),
 ): CredentialResolution {
   const envKey = usableLiteralSecret(environment.OPENROUTER_API_KEY);
   if (envKey)
@@ -101,6 +57,28 @@ export function resolveOpenRouterCredential(
     };
   }
   return extractOpenRouterCredential(result.value, path);
+}
+
+export function extractOpenRouterCredential(
+  value: unknown,
+  path: string,
+): CredentialResolution {
+  const root = objectValue(value);
+  if (!root) return { status: "invalid", source: OPENROUTER_PI_SOURCE, path };
+  const entry = objectValue(root.openrouter);
+  if (!entry) return { status: "missing", source: OPENROUTER_PI_SOURCE, path };
+  const key = [
+    entry.key,
+    entry.apiKey,
+    entry.api_key,
+    entry.access,
+    entry.token,
+  ]
+    .map(usableLiteralSecret)
+    .find((candidate): candidate is string => candidate !== undefined);
+  if (key)
+    return { status: "available", key, source: OPENROUTER_PI_SOURCE, path };
+  return { status: "invalid", source: OPENROUTER_PI_SOURCE, path };
 }
 
 export function createOpenRouterAdapter(
@@ -157,7 +135,7 @@ async function fetchQuota(dependencies: Dependencies): Promise<ProviderQuota> {
 
     const windows: QuotaWindow[] = [];
     if (
-      normalized.hasCap &&
+      !normalized.unlimited &&
       normalized.limit !== undefined &&
       normalized.remaining !== undefined
     ) {
@@ -181,10 +159,9 @@ async function fetchQuota(dependencies: Dependencies): Promise<ProviderQuota> {
       source: "api",
       account: normalized.label ? { accountId: normalized.label } : undefined,
       windows,
-      credits: {
-        remaining: normalized.remaining ?? Number.POSITIVE_INFINITY,
-        unit: "usd",
-      },
+      credits: normalized.unlimited
+        ? { unlimited: true, unit: "usd" }
+        : { remaining: normalized.remaining ?? 0, unit: "usd" },
       refreshedAt: new Date(dependencies.now()).toISOString(),
       sourcesTried: sourceNames(attempts),
       attempts,
@@ -228,7 +205,7 @@ async function inspectAuth(
 
 async function requestUsage(
   key: string,
-  fetchImplementation: typeof globalThis.fetch,
+  fetchImplementation: typeof providerFetch,
   deadlineMs: number,
 ): Promise<unknown> {
   const controller = new AbortController();
@@ -270,26 +247,16 @@ export function normalizeOpenRouterPayload(
 
   const limit = asNonnegativeNumber(data.limit);
   const remaining = asNonnegativeNumber(data.limit_remaining);
-  const usage = asNonnegativeNumber(data.usage) ?? 0;
-  const usageDaily = asNonnegativeNumber(data.usage_daily) ?? 0;
-  const usageWeekly = asNonnegativeNumber(data.usage_weekly) ?? 0;
-  const usageMonthly = asNonnegativeNumber(data.usage_monthly) ?? 0;
   const period = asString(data.limit_reset);
   const label = asString(data.label);
-  const isFreeTier = data.is_free_tier === true;
-  const hasCap = data.limit !== null && limit !== undefined;
+  const unlimited = data.limit === null || data.limit === undefined;
 
   return {
     label,
     limit,
     remaining,
-    usage,
-    usageDaily,
-    usageWeekly,
-    usageMonthly,
     period,
-    isFreeTier,
-    hasCap,
+    unlimited,
   };
 }
 
@@ -314,12 +281,6 @@ function clampPercent(value: number): number {
   return Math.max(0, Math.min(100, value));
 }
 
-function statusFromError(error: string): ProviderStatus {
-  if (error === "provider_auth_rejected") return "auth_required";
-  if (error === "provider_rate_limited") return "rate_limited";
-  return "error";
-}
-
 function credentialError(resolution: CredentialResolution): string {
   if (resolution.status === "missing")
     return "openrouter_credential_unavailable";
@@ -330,4 +291,10 @@ function credentialError(resolution: CredentialResolution): string {
 function errorCode(error: unknown): string {
   if (error instanceof Error) return error.message;
   return String(error);
+}
+
+function statusFromError(error: string): ProviderStatus {
+  if (error === "provider_auth_rejected") return "auth_required";
+  if (error === "provider_rate_limited") return "rate_limited";
+  return "error";
 }

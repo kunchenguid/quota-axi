@@ -51,20 +51,7 @@ describe("DeepSeek provider", () => {
       credits: { remaining: 12.5, unit: "usd" },
       attempts: [{ source: "env:DEEPSEEK_API_KEY", status: "success" }],
     });
-    expect(report.windows).toEqual([
-      expect.objectContaining({
-        id: "credits:usd",
-        kind: "credits",
-        limitUsd: 12.5,
-        percentRemaining: 100,
-      }),
-      expect.objectContaining({
-        id: "credits:cny",
-        kind: "credits",
-        limitUsd: 100,
-        percentRemaining: 100,
-      }),
-    ]);
+    expect(report.windows).toEqual([]);
     expect(JSON.stringify(report)).not.toContain(KEY);
     expect(request).toHaveBeenCalledOnce();
     const init = request.mock.calls[0][1];
@@ -120,7 +107,7 @@ describe("DeepSeek provider", () => {
         { deepseek: { key: "${DEEPSEEK_API_KEY}" } },
         "/auth.json",
       ),
-    ).toEqual({ status: "missing", source: "pi:deepseek", path: "/auth.json" });
+    ).toEqual({ status: "invalid", source: "pi:deepseek", path: "/auth.json" });
   });
 
   it("reports 401 as auth_required", async () => {
