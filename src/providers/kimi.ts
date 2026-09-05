@@ -115,9 +115,11 @@ export function createKimiAdapter(
           ? "unsupported_credential_type"
           : piInspection === "expired"
             ? "pi_kimi_credential_expired"
-            : piInspection === "error"
-              ? "credential_resolution_failed"
-              : undefined;
+            : piInspection === "invalid"
+              ? "pi_kimi_credential_invalid"
+              : piInspection === "error"
+                ? "credential_resolution_failed"
+                : undefined;
 
       let cliInspection;
       try {
@@ -162,6 +164,34 @@ export function createKimiAdapter(
 
 export const kimiAdapter = createKimiAdapter();
 
+/**
+ * Kimi's two credential stores are independent: either can answer alone. They
+ * are consulted in priority order and a source that cannot answer hands over
+ * to the next, so a broken store never speaks for a provider whose sibling
+ * store still works. Handover is deliberately limited to credential problems -
+ * a transport, decoding, or server failure is about the request rather than
+ * the credential, and retrying it on a second credential would hide it.
+ */
+const KIMI_SOURCE_ORDER = [
+  PI_KIMI_CREDENTIAL_SOURCE,
+  KIMI_CODE_CLI_CREDENTIAL_SOURCE,
+] as const;
+
+type KimiFailureRecord = {
+  failure: KimiFailure;
+  /** Whether the store held a credential, so a bare gap cannot speak for one that did. */
+  credentialPresent: boolean;
+};
+
+type KimiCandidate =
+  | { status: "available"; credential: string }
+  | {
+      status: "unavailable";
+      failure: KimiFailure;
+      attemptStatus: "skipped" | "failed";
+      credentialPresent: boolean;
+    };
+
 async function acquireKimiQuota(
   dependencies: KimiDependencies,
 ): Promise<ProviderQuota> {
@@ -170,104 +200,62 @@ async function acquireKimiQuota(
     () => controller.abort(),
     dependencies.deadlineMs,
   );
-  let attempts: SourceAttempt[] = [];
+  const attempts: SourceAttempt[] = [];
+  const failures: KimiFailureRecord[] = [];
 
   try {
-    const piResolution = await resolveCredential(
-      dependencies.broker,
-      controller.signal,
-    );
-    let credential: string;
-    let credentialSource: string;
-
-    if (piResolution.status === "available") {
-      credential = piResolution.credential;
-      credentialSource = PI_KIMI_CREDENTIAL_SOURCE;
-      attempts = [{ source: credentialSource, status: "failed" }];
-    } else {
-      const piFailure = credentialFailureFor(piResolution);
-      attempts = [
-        {
-          source: PI_KIMI_CREDENTIAL_SOURCE,
-          status: piResolution.status === "error" ? "failed" : "skipped",
-          error: piFailure.code,
-        },
-      ];
-      if (piResolution.status === "error") {
-        return failureReport(piFailure, attempts, dependencies);
-      }
-
-      attempts.push({
-        source: KIMI_CODE_CLI_CREDENTIAL_SOURCE,
-        status: "failed",
-      });
-      const cliResolution = await resolveCliCredential(
-        dependencies.cliCredentialSource,
+    for (const source of KIMI_SOURCE_ORDER) {
+      const candidate = await resolveKimiCandidate(
+        source,
+        dependencies,
         controller.signal,
       );
-      if (cliResolution.status !== "available") {
-        const cliFailure = cliCredentialFailureFor(cliResolution);
-        attempts[attempts.length - 1] = {
-          source: KIMI_CODE_CLI_CREDENTIAL_SOURCE,
-          status: cliResolution.status === "error" ? "failed" : "skipped",
-          error: cliFailure.code,
-        };
-        return failureReport(
-          cliResolution.status === "missing" ? piFailure : cliFailure,
+      if (candidate.status === "unavailable") {
+        attempts.push({
+          source,
+          status: candidate.attemptStatus,
+          error: candidate.failure.code,
+          ...(candidate.credentialPresent ? { credentialPresent: true } : {}),
+        });
+        failures.push({
+          failure: candidate.failure,
+          credentialPresent: candidate.credentialPresent,
+        });
+        if (controller.signal.aborted) break;
+        continue;
+      }
+
+      attempts.push({ source, status: "failed" });
+      try {
+        const report = await readKimiQuota(
+          candidate.credential,
+          source,
           attempts,
+          controller.signal,
           dependencies,
         );
-      }
-      credential = cliResolution.accessToken;
-      credentialSource = KIMI_CODE_CLI_CREDENTIAL_SOURCE;
-    }
-
-    const payload = await requestKimiQuota(
-      credential,
-      controller.signal,
-      dependencies.fetch,
-      dependencies.now,
-    );
-    const normalized = normalizeKimiPayload(payload);
-    const untrustedWindowIds = normalized.diagnostics.map((diagnostic) =>
-      diagnostic.code === "detail_invalid"
-        ? `limit:${diagnostic.index}`
-        : "limits",
-    );
-    const refreshedAt = new Date(dependencies.now()).toISOString();
-    attempts[attempts.length - 1] = {
-      source: credentialSource,
-      status: "success",
-    };
-    return {
-      provider: "kimi",
-      label: "Kimi",
-      source: "api",
-      windows: normalized.windows,
-      state: {
-        status: "fresh",
-        stale: false,
-        refreshedAt,
-        ...(untrustedWindowIds.length > 0 ? { untrustedWindowIds } : {}),
-        sourcesTried: attempts.map(({ source }) => source),
-      },
-      attempts,
-    };
-  } catch (error) {
-    const failure =
-      error instanceof KimiFailure
-        ? error
-        : new KimiFailure("credential_resolution_failed", {
-            staleEligible: true,
-          });
-    if (attempts.length === 0) {
-      attempts = [
-        {
-          source: PI_KIMI_CREDENTIAL_SOURCE,
+        return report;
+      } catch (error) {
+        const failure = asKimiFailure(error);
+        attempts[attempts.length - 1] = {
+          source,
           status: "failed",
           error: failure.code,
-        },
-      ];
+        };
+        failures.push({ failure, credentialPresent: true });
+        if (!failure.definitiveAuth || controller.signal.aborted) break;
+      }
+    }
+
+    return failureReport(definingFailure(failures), attempts, dependencies);
+  } catch (error) {
+    const failure = asKimiFailure(error);
+    if (attempts.length === 0) {
+      attempts.push({
+        source: PI_KIMI_CREDENTIAL_SOURCE,
+        status: "failed",
+        error: failure.code,
+      });
     } else {
       attempts[attempts.length - 1] = {
         source: attempts[attempts.length - 1].source,
@@ -279,6 +267,114 @@ async function acquireKimiQuota(
   } finally {
     clearTimeout(deadline);
   }
+}
+
+async function resolveKimiCandidate(
+  source: (typeof KIMI_SOURCE_ORDER)[number],
+  dependencies: KimiDependencies,
+  signal: AbortSignal,
+): Promise<KimiCandidate> {
+  if (source === PI_KIMI_CREDENTIAL_SOURCE) {
+    let resolution: KimiCredentialResolution;
+    try {
+      resolution = await resolveCredential(dependencies.broker, signal);
+    } catch (error) {
+      return unavailableCandidate(asKimiFailure(error), "failed", true);
+    }
+    if (resolution.status === "available") {
+      return { status: "available", credential: resolution.credential };
+    }
+    return unavailableCandidate(
+      credentialFailureFor(resolution),
+      resolution.status === "error" ? "failed" : "skipped",
+      resolution.status !== "missing",
+    );
+  }
+
+  let resolution: KimiCodeCliCredentialResolution;
+  try {
+    resolution = await resolveCliCredential(
+      dependencies.cliCredentialSource,
+      signal,
+    );
+  } catch (error) {
+    return unavailableCandidate(asKimiFailure(error), "failed", true);
+  }
+  if (resolution.status === "available") {
+    return { status: "available", credential: resolution.accessToken };
+  }
+  return unavailableCandidate(
+    cliCredentialFailureFor(resolution),
+    resolution.status === "error" ? "failed" : "skipped",
+    resolution.status !== "missing",
+  );
+}
+
+function unavailableCandidate(
+  failure: KimiFailure,
+  attemptStatus: "skipped" | "failed",
+  credentialPresent: boolean,
+): KimiCandidate {
+  return { status: "unavailable", failure, attemptStatus, credentialPresent };
+}
+
+async function readKimiQuota(
+  credential: string,
+  source: string,
+  attempts: SourceAttempt[],
+  signal: AbortSignal,
+  dependencies: KimiDependencies,
+): Promise<ProviderQuota> {
+  const payload = await requestKimiQuota(
+    credential,
+    signal,
+    dependencies.fetch,
+    dependencies.now,
+  );
+  const normalized = normalizeKimiPayload(payload);
+  const untrustedWindowIds = normalized.diagnostics.map((diagnostic) =>
+    diagnostic.code === "detail_invalid"
+      ? `limit:${diagnostic.index}`
+      : "limits",
+  );
+  const refreshedAt = new Date(dependencies.now()).toISOString();
+  attempts[attempts.length - 1] = { source, status: "success" };
+  return {
+    provider: "kimi",
+    label: "Kimi",
+    source: "api",
+    windows: normalized.windows,
+    state: {
+      status: "fresh",
+      stale: false,
+      refreshedAt,
+      ...(untrustedWindowIds.length > 0 ? { untrustedWindowIds } : {}),
+      sourcesTried: attempts.map(({ source: name }) => name),
+    },
+    attempts,
+  };
+}
+
+/**
+ * Which recorded failure speaks for the provider. A sibling that only failed
+ * transiently outranks a definitive rejection, so a rejected credential can
+ * never be reported as a sign-out while another source's outage is unresolved;
+ * among definitive verdicts a store that actually held a credential outranks
+ * one that was simply absent.
+ */
+function definingFailure(failures: KimiFailureRecord[]): KimiFailure {
+  return (
+    failures.find((record) => !record.failure.definitiveAuth)?.failure ??
+    failures.find((record) => record.credentialPresent)?.failure ??
+    failures[0]?.failure ??
+    new KimiFailure("credential_resolution_failed", { staleEligible: true })
+  );
+}
+
+function asKimiFailure(error: unknown): KimiFailure {
+  return error instanceof KimiFailure
+    ? error
+    : new KimiFailure("credential_resolution_failed", { staleEligible: true });
 }
 
 async function resolveCredential(
@@ -320,6 +416,12 @@ function credentialFailureFor(
   }
   if (resolution.status === "unsupported") {
     return new KimiFailure("unsupported_credential_type", {
+      status: "auth_required",
+      definitiveAuth: true,
+    });
+  }
+  if (resolution.status === "invalid") {
+    return new KimiFailure("pi_kimi_credential_invalid", {
       status: "auth_required",
       definitiveAuth: true,
     });

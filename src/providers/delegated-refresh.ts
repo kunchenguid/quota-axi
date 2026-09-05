@@ -181,12 +181,18 @@ export function refreshDelegateAttempt(
     return { source: delegate.source, status: "skipped", error: run.error };
   }
   if (run.status === "failed" || run.status === "unconfirmed") {
-    return { source: delegate.source, status: "failed", error: run.error };
+    return {
+      source: delegate.source,
+      status: "failed",
+      error: run.error,
+      degraded: false,
+    };
   }
   if (run.exitCode === 0) return { source: delegate.source, status: "success" };
   return {
     source: delegate.source,
     status: "failed",
     error: REFRESH_EXIT_STATUS,
+    degraded: false,
   };
 }

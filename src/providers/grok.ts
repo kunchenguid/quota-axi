@@ -256,15 +256,16 @@ async function fetchQuotaWithDependencies(
     }
   }
 
-  const piSelection =
-    cliSelection.outcome === "quota"
-      ? await selectCredential<GrokAttemptCredential, NormalizedGrokQuota>(
-          [],
-          (candidate) => attemptGrokCandidate(candidate.credential),
-        )
-      : await selectCredential(piCandidates, (candidate) =>
-          attemptGrokCandidate(candidate.credential),
-        );
+  const shouldTryPi =
+    cliSelection.outcome !== "quota" &&
+    cliSelection.outcome !== "transient" &&
+    cliSelection.transientError === undefined;
+  const piSelection = await selectCredential<
+    GrokAttemptCredential,
+    NormalizedGrokQuota
+  >(shouldTryPi ? piCandidates : [], (candidate) =>
+    attemptGrokCandidate(candidate.credential),
+  );
   const selection = mergeIndependentSelections(cliSelection, piSelection);
 
   const attempts = grokAttempts(
@@ -474,8 +475,8 @@ function mergeIndependentSelections<R>(
     return {
       outcome: "live_no_quota",
       winner: live.winner,
-      transientError: transient?.transientError,
-      retryAfter: transient?.retryAfter,
+      transientError: live.transientError ?? transient?.transientError,
+      retryAfter: live.retryAfter ?? transient?.retryAfter,
       refreshable,
       results,
     };
@@ -625,6 +626,8 @@ function grokAttempts(
           ? MODEL_AUTH_ONLY_ERROR
           : MODEL_AUTH_PROBE_LIVE,
       credentialPresent: true,
+      // Live auth that simply carries no consumer quota is not a broken source.
+      degraded: false,
     });
   } else {
     attempts.push(piSourceAttempt(piResolution));
@@ -657,6 +660,8 @@ function appendGrokCliAttempt(
       status: "skipped",
       error: MODEL_AUTH_PROBE_LIVE,
       credentialPresent: true,
+      // Live auth that simply carries no consumer quota is not a broken source.
+      degraded: false,
     });
     return;
   }
@@ -675,6 +680,7 @@ function appendGrokCliAttempt(
     source: pass.state.source.source,
     status: "skipped",
     error: `credentials_${pass.state.status}`,
+    ...(pass.state.status === "missing" ? {} : { credentialPresent: true }),
   });
 }
 
@@ -719,9 +725,10 @@ function classifyGrokAuthStatus(
   );
   const piUsable =
     (piResolution.status === "available" &&
-      (piResult?.outcome === "quota" ||
-        piResult?.outcome === "live_no_quota" ||
-        piResult?.outcome === "transient")) ||
+      (piResult === undefined ||
+        piResult.outcome === "quota" ||
+        piResult.outcome === "live_no_quota" ||
+        piResult.outcome === "transient")) ||
     (piResolution.status === "expired" &&
       piResult?.outcome === "live_no_quota");
   const cliUsable = selection.results.some(
@@ -762,6 +769,7 @@ function piSourceAttempt(resolution: PiXaiCredentialResolution): SourceAttempt {
           ? PI_QUOTA_NOT_NEEDED_ERROR
           : MODEL_AUTH_ONLY_ERROR,
       credentialPresent: true,
+      degraded: false,
     };
   }
   if (resolution.status === "expired") {
@@ -777,6 +785,7 @@ function piSourceAttempt(resolution: PiXaiCredentialResolution): SourceAttempt {
       source: PI_XAI_CREDENTIAL_SOURCE,
       status: "failed",
       error: "credential_resolution_failed",
+      credentialPresent: true,
     };
   }
   if (resolution.status === "unsupported") {
@@ -784,6 +793,7 @@ function piSourceAttempt(resolution: PiXaiCredentialResolution): SourceAttempt {
       source: PI_XAI_CREDENTIAL_SOURCE,
       status: "skipped",
       error: "unsupported_credential_type",
+      credentialPresent: true,
     };
   }
   if (resolution.status === "invalid") {
@@ -791,6 +801,7 @@ function piSourceAttempt(resolution: PiXaiCredentialResolution): SourceAttempt {
       source: PI_XAI_CREDENTIAL_SOURCE,
       status: "skipped",
       error: "credentials_invalid",
+      credentialPresent: true,
     };
   }
   return {

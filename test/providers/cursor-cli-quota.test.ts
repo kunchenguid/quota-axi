@@ -81,6 +81,7 @@ function writeCliAuthFile(): void {
 
 type ProcessMock = {
   editorToken?: string;
+  editorError?: string;
   keychainToken?: string;
   keychainPresent?: boolean;
 };
@@ -93,6 +94,7 @@ function mockProcess(mock: ProcessMock): { calls: string[][] } {
     execFileText: vi.fn(async (command: string, args: string[]) => {
       calls.push([command, ...args]);
       if (command === "sqlite3") {
+        if (mock.editorError) throw new Error(mock.editorError);
         if (mock.editorToken === undefined)
           throw new Error("unable to open database file");
         const query = args.at(-1) ?? "";
@@ -209,6 +211,29 @@ describe("Cursor CLI-only quota refresh", () => {
       expect(JSON.stringify(result)).not.toContain(
         "refresh-token-must-not-be-used",
       );
+    });
+  });
+
+  it("keeps an invalid editor store degraded when CLI auth returns quota", async () => {
+    writeCliAuthFile();
+    mockProcess({ editorError: "database disk image is malformed" });
+    mockUsageApi();
+
+    await onLinux(async () => {
+      const { withQuotaSemantics } =
+        await import("../../src/interpretation.js");
+      const { fetchQuota } = await import("../../src/providers/cursor.js");
+      const result = await fetchQuota({
+        allowKeychainPrompt: false,
+        refreshCredentials: false,
+      });
+      const interpreted = withQuotaSemantics(result, new Date().toISOString());
+
+      expect(result.state.status).toBe("fresh");
+      expect(result.windows.length).toBeGreaterThan(0);
+      expect(interpreted.state.degradedSources).toEqual([
+        { source: "state-vscdb", error: "sqlite_read_error" },
+      ]);
     });
   });
 

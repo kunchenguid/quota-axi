@@ -1,6 +1,7 @@
 import { open } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { classifyPiAuthEntry } from "../lib/pi-auth-store.js";
 
 const PI_PROVIDER_ID = "xai";
 const AUTH_FILE_LIMIT_BYTES = 64 * 1024;
@@ -109,14 +110,12 @@ async function resolveCredential(
   try {
     parsed = JSON.parse(contents.toString("utf8")) as unknown;
   } catch {
-    return { status: "error" };
+    return { status: "invalid" };
   }
 
-  const root = objectValue(parsed);
-  if (!root) return { status: "invalid" };
-
-  const entry = objectValue(root[PI_PROVIDER_ID]);
-  if (!entry) return { status: "missing" };
+  const classified = classifyPiAuthEntry(parsed, PI_PROVIDER_ID);
+  if (classified.status !== "present") return classified;
+  const { entry } = classified;
 
   const type = stringValue(entry.type)?.toLowerCase();
   if (type === "api_key") {
@@ -142,7 +141,7 @@ async function resolveCredential(
     return { status: "available", kind: "oauth", credential: access };
   }
 
-  if (type === undefined) return { status: "missing" };
+  if (type === undefined) return { status: "invalid" };
   return { status: "unsupported" };
 }
 
@@ -228,12 +227,6 @@ async function readBoundedFile(
 
 function nonempty(value: string | undefined): string | undefined {
   return value && value.length > 0 ? value : undefined;
-}
-
-function objectValue(value: unknown): Record<string, unknown> | undefined {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
 }
 
 function stringValue(value: unknown): string | undefined {

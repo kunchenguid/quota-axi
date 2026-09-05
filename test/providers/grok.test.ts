@@ -12,6 +12,7 @@ import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { writeCachedProviders } from "../../src/cache.js";
 import { main } from "../../src/cli.js";
+import { withQuotaSemantics } from "../../src/interpretation.js";
 import { statusFromError } from "../../src/providers/common.js";
 import {
   createGrokAdapter,
@@ -1228,12 +1229,14 @@ describe("Grok expired access-token classification", () => {
       authStatus: "usable",
       error: "Grok model access available; quota unavailable",
     });
-    expect(result.attempts).toContainEqual({
-      source: "web",
-      status: "skipped",
-      error: "model_auth_probe_live",
-      credentialPresent: true,
-    });
+    expect(result.attempts).toContainEqual(
+      expect.objectContaining({
+        source: "web",
+        status: "skipped",
+        error: "model_auth_probe_live",
+        credentialPresent: true,
+      }),
+    );
     expect(result.attempts).not.toContainEqual(
       expect.objectContaining({ source: "web", status: "failed" }),
     );
@@ -1502,6 +1505,10 @@ describe("Grok dual-source CLI and Pi xAI usability", () => {
     expect(result.state.authStatus).toBe("usable");
     expect(result.source).toBe("web");
     expect(result.windows.length).toBeGreaterThan(0);
+    expect(
+      withQuotaSemantics(result, new Date().toISOString()).state
+        .degradedSources,
+    ).toBeUndefined();
     expect(result.attempts).toEqual([
       {
         source: "auth-json",
@@ -1527,6 +1534,25 @@ describe("Grok dual-source CLI and Pi xAI usability", () => {
     expect(JSON.stringify(result)).not.toContain(
       "pi-xai-refresh-token-fixture",
     );
+  });
+
+  it("keeps an invalid CLI store degraded when Pi returns quota", async () => {
+    writeAuth({ invalid: { type: "api_key", key: "ignored" } });
+    writeValidPiXaiOauth();
+    const fetchMock = stubSuccessfulFetch();
+
+    const result = await fetchQuota({
+      allowKeychainPrompt: false,
+      refreshCredentials: false,
+    });
+    const interpreted = withQuotaSemantics(result, new Date().toISOString());
+
+    expect(result.state.status).toBe("fresh");
+    expect(result.windows.length).toBeGreaterThan(0);
+    expect(interpreted.state.degradedSources).toEqual([
+      { source: "auth-json", error: "credentials_invalid" },
+    ]);
+    expect(fetchMock).toHaveBeenCalledOnce();
   });
 
   it("reports a definitively rejected Pi oauth token as signed out", async () => {
@@ -1617,13 +1643,111 @@ describe("Grok dual-source CLI and Pi xAI usability", () => {
     expect(result.state.error).toBe("Grok quota unavailable");
   });
 
-  it("tries Pi oauth after a transient CLI quota failure", async () => {
-    writeValidAuth("cli-transient-token");
+  it("uses Pi numeric quota after live CLI auth exposes no quota", async () => {
+    writeAuth({
+      "https://auth.x.ai::fixture-client": {
+        key: "cli-model-only-token",
+        auth_mode: "oidc",
+        expires_at: "2035-01-01T00:00:00.000Z",
+      },
+    });
     writeValidPiXaiOauth();
-    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
       const authorization = (
         init?.headers as Record<string, string> | undefined
       )?.Authorization;
+      if (authorization === "Bearer cli-model-only-token") {
+        return url === GROK_BUILD_MODELS_URL
+          ? new Response(JSON.stringify({ object: "list", data: [] }), {
+              status: 200,
+            })
+          : grpcResponse(new Uint8Array(), { status: 403 });
+      }
+      return grpcResponse(consumerPayload());
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await fetchQuota({
+      allowKeychainPrompt: false,
+      refreshCredentials: false,
+    });
+
+    expect(result.state.status).toBe("fresh");
+    expect(result.state.authStatus).toBe("usable");
+    expect(result.windows.length).toBeGreaterThan(0);
+    expect(result.attempts).toEqual([
+      {
+        source: "web",
+        status: "skipped",
+        error: "model_auth_probe_live",
+        credentialPresent: true,
+        degraded: false,
+      },
+      { source: "pi:xai", status: "success", credentialPresent: true },
+    ]);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("stops before Pi when live CLI auth is followed by a transient candidate", async () => {
+    writeAuth({
+      "https://auth.x.ai::live-client": {
+        key: "cli-live-model-only-token",
+        auth_mode: "oidc",
+        expires_at: "2035-01-01T00:00:00.000Z",
+      },
+      "https://auth.x.ai::transient-client": {
+        key: "cli-transient-token",
+        auth_mode: "oidc",
+        expires_at: "2035-01-01T00:00:00.000Z",
+      },
+    });
+    writeValidPiXaiOauth();
+    const bearers: string[] = [];
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      const authorization =
+        (init?.headers as Record<string, string> | undefined)?.Authorization ??
+        "";
+      bearers.push(authorization);
+      if (authorization === "Bearer cli-live-model-only-token") {
+        return url === GROK_BUILD_MODELS_URL
+          ? new Response(JSON.stringify({ object: "list", data: [] }), {
+              status: 200,
+            })
+          : grpcResponse(new Uint8Array(), { status: 403 });
+      }
+      if (authorization === "Bearer cli-transient-token") {
+        throw new TypeError("network unavailable");
+      }
+      return grpcResponse(consumerPayload());
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await fetchQuota({
+      allowKeychainPrompt: false,
+      refreshCredentials: false,
+    });
+    const interpreted = withQuotaSemantics(result, new Date().toISOString());
+
+    expect(result.source).toBe("unavailable");
+    expect(result.windows).toEqual([]);
+    expect(result.state).toMatchObject({
+      status: "error",
+      authStatus: "usable",
+      error: "Grok quota unavailable",
+    });
+    expect(bearers).not.toContain("Bearer pi-xai-access-token-fixture");
+    expect(interpreted.state.degradedSources).toBeUndefined();
+  });
+
+  it("does not try Pi oauth after a transient CLI quota failure", async () => {
+    writeValidAuth("cli-transient-token");
+    writeValidPiXaiOauth();
+    const bearers: string[] = [];
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      const authorization =
+        (init?.headers as Record<string, string> | undefined)?.Authorization ??
+        "";
+      bearers.push(authorization);
       if (authorization === "Bearer cli-transient-token") {
         throw new TypeError("network unavailable");
       }
@@ -1636,13 +1760,24 @@ describe("Grok dual-source CLI and Pi xAI usability", () => {
       refreshCredentials: false,
     });
 
-    expect(result.state.status).toBe("fresh");
-    expect(result.source).toBe("web");
+    expect(result.state.status).toBe("error");
+    expect(result.source).toBe("unavailable");
     expect(result.attempts).toEqual([
       { source: "web", status: "failed", error: "Grok quota unavailable" },
-      { source: "pi:xai", status: "success", credentialPresent: true },
+      {
+        source: "pi:xai",
+        status: "skipped",
+        error: "quota_not_needed",
+        credentialPresent: true,
+        degraded: false,
+      },
     ]);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(bearers).toEqual(["Bearer cli-transient-token"]);
+    expect(bearers).not.toContain("Bearer pi-xai-access-token-fixture");
+    expect(
+      withQuotaSemantics(result, new Date().toISOString()).state
+        .degradedSources,
+    ).toBeUndefined();
   });
 
   it("tries a stored-expired CLI bearer independently of transient Pi oauth", async () => {
@@ -1722,6 +1857,7 @@ describe("Grok dual-source CLI and Pi xAI usability", () => {
         status: "skipped",
         error: "model_auth_only",
         credentialPresent: true,
+        degraded: false,
       },
     ]);
     // The official OIDC session is tested against consumer quota and the
@@ -1945,10 +2081,55 @@ describe("Grok dual-source CLI and Pi xAI usability", () => {
         status: "skipped",
         error: "quota_not_needed",
         credentialPresent: true,
+        degraded: false,
       },
     ]);
     expect(fetchMock).toHaveBeenCalledOnce();
   });
+
+  it("keeps unsupported Pi auth visible when the CLI bearer succeeds", async () => {
+    writeValidAuth("cli-only-key");
+    writePiXaiAuth({ xai: { type: "unsupported" } });
+    const fetchMock = stubSuccessfulFetch();
+
+    const result = await fetchQuota({
+      allowKeychainPrompt: false,
+      refreshCredentials: false,
+    });
+
+    expect(result.state.status).toBe("fresh");
+    expect(result.attempts).toEqual([
+      { source: "web", status: "success" },
+      {
+        source: "pi:xai",
+        status: "skipped",
+        error: "unsupported_credential_type",
+        credentialPresent: true,
+      },
+    ]);
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it.each([{}, null, "invalid", []])(
+    "keeps structurally invalid Pi auth %# degraded when CLI returns quota",
+    async (entry) => {
+      writeValidAuth("cli-only-key");
+      writePiXaiAuth({ xai: entry });
+      stubSuccessfulFetch();
+
+      const result = await fetchQuota({
+        allowKeychainPrompt: false,
+        refreshCredentials: false,
+      });
+      const interpreted = withQuotaSemantics(result, new Date().toISOString());
+
+      expect(result.state.status).toBe("fresh");
+      expect(result.windows.length).toBeGreaterThan(0);
+      expect(interpreted.state.degradedSources).toEqual([
+        { source: "pi:xai", error: "credentials_invalid" },
+      ]);
+    },
+  );
 
   it("keeps Grok CLI consumer quota when Pi xAI auth is missing", async () => {
     writeValidAuth("cli-only-key");
@@ -2188,7 +2369,7 @@ describe("Grok dual-source CLI and Pi xAI usability", () => {
     expect(JSON.stringify(result)).not.toContain("expired-pi-access");
   });
 
-  it("preserves malformed Pi auth JSON as a resolution error", async () => {
+  it("preserves malformed Pi auth JSON as invalid", async () => {
     const piAuthPath = join(process.env.PI_CODING_AGENT_DIR!, "auth.json");
     mkdirSync(dirname(piAuthPath), { recursive: true });
     writeFileSync(piAuthPath, "{not-json");
@@ -2201,13 +2382,14 @@ describe("Grok dual-source CLI and Pi xAI usability", () => {
 
     expect(result.state).toMatchObject({
       authStatus: "unusable",
-      status: "error",
-      error: "Grok Pi credential resolution failed",
+      status: "auth_required",
+      error: "Grok sign-in required",
     });
     expect(result.attempts).toContainEqual({
       source: "pi:xai",
-      status: "failed",
-      error: "credential_resolution_failed",
+      status: "skipped",
+      error: "credentials_invalid",
+      credentialPresent: true,
     });
   });
 
@@ -2309,7 +2491,12 @@ describe("Grok dual-source CLI and Pi xAI usability", () => {
       source: "pi:xai",
       status: "failed",
       error: "credential_resolution_failed",
+      credentialPresent: true,
     });
+    expect(
+      withQuotaSemantics(result, new Date().toISOString()).state
+        .degradedSources,
+    ).toEqual([{ source: "pi:xai", error: "credential_resolution_failed" }]);
   });
 
   it("omits the Grok CLI remedy for Pi-only refreshable expiry", async () => {
@@ -2687,6 +2874,7 @@ describe("Grok delegated credential refresh", () => {
         source: "auth-json",
         status: "skipped",
         error: "credentials_invalid",
+        credentialPresent: true,
       },
     ]);
     expect(fetchMock).toHaveBeenCalledTimes(2);
