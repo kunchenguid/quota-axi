@@ -35,6 +35,8 @@ const originalMimoProvider = PROVIDERS.mimo;
 const originalXdgCacheHome = process.env.XDG_CACHE_HOME;
 const originalMinimaxApiKey = process.env.MINIMAX_API_KEY;
 const originalMimoApiKey = process.env.MIMO_API_KEY;
+const originalDeepSeekApiKey = process.env.DEEPSEEK_API_KEY;
+const originalOpenRouterApiKey = process.env.OPENROUTER_API_KEY;
 const originalPiCodingAgentDir = process.env.PI_CODING_AGENT_DIR;
 const originalMmxConfigDir = process.env.MMX_CONFIG_DIR;
 let tempDir: string | undefined;
@@ -57,6 +59,8 @@ afterEach(() => {
   else process.env.XDG_CACHE_HOME = originalXdgCacheHome;
   restoreEnvironment("MINIMAX_API_KEY", originalMinimaxApiKey);
   restoreEnvironment("MIMO_API_KEY", originalMimoApiKey);
+  restoreEnvironment("DEEPSEEK_API_KEY", originalDeepSeekApiKey);
+  restoreEnvironment("OPENROUTER_API_KEY", originalOpenRouterApiKey);
   restoreEnvironment("PI_CODING_AGENT_DIR", originalPiCodingAgentDir);
   restoreEnvironment("MMX_CONFIG_DIR", originalMmxConfigDir);
   if (tempDir) rmSync(tempDir, { recursive: true, force: true });
@@ -953,6 +957,134 @@ describe("new provider public quota output", () => {
         ],
       }),
     ]);
+  });
+
+  it("publishes the registered DeepSeek balance through the JSON CLI", async () => {
+    useTempCache();
+    const key = "synthetic-deepseek-cli-key";
+    process.env.DEEPSEEK_API_KEY = key;
+    const fetch = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        expect(String(input)).toBe("https://api.deepseek.com/user/balance");
+        expect(new Headers(init?.headers).get("authorization")).toBe(
+          `Bearer ${key}`,
+        );
+        return new Response(
+          JSON.stringify({
+            is_available: true,
+            balance_infos: [
+              {
+                currency: "USD",
+                total_balance: "12.50",
+                granted_balance: "10.00",
+                topped_up_balance: "2.50",
+              },
+            ],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      },
+    );
+    vi.stubGlobal("fetch", fetch);
+
+    const json = JSON.parse(
+      await capture(["--provider", "deepseek", "--json", "--full"]),
+    ) as QuotaAxiResponse;
+
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(json.providers).toEqual([
+      expect.objectContaining({
+        provider: "deepseek",
+        source: "api",
+        windows: [],
+        credits: { remaining: 12.5, unit: "usd" },
+        state: expect.objectContaining({
+          status: "fresh",
+          stale: false,
+          sourcesTried: ["env:DEEPSEEK_API_KEY"],
+        }),
+        attempts: [{ source: "env:DEEPSEEK_API_KEY", status: "success" }],
+      }),
+    ]);
+    expect(JSON.stringify(json)).not.toContain(key);
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("publishes the registered OpenRouter key cap in JSON and names it in the default report", async () => {
+    useTempCache();
+    const key = "synthetic-openrouter-cli-key";
+    process.env.OPENROUTER_API_KEY = key;
+    const fetch = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        expect(String(input)).toBe("https://openrouter.ai/api/v1/key");
+        expect(new Headers(init?.headers).get("authorization")).toBe(
+          `Bearer ${key}`,
+        );
+        return new Response(
+          JSON.stringify({
+            data: {
+              label: "personal",
+              limit: 100,
+              limit_remaining: 73.25,
+              limit_reset: "Daily",
+              usage: 26.75,
+              is_free_tier: false,
+            },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      },
+    );
+    vi.stubGlobal("fetch", fetch);
+
+    const json = JSON.parse(
+      await capture(["--provider", "openrouter", "--json", "--full"]),
+    ) as QuotaAxiResponse;
+    expect(json.providers).toEqual([
+      expect.objectContaining({
+        provider: "openrouter",
+        source: "api",
+        account: { accountId: "personal" },
+        credits: { remaining: 73.25, unit: "usd" },
+        windows: [
+          expect.objectContaining({
+            id: "key-limit",
+            kind: "credits",
+            spentUsd: 26.75,
+            limitUsd: 100,
+            percentRemaining: 73.25,
+            resetText: "Daily",
+          }),
+        ],
+        state: expect.objectContaining({ status: "fresh", stale: false }),
+      }),
+    ]);
+    expect(JSON.stringify(json)).not.toContain(key);
+
+    const report = await capture(["--provider", "openrouter"]);
+    expect(report).toContain("openrouter,all,unresolved_windows,key-limit");
+  });
+
+  it("reports both new providers as signed out when no key is present", async () => {
+    useTempCache();
+    delete process.env.DEEPSEEK_API_KEY;
+    delete process.env.OPENROUTER_API_KEY;
+    process.env.PI_CODING_AGENT_DIR = join(tempDir!, "pi-agent-empty");
+    const fetch = vi.fn(async () => {
+      throw new Error("no request expected without a credential");
+    });
+    vi.stubGlobal("fetch", fetch);
+
+    const report = await capture(["--provider", "deepseek,openrouter"]);
+
+    expect(fetch).not.toHaveBeenCalled();
+    expect(report).toContain(
+      "deepseek,all,auth_required,deepseek_credential_unavailable",
+    );
+    expect(report).toContain(
+      "openrouter,all,auth_required,openrouter_credential_unavailable",
+    );
+    expect(process.exitCode).toBe(1);
   });
 });
 
