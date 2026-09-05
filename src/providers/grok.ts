@@ -256,13 +256,12 @@ async function fetchQuotaWithDependencies(
     }
   }
 
-  const cliCredentialFailed =
-    cliSelection.outcome === "all_rejected" ||
-    cliSelection.outcome === "no_candidates";
+  const shouldTryPi =
+    cliSelection.outcome !== "quota" && cliSelection.outcome !== "transient";
   const piSelection = await selectCredential<
     GrokAttemptCredential,
     NormalizedGrokQuota
-  >(cliCredentialFailed ? piCandidates : [], (candidate) =>
+  >(shouldTryPi ? piCandidates : [], (candidate) =>
     attemptGrokCandidate(candidate.credential),
   );
   const selection = mergeIndependentSelections(cliSelection, piSelection);

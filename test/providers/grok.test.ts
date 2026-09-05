@@ -12,6 +12,7 @@ import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { writeCachedProviders } from "../../src/cache.js";
 import { main } from "../../src/cli.js";
+import { withQuotaSemantics } from "../../src/interpretation.js";
 import { statusFromError } from "../../src/providers/common.js";
 import {
   createGrokAdapter,
@@ -1619,6 +1620,51 @@ describe("Grok dual-source CLI and Pi xAI usability", () => {
     expect(result.state.error).toBe("Grok quota unavailable");
   });
 
+  it("uses Pi numeric quota after live CLI auth exposes no quota", async () => {
+    writeAuth({
+      "https://auth.x.ai::fixture-client": {
+        key: "cli-model-only-token",
+        auth_mode: "oidc",
+        expires_at: "2035-01-01T00:00:00.000Z",
+      },
+    });
+    writeValidPiXaiOauth();
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      const authorization = (
+        init?.headers as Record<string, string> | undefined
+      )?.Authorization;
+      if (authorization === "Bearer cli-model-only-token") {
+        return url === GROK_BUILD_MODELS_URL
+          ? new Response(JSON.stringify({ object: "list", data: [] }), {
+              status: 200,
+            })
+          : grpcResponse(new Uint8Array(), { status: 403 });
+      }
+      return grpcResponse(consumerPayload());
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await fetchQuota({
+      allowKeychainPrompt: false,
+      refreshCredentials: false,
+    });
+
+    expect(result.state.status).toBe("fresh");
+    expect(result.state.authStatus).toBe("usable");
+    expect(result.windows.length).toBeGreaterThan(0);
+    expect(result.attempts).toEqual([
+      {
+        source: "web",
+        status: "skipped",
+        error: "model_auth_probe_live",
+        credentialPresent: true,
+        degraded: false,
+      },
+      { source: "pi:xai", status: "success", credentialPresent: true },
+    ]);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
   it("does not try Pi oauth after a transient CLI quota failure", async () => {
     writeValidAuth("cli-transient-token");
     writeValidPiXaiOauth();
@@ -1654,6 +1700,10 @@ describe("Grok dual-source CLI and Pi xAI usability", () => {
     ]);
     expect(bearers).toEqual(["Bearer cli-transient-token"]);
     expect(bearers).not.toContain("Bearer pi-xai-access-token-fixture");
+    expect(
+      withQuotaSemantics(result, new Date().toISOString()).state
+        .degradedSources,
+    ).toBeUndefined();
   });
 
   it("tries a stored-expired CLI bearer independently of transient Pi oauth", async () => {
