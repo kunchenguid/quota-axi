@@ -1228,12 +1228,14 @@ describe("Grok expired access-token classification", () => {
       authStatus: "usable",
       error: "Grok model access available; quota unavailable",
     });
-    expect(result.attempts).toContainEqual({
-      source: "web",
-      status: "skipped",
-      error: "model_auth_probe_live",
-      credentialPresent: true,
-    });
+    expect(result.attempts).toContainEqual(
+      expect.objectContaining({
+        source: "web",
+        status: "skipped",
+        error: "model_auth_probe_live",
+        credentialPresent: true,
+      }),
+    );
     expect(result.attempts).not.toContainEqual(
       expect.objectContaining({ source: "web", status: "failed" }),
     );
@@ -1722,6 +1724,7 @@ describe("Grok dual-source CLI and Pi xAI usability", () => {
         status: "skipped",
         error: "model_auth_only",
         credentialPresent: true,
+        degraded: false,
       },
     ]);
     // The official OIDC session is tested against consumer quota and the

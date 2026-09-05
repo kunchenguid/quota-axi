@@ -225,7 +225,6 @@ describe("Kimi request transport", () => {
           headers: { "content-type": "application/json" },
         }),
       async () => new Response(null, { status: 503 }),
-      async () => new Response(null, { status: 401 }),
     ];
 
     for (const requestFailure of failures) {
@@ -242,6 +241,74 @@ describe("Kimi request transport", () => {
       expect(cliSource.resolve).not.toHaveBeenCalled();
       expect(report.state.sourcesTried).toEqual(["pi:kimi-coding"]);
     }
+  });
+
+  it("reports the CLI reading when the Pi credential is rejected", async () => {
+    const request = vi.fn(
+      async (_input: RequestInfo | URL, init?: RequestInit) =>
+        new Headers(init?.headers).get("authorization") ===
+        "Bearer cli-token-after-pi-rejection"
+          ? jsonResponse(SUCCESS_PAYLOAD)
+          : new Response(null, { status: 401 }),
+    );
+    const remove = vi.fn();
+    const report = await testAdapter({
+      cliCredentialSource: cliCredentialSource({
+        status: "available",
+        accessToken: "cli-token-after-pi-rejection",
+      }),
+      fetch: request,
+      deleteCachedProvider: remove,
+    }).fetchQuota(OPTIONS);
+
+    expect(report.state.status).toBe("fresh");
+    expect(report.windows.length).toBeGreaterThan(0);
+    expect(remove).not.toHaveBeenCalled();
+    expect(report.state.sourcesTried).toEqual([
+      "pi:kimi-coding",
+      "kimi-code-cli",
+    ]);
+    expect(report.attempts).toEqual([
+      {
+        source: "pi:kimi-coding",
+        status: "failed",
+        error: "provider_auth_rejected",
+      },
+      { source: "kimi-code-cli", status: "success" },
+    ]);
+  });
+
+  it("keeps a rejected Pi credential answerable when the CLI is unusable", async () => {
+    const remove = vi.fn();
+    const report = await testAdapter({
+      cliCredentialSource: cliCredentialSource({ status: "missing" }),
+      fetch: vi.fn(async () => new Response(null, { status: 401 })),
+      deleteCachedProvider: remove,
+      readCachedProvider: () => cachedQuota(),
+    }).fetchQuota(OPTIONS);
+
+    expect(report.state).toMatchObject({
+      status: "auth_required",
+      stale: false,
+      error: "provider_auth_rejected",
+    });
+    expect(remove).toHaveBeenCalledWith("kimi");
+  });
+
+  it("does not report a rejected credential as sign-out while a sibling is only unreachable", async () => {
+    const remove = vi.fn();
+    const report = await testAdapter({
+      cliCredentialSource: cliCredentialSource({ status: "error" }),
+      fetch: vi.fn(async () => new Response(null, { status: 401 })),
+      deleteCachedProvider: remove,
+      readCachedProvider: () => cachedQuota(),
+    }).fetchQuota(OPTIONS);
+
+    expect(remove).not.toHaveBeenCalled();
+    expect(report).toMatchObject({
+      source: "cache",
+      state: { status: "stale", error: "credential_resolution_failed" },
+    });
   });
 
   it("coalesces concurrent acquisitions into one provider request", async () => {
@@ -856,7 +923,7 @@ describe("Kimi credential outcomes and cache policy", () => {
         error: "credential_resolution_failed",
         refreshedAt: cached.state.refreshedAt,
         untrustedWindowIds: ["limit:2"],
-        sourcesTried: ["pi:kimi-coding", "cache"],
+        sourcesTried: ["pi:kimi-coding", "kimi-code-cli", "cache"],
       },
     });
   });

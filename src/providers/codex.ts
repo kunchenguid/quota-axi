@@ -155,6 +155,11 @@ async function fetchQuotaWithDependencies(
       source: "oauth",
       status: "skipped",
       error: `credentials_${credentialState.status}`,
+      // An expired or malformed store still holds a credential, so a sibling
+      // source that answers supersedes it rather than replacing it silently.
+      ...(credentialState.status === "missing"
+        ? {}
+        : { credentialPresent: true }),
     });
     if (credentialState.status !== "missing") {
       finalError = "Codex sign-in required";

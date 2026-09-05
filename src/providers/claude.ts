@@ -343,6 +343,9 @@ async function attemptClaudeQuota(
       source: state.source.source,
       status: "skipped",
       error: `credentials_${state.status}`,
+      // A malformed store still holds a credential, so a sibling source that
+      // answers supersedes it rather than replacing it silently.
+      ...(state.status === "invalid" ? { credentialPresent: true } : {}),
     });
   }
 
@@ -366,6 +369,10 @@ async function attemptClaudeQuota(
                 source: "oauth-profile",
                 status: "failed",
                 error: quota.identityError,
+                // The identity lookup is not a credential source, so its
+                // failure never marks a source as superseded; `account`
+                // already reports the unverified identity.
+                degraded: false,
               }
             : { source: "oauth-profile", status: "success" },
         );

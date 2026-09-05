@@ -205,11 +205,13 @@ describe("Codex credential-state reporting", () => {
       status: "invalid",
     });
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(result.attempts).toContainEqual({
-      source: "oauth",
-      status: "skipped",
-      error: "credentials_invalid",
-    });
+    expect(result.attempts).toContainEqual(
+      expect.objectContaining({
+        source: "oauth",
+        status: "skipped",
+        error: "credentials_invalid",
+      }),
+    );
   });
 
   it("surfaces expired JWT credentials without probing OAuth usage", async () => {
@@ -235,11 +237,13 @@ describe("Codex credential-state reporting", () => {
     });
     expect(fetchMock).not.toHaveBeenCalled();
     expect(result.state.status).toBe("auth_required");
-    expect(result.attempts).toContainEqual({
-      source: "oauth",
-      status: "skipped",
-      error: "credentials_expired",
-    });
+    expect(result.attempts).toContainEqual(
+      expect.objectContaining({
+        source: "oauth",
+        status: "skipped",
+        error: "credentials_expired",
+      }),
+    );
   });
 
   it("treats access-token usability as authoritative when id_token is expired", async () => {
@@ -320,11 +324,13 @@ describe("Codex credential-state reporting", () => {
 
     expect(auth.sources[0]?.status).toBe("expired");
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(result.attempts).toContainEqual({
-      source: "oauth",
-      status: "skipped",
-      error: "credentials_expired",
-    });
+    expect(result.attempts).toContainEqual(
+      expect.objectContaining({
+        source: "oauth",
+        status: "skipped",
+        error: "credentials_expired",
+      }),
+    );
   });
 
   it("surfaces malformed auth JSON as invalid", async () => {

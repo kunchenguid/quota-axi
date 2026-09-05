@@ -499,11 +499,13 @@ describe("Claude credential-state reporting", () => {
           error: expectedError,
         },
       });
-      expect(result.attempts).toContainEqual({
-        source: "oauth-file",
-        status: "skipped",
-        error: expectedError,
-      });
+      expect(result.attempts).toContainEqual(
+        expect.objectContaining({
+          source: "oauth-file",
+          status: "skipped",
+          error: expectedError,
+        }),
+      );
       expect(readCachedProvider("claude")).toBeUndefined();
     },
   );
@@ -995,11 +997,13 @@ describe("Claude credential-state reporting", () => {
 
     expect(result.state.status).toBe("fresh");
     expect(result.account).toEqual({ identityStatus: "unverified" });
-    expect(result.attempts).toContainEqual({
-      source: "oauth-profile",
-      status: "failed",
-      error: "identity_profile_unrecognized",
-    });
+    expect(result.attempts).toContainEqual(
+      expect.objectContaining({
+        source: "oauth-profile",
+        status: "failed",
+        error: "identity_profile_unrecognized",
+      }),
+    );
   });
 
   it("surfaces missing file credentials as a skipped attempt and auth_required", async () => {

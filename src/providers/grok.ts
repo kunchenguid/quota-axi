@@ -625,6 +625,8 @@ function grokAttempts(
           ? MODEL_AUTH_ONLY_ERROR
           : MODEL_AUTH_PROBE_LIVE,
       credentialPresent: true,
+      // Live auth that simply carries no consumer quota is not a broken source.
+      degraded: false,
     });
   } else {
     attempts.push(piSourceAttempt(piResolution));
@@ -657,6 +659,8 @@ function appendGrokCliAttempt(
       status: "skipped",
       error: MODEL_AUTH_PROBE_LIVE,
       credentialPresent: true,
+      // Live auth that simply carries no consumer quota is not a broken source.
+      degraded: false,
     });
     return;
   }
