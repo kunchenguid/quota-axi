@@ -1948,6 +1948,7 @@ describe("Grok dual-source CLI and Pi xAI usability", () => {
         status: "skipped",
         error: "quota_not_needed",
         credentialPresent: true,
+        degraded: false,
       },
     ]);
     expect(fetchMock).toHaveBeenCalledOnce();

@@ -766,6 +766,7 @@ function piSourceAttempt(resolution: PiXaiCredentialResolution): SourceAttempt {
           ? PI_QUOTA_NOT_NEEDED_ERROR
           : MODEL_AUTH_ONLY_ERROR,
       credentialPresent: true,
+      degraded: false,
     };
   }
   if (resolution.status === "expired") {
