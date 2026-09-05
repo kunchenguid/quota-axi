@@ -5,9 +5,62 @@ import {
   normalizeOpenCodeGoPayload,
   opencodeGoAuthFilePath,
 } from "../../src/providers/opencode-go.js";
+import type { PiApiKeyCredentialBroker } from "../../src/providers/pi-api-key-credential.js";
+import type { PiApiKeyCredentialResolution } from "../../src/providers/pi-api-key-credential.js";
 
 const OPTIONS = { allowKeychainPrompt: false, refreshCredentials: false };
 const KEY = "synthetic-opencode-go-key-42";
+
+function createPiBroker(
+  resolution: PiApiKeyCredentialResolution,
+  providerIds: readonly string[],
+): PiApiKeyCredentialBroker {
+  const primary = providerIds[0] ?? "opencode-go";
+  const inspection =
+    resolution.status === "available"
+      ? { status: "available" as const, providerId: resolution.providerId }
+      : resolution.status === "missing"
+        ? { status: "missing" as const, providerId: primary }
+        : resolution.status === "invalid"
+          ? {
+              status: "invalid" as const,
+              providerId: resolution.providerId,
+              error: "invalid_credential",
+            }
+          : resolution.status === "unsupported"
+            ? {
+                status: "unsupported" as const,
+                providerId: resolution.providerId,
+                error: "unsupported_credential_type",
+              }
+            : {
+                status: "error" as const,
+                providerId: primary,
+                error: "credential_resolution_failed",
+              };
+  return {
+    providerIds,
+    resolve: vi.fn(async () => resolution),
+    inspect: vi.fn(async () => inspection),
+  };
+}
+
+function missingPiBroker(): PiApiKeyCredentialBroker {
+  return {
+    providerIds: ["opencode-go"],
+    resolve: async () => ({ status: "missing" }),
+    inspect: async () => ({ status: "missing", providerId: "opencode-go" }),
+  };
+}
+
+function goAdapter(
+  overrides: Partial<Parameters<typeof createOpenCodeGoAdapter>[0]> = {},
+) {
+  return createOpenCodeGoAdapter({
+    piCredentialBroker: missingPiBroker(),
+    ...overrides,
+  });
+}
 
 describe("OpenCode Go provider", () => {
   it("discovers the active opencode-go credential and supports the legacy id", () => {
@@ -72,7 +125,7 @@ describe("OpenCode Go provider", () => {
           { status: 200 },
         ),
     );
-    const report = await createOpenCodeGoAdapter({
+    const report = await goAdapter({
       credential: () => ({ status: "available", key: KEY, path: "/auth.json" }),
       fetch: request,
       now: () => Date.parse("2026-08-28T00:00:00Z"),
@@ -104,7 +157,7 @@ describe("OpenCode Go provider", () => {
       }).windows,
     ).toMatchObject([{ id: "weekly", percentRemaining: 77, percentUsed: 23 }]);
 
-    const report = await createOpenCodeGoAdapter({
+    const report = await goAdapter({
       credential: () => ({ status: "available", key: KEY, path: "/auth.json" }),
       fetch: vi.fn(
         async () => new Response("provider secret", { status: 403 }),
@@ -137,7 +190,7 @@ describe("OpenCode Go provider", () => {
     const body = new ReadableStream<Uint8Array>({
       cancel,
     });
-    const report = await createOpenCodeGoAdapter({
+    const report = await goAdapter({
       credential: () => ({ status: "available", key: KEY, path: "/auth.json" }),
       fetch: vi.fn(
         async () =>
@@ -155,11 +208,12 @@ describe("OpenCode Go provider", () => {
   });
 
   it("preserves credential resolution errors in auth inspection", async () => {
-    const report = await createOpenCodeGoAdapter({
+    const report = await goAdapter({
       credential: () => ({ status: "error", path: "/auth.json" }),
     }).inspectAuth(OPTIONS);
 
     expect(report.sources).toEqual([
+      { source: "pi:opencode-go", status: "missing" },
       {
         source: "opencode:auth.json",
         path: "/auth.json",
@@ -238,7 +292,7 @@ describe("OpenCode Go provider", () => {
   it("clears request deadline timers after a fast response", async () => {
     vi.useFakeTimers();
     try {
-      const report = await createOpenCodeGoAdapter({
+      const report = await goAdapter({
         credential: () => ({
           status: "available",
           key: KEY,
@@ -283,7 +337,7 @@ describe("OpenCode Go provider", () => {
         cancellations += 1;
       },
     });
-    const report = await createOpenCodeGoAdapter({
+    const report = await goAdapter({
       credential: () => ({ status: "available", key: KEY, path: "/auth.json" }),
       fetch: vi.fn(async () => new Response(body)),
     }).fetchQuota(OPTIONS);
@@ -297,7 +351,7 @@ describe("OpenCode Go provider", () => {
   });
 
   it("does not wait for stalled reader cleanup after an oversized chunk", async () => {
-    const report = await createOpenCodeGoAdapter({
+    const report = await goAdapter({
       credential: () => ({ status: "available", key: KEY, path: "/auth.json" }),
       fetch: vi.fn(
         async () =>
@@ -327,7 +381,7 @@ describe("OpenCode Go provider", () => {
 
   it("rejects oversized no-body responses before reading the array buffer", async () => {
     const arrayBuffer = vi.fn(async () => new ArrayBuffer(262_145));
-    const report = await createOpenCodeGoAdapter({
+    const report = await goAdapter({
       credential: () => ({ status: "available", key: KEY, path: "/auth.json" }),
       fetch: vi.fn(
         async () =>
@@ -348,7 +402,7 @@ describe("OpenCode Go provider", () => {
     expect(arrayBuffer).not.toHaveBeenCalled();
 
     const unverifiableArrayBuffer = vi.fn(async () => new ArrayBuffer(1));
-    const unverifiableReport = await createOpenCodeGoAdapter({
+    const unverifiableReport = await goAdapter({
       credential: () => ({ status: "available", key: KEY, path: "/auth.json" }),
       fetch: vi.fn(
         async () =>
@@ -371,7 +425,7 @@ describe("OpenCode Go provider", () => {
     const falselyDeclaredArrayBuffer = vi.fn(
       async () => new ArrayBuffer(262_145),
     );
-    const falselyDeclaredReport = await createOpenCodeGoAdapter({
+    const falselyDeclaredReport = await goAdapter({
       credential: () => ({ status: "available", key: KEY, path: "/auth.json" }),
       fetch: vi.fn(
         async () =>
@@ -394,7 +448,7 @@ describe("OpenCode Go provider", () => {
 
   it("cancels oversized declared response bodies before returning", async () => {
     const cancel = vi.fn(async () => undefined);
-    const report = await createOpenCodeGoAdapter({
+    const report = await goAdapter({
       credential: () => ({ status: "available", key: KEY, path: "/auth.json" }),
       fetch: vi.fn(
         async () =>
@@ -427,7 +481,7 @@ describe("OpenCode Go provider", () => {
       resolveRead?.({ done: true, value: undefined });
     });
     const releaseLock = vi.fn();
-    const report = await createOpenCodeGoAdapter({
+    const report = await goAdapter({
       deadlineMs: 10,
       credential: () => ({ status: "available", key: KEY, path: "/auth.json" }),
       fetch: vi.fn(
@@ -457,7 +511,7 @@ describe("OpenCode Go provider", () => {
 
   it("aborts a request that stalls before receiving headers", async () => {
     let signal: AbortSignal | undefined;
-    const report = await createOpenCodeGoAdapter({
+    const report = await goAdapter({
       deadlineMs: 10,
       credential: () => ({ status: "available", key: KEY, path: "/auth.json" }),
       fetch: vi.fn(
@@ -482,7 +536,7 @@ describe("OpenCode Go provider", () => {
       resolveFetch = resolve;
     });
     const cancel = vi.fn(async () => undefined);
-    const report = await createOpenCodeGoAdapter({
+    const report = await goAdapter({
       deadlineMs: 10,
       credential: () => ({ status: "available", key: KEY, path: "/auth.json" }),
       fetch: vi.fn(() => fetchPromise),
@@ -507,7 +561,7 @@ describe("OpenCode Go provider", () => {
   it("bounds cleanup when cancellation and the pending read both stall", async () => {
     const cancel = vi.fn(() => new Promise<void>(() => undefined));
     const releaseLock = vi.fn();
-    const report = await createOpenCodeGoAdapter({
+    const report = await goAdapter({
       deadlineMs: 10,
       credential: () => ({ status: "available", key: KEY, path: "/auth.json" }),
       fetch: vi.fn(
@@ -546,7 +600,7 @@ describe("OpenCode Go provider", () => {
     const releaseLock = vi.fn(() => {
       if (!readSettled) throw new Error("read_pending");
     });
-    const report = await createOpenCodeGoAdapter({
+    const report = await goAdapter({
       deadlineMs: 10,
       credential: () => ({ status: "available", key: KEY, path: "/auth.json" }),
       fetch: vi.fn(
@@ -581,5 +635,197 @@ describe("OpenCode Go provider", () => {
     resolveRead?.({ done: true, value: undefined });
     await Promise.resolve();
     expect(releaseLock).toHaveBeenCalledOnce();
+  });
+});
+
+describe("OpenCode Go Pi credential resolution", () => {
+  const GO_OPTIONS = OPTIONS;
+  const PI_KEY = "synthetic-pi-opencode-go-key-517";
+  const USAGE_RESPONSE = () =>
+    new Response(JSON.stringify({ usage: { weekly: { percent: 30 } } }), {
+      status: 200,
+    });
+
+  function piBrokerWith(
+    resolution: Parameters<typeof createPiBroker>[0],
+  ): PiApiKeyCredentialBroker {
+    return createPiBroker(resolution, ["opencode-go"]);
+  }
+
+  it("prefers Pi's opencode-go entry for the usage request", async () => {
+    const request = vi.fn(async () => USAGE_RESPONSE());
+    const report = await goAdapter({
+      credential: () => ({ status: "available", key: KEY, path: "/auth.json" }),
+      piCredentialBroker: piBrokerWith({
+        status: "available",
+        providerId: "opencode-go",
+        credential: PI_KEY,
+      }),
+      fetch: request,
+    }).fetchQuota(GO_OPTIONS);
+
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(
+      new Headers(request.mock.calls[0][1]?.headers).get("authorization"),
+    ).toBe(`Bearer ${PI_KEY}`);
+    expect(report.state.status).toBe("fresh");
+    expect(report.attempts).toEqual([
+      { source: "pi:opencode-go", status: "success" },
+      { source: "opencode:auth.json", status: "skipped" },
+    ]);
+    expect(JSON.stringify(report)).not.toContain(PI_KEY);
+    expect(JSON.stringify(report)).not.toContain(KEY);
+  });
+
+  it("falls back to the opencode credential when Pi's key is rejected", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(null, { status: 401 }))
+      .mockResolvedValueOnce(USAGE_RESPONSE());
+    const report = await goAdapter({
+      credential: () => ({ status: "available", key: KEY, path: "/auth.json" }),
+      piCredentialBroker: piBrokerWith({
+        status: "available",
+        providerId: "opencode-go",
+        credential: PI_KEY,
+      }),
+      fetch: request,
+    }).fetchQuota(GO_OPTIONS);
+
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(
+      new Headers(request.mock.calls[1][1]?.headers).get("authorization"),
+    ).toBe(`Bearer ${KEY}`);
+    expect(report.state.status).toBe("fresh");
+    expect(report.attempts).toEqual([
+      {
+        source: "pi:opencode-go",
+        status: "failed",
+        error: "provider_auth_rejected",
+      },
+      { source: "opencode:auth.json", status: "success" },
+    ]);
+  });
+
+  it("keeps an unreadable source from turning rejections into a sign-out", async () => {
+    const request = vi.fn(async () => new Response(null, { status: 401 }));
+    const report = await goAdapter({
+      credential: () => ({ status: "error", path: "/auth.json" }),
+      piCredentialBroker: piBrokerWith({
+        status: "available",
+        providerId: "opencode-go",
+        credential: PI_KEY,
+      }),
+      fetch: request,
+    }).fetchQuota(GO_OPTIONS);
+
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(report.state).toMatchObject({
+      status: "error",
+      error: "credential_resolution_failed",
+    });
+  });
+
+  it("reports auth_required only after every candidate is rejected", async () => {
+    const request = vi.fn(async () => new Response(null, { status: 403 }));
+    const report = await goAdapter({
+      credential: () => ({ status: "available", key: KEY, path: "/auth.json" }),
+      piCredentialBroker: piBrokerWith({
+        status: "available",
+        providerId: "opencode-go",
+        credential: PI_KEY,
+      }),
+      fetch: request,
+    }).fetchQuota(GO_OPTIONS);
+
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(report.state).toMatchObject({
+      status: "auth_required",
+      error: "provider_auth_rejected",
+    });
+  });
+
+  it("never treats a missing credential as a measured provider", async () => {
+    const request = vi.fn();
+    const report = await goAdapter({
+      credential: () => ({ status: "missing", path: "/auth.json" }),
+      fetch: request,
+    }).fetchQuota(GO_OPTIONS);
+
+    expect(request).not.toHaveBeenCalled();
+    expect(report.state).toMatchObject({
+      status: "auth_required",
+      error: "opencode_go_credential_unavailable",
+    });
+    expect(report.attempts).toEqual([
+      {
+        source: "pi:opencode-go",
+        status: "skipped",
+        error: "opencode_go_credential_unavailable",
+      },
+      {
+        source: "opencode:auth.json",
+        status: "skipped",
+        error: "opencode_go_credential_unavailable",
+      },
+    ]);
+  });
+
+  it("does not switch credentials after a transient Pi failure", async () => {
+    const request = vi.fn(async () => {
+      throw new Error("offline");
+    });
+    const report = await goAdapter({
+      credential: () => ({ status: "available", key: KEY, path: "/auth.json" }),
+      piCredentialBroker: piBrokerWith({
+        status: "available",
+        providerId: "opencode-go",
+        credential: PI_KEY,
+      }),
+      fetch: request,
+    }).fetchQuota(GO_OPTIONS);
+
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(report.state).toMatchObject({
+      status: "error",
+      error: "network_unavailable",
+    });
+    expect(report.attempts).toEqual([
+      {
+        source: "pi:opencode-go",
+        status: "failed",
+        error: "network_unavailable",
+      },
+      {
+        source: "opencode:auth.json",
+        status: "skipped",
+        error: "network_unavailable",
+      },
+    ]);
+  });
+
+  it("inspects both sources without exposing key material", async () => {
+    const report = await goAdapter({
+      credential: () => ({ status: "available", key: KEY, path: "/auth.json" }),
+      piCredentialBroker: piBrokerWith({
+        status: "available",
+        providerId: "opencode-go",
+        credential: PI_KEY,
+      }),
+    }).inspectAuth(GO_OPTIONS);
+
+    expect(report).toEqual({
+      provider: "opencode-go",
+      sources: [
+        { source: "pi:opencode-go", status: "available" },
+        {
+          source: "opencode:auth.json",
+          path: "/auth.json",
+          status: "available",
+        },
+      ],
+    });
+    expect(JSON.stringify(report)).not.toContain(PI_KEY);
+    expect(JSON.stringify(report)).not.toContain(KEY);
   });
 });

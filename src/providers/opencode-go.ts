@@ -8,13 +8,31 @@ import type {
   AuthSourceReport,
   ProviderAdapter,
   ProviderQuota,
+  ProviderStatus,
   QuotaWindow,
   SourceAttempt,
 } from "../types.js";
 import { failedProvider, sourceNames, successProvider } from "./common.js";
+import {
+  selectCredential,
+  type AttemptOutcome,
+  type CandidateResult,
+  type CredentialCandidate as SelectionCandidate,
+  type CredentialSelection,
+} from "./credential-selection.js";
+import {
+  createPiApiKeyCredentialBroker,
+  type PiApiKeyCredentialBroker,
+  type PiApiKeyCredentialInspection,
+  type PiApiKeyCredentialResolution,
+} from "./pi-api-key-credential.js";
 
 export const OPENCODE_GO_USAGE_URL = "https://opencode.ai/zen/go/v1/usage";
 export const OPENCODE_GO_CREDENTIAL_SOURCE = "opencode:auth.json";
+
+// Pi stores the OpenCode Go key under its own `opencode-go` entry; the
+// separate `opencode` (Zen) entry is a different product and is not read here.
+const PI_OPENCODE_GO_PROVIDER_IDS = ["opencode-go"] as const;
 
 const LABEL = "OpenCode Go";
 const RESPONSE_LIMIT_BYTES = 262_144;
@@ -27,6 +45,7 @@ type CredentialResolution =
 
 type Dependencies = {
   credential: () => CredentialResolution;
+  piCredentialBroker: PiApiKeyCredentialBroker;
   fetch: typeof globalThis.fetch;
   now: () => number;
   deadlineMs: number;
@@ -91,6 +110,9 @@ export function createOpenCodeGoAdapter(
 ): ProviderAdapter {
   const dependencies: Dependencies = {
     credential: () => resolveOpenCodeGoCredential(),
+    piCredentialBroker: createPiApiKeyCredentialBroker(
+      PI_OPENCODE_GO_PROVIDER_IDS,
+    ),
     fetch: globalThis.fetch,
     now: Date.now,
     deadlineMs: DEADLINE_MS,
@@ -107,36 +129,21 @@ export function createOpenCodeGoAdapter(
 export const opencodeGoAdapter = createOpenCodeGoAdapter();
 
 async function fetchQuota(dependencies: Dependencies): Promise<ProviderQuota> {
-  const resolution = dependencies.credential();
-  const attempts: SourceAttempt[] = [
-    {
-      source: OPENCODE_GO_CREDENTIAL_SOURCE,
-      status: resolution.status === "available" ? "failed" : "skipped",
-      ...(resolution.status !== "available"
-        ? { error: credentialError(resolution) }
-        : {}),
-    },
-  ];
-  if (resolution.status !== "available") {
-    return failedProvider({
-      provider: "opencode-go",
-      label: LABEL,
-      status: resolution.status === "missing" ? "auth_required" : "error",
-      error: credentialError(resolution),
-      source: "api",
-      sourcesTried: sourceNames(attempts),
-      attempts,
-    });
-  }
-  try {
-    const payload = await requestUsage(
-      resolution.key,
-      dependencies.fetch,
-      dependencies.deadlineMs,
-    );
-    const normalized = normalizeOpenCodeGoPayload(payload);
-    if (normalized.windows.length === 0) throw new Error("quota_missing");
-    attempts[0] = { source: OPENCODE_GO_CREDENTIAL_SOURCE, status: "success" };
+  const piResolution = await resolvePiCredential(dependencies);
+  const opencodeResolution = resolveCredentialSafely(dependencies);
+  const selection = await selectCredential(
+    credentialCandidates(piResolution, opencodeResolution),
+    (candidate) => attemptCandidate(candidate, dependencies),
+  );
+  const attempts = sourceAttempts(
+    piResolution,
+    opencodeResolution,
+    selection,
+    dependencies,
+  );
+
+  if (selection.outcome === "quota" && selection.result) {
+    const normalized = selection.result;
     return successProvider({
       provider: "opencode-go",
       label: LABEL,
@@ -147,34 +154,298 @@ async function fetchQuota(dependencies: Dependencies): Promise<ProviderQuota> {
       sourcesTried: sourceNames(attempts),
       attempts,
     });
-  } catch (error) {
-    const code = errorCode(error);
-    attempts[0] = {
-      source: OPENCODE_GO_CREDENTIAL_SOURCE,
-      status: "failed",
-      error: code,
-    };
-    return failedProvider({
-      provider: "opencode-go",
-      label: LABEL,
-      status:
-        code === "provider_auth_rejected"
-          ? "auth_required"
-          : code === "provider_rate_limited"
-            ? "rate_limited"
-            : "error",
-      error: code,
-      source: "api",
-      sourcesTried: sourceNames(attempts),
-      attempts,
+  }
+
+  const failure = selectionFailureFor(
+    selection,
+    piResolution,
+    opencodeResolution,
+  );
+  return failedProvider({
+    provider: "opencode-go",
+    label: LABEL,
+    status: failure.status,
+    error: failure.code,
+    source: "api",
+    sourcesTried: sourceNames(attempts),
+    attempts,
+  });
+}
+
+async function resolvePiCredential(
+  dependencies: Dependencies,
+): Promise<PiApiKeyCredentialResolution> {
+  try {
+    return await dependencies.piCredentialBroker.resolve();
+  } catch {
+    return { status: "error" };
+  }
+}
+
+function resolveCredentialSafely(
+  dependencies: Dependencies,
+): CredentialResolution {
+  try {
+    return dependencies.credential();
+  } catch {
+    return { status: "error", path: "" };
+  }
+}
+
+/** Pi's entry is tried first; the opencode store stays the fallback. */
+function credentialCandidates(
+  piResolution: PiApiKeyCredentialResolution,
+  opencodeResolution: CredentialResolution,
+): readonly SelectionCandidate<string>[] {
+  const candidates: SelectionCandidate<string>[] = [];
+  if (piResolution.status === "available") {
+    candidates.push({
+      source: `pi:${piResolution.providerId}`,
+      localState: "valid",
+      credential: piResolution.credential,
     });
   }
+  if (opencodeResolution.status === "available") {
+    candidates.push({
+      source: OPENCODE_GO_CREDENTIAL_SOURCE,
+      localState: "valid",
+      credential: opencodeResolution.key,
+    });
+  }
+  return candidates;
+}
+
+async function attemptCandidate(
+  candidate: SelectionCandidate<string>,
+  dependencies: Dependencies,
+): Promise<AttemptOutcome<NormalizedOpenCodeGoPayload>> {
+  try {
+    const payload = await requestUsage(
+      candidate.credential,
+      dependencies.fetch,
+      dependencies.deadlineMs,
+    );
+    const normalized = normalizeOpenCodeGoPayload(payload);
+    if (normalized.windows.length === 0) {
+      return { kind: "transient", error: "quota_missing" };
+    }
+    return { kind: "quota", result: normalized };
+  } catch (error) {
+    const code = errorCode(error);
+    if (code === "provider_auth_rejected") {
+      return { kind: "rejected", error: code };
+    }
+    return { kind: "transient", error: code };
+  }
+}
+
+function sourceAttempts(
+  piResolution: PiApiKeyCredentialResolution,
+  opencodeResolution: CredentialResolution,
+  selection: CredentialSelection<NormalizedOpenCodeGoPayload>,
+  dependencies: Dependencies,
+): SourceAttempt[] {
+  const primary =
+    dependencies.piCredentialBroker.providerIds[0] ?? "opencode-go";
+  const providerId = resolutionPiProviderId(piResolution) ?? primary;
+  const piSourceName = `pi:${providerId}`;
+  return [
+    piAttemptRecord(piResolution, piSourceName, selection),
+    opencodeAttemptRecord(opencodeResolution, selection),
+  ];
+}
+
+/** Names the source after the entry actually responsible for the state. */
+function resolutionPiProviderId(
+  resolution: PiApiKeyCredentialResolution,
+): string | undefined {
+  return resolution.status === "available" ||
+    resolution.status === "invalid" ||
+    resolution.status === "unsupported"
+    ? resolution.providerId
+    : undefined;
+}
+
+function piAttemptRecord(
+  resolution: PiApiKeyCredentialResolution,
+  sourceName: string,
+  selection: CredentialSelection<NormalizedOpenCodeGoPayload>,
+): SourceAttempt {
+  if (resolution.status === "available") {
+    return selectionAttemptRecord(
+      sourceName,
+      selection.results.find((entry) => entry.source === sourceName),
+      selection,
+    );
+  }
+  switch (resolution.status) {
+    case "missing":
+      return {
+        source: sourceName,
+        status: "skipped",
+        error: "opencode_go_credential_unavailable",
+      };
+    case "invalid":
+      return {
+        source: sourceName,
+        status: "skipped",
+        error: "opencode_go_credential_invalid",
+      };
+    case "unsupported":
+      return {
+        source: sourceName,
+        status: "skipped",
+        error: "unsupported_credential_type",
+      };
+    default:
+      return {
+        source: sourceName,
+        status: "failed",
+        error: "credential_resolution_failed",
+      };
+  }
+}
+
+function opencodeAttemptRecord(
+  resolution: CredentialResolution,
+  selection: CredentialSelection<NormalizedOpenCodeGoPayload>,
+): SourceAttempt {
+  if (resolution.status === "available") {
+    return selectionAttemptRecord(
+      OPENCODE_GO_CREDENTIAL_SOURCE,
+      selection.results.find(
+        (entry) => entry.source === OPENCODE_GO_CREDENTIAL_SOURCE,
+      ),
+      selection,
+    );
+  }
+  return {
+    source: OPENCODE_GO_CREDENTIAL_SOURCE,
+    status: resolution.status === "error" ? "failed" : "skipped",
+    error: credentialError(resolution),
+  };
+}
+
+function selectionAttemptRecord(
+  sourceName: string,
+  result: CandidateResult | undefined,
+  selection: CredentialSelection<NormalizedOpenCodeGoPayload>,
+): SourceAttempt {
+  if (
+    result === undefined ||
+    result.outcome === "not_tried" ||
+    result.outcome === "live_no_quota"
+  ) {
+    return {
+      source: sourceName,
+      status: "skipped",
+      ...(selection.transientError ? { error: selection.transientError } : {}),
+    };
+  }
+  if (result.outcome === "quota") {
+    return { source: sourceName, status: "success" };
+  }
+  return { source: sourceName, status: "failed", error: result.error };
+}
+
+type LocalFailure = { status: ProviderStatus; code: string };
+
+function selectionFailureFor(
+  selection: CredentialSelection<NormalizedOpenCodeGoPayload>,
+  piResolution: PiApiKeyCredentialResolution,
+  opencodeResolution: CredentialResolution,
+): LocalFailure {
+  switch (selection.outcome) {
+    case "transient":
+      return transientFailure(
+        selection.transientError ?? "quota_request_failed",
+      );
+    case "all_rejected":
+      // A source that could not be read leaves the credential set
+      // indeterminate: never a definitive sign-out while a usable
+      // credential may sit behind an unreadable store.
+      if (
+        piResolution.status === "error" ||
+        opencodeResolution.status === "error"
+      ) {
+        return { status: "error", code: "credential_resolution_failed" };
+      }
+      return { status: "auth_required", code: "provider_auth_rejected" };
+    case "live_no_quota":
+      // Unreachable: every attempt yields windows or throws.
+      return { status: "error", code: "quota_missing" };
+    default: {
+      if (
+        piResolution.status === "error" ||
+        opencodeResolution.status === "error"
+      ) {
+        return { status: "error", code: "credential_resolution_failed" };
+      }
+      // The opencode store's own state wins unless it is plain missing; a
+      // missing fallback defers to the Pi source's distinct state.
+      return opencodeResolution.status === "missing"
+        ? piLocalFailure(piResolution)
+        : opencodeLocalFailure(opencodeResolution);
+    }
+  }
+}
+
+function transientFailure(code: string): LocalFailure {
+  return {
+    status: code === "provider_rate_limited" ? "rate_limited" : "error",
+    code,
+  };
+}
+
+function piLocalFailure(
+  resolution: PiApiKeyCredentialResolution,
+): LocalFailure {
+  switch (resolution.status) {
+    case "missing":
+      return {
+        status: "auth_required",
+        code: "opencode_go_credential_unavailable",
+      };
+    case "unsupported":
+      return { status: "auth_required", code: "unsupported_credential_type" };
+    case "error":
+      return { status: "error", code: "credential_resolution_failed" };
+    default:
+      return {
+        status: "auth_required",
+        code: "opencode_go_credential_invalid",
+      };
+  }
+}
+
+function opencodeLocalFailure(resolution: CredentialResolution): LocalFailure {
+  if (resolution.status === "missing") {
+    return {
+      status: "auth_required",
+      code: "opencode_go_credential_unavailable",
+    };
+  }
+  if (resolution.status === "error") {
+    return { status: "error", code: "credential_resolution_failed" };
+  }
+  return { status: "auth_required", code: "opencode_go_credential_invalid" };
 }
 
 async function inspectAuth(
   dependencies: Dependencies,
 ): Promise<AuthProviderReport> {
-  const resolution = dependencies.credential();
+  const piInspection = await inspectPiCredential(dependencies);
+  const piStatus =
+    piInspection.status === "unsupported" ? "invalid" : piInspection.status;
+  const piError =
+    piInspection.status === "unsupported"
+      ? "unsupported_credential_type"
+      : piInspection.status === "invalid"
+        ? "invalid_credential"
+        : piInspection.status === "error"
+          ? "credential_resolution_failed"
+          : undefined;
+  const resolution = resolveCredentialSafely(dependencies);
   const source: AuthSourceReport = {
     source: OPENCODE_GO_CREDENTIAL_SOURCE,
     path: resolution.path,
@@ -190,7 +461,32 @@ async function inspectAuth(
       ? { error: "credential_resolution_failed" }
       : {}),
   };
-  return { provider: "opencode-go", sources: [source] };
+  return {
+    provider: "opencode-go",
+    sources: [
+      {
+        source: `pi:${piInspection.providerId}`,
+        status: piStatus,
+        ...(piError ? { error: piError } : {}),
+      },
+      source,
+    ],
+  };
+}
+
+async function inspectPiCredential(
+  dependencies: Dependencies,
+): Promise<PiApiKeyCredentialInspection> {
+  try {
+    return await dependencies.piCredentialBroker.inspect();
+  } catch {
+    return {
+      status: "error",
+      providerId:
+        dependencies.piCredentialBroker.providerIds[0] ?? "opencode-go",
+      error: "credential_resolution_failed",
+    };
+  }
 }
 
 async function requestUsage(

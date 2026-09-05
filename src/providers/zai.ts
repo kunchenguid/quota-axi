@@ -13,7 +13,6 @@ import { readJsonFileResult, type JsonFileReadResult } from "../lib/fs.js";
 import { usableLiteralSecret } from "../lib/secret.js";
 import type {
   AuthProviderReport,
-  AuthSourceReport,
   ProviderAdapter,
   ProviderOptions,
   ProviderQuota,
@@ -22,6 +21,19 @@ import type {
   SourceAttempt,
 } from "../types.js";
 import { VERSION } from "../version.js";
+import {
+  selectCredential,
+  type AttemptOutcome,
+  type CandidateResult,
+  type CredentialCandidate as SelectionCandidate,
+  type CredentialSelection,
+} from "./credential-selection.js";
+import {
+  createPiApiKeyCredentialBroker,
+  type PiApiKeyCredentialBroker,
+  type PiApiKeyCredentialInspection,
+  type PiApiKeyCredentialResolution,
+} from "./pi-api-key-credential.js";
 
 const ZAI_QUOTA_PATH = "/api/monitor/usage/quota/limit";
 const OPERATION_DEADLINE_MS = 15_000;
@@ -33,6 +45,12 @@ const ZAI_HOST = "api.z.ai";
 const ZHIPU_HOST = "open.bigmodel.cn";
 const OPENCODE_AUTH_SOURCE = "opencode:auth.json";
 const USER_AGENT = `quota-axi/${VERSION}`;
+
+// Pi stores the Z.AI Coding Plan key under `zai` (global, api.z.ai) or
+// `zai-coding-cn` (China, open.bigmodel.cn); the same hosts the opencode
+// source's ids resolve to.
+const PI_ZAI_PROVIDER_IDS = ["zai", "zai-coding-cn"] as const;
+const PI_ZAI_CN_PROVIDER_ID = "zai-coding-cn";
 
 const ZAI_PROVIDER_IDS = ["zai-coding-plan", "zai", "z-ai", "z.ai"];
 const ZHIPU_PROVIDER_IDS = ["zhipu", "zhipuai"];
@@ -72,8 +90,11 @@ export type ZaiCredentialSource = {
   inspect(): ZaiCredentialInspection;
 };
 
+type ZaiAttemptCredential = { apiKey: string; host: string };
+
 type ZaiDependencies = {
   credentialSource: ZaiCredentialSource;
+  piCredentialBroker: PiApiKeyCredentialBroker;
   fetch: typeof globalThis.fetch;
   readCachedProvider: typeof readCachedProviderFromDisk;
   deleteCachedProvider: typeof deleteCachedProviderFromDisk;
@@ -148,6 +169,7 @@ export function createZaiAdapter(
 ): ProviderAdapter {
   const dependencies: ZaiDependencies = {
     credentialSource: createOpencodeAuthCredentialSource(),
+    piCredentialBroker: createPiApiKeyCredentialBroker(PI_ZAI_PROVIDER_IDS),
     fetch: globalThis.fetch,
     readCachedProvider: readCachedProviderFromDisk,
     deleteCachedProvider: deleteCachedProviderFromDisk,
@@ -169,16 +191,36 @@ export function createZaiAdapter(
       return acquisition;
     },
     async inspectAuth(_options: ProviderOptions): Promise<AuthProviderReport> {
+      const piInspection = await inspectPiCredential(dependencies);
+      const piStatus =
+        piInspection.status === "unsupported" ? "invalid" : piInspection.status;
+      const piError =
+        piInspection.status === "unsupported"
+          ? "unsupported_credential_type"
+          : piInspection.status === "invalid"
+            ? "invalid_credential"
+            : piInspection.status === "error"
+              ? "credential_resolution_failed"
+              : undefined;
       const inspection = dependencies.credentialSource.inspect();
-      const source: AuthSourceReport = {
-        source: OPENCODE_AUTH_SOURCE,
-        path: inspection.path,
-        status: inspection.status,
-        ...(inspection.status === "invalid" || inspection.status === "error"
-          ? { error: inspection.error }
-          : {}),
+      return {
+        provider: "zai",
+        sources: [
+          {
+            source: `pi:${piInspection.providerId}`,
+            status: piStatus,
+            ...(piError ? { error: piError } : {}),
+          },
+          {
+            source: OPENCODE_AUTH_SOURCE,
+            path: inspection.path,
+            status: inspection.status,
+            ...(inspection.status === "invalid" || inspection.status === "error"
+              ? { error: inspection.error }
+              : {}),
+          },
+        ],
       };
-      return { provider: "zai", sources: [source] };
     },
   };
 }
@@ -196,50 +238,28 @@ async function acquireZaiQuota(
   let attempts: SourceAttempt[] = [];
 
   try {
-    const resolution = dependencies.credentialSource.resolve();
-    attempts = [{ source: OPENCODE_AUTH_SOURCE, status: "failed" }];
-
-    if (resolution.status !== "available") {
-      const failure = credentialFailureFor(resolution);
-      attempts[attempts.length - 1] = {
-        source: OPENCODE_AUTH_SOURCE,
-        status: resolution.status === "missing" ? "skipped" : "failed",
-        error: failure.code,
-      };
-      return failureReport(failure, attempts, dependencies);
-    }
-
-    const payload = await requestZaiQuota(
-      resolution.apiKey,
-      resolution.host,
-      controller.signal,
-      dependencies.fetch,
-      dependencies.now,
+    const piResolution = await resolvePiCredential(dependencies);
+    const opencodeResolution = resolveOpencodeCredential(
+      dependencies.credentialSource,
     );
-    const normalized = normalizeZaiPayload(payload);
-    const untrustedWindowIds = normalized.diagnostics.map(
-      (diagnostic) => `limit:${diagnostic.index}`,
+    const selection = await selectCredential(
+      zaiCredentialCandidates(piResolution, opencodeResolution),
+      (candidate) =>
+        attemptZaiCandidate(candidate, controller.signal, dependencies),
     );
-    const refreshedAt = new Date(dependencies.now()).toISOString();
-    attempts[attempts.length - 1] = {
-      source: OPENCODE_AUTH_SOURCE,
-      status: "success",
-    };
-    return {
-      provider: "zai",
-      label: "Z.AI",
-      source: "api",
-      ...(normalized.plan ? { plan: normalized.plan } : {}),
-      windows: normalized.windows,
-      state: {
-        status: "fresh",
-        stale: false,
-        refreshedAt,
-        ...(untrustedWindowIds.length > 0 ? { untrustedWindowIds } : {}),
-        sourcesTried: attempts.map(({ source }) => source),
-      },
+    attempts = zaiAttempts(
+      dependencies.piCredentialBroker.providerIds[0],
+      piResolution,
+      opencodeResolution,
+      selection,
+    );
+    return zaiReportFromSelection(
+      selection,
       attempts,
-    };
+      piResolution,
+      opencodeResolution,
+      dependencies,
+    );
   } catch (error) {
     const failure =
       error instanceof ZaiFailure
@@ -268,8 +288,325 @@ async function acquireZaiQuota(
   }
 }
 
-function credentialFailureFor(
-  resolution: Exclude<ZaiCredentialResolution, { status: "available" }>,
+async function resolvePiCredential(
+  dependencies: ZaiDependencies,
+): Promise<PiApiKeyCredentialResolution> {
+  try {
+    return await dependencies.piCredentialBroker.resolve();
+  } catch {
+    return { status: "error" };
+  }
+}
+
+function resolveOpencodeCredential(
+  source: ZaiCredentialSource,
+): ZaiCredentialResolution {
+  try {
+    return source.resolve();
+  } catch {
+    return { status: "error", path: "", error: "file_read_error" };
+  }
+}
+
+/** Pi's entry is tried first; the opencode store stays the fallback. */
+function zaiCredentialCandidates(
+  piResolution: PiApiKeyCredentialResolution,
+  opencodeResolution: ZaiCredentialResolution,
+): readonly SelectionCandidate<ZaiAttemptCredential>[] {
+  const candidates: SelectionCandidate<ZaiAttemptCredential>[] = [];
+  if (piResolution.status === "available") {
+    candidates.push({
+      source: `pi:${piResolution.providerId}`,
+      localState: "valid",
+      credential: {
+        apiKey: piResolution.credential,
+        host:
+          piResolution.providerId === PI_ZAI_CN_PROVIDER_ID
+            ? ZHIPU_HOST
+            : ZAI_HOST,
+      },
+    });
+  }
+  if (opencodeResolution.status === "available") {
+    candidates.push({
+      source: OPENCODE_AUTH_SOURCE,
+      localState: "valid",
+      credential: {
+        apiKey: opencodeResolution.apiKey,
+        host: opencodeResolution.host,
+      },
+    });
+  }
+  return candidates;
+}
+
+async function attemptZaiCandidate(
+  candidate: SelectionCandidate<ZaiAttemptCredential>,
+  signal: AbortSignal,
+  dependencies: ZaiDependencies,
+): Promise<AttemptOutcome<NormalizedZaiPayload>> {
+  try {
+    const payload = await requestZaiQuota(
+      candidate.credential.apiKey,
+      candidate.credential.host,
+      signal,
+      dependencies.fetch,
+      dependencies.now,
+    );
+    return { kind: "quota", result: normalizeZaiPayload(payload) };
+  } catch (error) {
+    const failure =
+      error instanceof ZaiFailure
+        ? error
+        : new ZaiFailure("credential_resolution_failed", {
+            staleEligible: true,
+          });
+    if (failure.definitiveAuth) {
+      return { kind: "rejected", error: failure.code };
+    }
+    return {
+      kind: "transient",
+      error: failure.code,
+      ...(failure.retryAfter ? { retryAfter: failure.retryAfter } : {}),
+    };
+  }
+}
+
+function zaiAttempts(
+  piPrimaryProviderId: string | undefined,
+  piResolution: PiApiKeyCredentialResolution,
+  opencodeResolution: ZaiCredentialResolution,
+  selection: CredentialSelection<NormalizedZaiPayload>,
+): SourceAttempt[] {
+  const piSourceName = piEntrySourceName(piResolution, piPrimaryProviderId);
+  return [
+    piAttemptRecord(piResolution, piSourceName, selection),
+    opencodeAttemptRecord(opencodeResolution, selection),
+  ];
+}
+
+/** Names the source after the entry actually responsible for the state. */
+function piEntrySourceName(
+  resolution: PiApiKeyCredentialResolution,
+  primary: string | undefined,
+): string {
+  const providerId =
+    resolution.status === "available" ||
+    resolution.status === "invalid" ||
+    resolution.status === "unsupported"
+      ? resolution.providerId
+      : undefined;
+  return `pi:${providerId ?? primary ?? "zai"}`;
+}
+
+function piAttemptRecord(
+  resolution: PiApiKeyCredentialResolution,
+  sourceName: string,
+  selection: CredentialSelection<NormalizedZaiPayload>,
+): SourceAttempt {
+  if (resolution.status === "available") {
+    return selectionAttemptRecord(
+      sourceName,
+      selection.results.find((entry) => entry.source === sourceName),
+      selection,
+    );
+  }
+  switch (resolution.status) {
+    case "missing":
+      return {
+        source: sourceName,
+        status: "skipped",
+        error: "zai_credential_unavailable",
+      };
+    case "invalid":
+      return {
+        source: sourceName,
+        status: "skipped",
+        error: "zai_credential_invalid",
+      };
+    case "unsupported":
+      return {
+        source: sourceName,
+        status: "skipped",
+        error: "unsupported_credential_type",
+      };
+    default:
+      return {
+        source: sourceName,
+        status: "failed",
+        error: "credential_resolution_failed",
+      };
+  }
+}
+
+function opencodeAttemptRecord(
+  resolution: ZaiCredentialResolution,
+  selection: CredentialSelection<NormalizedZaiPayload>,
+): SourceAttempt {
+  if (resolution.status === "available") {
+    return selectionAttemptRecord(
+      OPENCODE_AUTH_SOURCE,
+      selection.results.find((entry) => entry.source === OPENCODE_AUTH_SOURCE),
+      selection,
+    );
+  }
+  switch (resolution.status) {
+    case "missing":
+      return {
+        source: OPENCODE_AUTH_SOURCE,
+        status: "skipped",
+        error: "zai_credential_unavailable",
+      };
+    case "invalid":
+      return {
+        source: OPENCODE_AUTH_SOURCE,
+        status: "skipped",
+        error: "zai_credential_invalid",
+      };
+    default:
+      return {
+        source: OPENCODE_AUTH_SOURCE,
+        status: "failed",
+        error: "credential_resolution_failed",
+      };
+  }
+}
+
+function selectionAttemptRecord(
+  sourceName: string,
+  result: CandidateResult | undefined,
+  selection: CredentialSelection<NormalizedZaiPayload>,
+): SourceAttempt {
+  if (
+    result === undefined ||
+    result.outcome === "not_tried" ||
+    result.outcome === "live_no_quota"
+  ) {
+    return {
+      source: sourceName,
+      status: "skipped",
+      ...(selection.transientError ? { error: selection.transientError } : {}),
+    };
+  }
+  if (result.outcome === "quota") {
+    return { source: sourceName, status: "success" };
+  }
+  return { source: sourceName, status: "failed", error: result.error };
+}
+
+function zaiReportFromSelection(
+  selection: CredentialSelection<NormalizedZaiPayload>,
+  attempts: SourceAttempt[],
+  piResolution: PiApiKeyCredentialResolution,
+  opencodeResolution: ZaiCredentialResolution,
+  dependencies: ZaiDependencies,
+): ProviderQuota {
+  if (selection.outcome === "quota" && selection.result) {
+    const normalized = selection.result;
+    const untrustedWindowIds = normalized.diagnostics.map(
+      (diagnostic) => `limit:${diagnostic.index}`,
+    );
+    return {
+      provider: "zai",
+      label: "Z.AI",
+      source: "api",
+      ...(normalized.plan ? { plan: normalized.plan } : {}),
+      windows: normalized.windows,
+      state: {
+        status: "fresh",
+        stale: false,
+        refreshedAt: new Date(dependencies.now()).toISOString(),
+        ...(untrustedWindowIds.length > 0 ? { untrustedWindowIds } : {}),
+        sourcesTried: attempts.map(({ source }) => source),
+      },
+      attempts,
+    };
+  }
+  return failureReport(
+    selectionFailureFor(selection, piResolution, opencodeResolution),
+    attempts,
+    dependencies,
+  );
+}
+
+function selectionFailureFor(
+  selection: CredentialSelection<NormalizedZaiPayload>,
+  piResolution: PiApiKeyCredentialResolution,
+  opencodeResolution: ZaiCredentialResolution,
+): ZaiFailure {
+  switch (selection.outcome) {
+    case "transient":
+      return failureForCode(
+        selection.transientError ?? "credential_resolution_failed",
+        selection.retryAfter,
+      );
+    case "all_rejected":
+      // A source that could not be read leaves the credential set
+      // indeterminate: never a definitive sign-out (or cache retirement)
+      // while a usable credential may sit behind an unreadable store.
+      if (
+        piResolution.status === "error" ||
+        opencodeResolution.status === "error"
+      ) {
+        return new ZaiFailure("credential_resolution_failed", {
+          staleEligible: true,
+        });
+      }
+      return new ZaiFailure("provider_auth_rejected", {
+        status: "auth_required",
+        definitiveAuth: true,
+      });
+    case "live_no_quota":
+      // Unreachable for Z.AI: every attempt yields windows or throws.
+      return new ZaiFailure("schema_invalid");
+    default: {
+      if (
+        piResolution.status === "error" ||
+        opencodeResolution.status === "error"
+      ) {
+        return new ZaiFailure("credential_resolution_failed", {
+          staleEligible: true,
+        });
+      }
+      // The opencode store's own state wins unless it is plain missing; a
+      // missing fallback defers to the Pi source's distinct state.
+      return opencodeResolution.status === "missing"
+        ? piLocalFailureFor(piResolution)
+        : opencodeLocalFailureFor(opencodeResolution);
+    }
+  }
+}
+
+function piLocalFailureFor(
+  resolution: PiApiKeyCredentialResolution,
+): ZaiFailure {
+  switch (resolution.status) {
+    case "missing":
+      return new ZaiFailure("zai_credential_unavailable", {
+        status: "auth_required",
+        definitiveAuth: true,
+      });
+    case "unsupported":
+      return new ZaiFailure("unsupported_credential_type", {
+        status: "auth_required",
+        definitiveAuth: true,
+      });
+    case "error":
+      return new ZaiFailure("credential_resolution_failed", {
+        staleEligible: true,
+      });
+    default:
+      // Unreachable in the no-candidates branch (an available Pi credential
+      // would have been a candidate): classify as an invalid credential.
+      return new ZaiFailure("zai_credential_invalid", {
+        status: "auth_required",
+        definitiveAuth: true,
+      });
+  }
+}
+
+function opencodeLocalFailureFor(
+  resolution: ZaiCredentialResolution,
 ): ZaiFailure {
   if (resolution.status === "missing") {
     return new ZaiFailure("zai_credential_unavailable", {
@@ -286,6 +623,40 @@ function credentialFailureFor(
     status: "auth_required",
     definitiveAuth: true,
   });
+}
+
+async function inspectPiCredential(
+  dependencies: ZaiDependencies,
+): Promise<PiApiKeyCredentialInspection> {
+  try {
+    return await dependencies.piCredentialBroker.inspect();
+  } catch {
+    return {
+      status: "error",
+      providerId: dependencies.piCredentialBroker.providerIds[0] ?? "zai",
+      error: "credential_resolution_failed",
+    };
+  }
+}
+
+/** Rebuilds a non-auth failure with its original transport classification. */
+function failureForCode(code: string, retryAfter?: string): ZaiFailure {
+  switch (code) {
+    case "provider_rate_limited":
+      return new ZaiFailure(code, {
+        status: "rate_limited",
+        staleEligible: true,
+        retryAfter,
+      });
+    case "redirect_rejected":
+    case "provider_request_rejected":
+    case "response_invalid_utf8":
+    case "malformed_json":
+    case "schema_invalid":
+      return new ZaiFailure(code, { retryAfter });
+    default:
+      return new ZaiFailure(code, { staleEligible: true, retryAfter });
+  }
 }
 
 function failureReport(

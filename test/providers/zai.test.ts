@@ -13,6 +13,11 @@ import {
   type ZaiCredentialSource,
 } from "../../src/providers/zai.js";
 import type {
+  PiApiKeyCredentialBroker,
+  PiApiKeyCredentialInspection,
+  PiApiKeyCredentialResolution,
+} from "../../src/providers/pi-api-key-credential.js";
+import type {
   ProviderAdapter,
   ProviderQuota,
   QuotaWindow,
@@ -111,9 +116,16 @@ describe("Z.AI request transport", () => {
       state: {
         status: "fresh",
         stale: false,
-        sourcesTried: ["opencode:auth.json"],
+        sourcesTried: ["pi:zai", "opencode:auth.json"],
       },
-      attempts: [{ source: "opencode:auth.json", status: "success" }],
+      attempts: [
+        {
+          source: "pi:zai",
+          status: "skipped",
+          error: "zai_credential_unavailable",
+        },
+        { source: "opencode:auth.json", status: "success" },
+      ],
     });
     expect(report.account).toBeUndefined();
     expect(report.credits).toBeUndefined();
@@ -129,6 +141,7 @@ describe("Z.AI request transport", () => {
         host: "open.bigmodel.cn",
         path: "/home/user/.local/share/opencode/auth.json",
       }),
+      piCredentialBroker: piBroker({ status: "missing" }),
       fetch: request,
       readCachedProvider: () => undefined,
       deleteCachedProvider: () => undefined,
@@ -722,6 +735,11 @@ describe("Z.AI credential discovery", () => {
     expect(report.windows.length).toBeGreaterThan(0);
     expect(report.attempts).toEqual([
       {
+        source: "pi:zai",
+        status: "skipped",
+        error: "zai_credential_unavailable",
+      },
+      {
         source: "opencode:auth.json",
         status: "failed",
         error: "credential_resolution_failed",
@@ -777,6 +795,357 @@ describe("Z.AI credential discovery", () => {
       if (original === undefined) delete process.env.XDG_DATA_HOME;
       else process.env.XDG_DATA_HOME = original;
     }
+  });
+});
+
+describe("Z.AI Pi credential resolution", () => {
+  const PI_KEY = "synthetic-pi-zai-key-773";
+
+  it("prefers Pi's entry and sends it bare to the global host", async () => {
+    const request = vi.fn(async () => jsonResponse(QUOTA_PAYLOAD));
+    const report = await testAdapter({
+      piCredentialBroker: piBroker({
+        status: "available",
+        providerId: "zai",
+        credential: PI_KEY,
+      }),
+      fetch: request,
+    }).fetchQuota(OPTIONS);
+
+    expect(request).toHaveBeenCalledTimes(1);
+    const url = new URL(String(request.mock.calls[0][0]));
+    expect(url.hostname).toBe("api.z.ai");
+    expect(
+      new Headers(request.mock.calls[0][1]?.headers).get("authorization"),
+    ).toBe(PI_KEY);
+    expect(report.state.status).toBe("fresh");
+    expect(report.state.sourcesTried).toEqual(["pi:zai", "opencode:auth.json"]);
+    expect(report.attempts).toEqual([
+      { source: "pi:zai", status: "success" },
+      { source: "opencode:auth.json", status: "skipped" },
+    ]);
+    expect(JSON.stringify(report)).not.toContain(PI_KEY);
+    expect(JSON.stringify(report)).not.toContain(SYNTHETIC_KEY);
+  });
+
+  it("maps Pi's zai-coding-cn entry to the Zhipu host", async () => {
+    const request = vi.fn(async () => jsonResponse(QUOTA_PAYLOAD));
+    await testAdapter({
+      piCredentialBroker: piBroker(
+        {
+          status: "available",
+          providerId: "zai-coding-cn",
+          credential: PI_KEY,
+        },
+        ["zai", "zai-coding-cn"],
+      ),
+      fetch: request,
+    }).fetchQuota(OPTIONS);
+
+    expect(new URL(String(request.mock.calls[0][0])).hostname).toBe(
+      "open.bigmodel.cn",
+    );
+  });
+
+  it("falls back to the opencode credential when Pi's key is rejected", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(null, { status: 401 }))
+      .mockResolvedValueOnce(jsonResponse(QUOTA_PAYLOAD));
+    const report = await testAdapter({
+      piCredentialBroker: piBroker({
+        status: "available",
+        providerId: "zai",
+        credential: PI_KEY,
+      }),
+      fetch: request,
+    }).fetchQuota(OPTIONS);
+
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(report.state.status).toBe("fresh");
+    expect(report.attempts).toEqual([
+      {
+        source: "pi:zai",
+        status: "failed",
+        error: "provider_auth_rejected",
+      },
+      { source: "opencode:auth.json", status: "success" },
+    ]);
+  });
+
+  it("keeps an unreadable source from turning rejections into a sign-out", async () => {
+    const request = vi.fn(async () => new Response(null, { status: 401 }));
+    const remove = vi.fn();
+    const report = await testAdapter({
+      piCredentialBroker: piBroker({
+        status: "available",
+        providerId: "zai",
+        credential: PI_KEY,
+      }),
+      credentialSource: credentialSource({
+        status: "error",
+        path: "/home/user/.local/share/opencode/auth.json",
+        error: "file_read_error",
+      }),
+      fetch: request,
+      deleteCachedProvider: remove,
+      readCachedProvider: () => cachedQuota(),
+    }).fetchQuota(OPTIONS);
+
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(remove).not.toHaveBeenCalled();
+    expect(report.source).toBe("cache");
+    expect(report.state).toMatchObject({
+      status: "stale",
+      error: "credential_resolution_failed",
+    });
+  });
+
+  it("reports auth_required only when every candidate is rejected", async () => {
+    const remove = vi.fn();
+    const request = vi.fn(async () => new Response(null, { status: 403 }));
+    const report = await testAdapter({
+      piCredentialBroker: piBroker({
+        status: "available",
+        providerId: "zai",
+        credential: PI_KEY,
+      }),
+      fetch: request,
+      deleteCachedProvider: remove,
+      readCachedProvider: () => cachedQuota(),
+    }).fetchQuota(OPTIONS);
+
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(remove).toHaveBeenCalledWith("zai");
+    expect(report.state).toMatchObject({
+      status: "auth_required",
+      error: "provider_auth_rejected",
+    });
+    expect(report.windows).toEqual([]);
+  });
+
+  it("does not switch credentials after a transient Pi failure", async () => {
+    const request = vi.fn(async () => {
+      throw new Error("transport down");
+    });
+    const report = await testAdapter({
+      piCredentialBroker: piBroker({
+        status: "available",
+        providerId: "zai",
+        credential: PI_KEY,
+      }),
+      fetch: request,
+    }).fetchQuota(OPTIONS);
+
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(report.state).toMatchObject({
+      status: "error",
+      error: "network_unavailable",
+    });
+    expect(report.attempts).toEqual([
+      {
+        source: "pi:zai",
+        status: "failed",
+        error: "network_unavailable",
+      },
+      {
+        source: "opencode:auth.json",
+        status: "skipped",
+        error: "network_unavailable",
+      },
+    ]);
+  });
+
+  it("still serves quota from the opencode source when Pi's auth file is unreadable", async () => {
+    const request = vi.fn(async () => jsonResponse(QUOTA_PAYLOAD));
+    const report = await testAdapter({
+      piCredentialBroker: piBroker({ status: "error" }),
+      fetch: request,
+    }).fetchQuota(OPTIONS);
+
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(report.state.status).toBe("fresh");
+    expect(report.attempts).toEqual([
+      {
+        source: "pi:zai",
+        status: "failed",
+        error: "credential_resolution_failed",
+      },
+      { source: "opencode:auth.json", status: "success" },
+    ]);
+  });
+
+  it("reports an unsupported Pi credential type as a definitive auth state", async () => {
+    const request = vi.fn();
+    const remove = vi.fn();
+    const report = await testAdapter({
+      credentialSource: credentialSource({
+        status: "missing",
+        path: "/home/user/.local/share/opencode/auth.json",
+      }),
+      piCredentialBroker: piBroker({
+        status: "unsupported",
+        providerId: "zai",
+      }),
+      fetch: request,
+      deleteCachedProvider: remove,
+      readCachedProvider: () => cachedQuota(),
+    }).fetchQuota(OPTIONS);
+
+    expect(request).not.toHaveBeenCalled();
+    expect(remove).toHaveBeenCalledWith("zai");
+    expect(report.state).toMatchObject({
+      status: "auth_required",
+      error: "unsupported_credential_type",
+    });
+  });
+
+  it("names the responsible Pi entry when zai-coding-cn is rejected and zai is absent", async () => {
+    const request = vi.fn(async () => new Response(null, { status: 401 }));
+    const report = await testAdapter({
+      credentialSource: credentialSource({
+        status: "missing",
+        path: "/home/user/.local/share/opencode/auth.json",
+      }),
+      piCredentialBroker: piBroker({
+        status: "available",
+        providerId: "zai-coding-cn",
+        credential: PI_KEY,
+      }),
+      fetch: request,
+    }).fetchQuota(OPTIONS);
+
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(report.state).toMatchObject({
+      status: "auth_required",
+      error: "provider_auth_rejected",
+    });
+    expect(report.attempts).toEqual([
+      {
+        source: "pi:zai-coding-cn",
+        status: "failed",
+        error: "provider_auth_rejected",
+      },
+      {
+        source: "opencode:auth.json",
+        status: "skipped",
+        error: "zai_credential_unavailable",
+      },
+    ]);
+    const auth = await testAdapter({
+      piCredentialBroker: piBroker({
+        status: "available",
+        providerId: "zai-coding-cn",
+        credential: PI_KEY,
+      }),
+    }).inspectAuth(OPTIONS);
+    expect(auth.sources[0]).toEqual({
+      source: "pi:zai-coding-cn",
+      status: "available",
+    });
+  });
+
+  it("names the responsible Pi entry when the primary entry's key is unusable", async () => {
+    const report = await testAdapter({
+      credentialSource: credentialSource({
+        status: "missing",
+        path: "/home/user/.local/share/opencode/auth.json",
+      }),
+      piCredentialBroker: piBroker({
+        status: "invalid",
+        providerId: "zai-coding-cn",
+      }),
+    }).fetchQuota(OPTIONS);
+
+    expect(report.attempts).toEqual([
+      {
+        source: "pi:zai-coding-cn",
+        status: "skipped",
+        error: "zai_credential_invalid",
+      },
+      {
+        source: "opencode:auth.json",
+        status: "skipped",
+        error: "zai_credential_unavailable",
+      },
+    ]);
+  });
+
+  it("falls through an unusable primary entry and succeeds via the global entry", async () => {
+    const request = vi.fn(async () => jsonResponse(QUOTA_PAYLOAD));
+    const report = await testAdapter({
+      credentialSource: credentialSource({
+        status: "missing",
+        path: "/home/user/.local/share/opencode/auth.json",
+      }),
+      piCredentialBroker: piBroker({
+        status: "available",
+        providerId: "zai",
+        credential: PI_KEY,
+      }),
+      fetch: request,
+    }).fetchQuota(OPTIONS);
+
+    expect(new URL(String(request.mock.calls[0][0])).hostname).toBe("api.z.ai");
+    expect(report.attempts).toEqual([
+      { source: "pi:zai", status: "success" },
+      {
+        source: "opencode:auth.json",
+        status: "skipped",
+        error: "zai_credential_unavailable",
+      },
+    ]);
+  });
+
+  it("falls back to the opencode source when the China entry is rejected", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(null, { status: 401 }))
+      .mockResolvedValueOnce(jsonResponse(QUOTA_PAYLOAD));
+    const report = await testAdapter({
+      piCredentialBroker: piBroker({
+        status: "available",
+        providerId: "zai-coding-cn",
+        credential: PI_KEY,
+      }),
+      fetch: request,
+    }).fetchQuota(OPTIONS);
+
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(new URL(String(request.mock.calls[1][0])).hostname).toBe("api.z.ai");
+    expect(report.state.status).toBe("fresh");
+    expect(report.attempts).toEqual([
+      {
+        source: "pi:zai-coding-cn",
+        status: "failed",
+        error: "provider_auth_rejected",
+      },
+      { source: "opencode:auth.json", status: "success" },
+    ]);
+  });
+
+  it("inspects both sources without exposing key material", async () => {
+    const report = await testAdapter({
+      piCredentialBroker: piBroker({
+        status: "available",
+        providerId: "zai",
+        credential: PI_KEY,
+      }),
+    }).inspectAuth(OPTIONS);
+
+    expect(report).toEqual({
+      provider: "zai",
+      sources: [
+        { source: "pi:zai", status: "available" },
+        {
+          source: "opencode:auth.json",
+          path: "/home/user/.local/share/opencode/auth.json",
+          status: "available",
+        },
+      ],
+    });
+    expect(JSON.stringify(report)).not.toContain(PI_KEY);
+    expect(JSON.stringify(report)).not.toContain(SYNTHETIC_KEY);
   });
 });
 
@@ -935,6 +1304,7 @@ describe("Z.AI auth inspection", () => {
       expect(report).toEqual({
         provider: "zai",
         sources: [
+          { source: "pi:zai", status: "missing" },
           {
             source: "opencode:auth.json",
             path,
@@ -958,6 +1328,7 @@ function testAdapter(
       host: "api.z.ai",
       path: "/home/user/.local/share/opencode/auth.json",
     }),
+    piCredentialBroker: piBroker({ status: "missing" }),
     fetch: vi.fn(async () =>
       jsonResponse(QUOTA_PAYLOAD),
     ) as unknown as typeof fetch,
@@ -966,6 +1337,40 @@ function testAdapter(
     now: () => NOW,
     ...overrides,
   });
+}
+
+function piBroker(
+  resolution: PiApiKeyCredentialResolution,
+  providerIds: readonly string[] = ["zai", "zai-coding-cn"],
+): PiApiKeyCredentialBroker {
+  const primary = providerIds[0] ?? "zai";
+  const inspection: PiApiKeyCredentialInspection =
+    resolution.status === "available"
+      ? { status: "available", providerId: resolution.providerId }
+      : resolution.status === "missing"
+        ? { status: "missing", providerId: primary }
+        : resolution.status === "invalid"
+          ? {
+              status: "invalid",
+              providerId: resolution.providerId,
+              error: "invalid_credential",
+            }
+          : resolution.status === "unsupported"
+            ? {
+                status: "unsupported",
+                providerId: resolution.providerId,
+                error: "unsupported_credential_type",
+              }
+            : {
+                status: "error",
+                providerId: primary,
+                error: "credential_resolution_failed",
+              };
+  return {
+    providerIds,
+    resolve: vi.fn(async () => resolution),
+    inspect: vi.fn(async () => inspection),
+  };
 }
 
 function credentialSource(
