@@ -248,6 +248,7 @@ setTimeout(() => {
         source: "vendorcli-refresh",
         status: "failed",
         error: "refresh_timed_out",
+        degraded: false,
       });
 
       // The vendor ran to completion on its own: no SIGTERM/SIGINT/SIGHUP
@@ -306,6 +307,7 @@ function processGroupOf(pid) {
         source: "vendorcli-refresh",
         status: "failed",
         error: "refresh_exit_status",
+        degraded: false,
       });
     });
   },
@@ -856,6 +858,7 @@ describe.skipIf(process.platform === "win32")(
         source: "claude-cli-refresh",
         status: "failed",
         error: "refresh_timed_out",
+        degraded: false,
       });
       expect(result.state.status).toBe("stale");
       expect(result.state.stale).toBe(true);

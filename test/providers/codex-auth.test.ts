@@ -490,6 +490,40 @@ describe("Codex credential-state reporting", () => {
     ]);
   });
 
+  it("reports a transient Pi failure after native OAuth rejection", async () => {
+    const nativeToken = jwt({ exp: Math.floor(Date.now() / 1000) + 3600 });
+    writeAuth({ tokens: { access_token: nativeToken } });
+    writePiAuth(piOauthEntry());
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async (_url: string | URL | Request, init?: RequestInit) => {
+          const authorization = (init?.headers as Record<string, string>)
+            ?.authorization;
+          if (authorization === `Bearer ${nativeToken}`) {
+            return new Response(null, { status: 401 });
+          }
+          throw new TypeError("network unavailable");
+        },
+      ),
+    );
+
+    const { fetchQuota } = await import("../../src/providers/codex.js");
+    const result = await fetchQuota({
+      allowKeychainPrompt: false,
+      refreshCredentials: false,
+    });
+
+    expect(result.state.status).toBe("error");
+    expect(result.state.error).toBe("network unavailable");
+    expect(result.state.status).not.toBe("auth_required");
+    expect(result.attempts).toContainEqual({
+      source: "pi:openai-codex",
+      status: "failed",
+      error: "network unavailable",
+    });
+  });
+
   it("keeps a transient native probe failure over an expired Pi credential", async () => {
     const nativeToken = jwt({ exp: Math.floor(Date.now() / 1000) + 3600 });
     writeAuth({ tokens: { access_token: nativeToken } });

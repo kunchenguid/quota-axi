@@ -207,7 +207,10 @@ async function fetchQuotaWithDependencies(
         status: "failed",
         error: message,
       };
-      if (errorIsDefault) {
+      if (
+        errorIsDefault ||
+        statusFromError(finalError) === "auth_required"
+      ) {
         if (error instanceof RateLimitError) {
           finalError = message;
           errorIsDefault = false;
@@ -220,12 +223,16 @@ async function fetchQuotaWithDependencies(
     }
   } else {
     attempts.push(piSourceAttempt(piResolution));
-    if (!retryAfter && errorIsDefault) {
+    if (
+      !retryAfter &&
+      piResolution.status === "error" &&
+      (errorIsDefault || statusFromError(finalError) === "auth_required")
+    ) {
+      finalError = "Codex Pi credential resolution failed";
+      errorIsDefault = false;
+    } else if (!retryAfter && errorIsDefault) {
       if (piResolution.status === "expired") {
         finalError = "Pi Codex access token expired";
-        errorIsDefault = false;
-      } else if (piResolution.status === "error") {
-        finalError = "Codex Pi credential resolution failed";
         errorIsDefault = false;
       } else if (piResolution.status !== "missing") {
         finalError = "Codex sign-in required";
