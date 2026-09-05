@@ -1,7 +1,6 @@
-import { homedir } from "node:os";
-import { join } from "node:path";
 import { readJsonFileResult, type JsonFileReadResult } from "../lib/fs.js";
 import { providerFetch } from "../lib/http.js";
+import { piAuthFilePath } from "./pi-auth.js";
 import { usableLiteralSecret } from "../lib/secret.js";
 import type {
   AuthProviderReport,
@@ -9,7 +8,6 @@ import type {
   ProviderAdapter,
   ProviderQuota,
   ProviderStatus,
-  QuotaWindow,
   SourceAttempt,
 } from "../types.js";
 import { failedProvider, sourceNames, successProvider } from "./common.js";
@@ -21,14 +19,8 @@ export const DEEPSEEK_ENV_SOURCE = "env:DEEPSEEK_API_KEY";
 const LABEL = "DeepSeek";
 const DEADLINE_MS = 15_000;
 
-const CURRENCIES = ["CNY", "USD"] as const;
+const CURRENCIES = ["USD", "CNY"] as const;
 type DeepSeekCurrency = (typeof CURRENCIES)[number];
-
-const BALANCE_FIELDS = [
-  ["total", "Total balance", "total_balance"],
-  ["granted", "Granted balance", "granted_balance"],
-  ["topped-up", "Topped-up balance", "topped_up_balance"],
-] as const;
 
 type CredentialResolution =
   | { status: "available"; key: string; source: string; path?: string }
@@ -36,7 +28,7 @@ type CredentialResolution =
 
 type Dependencies = {
   credential: () => CredentialResolution;
-  fetch: typeof globalThis.fetch;
+  fetch: typeof providerFetch;
   now: () => number;
   deadlineMs: number;
 };
@@ -44,54 +36,15 @@ type Dependencies = {
 export type NormalizedDeepSeekPayload = {
   available: boolean;
   metrics: {
-    id: string;
-    label: string;
+    id: "usd-total" | "cny-total";
     value: string;
     currency: DeepSeekCurrency;
   }[];
 };
 
-export function deepseekAuthFilePath(): string {
-  const configured = process.env.PI_CODING_AGENT_DIR?.trim();
-  const home = process.env.HOME?.trim() || homedir();
-  const directory =
-    configured === undefined || configured === ""
-      ? join(home, ".pi", "agent")
-      : configured === "~"
-        ? home
-        : configured.startsWith("~/")
-          ? join(home, configured.slice(2))
-          : configured;
-  return join(directory, "auth.json");
-}
-
-export function extractDeepSeekCredential(
-  value: unknown,
-  path: string,
-): CredentialResolution {
-  const root = objectValue(value);
-  if (!root) return { status: "invalid", source: DEEPSEEK_PI_SOURCE, path };
-  for (const name of ["deepseek"]) {
-    const entry = objectValue(root[name]);
-    if (!entry) continue;
-    const key = [
-      entry.key,
-      entry.apiKey,
-      entry.api_key,
-      entry.access,
-      entry.token,
-    ]
-      .map(usableLiteralSecret)
-      .find((candidate): candidate is string => candidate !== undefined);
-    if (key)
-      return { status: "available", key, source: DEEPSEEK_PI_SOURCE, path };
-  }
-  return { status: "missing", source: DEEPSEEK_PI_SOURCE, path };
-}
-
 export function resolveDeepSeekCredential(
   environment: Readonly<Record<string, string | undefined>> = process.env,
-  path = deepseekAuthFilePath(),
+  path = piAuthFilePath(),
 ): CredentialResolution {
   const envKey = usableLiteralSecret(environment.DEEPSEEK_API_KEY);
   if (envKey)
@@ -107,6 +60,28 @@ export function resolveDeepSeekCredential(
     };
   }
   return extractDeepSeekCredential(result.value, path);
+}
+
+export function extractDeepSeekCredential(
+  value: unknown,
+  path: string,
+): CredentialResolution {
+  const root = objectValue(value);
+  if (!root) return { status: "invalid", source: DEEPSEEK_PI_SOURCE, path };
+  const entry = objectValue(root.deepseek);
+  if (!entry) return { status: "missing", source: DEEPSEEK_PI_SOURCE, path };
+  const key = [
+    entry.key,
+    entry.apiKey,
+    entry.api_key,
+    entry.access,
+    entry.token,
+  ]
+    .map(usableLiteralSecret)
+    .find((candidate): candidate is string => candidate !== undefined);
+  if (key)
+    return { status: "available", key, source: DEEPSEEK_PI_SOURCE, path };
+  return { status: "invalid", source: DEEPSEEK_PI_SOURCE, path };
 }
 
 export function createDeepSeekAdapter(
@@ -161,30 +136,11 @@ async function fetchQuota(dependencies: Dependencies): Promise<ProviderQuota> {
     const normalized = normalizeDeepSeekPayload(payload);
     attempts[0] = { source: resolution.source, status: "success" };
 
-    const windows: QuotaWindow[] = [];
-    for (const currency of ["USD", "CNY"] as const) {
-      const balance = normalized.metrics.find(
-        (m) =>
-          m.currency === currency && m.id === currency.toLowerCase() + "-total",
-      );
-      if (!balance) continue;
-      const value = Number(balance.value);
-      if (!Number.isFinite(value) || value < 0) continue;
-      windows.push({
-        id: "credits:" + currency.toLowerCase(),
-        label: currency + " balance",
-        kind: "credits",
-        spentUsd: 0,
-        limitUsd: value,
-        percentRemaining: 100,
-      });
-    }
-
     return successProvider({
       provider: "deepseek",
       label: LABEL,
       source: "api",
-      windows,
+      windows: [],
       credits: computeCredits(normalized.metrics),
       refreshedAt: new Date(dependencies.now()).toISOString(),
       sourcesTried: sourceNames(attempts),
@@ -229,7 +185,7 @@ async function inspectAuth(
 
 async function requestUsage(
   key: string,
-  fetchImplementation: typeof globalThis.fetch,
+  fetchImplementation: typeof providerFetch,
   deadlineMs: number,
 ): Promise<unknown> {
   const controller = new AbortController();
@@ -277,10 +233,8 @@ export function normalizeDeepSeekPayload(
     const currency = deepSeekCurrency(info.currency);
     if (!currency) throw new Error("unsupported_currency");
     if (balances.has(currency)) throw new Error("duplicate_currency");
-    for (const [, label, field] of BALANCE_FIELDS) {
-      if (!decimalAmount(info[field])) {
-        throw new Error("invalid_amount:" + label);
-      }
+    if (!decimalAmount(info.total_balance)) {
+      throw new Error("invalid_amount:Total balance");
     }
     balances.set(currency, info);
   }
@@ -289,14 +243,12 @@ export function normalizeDeepSeekPayload(
   for (const currency of CURRENCIES) {
     const balance = balances.get(currency);
     if (!balance) continue;
-    for (const [id, label, field] of BALANCE_FIELDS) {
-      metrics.push({
-        id: currency.toLowerCase() + "-" + id,
-        label,
-        value: String(balance[field]),
-        currency,
-      });
-    }
+    metrics.push({
+      id: (currency.toLowerCase() +
+        "-total") as NormalizedDeepSeekPayload["metrics"][number]["id"],
+      value: String(balance.total_balance),
+      currency,
+    });
   }
 
   return { available: root.is_available, metrics };
@@ -308,10 +260,22 @@ function computeCredits(
   const usdTotal = metrics.find(
     (m) => m.currency === "USD" && m.id === "usd-total",
   );
-  if (!usdTotal) return undefined;
-  const value = Number(usdTotal.value);
-  if (!Number.isFinite(value) || value < 0) return undefined;
-  return { remaining: value, unit: "usd" };
+  if (usdTotal) {
+    const value = Number(usdTotal.value);
+    if (Number.isFinite(value) && value >= 0) {
+      return { remaining: value, unit: "usd" };
+    }
+  }
+  const cnyTotal = metrics.find(
+    (m) => m.currency === "CNY" && m.id === "cny-total",
+  );
+  if (cnyTotal) {
+    const value = Number(cnyTotal.value);
+    if (Number.isFinite(value) && value >= 0) {
+      return { remaining: value, unit: "credits" };
+    }
+  }
+  return undefined;
 }
 
 function objectValue(value: unknown): Record<string, unknown> | undefined {
@@ -333,12 +297,6 @@ function decimalAmount(value: unknown): value is string {
   );
 }
 
-function statusFromError(error: string): ProviderStatus {
-  if (error === "provider_auth_rejected") return "auth_required";
-  if (error === "provider_rate_limited") return "rate_limited";
-  return "error";
-}
-
 function credentialError(resolution: CredentialResolution): string {
   if (resolution.status === "missing") return "deepseek_credential_unavailable";
   if (resolution.status === "invalid") return "deepseek_credential_invalid";
@@ -348,4 +306,10 @@ function credentialError(resolution: CredentialResolution): string {
 function errorCode(error: unknown): string {
   if (error instanceof Error) return error.message;
   return String(error);
+}
+
+function statusFromError(error: string): ProviderStatus {
+  if (error === "provider_auth_rejected") return "auth_required";
+  if (error === "provider_rate_limited") return "rate_limited";
+  return "error";
 }

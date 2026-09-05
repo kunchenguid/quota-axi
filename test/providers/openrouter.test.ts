@@ -93,7 +93,7 @@ describe("OpenRouter provider", () => {
 
     expect(report).toMatchObject({
       windows: [],
-      credits: { remaining: Number.POSITIVE_INFINITY, unit: "usd" },
+      credits: { unlimited: true, unit: "usd" },
     });
   });
 
@@ -138,7 +138,7 @@ describe("OpenRouter provider", () => {
         "/auth.json",
       ),
     ).toEqual({
-      status: "missing",
+      status: "invalid",
       source: "pi:openrouter",
       path: "/auth.json",
     });
