@@ -1,10 +1,10 @@
 import type { DegradedSource, SourceAttempt } from "../types.js";
 
 /**
- * A source that held a credential and did not yield a reading.
+ * A credential source that was not genuinely absent and did not yield a reading.
  *
  * The default is derived from the attempt itself - a source that was tried and
- * errored, or one that was skipped while still holding a credential - so a new
+ * errored, or one that was skipped after resolving beyond absence - so a new
  * provider inherits the correct answer without restating it. A provider whose
  * non-success attempt is not a credential problem (a live model-auth probe
  * that simply carries no quota, an identity lookup that is not a source at all)

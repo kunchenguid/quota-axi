@@ -220,18 +220,14 @@ describe("Cursor CLI-only quota refresh", () => {
     mockUsageApi();
 
     await onLinux(async () => {
-      const { withQuotaSemantics } = await import(
-        "../../src/interpretation.js"
-      );
+      const { withQuotaSemantics } =
+        await import("../../src/interpretation.js");
       const { fetchQuota } = await import("../../src/providers/cursor.js");
       const result = await fetchQuota({
         allowKeychainPrompt: false,
         refreshCredentials: false,
       });
-      const interpreted = withQuotaSemantics(
-        result,
-        new Date().toISOString(),
-      );
+      const interpreted = withQuotaSemantics(result, new Date().toISOString());
 
       expect(result.state.status).toBe("fresh");
       expect(result.windows.length).toBeGreaterThan(0);

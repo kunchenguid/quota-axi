@@ -1545,10 +1545,7 @@ describe("Grok dual-source CLI and Pi xAI usability", () => {
       allowKeychainPrompt: false,
       refreshCredentials: false,
     });
-    const interpreted = withQuotaSemantics(
-      result,
-      new Date().toISOString(),
-    );
+    const interpreted = withQuotaSemantics(result, new Date().toISOString());
 
     expect(result.state.status).toBe("fresh");
     expect(result.windows.length).toBeGreaterThan(0);
@@ -1729,10 +1726,7 @@ describe("Grok dual-source CLI and Pi xAI usability", () => {
       allowKeychainPrompt: false,
       refreshCredentials: false,
     });
-    const interpreted = withQuotaSemantics(
-      result,
-      new Date().toISOString(),
-    );
+    const interpreted = withQuotaSemantics(result, new Date().toISOString());
 
     expect(result.source).toBe("unavailable");
     expect(result.windows).toEqual([]);
@@ -2127,10 +2121,7 @@ describe("Grok dual-source CLI and Pi xAI usability", () => {
         allowKeychainPrompt: false,
         refreshCredentials: false,
       });
-      const interpreted = withQuotaSemantics(
-        result,
-        new Date().toISOString(),
-      );
+      const interpreted = withQuotaSemantics(result, new Date().toISOString());
 
       expect(result.state.status).toBe("fresh");
       expect(result.windows.length).toBeGreaterThan(0);
@@ -2505,9 +2496,7 @@ describe("Grok dual-source CLI and Pi xAI usability", () => {
     expect(
       withQuotaSemantics(result, new Date().toISOString()).state
         .degradedSources,
-    ).toEqual([
-      { source: "pi:xai", error: "credential_resolution_failed" },
-    ]);
+    ).toEqual([{ source: "pi:xai", error: "credential_resolution_failed" }]);
   });
 
   it("omits the Grok CLI remedy for Pi-only refreshable expiry", async () => {

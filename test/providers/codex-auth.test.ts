@@ -508,16 +508,14 @@ describe("Codex credential-state reporting", () => {
     }));
     vi.stubGlobal(
       "fetch",
-      vi.fn(
-        async (_url: string | URL | Request, init?: RequestInit) => {
-          const authorization = (init?.headers as Record<string, string>)
-            ?.authorization;
-          if (authorization === `Bearer ${nativeToken}`) {
-            return new Response(null, { status: 401 });
-          }
-          throw new TypeError("network unavailable");
-        },
-      ),
+      vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+        const authorization = (init?.headers as Record<string, string>)
+          ?.authorization;
+        if (authorization === `Bearer ${nativeToken}`) {
+          return new Response(null, { status: 401 });
+        }
+        throw new TypeError("network unavailable");
+      }),
     );
 
     const { fetchQuota } = await import("../../src/providers/codex.js");
@@ -548,7 +546,9 @@ describe("Codex credential-state reporting", () => {
     process.env.QUOTA_AXI_CODEX_BINARY = binary;
     const child = failingChild();
     const spawn = vi.fn(() => {
-      queueMicrotask(() => child.emit("error", new Error("network unavailable")));
+      queueMicrotask(() =>
+        child.emit("error", new Error("network unavailable")),
+      );
       return child;
     });
     vi.doMock("node:child_process", () => ({ spawn }));
@@ -631,18 +631,13 @@ describe("Codex credential-state reporting", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    const { withQuotaSemantics } = await import(
-      "../../src/interpretation.js"
-    );
+    const { withQuotaSemantics } = await import("../../src/interpretation.js");
     const { fetchQuota } = await import("../../src/providers/codex.js");
     const result = await fetchQuota({
       allowKeychainPrompt: false,
       refreshCredentials: false,
     });
-    const interpreted = withQuotaSemantics(
-      result,
-      new Date().toISOString(),
-    );
+    const interpreted = withQuotaSemantics(result, new Date().toISOString());
 
     expect(result.source).toBe("oauth");
     expect(result.state.status).toBe("error");
@@ -650,10 +645,7 @@ describe("Codex credential-state reporting", () => {
     expect(result.attempts).toEqual([
       { source: "oauth", status: "failed", error: "network unavailable" },
     ]);
-    expect(bearers).toEqual([
-      `Bearer ${nativeToken}`,
-      `Bearer ${nativeToken}`,
-    ]);
+    expect(bearers).toEqual([`Bearer ${nativeToken}`, `Bearer ${nativeToken}`]);
     expect(bearers).not.toContain(`Bearer ${piToken}`);
     expect(interpreted.state.degradedSources).toBeUndefined();
   });
@@ -749,18 +741,13 @@ describe("Codex credential-state reporting", () => {
       terminateChild: vi.fn(),
     }));
 
-    const { withQuotaSemantics } = await import(
-      "../../src/interpretation.js"
-    );
+    const { withQuotaSemantics } = await import("../../src/interpretation.js");
     const { fetchQuota } = await import("../../src/providers/codex.js");
     const result = await fetchQuota({
       allowKeychainPrompt: false,
       refreshCredentials: false,
     });
-    const interpreted = withQuotaSemantics(
-      result,
-      new Date().toISOString(),
-    );
+    const interpreted = withQuotaSemantics(result, new Date().toISOString());
 
     expect(result.source).toBe("cli-rpc");
     expect(result.windows.length).toBeGreaterThan(0);
@@ -785,18 +772,14 @@ describe("Codex credential-state reporting", () => {
         terminateChild: vi.fn(),
       }));
 
-      const { withQuotaSemantics } = await import(
-        "../../src/interpretation.js"
-      );
+      const { withQuotaSemantics } =
+        await import("../../src/interpretation.js");
       const { fetchQuota } = await import("../../src/providers/codex.js");
       const result = await fetchQuota({
         allowKeychainPrompt: false,
         refreshCredentials: false,
       });
-      const interpreted = withQuotaSemantics(
-        result,
-        new Date().toISOString(),
-      );
+      const interpreted = withQuotaSemantics(result, new Date().toISOString());
 
       expect(result.source).toBe("cli-rpc");
       expect(result.windows.length).toBeGreaterThan(0);

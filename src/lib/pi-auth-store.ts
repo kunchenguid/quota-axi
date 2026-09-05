@@ -10,9 +10,7 @@ export function classifyPiAuthEntry(
   if (!isObject(parsed)) return { status: "invalid" };
   if (!Object.hasOwn(parsed, providerId)) return { status: "missing" };
   const entry = parsed[providerId];
-  return isObject(entry)
-    ? { status: "present", entry }
-    : { status: "invalid" };
+  return isObject(entry) ? { status: "present", entry } : { status: "invalid" };
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {

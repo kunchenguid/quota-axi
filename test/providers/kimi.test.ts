@@ -1157,10 +1157,7 @@ describe("Kimi credential outcomes and cache policy", () => {
       }),
       fetch: request,
     }).fetchQuota(OPTIONS);
-    const interpreted = withQuotaSemantics(
-      report,
-      new Date(NOW).toISOString(),
-    );
+    const interpreted = withQuotaSemantics(report, new Date(NOW).toISOString());
 
     expect(report.state.status).toBe("fresh");
     expect(report.windows.length).toBeGreaterThan(0);
@@ -1236,9 +1233,7 @@ describe("Kimi credential outcomes and cache policy", () => {
       {
         generatedAt: new Date(NOW).toISOString(),
         schemaVersion: 5,
-        providers: [
-          withQuotaSemantics(report, new Date(NOW).toISOString()),
-        ],
+        providers: [withQuotaSemantics(report, new Date(NOW).toISOString())],
       },
       "quota-axi",
       false,

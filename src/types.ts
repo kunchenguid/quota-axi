@@ -208,15 +208,15 @@ export type SourceAttempt = {
   error?: string;
   credentialPresent?: boolean;
   /**
-   * Whether this source held a credential and failed to yield a reading.
-   * Left unset it is derived by `isDegradedSourceAttempt`; set it explicitly
+   * Whether this credential source was not genuinely absent and failed to
+   * yield a reading. Left unset it is derived by `isDegradedSourceAttempt`; set it explicitly
    * only to correct that derivation for an attempt that is not a credential
    * problem.
    */
   degraded?: boolean;
 };
 
-/** A source that held a credential and did not yield the reported reading. */
+/** A non-absent credential source that did not yield the reported reading. */
 export type DegradedSource = {
   source: string;
   error?: string;
@@ -259,7 +259,7 @@ export type ProviderQuota = {
     untrustedWindowIds?: string[];
     /**
      * Sources that were superseded: a working source answered for this
-     * provider while these held a credential that did not. Present only on a
+     * provider while these were broken or could not be read. Present only on a
      * fresh reading, so the breakage behind a healthy row stays visible.
      */
     degradedSources?: DegradedSource[];

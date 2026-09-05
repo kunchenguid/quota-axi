@@ -357,16 +357,16 @@ A `quota[]` row whose `runway` is `projected_exhaustion` or `exhausted_now` has 
 
 `attention[]` kinds:
 
-| `kind`                                                  | `scope` | Meaning                                                                                                                                                                                    |
-| ------------------------------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `stale`                                                 | `all`   | The report is stale diagnostic data. `detail` names the last refresh, `fetch failed` plus `state.error` when a usage fetch failed, and any `state.reason`; no scope gets a `quota[]` row.  |
-| `auth_required`, `rate_limited`, `unavailable`, `error` | `all`   | The provider state status. `detail` is `state.error`, any `state.reason`, plus the retry-after instant for a rate limit.                                                                   |
-| `no_quota`                                              | `all`   | The provider reported no measurable scope. Emitted when nothing else names it or when needed to preserve `state.authStatus`.                                                               |
-| `unresolved_windows`                                    | `all`   | `quotaSemantics.unresolvedWindowIds`: unfamiliar vendor windows not folded into any bound.                                                                                                 |
-| `untrusted_windows`                                     | `all`   | `state.untrustedWindowIds`: limits that could not be parsed authoritatively.                                                                                                               |
-| `headroom_unknown`                                      | scope   | The scope reports no effective percentage. `detail` names the windows that block it and any finite runway verdict with its limiting window.                                                |
-| `unmeasurable`                                          | scope   | Headroom is known but a bound blocks `runway`, `spendPriority`, or both. `detail` names which.                                                                                             |
-| `degraded_source`                                       | `all`   | A credential source was superseded: it held a credential that did not work while a sibling source answered. `detail` is `<source> · <error>`. One row per source, only on a fresh reading. |
+| `kind`                                                  | `scope` | Meaning                                                                                                                                                                                   |
+| ------------------------------------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `stale`                                                 | `all`   | The report is stale diagnostic data. `detail` names the last refresh, `fetch failed` plus `state.error` when a usage fetch failed, and any `state.reason`; no scope gets a `quota[]` row. |
+| `auth_required`, `rate_limited`, `unavailable`, `error` | `all`   | The provider state status. `detail` is `state.error`, any `state.reason`, plus the retry-after instant for a rate limit.                                                                  |
+| `no_quota`                                              | `all`   | The provider reported no measurable scope. Emitted when nothing else names it or when needed to preserve `state.authStatus`.                                                              |
+| `unresolved_windows`                                    | `all`   | `quotaSemantics.unresolvedWindowIds`: unfamiliar vendor windows not folded into any bound.                                                                                                |
+| `untrusted_windows`                                     | `all`   | `state.untrustedWindowIds`: limits that could not be parsed authoritatively.                                                                                                              |
+| `headroom_unknown`                                      | scope   | The scope reports no effective percentage. `detail` names the windows that block it and any finite runway verdict with its limiting window.                                               |
+| `unmeasurable`                                          | scope   | Headroom is known but a bound blocks `runway`, `spendPriority`, or both. `detail` names which.                                                                                            |
+| `degraded_source`                                       | `all`   | A credential source was superseded: it was broken or unreadable while a sibling source answered. `detail` is `<source> · <error>`. One row per source, only on a fresh reading.           |
 
 `remedy` carries `state.remedyCommand` when one exists, and situational agent-directed advice is still prepended to `help`.
 
@@ -391,7 +391,7 @@ An unknown or stale scope deliberately gets **no** `quota[]` row: the absence of
 | `effectiveAvailability[].pace.behindWindowIds`, `onPaceWindowIds`                                                                     |
 | Account identity (`account`) and per-source `attempts`                                                                                |
 
-Everything a consumer branches on stays in the default tier: `state.status`, `stale`, `authStatus`, `error`, `reason`, `remedyCommand`, `retryAfter`, `untrustedWindowIds`; window `pace.status`, `reason`, `reservePercentPoints`, `burnMultiple`; `quotaSemantics.status` and `unresolvedWindowIds`; and every scope's `effectivePercentRemaining`, `boundedBy`, `limitingWindowIds`, `runway`, `selection`, and pace `aheadWindowIds` / `unknownWindowIds` / `worstReservePercentPoints`. `credits` also stays, so a consumer can avoid misreading it as exhaustion.
+Everything a consumer branches on stays in the default tier: `state.status`, `stale`, `authStatus`, `error`, `reason`, `remedyCommand`, `retryAfter`, `untrustedWindowIds`, and `degradedSources`; window `pace.status`, `reason`, `reservePercentPoints`, `burnMultiple`; `quotaSemantics.status` and `unresolvedWindowIds`; and every scope's `effectivePercentRemaining`, `boundedBy`, `limitingWindowIds`, `runway`, `selection`, and pace `aheadWindowIds` / `unknownWindowIds` / `worstReservePercentPoints`. `credits` also stays, so a consumer can avoid misreading it as exhaustion.
 
 `--tui` renders from the complete in-memory model, so demotion never changes what the human report draws.
 
@@ -564,7 +564,7 @@ Any bounding window without usable pace makes the **whole scope** unmeasurable: 
 | Quota relationship statuses      | `known`, `partial`, or `unknown`                                                       |
 | Source attempt statuses          | `success`, `failed`, or `skipped`                                                      |
 
-Source attempts can include `credentialPresent` when a non-secret probe confirms a credential item exists.
+Source attempts can include `credentialPresent` when a source is not genuinely absent, including when a read failure prevents a more precise classification. They can include `degraded: false` when a non-success attempt is not a broken credential source; otherwise fresh reports derive `state.degradedSources` from failed attempts and skipped attempts with `credentialPresent`.
 
 ### Provider windows
 
@@ -601,7 +601,7 @@ Default model order is deterministic and non-preferential: provider, then model 
 | Provider auth report | `provider` and `sources`                                  |
 | Auth source entry    | `source`, optional `path`, `status`, and optional `error` |
 
-Auth source entries can include `credentialPresent` when a non-secret probe confirms a credential item exists.
+Auth source entries can include `credentialPresent` when a source is not genuinely absent, including when a read failure prevents a more precise classification.
 
 | Name                 | Values                                                                                                                                                                                                                                   |
 | -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

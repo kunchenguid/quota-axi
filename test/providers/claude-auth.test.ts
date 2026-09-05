@@ -1352,25 +1352,19 @@ describe("Claude credential-state reporting", () => {
       vi.fn(async (input: string | URL | Request) =>
         String(input).endsWith("/api/oauth/profile")
           ? new Response(JSON.stringify({ account: {} }), { status: 200 })
-          : new Response(
-              JSON.stringify({ five_hour: { utilization: 12 } }),
-              { status: 200 },
-            ),
+          : new Response(JSON.stringify({ five_hour: { utilization: 12 } }), {
+              status: 200,
+            }),
       ),
     );
 
-    const { withQuotaSemantics } = await import(
-      "../../src/interpretation.js"
-    );
+    const { withQuotaSemantics } = await import("../../src/interpretation.js");
     const { fetchQuota } = await import("../../src/providers/claude.js");
     const result = await fetchQuota({
       allowKeychainPrompt: false,
       refreshCredentials: false,
     });
-    const interpreted = withQuotaSemantics(
-      result,
-      new Date().toISOString(),
-    );
+    const interpreted = withQuotaSemantics(result, new Date().toISOString());
 
     expect(result.state.status).toBe("fresh");
     expect(result.windows.length).toBeGreaterThan(0);
