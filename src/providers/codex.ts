@@ -149,6 +149,27 @@ async function fetchQuotaWithDependencies(
         error: finalError,
       };
       if (error instanceof RateLimitError) retryAfter = error.retryAfter;
+      if (finalError !== "Codex sign-in required") {
+        const cached = readCachedProvider("codex");
+        if (cached) {
+          return staleFromCache(
+            cached,
+            finalError,
+            sourceNames(attempts),
+            attempts,
+          );
+        }
+        return failedProvider({
+          provider: "codex",
+          label: "Codex",
+          source: "oauth",
+          status: retryAfter ? "rate_limited" : statusFromError(finalError),
+          error: finalError,
+          retryAfter,
+          sourcesTried: sourceNames(attempts),
+          attempts,
+        });
+      }
     }
   } else {
     attempts.push({

@@ -1619,13 +1619,15 @@ describe("Grok dual-source CLI and Pi xAI usability", () => {
     expect(result.state.error).toBe("Grok quota unavailable");
   });
 
-  it("tries Pi oauth after a transient CLI quota failure", async () => {
+  it("does not try Pi oauth after a transient CLI quota failure", async () => {
     writeValidAuth("cli-transient-token");
     writeValidPiXaiOauth();
+    const bearers: string[] = [];
     const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
-      const authorization = (
-        init?.headers as Record<string, string> | undefined
-      )?.Authorization;
+      const authorization =
+        (init?.headers as Record<string, string> | undefined)?.Authorization ??
+        "";
+      bearers.push(authorization);
       if (authorization === "Bearer cli-transient-token") {
         throw new TypeError("network unavailable");
       }
@@ -1638,13 +1640,20 @@ describe("Grok dual-source CLI and Pi xAI usability", () => {
       refreshCredentials: false,
     });
 
-    expect(result.state.status).toBe("fresh");
-    expect(result.source).toBe("web");
+    expect(result.state.status).toBe("error");
+    expect(result.source).toBe("unavailable");
     expect(result.attempts).toEqual([
       { source: "web", status: "failed", error: "Grok quota unavailable" },
-      { source: "pi:xai", status: "success", credentialPresent: true },
+      {
+        source: "pi:xai",
+        status: "skipped",
+        error: "quota_not_needed",
+        credentialPresent: true,
+        degraded: false,
+      },
     ]);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(bearers).toEqual(["Bearer cli-transient-token"]);
+    expect(bearers).not.toContain("Bearer pi-xai-access-token-fixture");
   });
 
   it("tries a stored-expired CLI bearer independently of transient Pi oauth", async () => {

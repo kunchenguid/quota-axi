@@ -554,70 +554,61 @@ describe("Codex credential-state reporting", () => {
     expect(result.state.status).toBe("error");
     expect(result.state.error).toBe("Codex quota request timed out");
     expect(result.state.status).not.toBe("auth_required");
+    expect(result.source).toBe("oauth");
     expect(result.attempts).toEqual([
       {
         source: "oauth",
         status: "failed",
         error: "Codex quota request timed out",
       },
-      {
-        source: "pi:openai-codex",
-        status: "skipped",
-        error: "credentials_expired_refreshable",
-        credentialPresent: true,
-      },
-      { source: "cli-rpc", status: "failed", error: expect.any(String) },
     ]);
   });
 
-  it.each([401, 429])(
-    "keeps a transient native probe failure over an available Pi credential rejected with %i",
-    async (piStatus) => {
-      const nativeToken = jwt({ exp: Math.floor(Date.now() / 1000) + 3600 });
-      writeAuth({ tokens: { access_token: nativeToken } });
-      writePiAuth(piOauthEntry());
-      const timeout = () => {
-        const error = new Error("The operation was aborted");
-        error.name = "AbortError";
-        return error;
-      };
-      const fetchMock = vi.fn(
-        async (_url: string | URL | Request, init?: RequestInit) => {
-          const authorization = (init?.headers as Record<string, string>)
-            ?.authorization;
-          if (authorization === `Bearer ${nativeToken}`) throw timeout();
-          return new Response(null, {
-            status: piStatus,
-            headers:
-              piStatus === 429
-                ? { "retry-after": "2030-01-01T00:00:00.000Z" }
-                : undefined,
-          });
-        },
-      );
-      vi.stubGlobal("fetch", fetchMock);
+  it("does not switch to working Pi OAuth after a transient native failure", async () => {
+    const nativeToken = jwt({ exp: Math.floor(Date.now() / 1000) + 3600 });
+    const piToken = "working-pi-token";
+    writeAuth({ tokens: { access_token: nativeToken } });
+    writePiAuth(piOauthEntry({ access: piToken }));
+    const bearers: string[] = [];
+    const fetchMock = vi.fn(
+      async (_url: string | URL | Request, init?: RequestInit) => {
+        const authorization =
+          (init?.headers as Record<string, string>)?.authorization ?? "";
+        bearers.push(authorization);
+        if (authorization === `Bearer ${nativeToken}`) {
+          throw new TypeError("network unavailable");
+        }
+        return successfulUsageResponse();
+      },
+    );
+    vi.stubGlobal("fetch", fetchMock);
 
-      const { fetchQuota } = await import("../../src/providers/codex.js");
-      const result = await fetchQuota({
-        allowKeychainPrompt: false,
-        refreshCredentials: false,
-      });
+    const { withQuotaSemantics } = await import(
+      "../../src/interpretation.js"
+    );
+    const { fetchQuota } = await import("../../src/providers/codex.js");
+    const result = await fetchQuota({
+      allowKeychainPrompt: false,
+      refreshCredentials: false,
+    });
+    const interpreted = withQuotaSemantics(
+      result,
+      new Date().toISOString(),
+    );
 
-      expect(result.state.status).toBe("error");
-      expect(result.state.error).toBe("Codex quota request timed out");
-      expect(result.state.status).not.toBe("auth_required");
-      expect(result.state.status).not.toBe("rate_limited");
-      expect(result.state.retryAfter).toBeUndefined();
-      expect(result.attempts).toContainEqual({
-        source: "pi:openai-codex",
-        status: "failed",
-        error:
-          piStatus === 429
-            ? "Codex quota endpoint rate limited"
-            : "Codex sign-in required",
-      });
-    },
-  );
+    expect(result.source).toBe("oauth");
+    expect(result.state.status).toBe("error");
+    expect(result.state.error).toBe("network unavailable");
+    expect(result.attempts).toEqual([
+      { source: "oauth", status: "failed", error: "network unavailable" },
+    ]);
+    expect(bearers).toEqual([
+      `Bearer ${nativeToken}`,
+      `Bearer ${nativeToken}`,
+    ]);
+    expect(bearers).not.toContain(`Bearer ${piToken}`);
+    expect(interpreted.state.degradedSources).toBeUndefined();
+  });
 
   it("keeps an unusable native credential over an expired Pi credential", async () => {
     writeAuth({ tokens: { access_token: jwt({ exp: 1 }) } });

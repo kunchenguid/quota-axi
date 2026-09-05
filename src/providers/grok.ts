@@ -256,15 +256,15 @@ async function fetchQuotaWithDependencies(
     }
   }
 
-  const piSelection =
-    cliSelection.outcome === "quota"
-      ? await selectCredential<GrokAttemptCredential, NormalizedGrokQuota>(
-          [],
-          (candidate) => attemptGrokCandidate(candidate.credential),
-        )
-      : await selectCredential(piCandidates, (candidate) =>
-          attemptGrokCandidate(candidate.credential),
-        );
+  const cliCredentialFailed =
+    cliSelection.outcome === "all_rejected" ||
+    cliSelection.outcome === "no_candidates";
+  const piSelection = await selectCredential<
+    GrokAttemptCredential,
+    NormalizedGrokQuota
+  >(cliCredentialFailed ? piCandidates : [], (candidate) =>
+    attemptGrokCandidate(candidate.credential),
+  );
   const selection = mergeIndependentSelections(cliSelection, piSelection);
 
   const attempts = grokAttempts(
@@ -723,9 +723,10 @@ function classifyGrokAuthStatus(
   );
   const piUsable =
     (piResolution.status === "available" &&
-      (piResult?.outcome === "quota" ||
-        piResult?.outcome === "live_no_quota" ||
-        piResult?.outcome === "transient")) ||
+      (piResult === undefined ||
+        piResult.outcome === "quota" ||
+        piResult.outcome === "live_no_quota" ||
+        piResult.outcome === "transient")) ||
     (piResolution.status === "expired" &&
       piResult?.outcome === "live_no_quota");
   const cliUsable = selection.results.some(
