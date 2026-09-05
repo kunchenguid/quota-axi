@@ -13,6 +13,7 @@ export type KimiCredentialResolution =
       credential: string;
     }
   | { status: "missing" }
+  | { status: "invalid" }
   | { status: "expired"; refreshable: boolean }
   | { status: "unsupported" }
   | { status: "error" };
@@ -66,21 +67,22 @@ async function resolveCredential(
       : { status: "error" };
   }
   if (contents.byteLength > AUTH_FILE_LIMIT_BYTES) {
-    return { status: "missing" };
+    return { status: "invalid" };
   }
 
   let parsed: unknown;
   try {
     parsed = JSON.parse(contents.toString("utf8")) as unknown;
   } catch {
-    return { status: "missing" };
+    return { status: "invalid" };
   }
 
   const root = objectValue(parsed);
-  if (!root) return { status: "missing" };
+  if (!root) return { status: "invalid" };
+  if (!Object.hasOwn(root, PI_PROVIDER_ID)) return { status: "missing" };
 
   const entry = objectValue(root[PI_PROVIDER_ID]);
-  if (!entry) return { status: "missing" };
+  if (!entry) return { status: "invalid" };
 
   // Pi stores a `kimi-coding` login as either a literal API key or the OAuth
   // record it received from Kimi. Both are read in place: an expired OAuth
@@ -91,14 +93,14 @@ async function resolveCredential(
     const apiKey = usableLiteralSecret(entry.key);
     return apiKey !== undefined
       ? { status: "available", kind: "api_key", credential: apiKey }
-      : { status: "missing" };
+      : { status: "invalid" };
   }
   if (type === "oauth") {
     const access = usableLiteralSecret(entry.access);
-    if (access === undefined) return { status: "missing" };
+    if (access === undefined) return { status: "invalid" };
     const hasExpiry = Object.hasOwn(entry, "expires");
     const expiresMs = timestampMs(entry.expires);
-    if (hasExpiry && expiresMs === undefined) return { status: "missing" };
+    if (hasExpiry && expiresMs === undefined) return { status: "invalid" };
     if (expiresMs !== undefined && expiresMs <= dependencies.now()) {
       return {
         status: "expired",
@@ -107,7 +109,7 @@ async function resolveCredential(
     }
     return { status: "available", kind: "oauth", credential: access };
   }
-  if (type === undefined) return { status: "missing" };
+  if (type === undefined) return { status: "invalid" };
   return { status: "unsupported" };
 }
 

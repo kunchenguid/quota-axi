@@ -115,9 +115,11 @@ export function createKimiAdapter(
           ? "unsupported_credential_type"
           : piInspection === "expired"
             ? "pi_kimi_credential_expired"
-            : piInspection === "error"
-              ? "credential_resolution_failed"
-              : undefined;
+            : piInspection === "invalid"
+              ? "pi_kimi_credential_invalid"
+              : piInspection === "error"
+                ? "credential_resolution_failed"
+                : undefined;
 
       let cliInspection;
       try {
@@ -414,6 +416,12 @@ function credentialFailureFor(
   }
   if (resolution.status === "unsupported") {
     return new KimiFailure("unsupported_credential_type", {
+      status: "auth_required",
+      definitiveAuth: true,
+    });
+  }
+  if (resolution.status === "invalid") {
+    return new KimiFailure("pi_kimi_credential_invalid", {
       status: "auth_required",
       definitiveAuth: true,
     });

@@ -121,7 +121,7 @@ describe("Pi Kimi credential broker", () => {
     expect(readdirSync(home)).toEqual([]);
   });
 
-  it("reports a stored environment reference as missing without resolving it", async () => {
+  it("reports a stored environment reference as invalid without resolving it", async () => {
     const fixture = piAuthFixture("${MISSING_KIMI_KEY_FIXTURE_983}");
     process.env.MISSING_KIMI_KEY_FIXTURE_983 = "must-not-be-resolved";
     process.env.KIMI_API_KEY = "ambient-key-must-not-replace-reference";
@@ -129,7 +129,7 @@ describe("Pi Kimi credential broker", () => {
 
     const resolution = await broker.resolve();
 
-    expect(resolution).toEqual({ status: "missing" });
+    expect(resolution).toEqual({ status: "invalid" });
     expect(JSON.stringify(resolution)).not.toContain(
       "MISSING_KIMI_KEY_FIXTURE_983",
     );
@@ -145,7 +145,7 @@ describe("Pi Kimi credential broker", () => {
     process.env.KIMI_API_KEY = "ambient-key-must-not-replace-bad-reference";
     const broker = createPiKimiCredentialBroker();
 
-    await expect(broker.resolve()).resolves.toEqual({ status: "missing" });
+    await expect(broker.resolve()).resolves.toEqual({ status: "invalid" });
     expectAuthUnchanged(fixture);
   });
 
@@ -164,7 +164,7 @@ describe("Pi Kimi credential broker", () => {
     );
     const broker = createPiKimiCredentialBroker();
 
-    await expect(broker.resolve()).resolves.toEqual({ status: "missing" });
+    await expect(broker.resolve()).resolves.toEqual({ status: "invalid" });
     expect(() => statSync(markerPath)).toThrow();
     expectAuthUnchanged(fixture, ["auth.json"]);
   });
@@ -188,7 +188,7 @@ describe("Pi Kimi credential broker", () => {
 
       const resolution = await broker.resolve();
 
-      expect(resolution).toEqual({ status: "missing" });
+      expect(resolution).toEqual({ status: "invalid" });
       expect(JSON.stringify(resolution)).not.toContain(key);
       expect(JSON.stringify(resolution)).not.toContain(
         "ambient-key-must-not-replace-bad-reference",
@@ -198,7 +198,7 @@ describe("Pi Kimi credential broker", () => {
     },
   );
 
-  it("reports malformed Pi auth state as missing without changing it", async () => {
+  it("reports malformed Pi auth state as invalid without changing it", async () => {
     const home = temporaryDirectory();
     const authPath = join(home, ".pi", "agent", "auth.json");
     mkdirSync(dirname(authPath), { recursive: true, mode: 0o700 });
@@ -208,11 +208,11 @@ describe("Pi Kimi credential broker", () => {
     const fixture = { authPath, before: snapshot(authPath) };
     const broker = createPiKimiCredentialBroker();
 
-    await expect(broker.resolve()).resolves.toEqual({ status: "missing" });
+    await expect(broker.resolve()).resolves.toEqual({ status: "invalid" });
     expectSnapshotEqual(authPath, fixture.before);
   });
 
-  it("reports oversized Pi auth files as missing without loading them fully", async () => {
+  it("reports oversized Pi auth files as invalid without loading them fully", async () => {
     const oversized = Buffer.alloc(64 * 1024 + 8, 0x61);
     const readFile = vi.fn(async () => oversized);
     const broker = createPiKimiCredentialBroker({
@@ -224,7 +224,7 @@ describe("Pi Kimi credential broker", () => {
       readFile,
     });
 
-    await expect(broker.resolve()).resolves.toEqual({ status: "missing" });
+    await expect(broker.resolve()).resolves.toEqual({ status: "invalid" });
     expect(readFile).toHaveBeenCalledTimes(1);
     expect(readFile.mock.calls[0][1]).toBe(64 * 1024);
   });
@@ -411,11 +411,11 @@ describe("Pi Kimi credential broker", () => {
     ["absent access token", { refresh: "r", expires: Date.now() + 3_600_000 }],
     ["environment reference", { access: "$KIMI_OAUTH_ACCESS" }],
     ["unparseable expiry", { access: "usable-access", expires: "soon" }],
-  ])("reports an OAuth record with an %s as missing", async (_label, entry) => {
+  ])("reports an OAuth record with an %s as invalid", async (_label, entry) => {
     const fixture = piOauthFixture(entry);
 
     await expect(createPiKimiCredentialBroker().resolve()).resolves.toEqual({
-      status: "missing",
+      status: "invalid",
     });
     expectSnapshotEqual(fixture.authPath, fixture.before);
   });
@@ -472,11 +472,11 @@ describe("Pi Kimi credential broker", () => {
     });
   });
 
-  it("reports missing and blank keys without exposing values", async () => {
+  it("reports blank keys as invalid without exposing values", async () => {
     for (const key of ["", "   "]) {
       const fixture = piAuthFixture(key);
       const resolution = await createPiKimiCredentialBroker().resolve();
-      expect(resolution).toEqual({ status: "missing" });
+      expect(resolution).toEqual({ status: "invalid" });
       expectAuthUnchanged(fixture);
     }
   });

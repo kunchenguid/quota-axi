@@ -13,10 +13,11 @@ import type {
   KimiCodeCliCredentialResolution,
   KimiCodeCliCredentialSource,
 } from "../../src/providers/kimi-code-cli-credential.js";
-import type {
-  KimiCredentialBroker,
-  KimiCredentialInspection,
-  KimiCredentialResolution,
+import {
+  createPiKimiCredentialBroker,
+  type KimiCredentialBroker,
+  type KimiCredentialInspection,
+  type KimiCredentialResolution,
 } from "../../src/providers/pi-kimi-credential.js";
 import type {
   ProviderAdapter,
@@ -903,6 +904,7 @@ describe("Kimi payload normalization", () => {
 describe("Kimi credential outcomes and cache policy", () => {
   it.each([
     ["missing", "kimi_credential_unavailable"],
+    ["invalid", "pi_kimi_credential_invalid"],
     ["unsupported", "unsupported_credential_type"],
   ] as const)(
     "makes no request for %s credentials and retires cache",
@@ -1065,6 +1067,7 @@ describe("Kimi credential outcomes and cache policy", () => {
     for (const [inspection, expected] of [
       ["available", { status: "available" }],
       ["missing", { status: "missing" }],
+      ["invalid", { status: "invalid", error: "pi_kimi_credential_invalid" }],
       [
         "unsupported",
         { status: "invalid", error: "unsupported_credential_type" },
@@ -1138,6 +1141,33 @@ describe("Kimi credential outcomes and cache policy", () => {
       });
     },
   );
+
+  it("keeps a malformed Pi store degraded when the CLI returns quota", async () => {
+    const request = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        jsonResponse(SUCCESS_PAYLOAD),
+    );
+    const report = await testAdapter({
+      broker: createPiKimiCredentialBroker({
+        readFile: async () => Buffer.from("{malformed"),
+      }),
+      cliCredentialSource: cliCredentialSource({
+        status: "available",
+        accessToken: "working-cli-token",
+      }),
+      fetch: request,
+    }).fetchQuota(OPTIONS);
+    const interpreted = withQuotaSemantics(
+      report,
+      new Date(NOW).toISOString(),
+    );
+
+    expect(report.state.status).toBe("fresh");
+    expect(report.windows.length).toBeGreaterThan(0);
+    expect(interpreted.state.degradedSources).toEqual([
+      { source: "pi:kimi-coding", error: "pi_kimi_credential_invalid" },
+    ]);
+  });
 
   it("falls through to the CLI when the Pi OAuth record is expired", async () => {
     const request = vi.fn(

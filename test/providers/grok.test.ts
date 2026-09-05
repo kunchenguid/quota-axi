@@ -2300,7 +2300,7 @@ describe("Grok dual-source CLI and Pi xAI usability", () => {
     expect(JSON.stringify(result)).not.toContain("expired-pi-access");
   });
 
-  it("preserves malformed Pi auth JSON as a resolution error", async () => {
+  it("preserves malformed Pi auth JSON as invalid", async () => {
     const piAuthPath = join(process.env.PI_CODING_AGENT_DIR!, "auth.json");
     mkdirSync(dirname(piAuthPath), { recursive: true });
     writeFileSync(piAuthPath, "{not-json");
@@ -2313,13 +2313,13 @@ describe("Grok dual-source CLI and Pi xAI usability", () => {
 
     expect(result.state).toMatchObject({
       authStatus: "unusable",
-      status: "error",
-      error: "Grok Pi credential resolution failed",
+      status: "auth_required",
+      error: "Grok sign-in required",
     });
     expect(result.attempts).toContainEqual({
       source: "pi:xai",
-      status: "failed",
-      error: "credential_resolution_failed",
+      status: "skipped",
+      error: "credentials_invalid",
       credentialPresent: true,
     });
   });

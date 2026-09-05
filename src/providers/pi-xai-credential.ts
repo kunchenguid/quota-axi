@@ -109,7 +109,7 @@ async function resolveCredential(
   try {
     parsed = JSON.parse(contents.toString("utf8")) as unknown;
   } catch {
-    return { status: "error" };
+    return { status: "invalid" };
   }
 
   const root = objectValue(parsed);
