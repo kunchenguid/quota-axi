@@ -1505,6 +1505,10 @@ describe("Grok dual-source CLI and Pi xAI usability", () => {
     expect(result.state.authStatus).toBe("usable");
     expect(result.source).toBe("web");
     expect(result.windows.length).toBeGreaterThan(0);
+    expect(
+      withQuotaSemantics(result, new Date().toISOString()).state
+        .degradedSources,
+    ).toBeUndefined();
     expect(result.attempts).toEqual([
       {
         source: "auth-json",
@@ -1530,6 +1534,28 @@ describe("Grok dual-source CLI and Pi xAI usability", () => {
     expect(JSON.stringify(result)).not.toContain(
       "pi-xai-refresh-token-fixture",
     );
+  });
+
+  it("keeps an invalid CLI store degraded when Pi returns quota", async () => {
+    writeAuth({ invalid: { type: "api_key", key: "ignored" } });
+    writeValidPiXaiOauth();
+    const fetchMock = stubSuccessfulFetch();
+
+    const result = await fetchQuota({
+      allowKeychainPrompt: false,
+      refreshCredentials: false,
+    });
+    const interpreted = withQuotaSemantics(
+      result,
+      new Date().toISOString(),
+    );
+
+    expect(result.state.status).toBe("fresh");
+    expect(result.windows.length).toBeGreaterThan(0);
+    expect(interpreted.state.degradedSources).toEqual([
+      { source: "auth-json", error: "credentials_invalid" },
+    ]);
+    expect(fetchMock).toHaveBeenCalledOnce();
   });
 
   it("reports a definitively rejected Pi oauth token as signed out", async () => {
@@ -2294,6 +2320,7 @@ describe("Grok dual-source CLI and Pi xAI usability", () => {
       source: "pi:xai",
       status: "failed",
       error: "credential_resolution_failed",
+      credentialPresent: true,
     });
   });
 
@@ -2395,7 +2422,14 @@ describe("Grok dual-source CLI and Pi xAI usability", () => {
       source: "pi:xai",
       status: "failed",
       error: "credential_resolution_failed",
+      credentialPresent: true,
     });
+    expect(
+      withQuotaSemantics(result, new Date().toISOString()).state
+        .degradedSources,
+    ).toEqual([
+      { source: "pi:xai", error: "credential_resolution_failed" },
+    ]);
   });
 
   it("omits the Grok CLI remedy for Pi-only refreshable expiry", async () => {
@@ -2773,6 +2807,7 @@ describe("Grok delegated credential refresh", () => {
         source: "auth-json",
         status: "skipped",
         error: "credentials_invalid",
+        credentialPresent: true,
       },
     ]);
     expect(fetchMock).toHaveBeenCalledTimes(2);

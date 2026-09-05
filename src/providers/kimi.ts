@@ -277,7 +277,7 @@ async function resolveKimiCandidate(
     try {
       resolution = await resolveCredential(dependencies.broker, signal);
     } catch (error) {
-      return unavailableCandidate(asKimiFailure(error), "failed", false);
+      return unavailableCandidate(asKimiFailure(error), "failed", true);
     }
     if (resolution.status === "available") {
       return { status: "available", credential: resolution.credential };
@@ -296,7 +296,7 @@ async function resolveKimiCandidate(
       signal,
     );
   } catch (error) {
-    return unavailableCandidate(asKimiFailure(error), "failed", false);
+    return unavailableCandidate(asKimiFailure(error), "failed", true);
   }
   if (resolution.status === "available") {
     return { status: "available", credential: resolution.accessToken };

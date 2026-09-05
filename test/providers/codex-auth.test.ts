@@ -703,6 +703,40 @@ describe("Codex credential-state reporting", () => {
     expect(spawn).toHaveBeenCalledOnce();
   });
 
+  it("keeps unsupported Pi auth degraded when CLI RPC returns quota", async () => {
+    writePiAuth({ type: "api_key", key: "unsupported-api-key" });
+    const binary = join(tempDir!, "codex-fixture");
+    process.env.QUOTA_AXI_CODEX_BINARY = binary;
+    const spawn = vi.fn(() => successfulChild());
+    vi.doMock("node:child_process", () => ({ spawn }));
+    vi.doMock("../../src/lib/process.js", () => ({
+      findCommandPath: vi.fn(async () => binary),
+      terminateChild: vi.fn(),
+    }));
+
+    const { withQuotaSemantics } = await import(
+      "../../src/interpretation.js"
+    );
+    const { fetchQuota } = await import("../../src/providers/codex.js");
+    const result = await fetchQuota({
+      allowKeychainPrompt: false,
+      refreshCredentials: false,
+    });
+    const interpreted = withQuotaSemantics(
+      result,
+      new Date().toISOString(),
+    );
+
+    expect(result.source).toBe("cli-rpc");
+    expect(result.windows.length).toBeGreaterThan(0);
+    expect(interpreted.state.degradedSources).toEqual([
+      {
+        source: "pi:openai-codex",
+        error: "unsupported_credential_type",
+      },
+    ]);
+  });
+
   it("reports refreshable Pi expiry without exchanging or exposing the refresh token", async () => {
     writePiAuth(
       piOauthEntry({

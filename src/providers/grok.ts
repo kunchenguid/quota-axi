@@ -678,6 +678,7 @@ function appendGrokCliAttempt(
     source: pass.state.source.source,
     status: "skipped",
     error: `credentials_${pass.state.status}`,
+    ...(pass.state.status === "missing" ? {} : { credentialPresent: true }),
   });
 }
 
@@ -782,6 +783,7 @@ function piSourceAttempt(resolution: PiXaiCredentialResolution): SourceAttempt {
       source: PI_XAI_CREDENTIAL_SOURCE,
       status: "failed",
       error: "credential_resolution_failed",
+      credentialPresent: true,
     };
   }
   if (resolution.status === "unsupported") {

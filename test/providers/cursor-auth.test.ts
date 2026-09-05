@@ -91,6 +91,7 @@ describe("Cursor credential-state reporting", () => {
       source: "state-vscdb",
       status: "skipped",
       error: "sqlite3_unavailable",
+      credentialPresent: true,
     });
   });
 
@@ -114,6 +115,7 @@ describe("Cursor credential-state reporting", () => {
       source: "state-vscdb",
       status: "skipped",
       error: "sqlite_read_error",
+      credentialPresent: true,
     });
   });
 
@@ -377,6 +379,7 @@ describe("Cursor credential-state reporting", () => {
         ),
         status: "skipped",
         error: "sqlite3_unavailable",
+        credentialPresent: true,
       });
     });
   });

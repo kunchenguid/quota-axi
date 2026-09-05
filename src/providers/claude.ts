@@ -764,6 +764,7 @@ async function readSkippedKeychainCredentialState(
       source: "keychain",
       status: "skipped",
       error: "keychain_presence_check_failed",
+      credentialPresent: true,
     },
   };
 }
@@ -916,6 +917,7 @@ function keychainFailureState(error: unknown): CredentialState {
         source: "keychain",
         status: "skipped",
         error: "keychain_prompt_timeout",
+        credentialPresent: true,
       },
     };
   }
@@ -926,6 +928,7 @@ function keychainFailureState(error: unknown): CredentialState {
         source: "keychain",
         status: "skipped",
         error: KEYCHAIN_UNREACHABLE_ERROR,
+        credentialPresent: true,
       },
     };
   }
@@ -935,6 +938,7 @@ function keychainFailureState(error: unknown): CredentialState {
       source: "keychain",
       status: "skipped",
       error: "keychain_access_denied",
+      credentialPresent: true,
     },
   };
 }

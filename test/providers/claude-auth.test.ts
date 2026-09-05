@@ -1172,6 +1172,7 @@ describe("Claude credential-state reporting", () => {
       source: "keychain",
       status: "skipped",
       error: "keychain_unreachable",
+      credentialPresent: true,
     });
   });
 
@@ -1329,6 +1330,53 @@ describe("Claude credential-state reporting", () => {
     const marker = claudeKeychainAccessMarkerPath("fixture-user");
     expect(existsSync(marker)).toBe(true);
     expect(statSync(marker).mode & 0o777).toBe(0o600);
+  });
+
+  it("keeps an invalid OAuth file degraded when Keychain returns quota", async () => {
+    usePlatform("darwin");
+    const home = useTempHome();
+    await writeKeychainAccessMarker();
+    mkdirSync(join(home, ".claude"), { recursive: true });
+    writeFileSync(join(home, ".claude", ".credentials.json"), "{invalid");
+    const execFileText = vi.fn(async () =>
+      JSON.stringify({
+        claudeAiOauth: {
+          accessToken: "working-keychain-token",
+          expiresAt: "2035-01-01T00:00:00.000Z",
+        },
+      }),
+    );
+    vi.doMock("../../src/lib/process.js", () => ({ execFileText }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request) =>
+        String(input).endsWith("/api/oauth/profile")
+          ? new Response(JSON.stringify({ account: {} }), { status: 200 })
+          : new Response(
+              JSON.stringify({ five_hour: { utilization: 12 } }),
+              { status: 200 },
+            ),
+      ),
+    );
+
+    const { withQuotaSemantics } = await import(
+      "../../src/interpretation.js"
+    );
+    const { fetchQuota } = await import("../../src/providers/claude.js");
+    const result = await fetchQuota({
+      allowKeychainPrompt: false,
+      refreshCredentials: false,
+    });
+    const interpreted = withQuotaSemantics(
+      result,
+      new Date().toISOString(),
+    );
+
+    expect(result.state.status).toBe("fresh");
+    expect(result.windows.length).toBeGreaterThan(0);
+    expect(interpreted.state.degradedSources).toEqual([
+      { source: "oauth-file", error: "credentials_invalid" },
+    ]);
   });
 
   it("selects the current-user item from duplicate services through the real CLI", async () => {
@@ -1555,11 +1603,13 @@ describe("Claude credential-state reporting", () => {
       source: "keychain",
       status: "skipped",
       error: "keychain_presence_check_failed",
+      credentialPresent: true,
     });
     expect(result.attempts).toContainEqual({
       source: "keychain",
       status: "skipped",
       error: "keychain_presence_check_failed",
+      credentialPresent: true,
     });
     expect(result.attempts).not.toContainEqual(
       expect.objectContaining({

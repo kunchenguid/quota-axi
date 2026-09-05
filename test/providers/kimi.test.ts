@@ -167,7 +167,7 @@ describe("Kimi request transport", () => {
     expect(report.state.untrustedWindowIds).toEqual(["limit:2"]);
   });
 
-  it.each(["missing", "unsupported"] as const)(
+  it.each(["missing", "unsupported", "error"] as const)(
     "uses a fresh CLI credential after Pi reports %s",
     async (piStatus) => {
       const cliToken = "synthetic-cli-token-529";
@@ -204,16 +204,34 @@ describe("Kimi request transport", () => {
       expect(report.attempts).toEqual([
         {
           source: "pi:kimi-coding",
-          status: "skipped",
+          status: piStatus === "error" ? "failed" : "skipped",
           error:
             piStatus === "missing"
               ? "kimi_credential_unavailable"
-              : "unsupported_credential_type",
-          ...(piStatus === "unsupported" ? { credentialPresent: true } : {}),
+              : piStatus === "unsupported"
+                ? "unsupported_credential_type"
+                : "credential_resolution_failed",
+          ...(piStatus === "missing" ? {} : { credentialPresent: true }),
         },
         { source: "kimi-code-cli", status: "success" },
       ]);
       expect(JSON.stringify(report)).not.toContain(cliToken);
+      expect(
+        withQuotaSemantics(report, new Date(NOW).toISOString()).state
+          .degradedSources,
+      ).toEqual(
+        piStatus === "missing"
+          ? undefined
+          : [
+              {
+                source: "pi:kimi-coding",
+                error:
+                  piStatus === "unsupported"
+                    ? "unsupported_credential_type"
+                    : "credential_resolution_failed",
+              },
+            ],
+      );
     },
   );
 

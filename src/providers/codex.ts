@@ -345,6 +345,7 @@ function piSourceAttempt(
       source: PI_CODEX_CREDENTIAL_SOURCE,
       status: "failed",
       error: "credential_resolution_failed",
+      credentialPresent: true,
     };
   }
   if (resolution.status === "expired") {
