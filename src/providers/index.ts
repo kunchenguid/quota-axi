@@ -9,6 +9,8 @@ import { kimiAdapter } from "./kimi.js";
 import { opencodeGoAdapter } from "./opencode-go.js";
 import { minimaxAdapter } from "./minimax.js";
 import { mimoAdapter } from "./mimo.js";
+import { deepseekAdapter } from "./deepseek.js";
+import { openrouterAdapter } from "./openrouter.js";
 import { zaiAdapter } from "./zai.js";
 import {
   PROVIDER_IDS,
@@ -29,6 +31,8 @@ export const PROVIDERS: Record<ProviderId, ProviderAdapter> = {
   "opencode-go": opencodeGoAdapter,
   minimax: minimaxAdapter,
   mimo: mimoAdapter,
+  deepseek: deepseekAdapter,
+  openrouter: openrouterAdapter,
 };
 
 export function parseProviders(value: string | undefined): ProviderId[] {

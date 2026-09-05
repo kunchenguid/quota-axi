@@ -19,8 +19,12 @@ metadata:
       - agy
       - alibaba
       - opencode-go
+      - deepseek
+      - openrouter
       - minimax
       - mimo
+      - deepseek
+      - openrouter
       - antigravity
       - cli
     category: observability
