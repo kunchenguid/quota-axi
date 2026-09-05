@@ -114,7 +114,52 @@ function semanticsFor(
         provider.windows,
         "OpenCode Go reports rolling, weekly, and monthly windows, but quota-axi has no provider evidence that they jointly bound all models, so it does not claim an effective combined percentage.",
       );
+    case "minimax":
+      return minimaxSemantics(provider.windows, generatedAt);
   }
+}
+
+function minimaxSemantics(
+  windows: QuotaWindow[],
+  generatedAt: string,
+): QuotaSemantics {
+  const account = windows.filter(
+    ({ id }) => id === "interval" || id === "weekly",
+  );
+  const modelWindows = windows.filter(({ kind }) => kind === "model");
+  const recognized = new Set([...account, ...modelWindows]);
+  const unresolved = windows.filter((window) => !recognized.has(window));
+  if (unresolved.length > 0) {
+    return partialSemantics(
+      unresolved,
+      "MiniMax's shared interval and weekly Token Plan windows bound every model the plan covers, and each other resource (such as video) adds its own separate bound, but unfamiliar windows prevent a definitive effective percentage.",
+    );
+  }
+
+  const effectiveAvailability: EffectiveAvailability[] = [];
+  if (account.length > 0) {
+    effectiveAvailability.push(
+      availability("all_models", account, generatedAt),
+    );
+  }
+  const models = new Map<string, QuotaWindow[]>();
+  for (const window of modelWindows) {
+    const scope = minimaxModelScope(window.id);
+    const scoped = models.get(scope) ?? [];
+    scoped.push(window);
+    models.set(scope, scoped);
+  }
+  for (const [scope, scoped] of models) {
+    effectiveAvailability.push(availability(scope, scoped, generatedAt));
+  }
+  return knownSemantics(
+    effectiveAvailability,
+    "MiniMax's shared interval and weekly Token Plan windows bound every model the plan covers. Each other resource, such as video, is a separate bound with its own interval and weekly windows.",
+  );
+}
+
+function minimaxModelScope(id: string): string {
+  return id.replace(/:(?:interval|weekly)$/, "");
 }
 
 function alibabaSemantics(

@@ -313,6 +313,48 @@ describe("quota semantics", () => {
     );
   });
 
+  it("keeps MiniMax's shared Token Plan bound separate from a resource-scoped model bound", () => {
+    const result = withQuotaSemantics(
+      provider("minimax", [
+        window("interval", "session", 85, { windowSeconds: 14_400 }),
+        window("weekly", "weekly", 70, { windowSeconds: WEEK_SECONDS }),
+        window("model:video:interval", "model", 40),
+        window("model:video:weekly", "model", 55),
+      ]),
+      GENERATED_AT,
+    );
+
+    expect(result.quotaSemantics?.effectiveAvailability).toEqual([
+      expect.objectContaining({
+        scope: "all_models",
+        effectivePercentRemaining: 70,
+        boundedBy: ["interval", "weekly"],
+      }),
+      expect.objectContaining({
+        scope: "model:video",
+        effectivePercentRemaining: 40,
+        boundedBy: ["model:video:interval", "model:video:weekly"],
+      }),
+    ]);
+  });
+
+  it("does not claim a definitive MiniMax percentage when an unfamiliar window appears", () => {
+    const result = withQuotaSemantics(
+      provider("minimax", [
+        window("interval", "session", 85, { windowSeconds: 14_400 }),
+        window("weekly", "weekly", 70, { windowSeconds: WEEK_SECONDS }),
+        window("mystery", "unknown", 10),
+      ]),
+      GENERATED_AT,
+    );
+
+    expect(result.quotaSemantics).toMatchObject({
+      status: "partial",
+      effectiveAvailability: [],
+      unresolvedWindowIds: ["mystery"],
+    });
+  });
+
   it("surfaces pace on a non-currently-limiting bounding window that is ahead", () => {
     const result = withQuotaSemantics(
       provider("claude", [

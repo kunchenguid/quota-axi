@@ -1,7 +1,7 @@
 // Trigger string Claude Code (and other agents) match against to auto-load the skill.
 // Kept terse and outcome-focused so it fires on "check quota/rate limits" intents.
 export const SKILL_DESCRIPTION =
-  "Report local Claude, Codex, Cursor, GitHub Copilot, Grok, Kimi, Z.AI, Alibaba, OpenCode Go, and Antigravity quota windows via the quota-axi CLI - remaining " +
+  "Report local Claude, Codex, Cursor, GitHub Copilot, Grok, Kimi, Z.AI, Alibaba, OpenCode Go, MiniMax, and Antigravity quota windows via the quota-axi CLI - remaining " +
   "effective usable runway, percentages, reset times, cycle-average pace vs the reset clock, a per-scope selection signal, and provider status read from local auth sources, " +
   "with no routing, no credential minting, and no default ordering preference. Use before deciding whether it is safe " +
   "to keep spending a provider's quota, when the user asks about usage, rate limits, pace, or " +
@@ -26,6 +26,7 @@ export const HERMES_TAGS = [
   "agy",
   "alibaba",
   "opencode-go",
+  "minimax",
   "antigravity",
   "cli",
 ];
@@ -62,7 +63,7 @@ ${yamlStringList(HERMES_TAGS, "      ")}
 
 # quota-axi
 
-Report local Claude, Codex, Cursor, GitHub Copilot, Grok, Kimi, Z.AI, Alibaba, OpenCode Go, and Antigravity quota windows.
+Report local Claude, Codex, Cursor, GitHub Copilot, Grok, Kimi, Z.AI, Alibaba, OpenCode Go, MiniMax, and Antigravity quota windows.
 quota-axi is data only: it never routes, recommends, ranks, or mints credentials. When the same stored
 access token is expired, refreshable, and definitively rejected, it may delegate renewal to the vendor's
 own CLI and re-read the result.
