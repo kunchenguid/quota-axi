@@ -15,7 +15,7 @@ Quota CLI for agents - designed with [AXI](https://axi.md) (Agent eXperience Int
 Agents need quota state before they choose where work can safely run.
 Vendor dashboards are not shaped for shell automation, and local CLIs expose different windows, resets, and auth sources.
 
-quota-axi reports local Claude, Codex, Cursor, GitHub Copilot, Grok, Kimi, Z.AI, Alibaba, OpenCode Go, MiniMax, MiMo, and Antigravity (`agy`) quota windows in one [AXI](https://axi.md)-shaped call.
+quota-axi reports local Claude, Codex, Cursor, GitHub Copilot, Grok, Kimi, Z.AI, Alibaba, OpenCode Go, MiniMax, MiMo, DeepSeek, OpenRouter, and Antigravity (`agy`) quota windows in one [AXI](https://axi.md)-shaped call.
 It is data only: it never routes, recommends a provider, model, harness, credential, or route, proxies, intercepts, logs in, imports browser cookies, or mints or rotates a credential. When the same stored access token is expired, carries a refresh token, and is definitively rejected, quota-axi may delegate renewal to that vendor's own non-interactive CLI command and re-read the result ([Delegated credential refresh](#delegated-credential-refresh)). Default output has no ordering preference. The opt-in `models --sort runway` surface applies only its documented deterministic comparator to quota evidence, preserves all evidence and explicit ties, and is not a recommendation. It publishes one derived per-scope comparative selection signal, [`selection`](#per-scope-selection-signal), as data computed from figures it already reports; the consumer, not quota-axi, does any routing or ranking with it.
 
 - **Official sources** - quota-axi reads local provider auth sources and calls first-party quota, usage, billing, entitlement, local loopback, or read-only credential-liveness endpoints used by the local agents, with read-only CLI probes for Alibaba and Codex where applicable. The only other vendor commands it runs are the declared credential-refresh delegates.
@@ -193,7 +193,7 @@ $ quota-axi --provider claude --json
 $ quota-axi auth
 bin: ~/.npm/_npx/.../quota-axi
 description: Inspect local quota auth sources without printing secret values
-auth[17]{provider,source,path,status,error}:
+auth[19]{provider,source,path,status,error}:
   claude,oauth-file,~/.claude/.credentials.json,available,none
   claude,keychain,none,skipped,keychain_prompt_required
   codex,auth-json,~/.codex/auth.json,available,none
@@ -211,6 +211,8 @@ auth[17]{provider,source,path,status,error}:
   opencode-go,opencode:auth.json,~/.local/share/opencode/auth.json,available,none
   minimax,pi:minimax,~/.pi/agent/auth.json,available,none
   mimo,env:MIMO_API_KEY,none,available,none
+  deepseek,pi:deepseek,~/.pi/agent/auth.json,available,none
+  openrouter,pi:openrouter,~/.pi/agent/auth.json,available,none
 help[1]:
   Run `quota-axi --allow-keychain-prompt auth` to permit macOS Keychain access
 ```
@@ -303,20 +305,20 @@ It is generated from `src/skill.ts`; update it with `pnpm run build:skill` and v
 
 ### Flags
 
-| Flag                                                                                        | Description                                                        |
-| ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
-| `--provider claude,codex,cursor,copilot,grok,kimi,zai,agy,alibaba,opencode-go,minimax,mimo` | Scope providers                                                    |
-| `--json`                                                                                    | Emit normalized JSON instead of TOON for quota, auth, or models    |
-| `--full`                                                                                    | Include audit and derivation details                               |
-| `--tui`                                                                                     | Render the live human terminal report instead of TOON (quota only) |
-| `--refresh 30s\|5m\|1h`                                                                     | Live `--tui` refresh interval, default 5m (30s-24h)                |
-| `--once`                                                                                    | Render one `--tui` frame and exit instead of staying live          |
-| `--allow-keychain-prompt`                                                                   | Permit macOS provider Keychain access that could prompt            |
-| `--no-credential-refresh`                                                                   | Never run a vendor CLI's own non-interactive credential refresh    |
-| `--intelligence high\|medium\|low`                                                          | Filter `models` by editorial intelligence bucket                   |
-| `--sort runway`                                                                             | Explicitly sort `models` by documented usable-runway evidence      |
-| `-h`, `--help`                                                                              | Print terse [AXI](https://axi.md) help                             |
-| `-v`, `-V`, `--version`                                                                     | Print version                                                      |
+| Flag                                                                                                            | Description                                                        |
+| --------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| `--provider claude,codex,cursor,copilot,grok,kimi,zai,agy,alibaba,opencode-go,minimax,mimo,deepseek,openrouter` | Scope providers                                                    |
+| `--json`                                                                                                        | Emit normalized JSON instead of TOON for quota, auth, or models    |
+| `--full`                                                                                                        | Include audit and derivation details                               |
+| `--tui`                                                                                                         | Render the live human terminal report instead of TOON (quota only) |
+| `--refresh 30s\|5m\|1h`                                                                                         | Live `--tui` refresh interval, default 5m (30s-24h)                |
+| `--once`                                                                                                        | Render one `--tui` frame and exit instead of staying live          |
+| `--allow-keychain-prompt`                                                                                       | Permit macOS provider Keychain access that could prompt            |
+| `--no-credential-refresh`                                                                                       | Never run a vendor CLI's own non-interactive credential refresh    |
+| `--intelligence high\|medium\|low`                                                                              | Filter `models` by editorial intelligence bucket                   |
+| `--sort runway`                                                                                                 | Explicitly sort `models` by documented usable-runway evidence      |
+| `-h`, `--help`                                                                                                  | Print terse [AXI](https://axi.md) help                             |
+| `-v`, `-V`, `--version`                                                                                         | Print version                                                      |
 
 ### Human terminal report (`--tui`)
 
@@ -447,7 +449,7 @@ Cursor's IDE windows (`included_usage`, `auto_usage`, `api_usage`, and optional 
 
 Z.AI's `five_hour` and `weekly` token windows jointly bound model usage and are reported as one `all_models` scope, while the `mcp_month` tool window is a separate resource reported as its own `tools` scope; a tool window near exhaustion therefore never lowers model headroom, and model windows never mask tool exhaustion. An unfamiliar or untrusted Z.AI window is not folded into either bound: it stays named in `unresolvedWindowIds`, turns the provider's semantics `partial`, and leaves both scopes non-definitive because it could add a bound to either.
 
-Alibaba's account `weekly` window is reported at `all_models` scope, while each `model:*` limit is kept only at its named model scope; a model limit never becomes an account-wide bound. OpenCode Go's rolling, weekly, and monthly windows are reported as raw windows but remain `unknown` for effective availability because quota-axi has no provider evidence that those windows jointly bind `all_models`. MiniMax model-remains windows are kept at their named model scopes and never become an account-wide bound. MiMo has no quota windows or effective model scope until a provider-owned quota source exists.
+Alibaba's account `weekly` window is reported at `all_models` scope, while each `model:*` limit is kept only at its named model scope; a model limit never becomes an account-wide bound. OpenCode Go's rolling, weekly, and monthly windows are reported as raw windows but remain `unknown` for effective availability because quota-axi has no provider evidence that those windows jointly bind `all_models`. MiniMax model-remains windows are kept at their named model scopes and never become an account-wide bound. MiMo has no quota windows or effective model scope until a provider-owned quota source exists. DeepSeek and OpenRouter expose balances or key caps as raw credit evidence; quota-axi does not infer model headroom or effective remaining from those amounts.
 
 For every stale provider report, raw windows remain available for diagnostics but effective availability is always `unknown` and omits `effectivePercentRemaining` and `limitingWindowIds`. Window pace is `unknown` with reason `stale`, and each effective pace summary, effective `runway`, and `selection` is also `unknown` with its unmeasurable bounds named. Routing agents must not treat a stale raw percentage as current headroom.
 
@@ -582,10 +584,12 @@ Source attempts can include `credentialPresent` when a non-secret probe confirms
 | OpenCode Go            | Reads `opencode-go` (falling back to `opencode`) from OpenCode's `auth.json` and reports the provider's rolling, weekly, and monthly usage windows. It uses only cycle durations present in the payload; absent durations remain absent, and the windows' effective relationship stays unknown.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | MiniMax                | Reads a local MiniMax/Pi API key and the first-party Token Plan or balance response. Named `model_remains` rows become model-scoped `model:<slug>:5h` and `model:<slug>:7d` windows; absent numeric observations remain absent, and no account-wide bound is inferred.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | MiMo                   | Reads only the local `MIMO_API_KEY` used by Pi. No first-party read-only quota endpoint is established, so a usable credential reports an empty fresh window set rather than fabricated model headroom.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| DeepSeek               | Reads a local DeepSeek/Pi API key and the first-party balance response. USD/CNY totals are exposed as credit balances only; no quota windows, reset, or effective model headroom is inferred from balance amounts.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| OpenRouter             | Reads a local OpenRouter/Pi API key and the first-party key endpoint. A finite key cap is reported as a raw `key-limit` credit window; a null cap is reported as unlimited credits. The relationship to model quota remains unknown.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 
 ### Model catalog and `models`
 
-`quota-axi models [--intelligence high|medium|low] [--sort runway] [--provider ...] [--json|--full]` joins a reviewed catalog of native Claude, Codex, Grok, Kimi, and MiniMax models to the provider's effective quota evidence. MiMo has catalog names for discovery, but no quota windows are established, so its model rows remain unevidenced. It queries catalog-backed providers by default and accepts only those providers in an explicit models scope. Cursor, Copilot, Z.AI, Alibaba, OpenCode Go, and Antigravity report quota but have no reviewed catalog entries yet, so they are not `models` providers.
+`quota-axi models [--intelligence high|medium|low] [--sort runway] [--provider ...] [--json|--full]` joins a reviewed catalog of native Claude, Codex, Grok, Kimi, and MiniMax models to the provider's effective quota evidence. MiMo has catalog names for discovery, but no quota windows are established, so its model rows remain unevidenced. It queries catalog-backed providers by default and accepts only those providers in an explicit models scope. Cursor, Copilot, Z.AI, Alibaba, OpenCode Go, DeepSeek, OpenRouter, and Antigravity report quota but have no reviewed catalog entries yet, so they are not `models` providers.
 
 Catalog buckets are coarse editorial classifications relative to the current frontier, not scores. They are curated from public provider material and public leaderboards, including [Artificial Analysis](https://artificialanalysis.ai/) as an informing source. quota-axi does not reproduce Artificial Analysis scores, has no runtime Artificial Analysis dependency, and never commits an Artificial Analysis key. `scripts/refresh-model-kb.ts` is a maintainer-only review aid: it may use a private `AA_API_KEY` to suggest changes, but it never writes the catalog.
 
@@ -603,10 +607,10 @@ Default model order is deterministic and non-preferential: provider, then model 
 
 Auth source entries can include `credentialPresent` when a non-secret probe confirms a credential item exists.
 
-| Name                 | Values                                                                                                                                                                                                                                                                                                                   |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Auth source statuses | `available`, `missing`, `invalid`, `expired`, `skipped`, or `error`                                                                                                                                                                                                                                                      |
-| Auth source names    | `oauth-file`, `keychain`, `auth-json`, `auth-env`, `apps-json`, `state-vscdb`, `cli-keychain`, `cli-authfile`, `cli-rpc`, `pi:openai-codex`, `pi:kimi-coding`, `pi:xai`, `kimi-code-cli`, `opencode:auth.json`, `minimax:config.json`, `pi:minimax`, `env:MINIMAX_API_KEY`, `env:MIMO_API_KEY`, `bl-cli`, and `loopback` |
+| Name                 | Values                                                                                                                                                                                                                                                                                                                                                                                                     |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Auth source statuses | `available`, `missing`, `invalid`, `expired`, `skipped`, or `error`                                                                                                                                                                                                                                                                                                                                        |
+| Auth source names    | `oauth-file`, `keychain`, `auth-json`, `auth-env`, `apps-json`, `state-vscdb`, `cli-keychain`, `cli-authfile`, `cli-rpc`, `pi:openai-codex`, `pi:kimi-coding`, `pi:xai`, `kimi-code-cli`, `opencode:auth.json`, `minimax:config.json`, `pi:minimax`, `env:MINIMAX_API_KEY`, `env:MIMO_API_KEY`, `pi:deepseek`, `env:DEEPSEEK_API_KEY`, `pi:openrouter`, `env:OPENROUTER_API_KEY`, `bl-cli`, and `loopback` |
 
 ## Security Posture
 
@@ -626,6 +630,8 @@ Auth source entries can include `credentialPresent` when a non-secret probe conf
 | OpenCode Go    | `$XDG_DATA_HOME/opencode/auth.json` when set, `%LOCALAPPDATA%\opencode\auth.json` on Windows, otherwise `~/.local/share/opencode/auth.json`, for a literal `opencode-go` key with `opencode` fallback                                                                                                                                                                                                                          |
 | MiniMax        | `$PI_CODING_AGENT_DIR/auth.json` (default `~/.pi/agent/auth.json`) for a literal `minimax` key, `$MMX_CONFIG_DIR/config.json` (default `~/.mmx/config.json`), or `MINIMAX_API_KEY`; `MINIMAX_BASE_URL` is accepted only for MiniMax first-party hosts                                                                                                                                                                          |
 | MiMo           | `MIMO_API_KEY` only, as a literal secret; quota-axi does not read browser or dashboard state                                                                                                                                                                                                                                                                                                                                   |
+| DeepSeek       | `DEEPSEEK_API_KEY` or `$PI_CODING_AGENT_DIR/auth.json` (default `~/.pi/agent/auth.json`) for a literal `deepseek` key                                                                                                                                                                                                                                                                                                          |
+| OpenRouter     | `OPENROUTER_API_KEY` or `$PI_CODING_AGENT_DIR/auth.json` (default `~/.pi/agent/auth.json`) for a literal `openrouter` key                                                                                                                                                                                                                                                                                                      |
 
 ### Provider notes
 
@@ -718,6 +724,18 @@ Auth source entries can include `credentialPresent` when a non-secret probe conf
 - It reads only the literal `MIMO_API_KEY` environment value used by the local Pi provider configuration.
 - MiMo's provider-owned setup exposes model authentication but no established read-only quota operation. A usable key therefore yields `authStatus: usable` with `windows: []`; quota-axi never probes an inference endpoint, sends cookies, or claims a model scope.
 
+**DeepSeek**
+
+- It reads only a literal `DEEPSEEK_API_KEY` or the literal `deepseek` entry in Pi's `$PI_CODING_AGENT_DIR/auth.json` (default `~/.pi/agent/auth.json`). Environment, template, and command references are rejected rather than resolved.
+- It sends one redirect-disabled `GET` to DeepSeek's first-party `/user/balance` endpoint with a bearer token. USD/CNY totals are exposed as credits only; quota-axi never converts balances into usage windows, resets, percentages, or model headroom.
+- It never launches DeepSeek tooling, refreshes or writes credentials, sends cookies, or retains raw responses.
+
+**OpenRouter**
+
+- It reads only a literal `OPENROUTER_API_KEY` or the literal `openrouter` entry in Pi's `$PI_CODING_AGENT_DIR/auth.json` (default `~/.pi/agent/auth.json`). Environment, template, and command references are rejected rather than resolved.
+- It sends one redirect-disabled `GET` to OpenRouter's first-party `/api/v1/key` endpoint with a bearer token. A finite key cap is reported as the raw `key-limit` credit window; a null cap is reported as unlimited credits. quota-axi does not infer model quota, account-wide effective headroom, or reset times beyond fields the endpoint supplies.
+- It never launches OpenRouter tooling, refreshes or writes credentials, sends cookies, or retains raw responses.
+
 **Antigravity**
 
 - It never launches, restarts, signs in to, or mutates Antigravity or `agy`. It reads no credential store, so it has no delegated refresh either.
@@ -732,12 +750,12 @@ quota-axi reports quota; it is not an auth app. It never mints a credential, nev
 
 Instead, when the same stored access token is expired, carries a refresh token, **and** is definitively rejected, quota-axi may run the vendor CLI's own smallest non-interactive command that already owns rotation, then re-read the store that CLI rewrote and retry the same read-only quota request once. Rotation is always the vendor's; quota-axi only reads the result.
 
-| Provider                                                                             | Vendor-owned recovery path        | Store the vendor rewrites                             |
-| ------------------------------------------------------------------------------------ | --------------------------------- | ----------------------------------------------------- |
-| Claude                                                                               | `claude doctor` delegate          | the Claude Code Keychain item, or `.credentials.json` |
-| Codex                                                                                | existing `app-server` quota probe | `$CODEX_HOME/auth.json`                               |
-| Grok                                                                                 | `grok models` delegate            | `$GROK_HOME/auth.json`                                |
-| Cursor, GitHub Copilot, Kimi, Z.AI, Alibaba, OpenCode Go, MiniMax, MiMo, Antigravity | none                              | read-only; see the per-provider notes below           |
+| Provider                                                                                                   | Vendor-owned recovery path        | Store the vendor rewrites                             |
+| ---------------------------------------------------------------------------------------------------------- | --------------------------------- | ----------------------------------------------------- |
+| Claude                                                                                                     | `claude doctor` delegate          | the Claude Code Keychain item, or `.credentials.json` |
+| Codex                                                                                                      | existing `app-server` quota probe | `$CODEX_HOME/auth.json`                               |
+| Grok                                                                                                       | `grok models` delegate            | `$GROK_HOME/auth.json`                                |
+| Cursor, GitHub Copilot, Kimi, Z.AI, Alibaba, OpenCode Go, MiniMax, MiMo, DeepSeek, OpenRouter, Antigravity | none                              | read-only; see the per-provider notes below           |
 
 The Claude and Grok delegated runs are bounded the same way:
 
