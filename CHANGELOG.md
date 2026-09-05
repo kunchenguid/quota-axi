@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.38](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.37...quota-axi-v0.1.38) (2026-09-05)
+
+
+### Bug Fixes
+
+* **providers:** fall back to working credential sources ([#147](https://github.com/kunchenguid/quota-axi/issues/147)) ([dc5accd](https://github.com/kunchenguid/quota-axi/commit/dc5accde5f8a8d6e2ec5ffa5ffdcd05a7d77e2c4))
+
 ## [0.1.37](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.36...quota-axi-v0.1.37) (2026-09-04)
 
 
