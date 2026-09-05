@@ -268,9 +268,7 @@ async function fetchQuotaWithDependencies(
       status: "failed",
       error: message,
     };
-    // cli-rpc is the last source, so this deliberately does not clear
-    // errorIsDefault. Add a source after it and the flag has to be cleared here.
-    if (errorIsDefault) {
+    if (errorIsDefault || !(error instanceof CodexCliUnavailableError)) {
       finalError = message;
     }
   }
@@ -734,7 +732,7 @@ async function probeCodexCli(): Promise<{
 }> {
   const binary = await resolveCodexBinary();
   if (binary.status === "missing") {
-    throw new Error(codexBinaryErrorMessage(binary));
+    throw new CodexCliUnavailableError(codexBinaryErrorMessage(binary));
   }
   const child = spawn(
     binary.path,
@@ -1010,6 +1008,8 @@ function errorMessage(error: unknown): string {
     return "Codex quota request timed out";
   return error instanceof Error ? error.message : "Codex quota unavailable";
 }
+
+class CodexCliUnavailableError extends Error {}
 
 class RateLimitError extends Error {
   constructor(readonly retryAfter: string | undefined) {

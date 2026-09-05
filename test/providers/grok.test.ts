@@ -2116,6 +2116,30 @@ describe("Grok dual-source CLI and Pi xAI usability", () => {
     expect(fetchMock).toHaveBeenCalledOnce();
   });
 
+  it.each([{}, null, "invalid", []])(
+    "keeps structurally invalid Pi auth %# degraded when CLI returns quota",
+    async (entry) => {
+      writeValidAuth("cli-only-key");
+      writePiXaiAuth({ xai: entry });
+      stubSuccessfulFetch();
+
+      const result = await fetchQuota({
+        allowKeychainPrompt: false,
+        refreshCredentials: false,
+      });
+      const interpreted = withQuotaSemantics(
+        result,
+        new Date().toISOString(),
+      );
+
+      expect(result.state.status).toBe("fresh");
+      expect(result.windows.length).toBeGreaterThan(0);
+      expect(interpreted.state.degradedSources).toEqual([
+        { source: "pi:xai", error: "credentials_invalid" },
+      ]);
+    },
+  );
+
   it("keeps Grok CLI consumer quota when Pi xAI auth is missing", async () => {
     writeValidAuth("cli-only-key");
     const fetchMock = stubSuccessfulFetch();

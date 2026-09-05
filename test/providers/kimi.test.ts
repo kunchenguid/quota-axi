@@ -1169,6 +1169,37 @@ describe("Kimi credential outcomes and cache policy", () => {
     ]);
   });
 
+  it.each([{}, null, "invalid", []])(
+    "keeps structurally invalid Pi auth %# degraded when the CLI returns quota",
+    async (entry) => {
+      const request = vi.fn(
+        async (_input: RequestInfo | URL, _init?: RequestInit) =>
+          jsonResponse(SUCCESS_PAYLOAD),
+      );
+      const report = await testAdapter({
+        broker: createPiKimiCredentialBroker({
+          readFile: async () =>
+            Buffer.from(JSON.stringify({ "kimi-coding": entry })),
+        }),
+        cliCredentialSource: cliCredentialSource({
+          status: "available",
+          accessToken: "working-cli-token",
+        }),
+        fetch: request,
+      }).fetchQuota(OPTIONS);
+      const interpreted = withQuotaSemantics(
+        report,
+        new Date(NOW).toISOString(),
+      );
+
+      expect(report.state.status).toBe("fresh");
+      expect(report.windows.length).toBeGreaterThan(0);
+      expect(interpreted.state.degradedSources).toEqual([
+        { source: "pi:kimi-coding", error: "pi_kimi_credential_invalid" },
+      ]);
+    },
+  );
+
   it("falls through to the CLI when the Pi OAuth record is expired", async () => {
     const request = vi.fn(
       async (_input: RequestInfo | URL, _init?: RequestInit) =>
