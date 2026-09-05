@@ -1060,6 +1060,12 @@ describe("default TOON decision blocks", () => {
       emptyFreshQuota("minimax", "MiniMax"),
     );
     PROVIDERS.mimo = providerWithQuota(emptyFreshQuota("mimo", "MiMo"));
+    PROVIDERS.deepseek = providerWithQuota(
+      emptyFreshQuota("deepseek", "DeepSeek"),
+    );
+    PROVIDERS.openrouter = providerWithQuota(
+      emptyFreshQuota("openrouter", "OpenRouter"),
+    );
 
     const output = await capture([]);
     const named = new Set([
