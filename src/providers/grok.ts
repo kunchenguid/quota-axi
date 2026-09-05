@@ -257,7 +257,9 @@ async function fetchQuotaWithDependencies(
   }
 
   const shouldTryPi =
-    cliSelection.outcome !== "quota" && cliSelection.outcome !== "transient";
+    cliSelection.outcome !== "quota" &&
+    cliSelection.outcome !== "transient" &&
+    cliSelection.transientError === undefined;
   const piSelection = await selectCredential<
     GrokAttemptCredential,
     NormalizedGrokQuota
@@ -473,8 +475,8 @@ function mergeIndependentSelections<R>(
     return {
       outcome: "live_no_quota",
       winner: live.winner,
-      transientError: transient?.transientError,
-      retryAfter: transient?.retryAfter,
+      transientError: live.transientError ?? transient?.transientError,
+      retryAfter: live.retryAfter ?? transient?.retryAfter,
       refreshable,
       results,
     };

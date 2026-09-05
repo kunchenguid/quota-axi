@@ -1691,6 +1691,60 @@ describe("Grok dual-source CLI and Pi xAI usability", () => {
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
+  it("stops before Pi when live CLI auth is followed by a transient candidate", async () => {
+    writeAuth({
+      "https://auth.x.ai::live-client": {
+        key: "cli-live-model-only-token",
+        auth_mode: "oidc",
+        expires_at: "2035-01-01T00:00:00.000Z",
+      },
+      "https://auth.x.ai::transient-client": {
+        key: "cli-transient-token",
+        auth_mode: "oidc",
+        expires_at: "2035-01-01T00:00:00.000Z",
+      },
+    });
+    writeValidPiXaiOauth();
+    const bearers: string[] = [];
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      const authorization =
+        (init?.headers as Record<string, string> | undefined)?.Authorization ??
+        "";
+      bearers.push(authorization);
+      if (authorization === "Bearer cli-live-model-only-token") {
+        return url === GROK_BUILD_MODELS_URL
+          ? new Response(JSON.stringify({ object: "list", data: [] }), {
+              status: 200,
+            })
+          : grpcResponse(new Uint8Array(), { status: 403 });
+      }
+      if (authorization === "Bearer cli-transient-token") {
+        throw new TypeError("network unavailable");
+      }
+      return grpcResponse(consumerPayload());
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await fetchQuota({
+      allowKeychainPrompt: false,
+      refreshCredentials: false,
+    });
+    const interpreted = withQuotaSemantics(
+      result,
+      new Date().toISOString(),
+    );
+
+    expect(result.source).toBe("unavailable");
+    expect(result.windows).toEqual([]);
+    expect(result.state).toMatchObject({
+      status: "error",
+      authStatus: "usable",
+      error: "Grok quota unavailable",
+    });
+    expect(bearers).not.toContain("Bearer pi-xai-access-token-fixture");
+    expect(interpreted.state.degradedSources).toBeUndefined();
+  });
+
   it("does not try Pi oauth after a transient CLI quota failure", async () => {
     writeValidAuth("cli-transient-token");
     writeValidPiXaiOauth();
