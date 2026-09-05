@@ -1,6 +1,7 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { readJsonFileResult, type JsonFileReadResult } from "../lib/fs.js";
+import { providerFetch } from "../lib/http.js";
 import { usableLiteralSecret } from "../lib/secret.js";
 import type {
   AuthProviderReport,
@@ -113,7 +114,7 @@ export function createDeepSeekAdapter(
 ): ProviderAdapter {
   const dependencies: Dependencies = {
     credential: () => resolveDeepSeekCredential(),
-    fetch: globalThis.fetch,
+    fetch: providerFetch,
     now: Date.now,
     deadlineMs: DEADLINE_MS,
     ...overrides,
