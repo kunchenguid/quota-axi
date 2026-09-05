@@ -1,11 +1,13 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo, Socket } from "node:net";
 import { describe, expect, it, vi } from "vitest";
+import { withQuotaSemantics } from "../../src/interpretation.js";
 import {
   createKimiAdapter,
   normalizeKimiPayload,
   normalizeRetryAfter,
 } from "../../src/providers/kimi.js";
+import { renderQuotaToon } from "../../src/render.js";
 import type {
   KimiCodeCliCredentialInspection,
   KimiCodeCliCredentialResolution,
@@ -207,6 +209,7 @@ describe("Kimi request transport", () => {
             piStatus === "missing"
               ? "kimi_credential_unavailable"
               : "unsupported_credential_type",
+          ...(piStatus === "unsupported" ? { credentialPresent: true } : {}),
         },
         { source: "kimi-code-cli", status: "success" },
       ]);
@@ -1145,9 +1148,25 @@ describe("Kimi credential outcomes and cache policy", () => {
         source: "pi:kimi-coding",
         status: "skipped",
         error: "pi_kimi_credential_expired",
+        credentialPresent: true,
       },
       { source: "kimi-code-cli", status: "success" },
     ]);
+
+    const rendered = renderQuotaToon(
+      {
+        generatedAt: new Date(NOW).toISOString(),
+        schemaVersion: 5,
+        providers: [
+          withQuotaSemantics(report, new Date(NOW).toISOString()),
+        ],
+      },
+      "quota-axi",
+      false,
+    );
+    expect(rendered).toContain(
+      'kimi,all,degraded_source,"pi:kimi-coding · pi_kimi_credential_expired",none',
+    );
   });
 
   it("reports Pi OAuth expiry when no other credential is usable", async () => {

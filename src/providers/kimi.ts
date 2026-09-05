@@ -213,6 +213,7 @@ async function acquireKimiQuota(
           source,
           status: candidate.attemptStatus,
           error: candidate.failure.code,
+          ...(candidate.credentialPresent ? { credentialPresent: true } : {}),
         });
         failures.push({
           failure: candidate.failure,

@@ -1954,6 +1954,29 @@ describe("Grok dual-source CLI and Pi xAI usability", () => {
     expect(fetchMock).toHaveBeenCalledOnce();
   });
 
+  it("keeps unsupported Pi auth visible when the CLI bearer succeeds", async () => {
+    writeValidAuth("cli-only-key");
+    writePiXaiAuth({ xai: { type: "unsupported" } });
+    const fetchMock = stubSuccessfulFetch();
+
+    const result = await fetchQuota({
+      allowKeychainPrompt: false,
+      refreshCredentials: false,
+    });
+
+    expect(result.state.status).toBe("fresh");
+    expect(result.attempts).toEqual([
+      { source: "web", status: "success" },
+      {
+        source: "pi:xai",
+        status: "skipped",
+        error: "unsupported_credential_type",
+        credentialPresent: true,
+      },
+    ]);
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
   it("keeps Grok CLI consumer quota when Pi xAI auth is missing", async () => {
     writeValidAuth("cli-only-key");
     const fetchMock = stubSuccessfulFetch();

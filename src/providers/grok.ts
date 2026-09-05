@@ -789,6 +789,7 @@ function piSourceAttempt(resolution: PiXaiCredentialResolution): SourceAttempt {
       source: PI_XAI_CREDENTIAL_SOURCE,
       status: "skipped",
       error: "unsupported_credential_type",
+      credentialPresent: true,
     };
   }
   if (resolution.status === "invalid") {
@@ -796,6 +797,7 @@ function piSourceAttempt(resolution: PiXaiCredentialResolution): SourceAttempt {
       source: PI_XAI_CREDENTIAL_SOURCE,
       status: "skipped",
       error: "credentials_invalid",
+      credentialPresent: true,
     };
   }
   return {

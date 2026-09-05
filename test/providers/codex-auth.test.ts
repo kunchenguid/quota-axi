@@ -795,6 +795,7 @@ describe("Codex credential-state reporting", () => {
       source: "pi:openai-codex",
       status: "skipped",
       error: "unsupported_credential_type",
+      credentialPresent: true,
     });
 
     writePiAuth(

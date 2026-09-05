@@ -354,6 +354,7 @@ function piSourceAttempt(
     source: PI_CODEX_CREDENTIAL_SOURCE,
     status: "skipped",
     error,
+    ...(resolution.status === "missing" ? {} : { credentialPresent: true }),
   };
 }
 
