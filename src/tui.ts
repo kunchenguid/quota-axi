@@ -77,6 +77,8 @@ const ACCENTS: Record<ProviderId, StyleSpec> = {
   "opencode-go": { rgb: [160, 210, 255], ansi16: "96", bold: true },
   minimax: { rgb: [255, 196, 112], ansi16: "93", bold: true },
   mimo: { rgb: [174, 214, 241], ansi16: "96", bold: true },
+  deepseek: { rgb: [88, 160, 242], ansi16: "94", bold: true },
+  openrouter: { rgb: [183, 148, 232], ansi16: "95", bold: true },
 };
 
 const STYLES: Record<Exclude<StyleName, `accent:${ProviderId}`>, StyleSpec> = {

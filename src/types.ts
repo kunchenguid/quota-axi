@@ -10,7 +10,9 @@ export type ProviderId =
   | "alibaba"
   | "opencode-go"
   | "minimax"
-  | "mimo";
+  | "mimo"
+  | "deepseek"
+  | "openrouter";
 
 export const PROVIDER_IDS = [
   "claude",
@@ -25,6 +27,8 @@ export const PROVIDER_IDS = [
   "opencode-go",
   "minimax",
   "mimo",
+  "deepseek",
+  "openrouter",
 ] as const satisfies readonly ProviderId[];
 
 export type ProviderSource =

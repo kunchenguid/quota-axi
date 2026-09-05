@@ -26,8 +26,12 @@ export const HERMES_TAGS = [
   "agy",
   "alibaba",
   "opencode-go",
+  "deepseek",
+  "openrouter",
   "minimax",
   "mimo",
+  "deepseek",
+  "openrouter",
   "antigravity",
   "cli",
 ];

@@ -80,6 +80,8 @@ describe("CLI flag parsing", () => {
       "opencode-go",
       "minimax",
       "mimo",
+      "deepseek",
+      "openrouter",
     ]);
   });
 
@@ -119,6 +121,8 @@ describe("CLI flag parsing", () => {
           "opencode-go",
           "minimax",
           "mimo",
+          "deepseek",
+          "openrouter",
         ],
         json: true,
         full: true,
@@ -986,11 +990,13 @@ describe("default TOON decision blocks", () => {
       "codex",
       "copilot",
       "cursor",
+      "deepseek",
       "grok",
       "kimi",
       "mimo",
       "minimax",
       "opencode-go",
+      "openrouter",
       "zai",
     ]);
   });

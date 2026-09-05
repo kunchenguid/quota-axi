@@ -121,6 +121,12 @@ function semanticsFor(
         provider.windows,
         "MiMo exposes local API authentication, but no first-party read-only quota endpoint is established, so model headroom remains unknown.",
       );
+    case "deepseek":
+    case "openrouter":
+      return unknownSemantics(
+        provider.windows,
+        `${provider.label ?? provider.provider} reports a credit balance, not a usage window. quota-axi exposes the raw balance but does not infer an effective remaining percentage.`,
+      );
   }
 }
 
