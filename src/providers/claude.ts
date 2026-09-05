@@ -404,6 +404,7 @@ async function attemptClaudeQuota(
           }
         } else {
           transientFailure = failure.withUsageFetchFailure();
+          break;
         }
       }
     }
@@ -434,8 +435,8 @@ async function attemptClaudeQuota(
       state.source.error === "keychain_access_denied",
   );
   let failure =
-    definitiveFailure ??
     transientFailure ??
+    definitiveFailure ??
     new ClaudeFailure("Claude quota unavailable", { staleEligible: true });
   // A denied Keychain read never saw the live session. A 401 from a leftover
   // oauth-file sidecar is not evidence the user is signed out of Claude.

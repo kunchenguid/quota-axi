@@ -494,6 +494,14 @@ describe("Codex credential-state reporting", () => {
     const nativeToken = jwt({ exp: Math.floor(Date.now() / 1000) + 3600 });
     writeAuth({ tokens: { access_token: nativeToken } });
     writePiAuth(piOauthEntry());
+    const binary = join(tempDir!, "codex-fixture");
+    process.env.QUOTA_AXI_CODEX_BINARY = binary;
+    const spawn = vi.fn(() => successfulChild());
+    vi.doMock("node:child_process", () => ({ spawn }));
+    vi.doMock("../../src/lib/process.js", () => ({
+      findCommandPath: vi.fn(async () => binary),
+      terminateChild: vi.fn(),
+    }));
     vi.stubGlobal(
       "fetch",
       vi.fn(
@@ -514,14 +522,19 @@ describe("Codex credential-state reporting", () => {
       refreshCredentials: false,
     });
 
+    expect(result.source).toBe("pi:openai-codex");
     expect(result.state.status).toBe("error");
     expect(result.state.error).toBe("network unavailable");
     expect(result.state.status).not.toBe("auth_required");
-    expect(result.attempts).toContainEqual({
-      source: "pi:openai-codex",
-      status: "failed",
-      error: "network unavailable",
-    });
+    expect(result.attempts).toEqual([
+      { source: "oauth", status: "failed", error: "Codex sign-in required" },
+      {
+        source: "pi:openai-codex",
+        status: "failed",
+        error: "network unavailable",
+      },
+    ]);
+    expect(spawn).not.toHaveBeenCalled();
   });
 
   it("keeps a transient native probe failure over an expired Pi credential", async () => {

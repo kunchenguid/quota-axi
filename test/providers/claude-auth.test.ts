@@ -688,6 +688,62 @@ describe("Claude credential-state reporting", () => {
       expect(JSON.stringify(annotated)).not.toContain(fakeToken);
     },
   );
+  it("does not switch from a transient Keychain request to the OAuth file", async () => {
+    usePlatform("darwin");
+    const home = useTempHome();
+    await writeKeychainAccessMarker();
+    writeClaudeCredential(home, {
+      accessToken: "working-oauth-file-token",
+      expiresAt: "2035-01-01T00:00:00.000Z",
+    });
+    const execFileText = vi.fn(async () =>
+      JSON.stringify({
+        claudeAiOauth: {
+          accessToken: "transient-keychain-token",
+          expiresAt: "2035-01-01T00:00:00.000Z",
+        },
+      }),
+    );
+    vi.doMock("../../src/lib/process.js", () => ({ execFileText }));
+    const bearers: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+        const authorization =
+          (init?.headers as Record<string, string>)?.authorization ?? "";
+        bearers.push(authorization);
+        if (authorization === "Bearer transient-keychain-token") {
+          throw new TypeError("network unavailable");
+        }
+        return new Response(
+          JSON.stringify({ five_hour: { utilization: 12 } }),
+          { status: 200 },
+        );
+      }),
+    );
+
+    const { fetchQuota } = await import("../../src/providers/claude.js");
+    const result = await fetchQuota({
+      allowKeychainPrompt: false,
+      refreshCredentials: false,
+    });
+
+    expect(result.state).toMatchObject({
+      status: "error",
+      stale: false,
+      error: "network unavailable",
+    });
+    expect(result.attempts).toEqual([
+      {
+        source: "keychain",
+        status: "failed",
+        error: "network unavailable",
+      },
+    ]);
+    expect(bearers).toEqual(["Bearer transient-keychain-token"]);
+    expect(bearers).not.toContain("Bearer working-oauth-file-token");
+  });
+
   it("uses a stale snapshot only for its matching synthetic credential context", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-06T20:00:00.000Z"));

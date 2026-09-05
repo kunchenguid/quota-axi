@@ -150,25 +150,7 @@ async function fetchQuotaWithDependencies(
       };
       if (error instanceof RateLimitError) retryAfter = error.retryAfter;
       if (finalError !== "Codex sign-in required") {
-        const cached = readCachedProvider("codex");
-        if (cached) {
-          return staleFromCache(
-            cached,
-            finalError,
-            sourceNames(attempts),
-            attempts,
-          );
-        }
-        return failedProvider({
-          provider: "codex",
-          label: "Codex",
-          source: "oauth",
-          status: retryAfter ? "rate_limited" : statusFromError(finalError),
-          error: finalError,
-          retryAfter,
-          sourcesTried: sourceNames(attempts),
-          attempts,
-        });
+        return codexFailureReport(finalError, retryAfter, attempts, "oauth");
       }
     }
   } else {
@@ -228,18 +210,19 @@ async function fetchQuotaWithDependencies(
         status: "failed",
         error: message,
       };
-      if (
-        errorIsDefault ||
-        statusFromError(finalError) === "auth_required"
-      ) {
-        if (error instanceof RateLimitError) {
-          finalError = message;
-          errorIsDefault = false;
-          retryAfter = error.retryAfter;
-        } else if (!retryAfter) {
-          finalError = message;
-          errorIsDefault = false;
-        }
+      if (message !== "Codex sign-in required") {
+        const piRetryAfter =
+          error instanceof RateLimitError ? error.retryAfter : undefined;
+        return codexFailureReport(
+          message,
+          piRetryAfter,
+          attempts,
+          PI_CODEX_CREDENTIAL_SOURCE,
+        );
+      }
+      if (errorIsDefault || statusFromError(finalError) === "auth_required") {
+        finalError = message;
+        errorIsDefault = false;
       }
     }
   } else {
@@ -292,16 +275,25 @@ async function fetchQuotaWithDependencies(
     }
   }
 
+  return codexFailureReport(finalError, retryAfter, attempts);
+}
+
+function codexFailureReport(
+  error: string,
+  retryAfter: string | undefined,
+  attempts: SourceAttempt[],
+  source?: ProviderQuota["source"],
+): ProviderQuota {
   const cached = readCachedProvider("codex");
   if (cached) {
-    return staleFromCache(cached, finalError, sourceNames(attempts), attempts);
+    return staleFromCache(cached, error, sourceNames(attempts), attempts);
   }
-
   return failedProvider({
     provider: "codex",
     label: "Codex",
-    status: retryAfter ? "rate_limited" : statusFromError(finalError),
-    error: finalError,
+    ...(source ? { source } : {}),
+    status: retryAfter ? "rate_limited" : statusFromError(error),
+    error,
     retryAfter,
     sourcesTried: sourceNames(attempts),
     attempts,
