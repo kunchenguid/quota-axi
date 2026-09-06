@@ -2,7 +2,6 @@ import {
   deleteCachedProvider as deleteCachedProviderFromDisk,
   readCachedKimiProvider as readCachedProviderFromDisk,
 } from "../cache.js";
-import { kimiCredentialContextId } from "../lib/fs.js";
 import type {
   AuthProviderReport,
   ProviderAdapter,
@@ -20,6 +19,7 @@ import {
 import {
   createKimiCodeCliCredentialSource,
   KIMI_CODE_CLI_CREDENTIAL_SOURCE,
+  kimiCredentialContextId,
   type KimiCodeCliCredentialInspection,
   type KimiCodeCliCredentialResolution,
   type KimiCodeCliCredentialSource,

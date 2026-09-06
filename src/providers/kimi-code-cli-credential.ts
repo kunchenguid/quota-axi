@@ -1,6 +1,8 @@
+import { createHash } from "node:crypto";
+import { closeSync, openSync, readSync } from "node:fs";
 import { open } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import {
   kimiCredentialPath,
   resolveKimiCodeEnvironment,
@@ -118,7 +120,12 @@ async function resolveCredential(
   return { status: "available", accessToken, baseUrl: environment.baseUrl };
 }
 
-function kimiCodeHome(dependencies: CredentialSourceDependencies): string {
+function kimiCodeHome(
+  dependencies: Pick<
+    CredentialSourceDependencies,
+    "environment" | "homeDirectory"
+  >,
+): string {
   const configuredHome = nonempty(dependencies.environment.KIMI_CODE_HOME);
   return (
     configuredHome ??
@@ -130,17 +137,90 @@ function kimiCodeHome(dependencies: CredentialSourceDependencies): string {
 }
 
 /**
+ * An opaque, deterministic cache-provenance identifier for the Kimi Code
+ * environment selected by the current process, so a cached snapshot is only
+ * reused for the deployment and slot that produced it.
+ *
+ * It hashes the resolved environment rather than the configuration text. The
+ * table this reader parses also holds Kimi Code's literal `api_key`, and a
+ * digest of those bytes would put a credential-derived value in the cache file
+ * and let a secret decide observable behaviour. Resolving first also keeps the
+ * identifier stable across edits that select the same environment, so changing
+ * an unrelated setting does not throw away usable stale quota.
+ */
+export function kimiCredentialContextId(): string {
+  const codeHome = resolve(
+    kimiCodeHome({
+      environment: process.env,
+      homeDirectory: homedir,
+    }).normalize("NFC"),
+  );
+  const environment = resolveKimiCodeEnvironment(configTextSync(codeHome));
+  const selection =
+    environment.status === "resolved"
+      ? `slot:${environment.credentialFileName}\nbase:${environment.baseUrl}`
+      : `unresolved:${environment.status}`;
+  return createHash("sha256")
+    .update(`kimi-code-home:${codeHome}\n${selection}`)
+    .digest("hex");
+}
+
+/** `readConfigText`'s rule, for the callers that cannot await it. */
+function configTextSync(codeHome: string): string | undefined {
+  let file: number;
+  try {
+    file = openSync(join(codeHome, "config.toml"), "r");
+  } catch {
+    return undefined;
+  }
+  try {
+    const contents = new Uint8Array(CONFIG_FILE_LIMIT_BYTES + 1);
+    let offset = 0;
+    while (offset < contents.byteLength) {
+      const read = readSync(
+        file,
+        contents,
+        offset,
+        contents.byteLength - offset,
+        null,
+      );
+      if (read === 0) break;
+      offset += read;
+    }
+    return offset > CONFIG_FILE_LIMIT_BYTES
+      ? undefined
+      : Buffer.from(contents.buffer, contents.byteOffset, offset).toString(
+          "utf8",
+        );
+  } catch {
+    return undefined;
+  } finally {
+    closeSync(file);
+  }
+}
+
+/**
  * The configuration text, or nothing when this reader has none to offer.
  *
- * An absent file, a file it cannot open, and a file past the size cap all
- * return nothing on purpose: they are one epistemic state - quota-axi does not
- * know what the configuration says - and so is a file whose contents stop being
- * parseable partway, which `resolveKimiCodeEnvironment` already resolves from
- * the reference it has. Giving them one verdict is deliberate, not an
- * oversight. That verdict is the unsuffixed `kimi-code` slot on the default
- * deployment, which is safe because the CLI writes that slot only for that
- * deployment, so the pair matches by construction; a global login has no such
- * file and correctly reports no credential rather than a substituted one.
+ * An absent file, one it cannot open, and one past the size cap all return
+ * nothing on purpose. They are a single epistemic state - quota-axi does not
+ * know what the configuration says - which is also the state a file reaches
+ * when `scanConfig` stops partway, and states that share their evidence should
+ * share their verdict. Giving them one is deliberate, not an oversight.
+ *
+ * That verdict is the unsuffixed `kimi-code` slot on the default deployment,
+ * because Kimi Code writes that slot only for that deployment, so slot and host
+ * match by construction and no token can reach the wrong region.
+ *
+ * KNOWN LIMIT, UNVERIFIED: the verdict also assumes Kimi Code removes that slot
+ * when a user switches deployments. Confirming that needs a real installation
+ * to switch, which was not available. If a stale `kimi-code.json` does survive a
+ * move to a global login, a user whose `config.toml` later becomes unreadable
+ * would get a fresh reading of the previous mainland account. The cost is a
+ * wrong account's numbers, not a token sent to another region. The fallback is
+ * kept because removing it would strand a signed-in mainland user whose
+ * `config.toml` this reader cannot walk, and reporting an accurate number for
+ * them is the obligation this weighs against.
  */
 async function readConfigText(
   codeHome: string,

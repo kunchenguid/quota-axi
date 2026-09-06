@@ -3,9 +3,9 @@ import {
   cacheFilePath,
   claudeCredentialContextId,
   ensurePrivateParent,
-  kimiCredentialContextId,
   readJsonFile,
 } from "./lib/fs.js";
+import { kimiCredentialContextId } from "./providers/kimi-code-cli-credential.js";
 import type {
   ProviderId,
   ProviderQuota,

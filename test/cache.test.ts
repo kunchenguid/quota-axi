@@ -16,11 +16,8 @@ import {
   readCachedProvider,
   writeCachedProviders,
 } from "../src/cache.js";
-import {
-  cacheFilePath,
-  claudeCredentialContextId,
-  kimiCredentialContextId,
-} from "../src/lib/fs.js";
+import { cacheFilePath, claudeCredentialContextId } from "../src/lib/fs.js";
+import { kimiCredentialContextId } from "../src/providers/kimi-code-cli-credential.js";
 import type { ProviderId, ProviderQuota } from "../src/types.js";
 
 const originalXdgCacheHome = process.env.XDG_CACHE_HOME;
@@ -219,7 +216,13 @@ describe("quota cache", () => {
     const config = join(codeHome, "config.toml");
     mkdirSync(codeHome, { recursive: true });
     process.env.KIMI_CODE_HOME = codeHome;
-    writeFileSync(config, '[providers."managed:kimi-code"]\ntype = "kimi"\n');
+    writeFileSync(
+      config,
+      `[providers."managed:kimi-code"]
+type = "kimi"
+api_key = "cache-context-must-not-depend-on-this-118"
+`,
+    );
 
     writeCachedProviders([{ ...quota("kimi", 42), source: "api" as const }]);
 
@@ -228,6 +231,17 @@ describe("quota cache", () => {
     };
     expect(payload.providers[0]?.credentialContext).toMatch(/^[a-f0-9]{64}$/);
     expect(JSON.stringify(payload)).not.toContain(codeHome);
+    expect(readCachedKimiProvider(kimiCredentialContextId())).toBeDefined();
+
+    writeFileSync(
+      config,
+      `[providers."managed:kimi-code"]
+type = "kimi"
+api_key = "a-rotated-key-selects-the-same-environment-994"
+default_model = "k2"
+`,
+    );
+
     expect(readCachedKimiProvider(kimiCredentialContextId())).toBeDefined();
 
     writeFileSync(
