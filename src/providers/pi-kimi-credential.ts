@@ -111,7 +111,7 @@ async function resolveCredential(
     if (expiresMs !== undefined && expiresMs <= dependencies.now()) {
       return {
         status: "expired",
-        refreshable: usableLiteralSecret(entry.refresh) !== undefined,
+        refreshable: Object.hasOwn(entry, "refresh"),
         credential: access,
       };
     }

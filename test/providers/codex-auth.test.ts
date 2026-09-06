@@ -616,6 +616,46 @@ describe("Codex credential-state reporting", () => {
     ]);
   });
 
+  it("does not switch sources when one native endpoint rejects and the other fails transiently", async () => {
+    const nativeToken = jwt({ exp: Math.floor(Date.now() / 1000) + 3600 });
+    const piToken = "working-pi-token";
+    writeAuth({ tokens: { access_token: nativeToken } });
+    writePiAuth(piOauthEntry({ access: piToken }));
+    const bearers: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async (url: string | URL | Request, init?: RequestInit) => {
+          const authorization =
+            (init?.headers as Record<string, string>)?.authorization ?? "";
+          bearers.push(authorization);
+          if (String(url).endsWith("/wham/usage")) {
+            return new Response(null, { status: 401 });
+          }
+          throw new TypeError("network unavailable");
+        },
+      ),
+    );
+
+    const { fetchQuota } = await import("../../src/providers/codex.js");
+    const result = await fetchQuota({
+      allowKeychainPrompt: false,
+      refreshCredentials: false,
+    });
+
+    expect(result.source).toBe("oauth");
+    expect(result.state.status).toBe("error");
+    expect(result.state.error).toBe("network unavailable");
+    expect(result.attempts).toEqual([
+      { source: "oauth", status: "failed", error: "network unavailable" },
+    ]);
+    expect(bearers).toEqual([
+      `Bearer ${nativeToken}`,
+      `Bearer ${nativeToken}`,
+    ]);
+    expect(bearers).not.toContain(`Bearer ${piToken}`);
+  });
+
   it("does not switch to working Pi OAuth after a transient native failure", async () => {
     const nativeToken = jwt({ exp: Math.floor(Date.now() / 1000) + 3600 });
     const piToken = "working-pi-token";

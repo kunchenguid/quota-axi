@@ -826,8 +826,8 @@ async function fetchOauthUsage(credentials: CodexCredentials): Promise<{
       clearTimeout(timer);
     }
   }
-  if (rejected) throw new CodexAuthRejectedError("Codex sign-in required");
   if (lastError) throw lastError;
+  if (rejected) throw new CodexAuthRejectedError("Codex sign-in required");
   throw new Error("Codex quota unavailable");
 }
 
