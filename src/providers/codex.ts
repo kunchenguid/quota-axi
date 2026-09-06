@@ -816,9 +816,13 @@ async function fetchOauthUsage(credentials: CodexCredentials): Promise<{
         throw new RateLimitError(
           retryAfterToIso(response.headers.get("retry-after")),
         );
-      if (!response.ok) continue;
+      if (!response.ok) {
+        lastError = new Error("Codex quota unavailable");
+        continue;
+      }
       const quota = normalizeCodexUsage(await response.json());
       if (quota) return quota;
+      lastError = new Error("Codex quota unavailable");
     } catch (error) {
       if (error instanceof RateLimitError) throw error;
       lastError = error;
