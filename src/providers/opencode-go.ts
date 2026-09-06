@@ -134,7 +134,7 @@ async function fetchQuota(dependencies: Dependencies): Promise<ProviderQuota> {
       dependencies.fetch,
       dependencies.deadlineMs,
     );
-    const normalized = normalizeOpenCodeGoPayload(payload);
+    const normalized = normalizeOpenCodeGoPayload(payload, dependencies.now());
     if (normalized.windows.length === 0) throw new Error("quota_missing");
     attempts[0] = { source: OPENCODE_GO_CREDENTIAL_SOURCE, status: "success" };
     return successProvider({
@@ -392,19 +392,27 @@ async function raceWithAbort<T>(
 
 export function normalizeOpenCodeGoPayload(
   raw: unknown,
+  now = Date.now(),
 ): NormalizedOpenCodeGoPayload {
   const root = objectValue(raw);
-  const usage = objectValue(root?.usage);
-  if (!usage) return { windows: [] };
+  const nestedUsage = objectValue(root?.usage);
   const definitions = [
-    ["rolling", "five_hour", "session"],
-    ["weekly", "weekly", "weekly"],
-    ["monthly", "monthly", "monthly"],
+    [["rollingUsage", "rolling"], "five_hour", "session"],
+    [["weeklyUsage", "weekly"], "weekly", "weekly"],
+    [["monthlyUsage", "monthly"], "monthly", "monthly"],
   ] as const;
   const windows = definitions
-    .map(([name, id, kind]) => {
-      const record = objectValue(usage[name]);
-      return record ? normalizeWindow(record, id, kind) : undefined;
+    .map(([names, id, kind]) => {
+      const record = names
+        .map(
+          (name) =>
+            objectValue(nestedUsage?.[name]) ?? objectValue(root?.[name]),
+        )
+        .find(
+          (candidate): candidate is Record<string, unknown> =>
+            candidate !== undefined,
+        );
+      return record ? normalizeWindow(record, id, kind, now) : undefined;
     })
     .filter((window): window is QuotaWindow => window !== undefined);
   const plan =
@@ -416,18 +424,27 @@ function normalizeWindow(
   record: Record<string, unknown>,
   id: string,
   kind: QuotaWindow["kind"],
+  now: number,
 ): QuotaWindow | undefined {
-  const used = firstNumber(record, ["percent", "percentUsed", "usedPercent"]);
+  const used = firstNumber(record, [
+    "percent",
+    "percentUsed",
+    "usedPercent",
+    "usagePercent",
+  ]);
   const remaining = firstNumber(record, [
     "percentRemaining",
     "remainingPercent",
   ]);
+  const status = stringValue(record.status)?.toLowerCase();
   const percentRemaining =
     remaining !== undefined
       ? clampPercent(remaining)
       : used !== undefined
         ? clampPercent(100 - used)
-        : undefined;
+        : status === "rate-limited"
+          ? 0
+          : undefined;
   if (percentRemaining === undefined) return undefined;
   const reset = firstValue(record, [
     "resetsAt",
@@ -445,7 +462,12 @@ function normalizeWindow(
     "periodSeconds",
     "period_seconds",
   ]);
-  const parsedReset = safeParseReset(reset);
+  const resetInSec = firstNumber(record, ["resetInSec", "reset_in_sec"]);
+  const parsedReset =
+    safeParseReset(reset) ??
+    (resetInSec !== undefined && resetInSec >= 0
+      ? new Date(now + resetInSec * 1_000).toISOString()
+      : undefined);
   const hasAuthoritativeDuration = windowSeconds === 18_000;
   const normalizedIdentity =
     id === "five_hour" && !hasAuthoritativeDuration
