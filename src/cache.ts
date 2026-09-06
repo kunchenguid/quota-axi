@@ -3,6 +3,7 @@ import {
   cacheFilePath,
   claudeCredentialContextId,
   ensurePrivateParent,
+  kimiCredentialContextId,
   readJsonFile,
 } from "./lib/fs.js";
 import type {
@@ -41,11 +42,23 @@ const WINDOW_KINDS = [
   "unknown",
 ] as const satisfies readonly QuotaWindow["kind"][];
 const CACHE_SCHEMA_VERSION = 2;
-const CLAUDE_CONTEXT_ID = /^[a-f0-9]{64}$/;
+const CREDENTIAL_CONTEXT_ID = /^[a-f0-9]{64}$/;
+
+/**
+ * Providers whose local configuration decides which account a reading belongs
+ * to: a Claude profile selects the credential store, and a Kimi Code
+ * `config.toml` selects the deployment. A snapshot from one such context says
+ * nothing about another, so each is stamped on write and required to match on
+ * stale reuse.
+ */
+const CONTEXT_SCOPED_PROVIDERS: Partial<Record<ProviderId, () => string>> = {
+  claude: claudeCredentialContextId,
+  kimi: kimiCredentialContextId,
+};
 
 type CachedProvider = {
   snapshot: ProviderQuota;
-  claudeCredentialContextId?: string;
+  credentialContextId?: string;
 };
 
 export function readCachedProvider(
@@ -63,11 +76,29 @@ export function readCachedProvider(
 export function readCachedClaudeProvider(
   contextId: string,
 ): ProviderQuota | undefined {
-  if (!CLAUDE_CONTEXT_ID.test(contextId)) return undefined;
+  return readCachedProviderInContext("claude", contextId);
+}
+
+/**
+ * Kimi stale quota may only be reused when the cache record proves it was
+ * captured for the same locally selected Kimi Code environment, so one
+ * deployment's numbers can never stand in for the other's.
+ */
+export function readCachedKimiProvider(
+  contextId: string,
+): ProviderQuota | undefined {
+  return readCachedProviderInContext("kimi", contextId);
+}
+
+function readCachedProviderInContext(
+  provider: ProviderId,
+  contextId: string,
+): ProviderQuota | undefined {
+  if (!CREDENTIAL_CONTEXT_ID.test(contextId)) return undefined;
   return readCacheProviders().find(
     (item) =>
-      item.snapshot.provider === "claude" &&
-      item.claudeCredentialContextId === contextId,
+      item.snapshot.provider === provider &&
+      item.credentialContextId === contextId,
   )?.snapshot;
 }
 
@@ -171,11 +202,10 @@ function toCacheProvider(provider: ProviderQuota): CachedProvider | undefined {
     CACHE_SCHEMA_VERSION,
   )?.snapshot;
   if (!snapshot) return undefined;
+  const contextId = CONTEXT_SCOPED_PROVIDERS[provider.provider]?.();
   return {
     snapshot,
-    ...(provider.provider === "claude"
-      ? { claudeCredentialContextId: claudeCredentialContextId() }
-      : {}),
+    ...(contextId ? { credentialContextId: contextId } : {}),
   };
 }
 
@@ -184,8 +214,8 @@ function serializeCachedProvider(
 ): Record<string, unknown> {
   return {
     ...provider.snapshot,
-    ...(provider.claudeCredentialContextId
-      ? { credentialContext: provider.claudeCredentialContextId }
+    ...(provider.credentialContextId
+      ? { credentialContext: provider.credentialContextId }
       : {}),
   };
 }
@@ -243,10 +273,10 @@ function normalizeCachedProvider(
   return {
     snapshot,
     ...(schemaVersion === CACHE_SCHEMA_VERSION &&
-    snapshot.provider === "claude" &&
+    snapshot.provider in CONTEXT_SCOPED_PROVIDERS &&
     credentialContext &&
-    CLAUDE_CONTEXT_ID.test(credentialContext)
-      ? { claudeCredentialContextId: credentialContext }
+    CREDENTIAL_CONTEXT_ID.test(credentialContext)
+      ? { credentialContextId: credentialContext }
       : {}),
   };
 }

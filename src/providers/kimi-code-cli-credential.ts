@@ -81,9 +81,9 @@ async function resolveCredential(
   dependencies: CredentialSourceDependencies,
 ): Promise<KimiCodeCliCredentialResolution> {
   const codeHome = kimiCodeHome(dependencies);
-  const config = await readConfigText(codeHome, dependencies);
-  if (config.status === "unreadable") return { status: "invalid_config" };
-  const environment = resolveKimiCodeEnvironment(config.text);
+  const environment = resolveKimiCodeEnvironment(
+    await readConfigText(codeHome, dependencies),
+  );
   if (environment.status !== "resolved") return { status: environment.status };
 
   const path = kimiCredentialPath(codeHome, environment.credentialFileName);
@@ -130,30 +130,34 @@ function kimiCodeHome(dependencies: CredentialSourceDependencies): string {
 }
 
 /**
- * An absent `config.toml` is not an error: a mainland-China login persists the
- * default slot, so no file and the default reference describe one environment.
- * An unreadable file is reported as configuration quota-axi could not parse
- * rather than silently defaulting, because defaulting would name a slot the
- * file may well contradict.
+ * The configuration text, or nothing when this reader has none to offer.
+ *
+ * An absent file, a file it cannot open, and a file past the size cap all
+ * return nothing on purpose: they are one epistemic state - quota-axi does not
+ * know what the configuration says - and so is a file whose contents stop being
+ * parseable partway, which `resolveKimiCodeEnvironment` already resolves from
+ * the reference it has. Giving them one verdict is deliberate, not an
+ * oversight. That verdict is the unsuffixed `kimi-code` slot on the default
+ * deployment, which is safe because the CLI writes that slot only for that
+ * deployment, so the pair matches by construction; a global login has no such
+ * file and correctly reports no credential rather than a substituted one.
  */
 async function readConfigText(
   codeHome: string,
   dependencies: CredentialSourceDependencies,
-): Promise<{ status: "read"; text?: string } | { status: "unreadable" }> {
+): Promise<string | undefined> {
   let contents: Buffer;
   try {
     contents = await dependencies.readConfigFile(
       join(codeHome, "config.toml"),
       CONFIG_FILE_LIMIT_BYTES,
     );
-  } catch (error) {
-    return errorCode(error) === "ENOENT"
-      ? { status: "read" }
-      : { status: "unreadable" };
+  } catch {
+    return undefined;
   }
   return contents.byteLength > CONFIG_FILE_LIMIT_BYTES
-    ? { status: "unreadable" }
-    : { status: "read", text: contents.toString("utf8") };
+    ? undefined
+    : contents.toString("utf8");
 }
 
 async function readBoundedFile(

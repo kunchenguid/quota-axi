@@ -63,7 +63,7 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 - The cache path is `~/.cache/quota-axi/quotas.json`, or under `$XDG_CACHE_HOME/quota-axi/` when `XDG_CACHE_HOME` is set.
 - The Claude Keychain access marker is stored alongside the cache, is `0600`, is keyed by hashed profile/account identity, and contains no credential material or raw account name. Legacy service-only markers are ignored without being deleted.
 - Quota cache files must be `0600` and contain only normalized non-secret snapshots.
-- Only fresh provider snapshots with windows are cached; fresh provider reports with no windows clear any existing cached snapshot for that provider. Claude snapshots additionally carry an opaque SHA-256 selected-configuration context identifier, and stale fallback rejects legacy or mismatched contexts.
+- Only fresh provider snapshots with windows are cached; fresh provider reports with no windows clear any existing cached snapshot for that provider. Claude and Kimi snapshots additionally carry an opaque SHA-256 selected-configuration context identifier (Claude's profile directory, Kimi's `config.toml` bytes and home), and stale fallback rejects legacy or mismatched contexts. Route any provider whose local configuration selects the account through `CONTEXT_SCOPED_PROVIDERS` in `src/cache.ts` rather than adding a per-provider field.
 - Failed providers, stale providers, account identity, source attempts, and derived `pace` objects are not cached.
 - Do not cache raw provider responses or credential headers.
 

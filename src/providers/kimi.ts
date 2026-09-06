@@ -1,7 +1,8 @@
 import {
   deleteCachedProvider as deleteCachedProviderFromDisk,
-  readCachedProvider as readCachedProviderFromDisk,
+  readCachedKimiProvider as readCachedProviderFromDisk,
 } from "../cache.js";
+import { kimiCredentialContextId } from "../lib/fs.js";
 import type {
   AuthProviderReport,
   ProviderAdapter,
@@ -69,6 +70,7 @@ type KimiDependencies = {
   fetch: typeof globalThis.fetch;
   readCachedProvider: typeof readCachedProviderFromDisk;
   deleteCachedProvider: typeof deleteCachedProviderFromDisk;
+  credentialContextId: typeof kimiCredentialContextId;
   now: () => number;
   deadlineMs: number;
 };
@@ -100,6 +102,7 @@ export function createKimiAdapter(
     fetch: globalThis.fetch,
     readCachedProvider: readCachedProviderFromDisk,
     deleteCachedProvider: deleteCachedProviderFromDisk,
+    credentialContextId: kimiCredentialContextId,
     now: Date.now,
     deadlineMs: OPERATION_DEADLINE_MS,
     ...overrides,
@@ -612,7 +615,9 @@ function failureReport(
 
   if (failure.staleEligible) {
     try {
-      const cached = dependencies.readCachedProvider("kimi");
+      const cached = dependencies.readCachedProvider(
+        dependencies.credentialContextId(),
+      );
       const stale = cached
         ? staleKimiReport(
             cached,

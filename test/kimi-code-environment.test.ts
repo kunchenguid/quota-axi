@@ -747,6 +747,101 @@ key = "oauth/../../escaped"
     });
   });
 
+  it("keeps a config.toml quota-axi cannot open on the default reading", () => {
+    const fixture = isolatedFixture();
+    mkdirSync(join(fixture.kimiCodeHome, "config.toml"), { recursive: true });
+    writeCredential(fixture, "kimi-code", "unopenable-config-token-512");
+    const preload = mockFetch(
+      fixture,
+      MAINLAND_USAGE_URL,
+      "unopenable-config-token-512",
+      20,
+    );
+
+    const result = runCli(
+      fixture,
+      ["--provider", "kimi", "--json", "--full"],
+      preload,
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).not.toContain("unopenable-config-token-512");
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      providers: [
+        {
+          provider: "kimi",
+          source: "api",
+          windows: [{ id: "weekly", percentRemaining: 80 }],
+        },
+      ],
+    });
+  });
+
+  it("never serves one deployment's cached numbers for the other", () => {
+    const fixture = isolatedFixture();
+    writeCredential(fixture, "kimi-code", "mainland-cached-token-401");
+
+    const fresh = runCli(
+      fixture,
+      ["--provider", "kimi", "--json", "--full"],
+      mockFetch(fixture, MAINLAND_USAGE_URL, "mainland-cached-token-401", 25),
+    );
+    expect(fresh.status).toBe(0);
+    expect(JSON.parse(fresh.stdout)).toMatchObject({
+      providers: [{ provider: "kimi", source: "api" }],
+    });
+
+    const sameEnvironment = runCli(
+      fixture,
+      ["--provider", "kimi", "--json", "--full"],
+      failingFetch(fixture),
+    );
+    expect(JSON.parse(sameEnvironment.stdout)).toMatchObject({
+      providers: [
+        {
+          provider: "kimi",
+          source: "cache",
+          windows: [{ id: "weekly", percentRemaining: 75 }],
+        },
+      ],
+    });
+
+    writeConfig(
+      fixture,
+      `[providers."managed:kimi-code"]
+base_url = "https://api.kimi.ai/coding/v1"
+
+[providers."managed:kimi-code".oauth]
+storage = "file"
+key = "oauth/kimi-code-env-synthetic00000013"
+oauth_host = "https://auth.kimi.ai"
+`,
+    );
+    writeCredential(
+      fixture,
+      "kimi-code-env-synthetic00000013",
+      "global-switched-token-866",
+    );
+
+    const switched = runCli(
+      fixture,
+      ["--provider", "kimi", "--json", "--full"],
+      failingFetch(fixture),
+    );
+
+    expect(switched.status).toBe(1);
+    expect(switched.stdout).not.toContain("global-switched-token-866");
+    expect(JSON.parse(switched.stdout)).toMatchObject({
+      providers: [
+        {
+          provider: "kimi",
+          source: "unavailable",
+          windows: [],
+        },
+      ],
+    });
+  });
+
   it("reads the managed provider's own table, not a similarly keyed service", () => {
     const fixture = isolatedFixture();
     writeConfig(
@@ -898,6 +993,18 @@ function mockFetch(
     headers: { "content-type": "application/json" },
   });
 };
+`,
+    { mode: 0o600 },
+  );
+  return preload;
+}
+
+/** Fails every usage request transiently, so only the cache can answer. */
+function failingFetch(fixture: IsolatedFixture): string {
+  const preload = join(fixture.root, "failing-fetch.mjs");
+  writeFileSync(
+    preload,
+    `globalThis.fetch = async () => new Response(null, { status: 503 });
 `,
     { mode: 0o600 },
   );

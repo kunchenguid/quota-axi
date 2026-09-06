@@ -1371,10 +1371,13 @@ function testAdapter(
     ) as unknown as typeof fetch,
     readCachedProvider: () => undefined,
     deleteCachedProvider: () => undefined,
+    credentialContextId: () => TEST_CREDENTIAL_CONTEXT_ID,
     now: () => NOW,
     ...overrides,
   });
 }
+
+const TEST_CREDENTIAL_CONTEXT_ID = "a".repeat(64);
 
 function broker(
   resolution: KimiCredentialResolution,

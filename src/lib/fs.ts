@@ -1,4 +1,10 @@
-import { mkdirSync, readFileSync } from "node:fs";
+import {
+  closeSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readSync,
+} from "node:fs";
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -61,6 +67,68 @@ export function claudeCredentialContextId(): string {
   return createHash("sha256")
     .update(`claude-config-dir:${configDir}`)
     .digest("hex");
+}
+
+const KIMI_CONFIG_CONTEXT_LIMIT_BYTES = 256 * 1024;
+
+/**
+ * An opaque, deterministic cache-provenance identifier for the Kimi Code
+ * environment selected by the current process.
+ *
+ * Kimi Code keeps one credential per deployment and records the current one in
+ * `config.toml`, so switching between its `.com` and `.ai` deployments rewrites
+ * that file. Hashing the file's bytes alongside the home that holds it is what
+ * partitions cached Kimi snapshots by the configuration that produced them,
+ * exactly as the Claude profile above partitions Claude's. Neither the path nor
+ * any configured value leaves this helper.
+ */
+export function kimiCredentialContextId(): string {
+  const codeHome = resolve(
+    (
+      process.env.KIMI_CODE_HOME ||
+      join(process.env.HOME || homedir(), ".kimi-code")
+    ).normalize("NFC"),
+  );
+  return createHash("sha256")
+    .update(
+      `kimi-code-home:${codeHome}\nconfig:${boundedFileDigest(
+        join(codeHome, "config.toml"),
+        KIMI_CONFIG_CONTEXT_LIMIT_BYTES,
+      )}`,
+    )
+    .digest("hex");
+}
+
+/** A digest of a file's leading bytes, or a stable marker when there are none. */
+function boundedFileDigest(path: string, maxBytes: number): string {
+  let file: number;
+  try {
+    file = openSync(path, "r");
+  } catch {
+    return "absent";
+  }
+  try {
+    const buffer = new Uint8Array(maxBytes + 1);
+    let offset = 0;
+    while (offset < buffer.byteLength) {
+      const read = readSync(
+        file,
+        buffer,
+        offset,
+        buffer.byteLength - offset,
+        null,
+      );
+      if (read === 0) break;
+      offset += read;
+    }
+    return createHash("sha256")
+      .update(buffer.subarray(0, offset))
+      .digest("hex");
+  } catch {
+    return "unreadable";
+  } finally {
+    closeSync(file);
+  }
 }
 
 export function claudeKeychainAccessMarkerPath(

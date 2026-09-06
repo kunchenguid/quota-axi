@@ -12,14 +12,20 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   deleteCachedProvider,
   readCachedClaudeProvider,
+  readCachedKimiProvider,
   readCachedProvider,
   writeCachedProviders,
 } from "../src/cache.js";
-import { cacheFilePath, claudeCredentialContextId } from "../src/lib/fs.js";
+import {
+  cacheFilePath,
+  claudeCredentialContextId,
+  kimiCredentialContextId,
+} from "../src/lib/fs.js";
 import type { ProviderId, ProviderQuota } from "../src/types.js";
 
 const originalXdgCacheHome = process.env.XDG_CACHE_HOME;
 const originalClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
+const originalKimiCodeHome = process.env.KIMI_CODE_HOME;
 let tempDir: string | undefined;
 
 afterEach(() => {
@@ -28,6 +34,8 @@ afterEach(() => {
   if (originalClaudeConfigDir === undefined)
     delete process.env.CLAUDE_CONFIG_DIR;
   else process.env.CLAUDE_CONFIG_DIR = originalClaudeConfigDir;
+  if (originalKimiCodeHome === undefined) delete process.env.KIMI_CODE_HOME;
+  else process.env.KIMI_CODE_HOME = originalKimiCodeHome;
   if (tempDir) rmSync(tempDir, { recursive: true, force: true });
   tempDir = undefined;
 });
@@ -203,6 +211,32 @@ describe("quota cache", () => {
     expect(contextId).toMatch(/^[a-f0-9]{64}$/);
     expect(JSON.stringify(payload)).not.toContain(contextDir);
     expect(readCachedClaudeProvider(claudeCredentialContextId())).toBeDefined();
+  });
+
+  it("refuses Kimi cache captured under another Kimi Code environment", () => {
+    useTempCache();
+    const codeHome = join(tempDir!, "synthetic-kimi-code-home");
+    const config = join(codeHome, "config.toml");
+    mkdirSync(codeHome, { recursive: true });
+    process.env.KIMI_CODE_HOME = codeHome;
+    writeFileSync(config, '[providers."managed:kimi-code"]\ntype = "kimi"\n');
+
+    writeCachedProviders([{ ...quota("kimi", 42), source: "api" as const }]);
+
+    const payload = JSON.parse(readFileSync(cacheFilePath(), "utf8")) as {
+      providers: Array<{ credentialContext?: string }>;
+    };
+    expect(payload.providers[0]?.credentialContext).toMatch(/^[a-f0-9]{64}$/);
+    expect(JSON.stringify(payload)).not.toContain(codeHome);
+    expect(readCachedKimiProvider(kimiCredentialContextId())).toBeDefined();
+
+    writeFileSync(
+      config,
+      '[providers."managed:kimi-code"]\nbase_url = "https://api.kimi.ai/coding/v1"\n',
+    );
+
+    expect(readCachedKimiProvider(kimiCredentialContextId())).toBeUndefined();
+    expect(readCachedProvider("kimi")).toBeDefined();
   });
 
   it("writes normalized cache data with mode 0600 and no attempts or sentinel secret", () => {
