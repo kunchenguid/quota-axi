@@ -91,6 +91,7 @@ export async function readCursorCliCredentialState(
         path,
         status: "invalid",
         error: identityResult.error,
+        credentialPresent: true,
       },
     };
   }
@@ -119,6 +120,7 @@ function readLinuxAuthFileCredentialState(
         path,
         status: "invalid",
         error: raw.error,
+        credentialPresent: true,
       },
     };
   }
@@ -183,6 +185,7 @@ async function readKeychainAccessToken(
         path,
         status: "invalid",
         error: "empty_credential",
+        credentialPresent: true,
       },
     };
   }
@@ -234,7 +237,7 @@ function skippedKeychainState(
         presence === "present"
           ? "keychain_prompt_required"
           : "keychain_presence_check_failed",
-      ...(presence === "present" ? { credentialPresent: true } : {}),
+      credentialPresent: true,
     },
   };
 }
@@ -256,6 +259,7 @@ function keychainFailureState(
         path,
         status: "skipped",
         error: "keychain_prompt_timeout",
+        credentialPresent: true,
       },
     };
   }
@@ -267,6 +271,7 @@ function keychainFailureState(
       path,
       status: "skipped",
       error: "keychain_access_denied",
+      credentialPresent: true,
     },
   };
 }

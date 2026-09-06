@@ -445,6 +445,7 @@ async function readCredentialState(): Promise<CredentialState> {
         path: STATE_DB,
         status: "skipped",
         error: "sqlite3_unavailable",
+        credentialPresent: true,
       },
     };
   }
@@ -480,6 +481,7 @@ async function readCredentialState(): Promise<CredentialState> {
         path: STATE_DB,
         status: "invalid",
         error: sqliteError,
+        credentialPresent: true,
       },
     };
   }

@@ -149,12 +149,20 @@ async function fetchQuotaWithDependencies(
         error: finalError,
       };
       if (error instanceof RateLimitError) retryAfter = error.retryAfter;
+      if (finalError !== "Codex sign-in required") {
+        return codexFailureReport(finalError, retryAfter, attempts, "oauth");
+      }
     }
   } else {
     attempts.push({
       source: "oauth",
       status: "skipped",
       error: `credentials_${credentialState.status}`,
+      // An expired or malformed store still holds a credential, so a sibling
+      // source that answers supersedes it rather than replacing it silently.
+      ...(credentialState.status === "missing"
+        ? {}
+        : { credentialPresent: true }),
     });
     if (credentialState.status !== "missing") {
       finalError = "Codex sign-in required";
@@ -202,25 +210,33 @@ async function fetchQuotaWithDependencies(
         status: "failed",
         error: message,
       };
-      if (errorIsDefault) {
-        if (error instanceof RateLimitError) {
-          finalError = message;
-          errorIsDefault = false;
-          retryAfter = error.retryAfter;
-        } else if (!retryAfter) {
-          finalError = message;
-          errorIsDefault = false;
-        }
+      if (message !== "Codex sign-in required") {
+        const piRetryAfter =
+          error instanceof RateLimitError ? error.retryAfter : undefined;
+        return codexFailureReport(
+          message,
+          piRetryAfter,
+          attempts,
+          PI_CODEX_CREDENTIAL_SOURCE,
+        );
+      }
+      if (errorIsDefault || statusFromError(finalError) === "auth_required") {
+        finalError = message;
+        errorIsDefault = false;
       }
     }
   } else {
     attempts.push(piSourceAttempt(piResolution));
-    if (!retryAfter && errorIsDefault) {
+    if (
+      !retryAfter &&
+      piResolution.status === "error" &&
+      (errorIsDefault || statusFromError(finalError) === "auth_required")
+    ) {
+      finalError = "Codex Pi credential resolution failed";
+      errorIsDefault = false;
+    } else if (!retryAfter && errorIsDefault) {
       if (piResolution.status === "expired") {
         finalError = "Pi Codex access token expired";
-        errorIsDefault = false;
-      } else if (piResolution.status === "error") {
-        finalError = "Codex Pi credential resolution failed";
         errorIsDefault = false;
       } else if (piResolution.status !== "missing") {
         finalError = "Codex sign-in required";
@@ -252,23 +268,30 @@ async function fetchQuotaWithDependencies(
       status: "failed",
       error: message,
     };
-    // cli-rpc is the last source, so this deliberately does not clear
-    // errorIsDefault. Add a source after it and the flag has to be cleared here.
-    if (errorIsDefault) {
+    if (errorIsDefault || !(error instanceof CodexCliUnavailableError)) {
       finalError = message;
     }
   }
 
+  return codexFailureReport(finalError, retryAfter, attempts);
+}
+
+function codexFailureReport(
+  error: string,
+  retryAfter: string | undefined,
+  attempts: SourceAttempt[],
+  source?: ProviderQuota["source"],
+): ProviderQuota {
   const cached = readCachedProvider("codex");
   if (cached) {
-    return staleFromCache(cached, finalError, sourceNames(attempts), attempts);
+    return staleFromCache(cached, error, sourceNames(attempts), attempts);
   }
-
   return failedProvider({
     provider: "codex",
     label: "Codex",
-    status: retryAfter ? "rate_limited" : statusFromError(finalError),
-    error: finalError,
+    ...(source ? { source } : {}),
+    status: retryAfter ? "rate_limited" : statusFromError(error),
+    error,
     retryAfter,
     sourcesTried: sourceNames(attempts),
     attempts,
@@ -320,6 +343,7 @@ function piSourceAttempt(
       source: PI_CODEX_CREDENTIAL_SOURCE,
       status: "failed",
       error: "credential_resolution_failed",
+      credentialPresent: true,
     };
   }
   if (resolution.status === "expired") {
@@ -342,6 +366,7 @@ function piSourceAttempt(
     source: PI_CODEX_CREDENTIAL_SOURCE,
     status: "skipped",
     error,
+    ...(resolution.status === "missing" ? {} : { credentialPresent: true }),
   };
 }
 
@@ -707,7 +732,7 @@ async function probeCodexCli(): Promise<{
 }> {
   const binary = await resolveCodexBinary();
   if (binary.status === "missing") {
-    throw new Error(codexBinaryErrorMessage(binary));
+    throw new CodexCliUnavailableError(codexBinaryErrorMessage(binary));
   }
   const child = spawn(
     binary.path,
@@ -983,6 +1008,8 @@ function errorMessage(error: unknown): string {
     return "Codex quota request timed out";
   return error instanceof Error ? error.message : "Codex quota unavailable";
 }
+
+class CodexCliUnavailableError extends Error {}
 
 class RateLimitError extends Error {
   constructor(readonly retryAfter: string | undefined) {

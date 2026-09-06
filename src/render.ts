@@ -191,6 +191,35 @@ function providerAttention(
   measured: boolean,
   scopeRows: number,
 ): AttentionRow[] {
+  // Degraded sources are appended, never counted: they name the provider but
+  // not why a scope is missing, so they must not suppress the `no_quota` row.
+  return [
+    ...providerStateRows(provider, measured, scopeRows),
+    ...degradedSourceRows(provider),
+  ];
+}
+
+/**
+ * A working sibling answered for this provider, so the rows above are healthy
+ * and this is the only place the superseded breakage is still stated.
+ */
+function degradedSourceRows(provider: ProviderQuota): AttentionRow[] {
+  return (provider.state.degradedSources ?? []).map((degraded) => ({
+    provider: provider.provider,
+    scope: "all",
+    kind: "degraded_source",
+    detail: degraded.error
+      ? `${degraded.source}${DETAIL_SEPARATOR}${degraded.error}`
+      : degraded.source,
+    remedy: NONE,
+  }));
+}
+
+function providerStateRows(
+  provider: ProviderQuota,
+  measured: boolean,
+  scopeRows: number,
+): AttentionRow[] {
   const rows: AttentionRow[] = [];
   const primary = primaryProviderRow(provider);
   if (primary) rows.push(primary);

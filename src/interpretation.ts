@@ -1,3 +1,4 @@
+import { degradedSources } from "./lib/source-attempts.js";
 import {
   computeEffectiveRunway,
   computeWindowPace,
@@ -25,10 +26,25 @@ export function withQuotaSemantics(
   const semantics = semanticsFor(withWindows, generatedAt);
   return {
     ...withWindows,
+    state: { ...provider.state, ...supersededSources(provider) },
     quotaSemantics: provider.state.stale
       ? staleSemantics(semantics)
       : semantics,
   };
+}
+
+/**
+ * Name the sources a working sibling superseded. Only a fresh reading can
+ * supersede anything: when nothing worked, `state.error` and the report status
+ * already carry the auth problem, and repeating every source there would bury
+ * it rather than make it visible.
+ */
+function supersededSources(
+  provider: ProviderQuota,
+): Pick<ProviderQuota["state"], "degradedSources"> {
+  if (provider.state.stale || provider.state.status !== "fresh") return {};
+  const degraded = degradedSources(provider.attempts);
+  return degraded.length > 0 ? { degradedSources: degraded } : {};
 }
 
 function staleSemantics(semantics: QuotaSemantics): QuotaSemantics {

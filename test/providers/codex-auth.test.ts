@@ -59,6 +59,10 @@ function piAuthFile(): string {
 }
 
 function writePiAuth(entry: Record<string, unknown>): void {
+  writePiAuthValue(entry);
+}
+
+function writePiAuthValue(entry: unknown): void {
   mkdirSync(process.env.PI_CODING_AGENT_DIR!, { recursive: true });
   writeFileSync(piAuthFile(), JSON.stringify({ "openai-codex": entry }), {
     mode: 0o600,
@@ -205,11 +209,13 @@ describe("Codex credential-state reporting", () => {
       status: "invalid",
     });
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(result.attempts).toContainEqual({
-      source: "oauth",
-      status: "skipped",
-      error: "credentials_invalid",
-    });
+    expect(result.attempts).toContainEqual(
+      expect.objectContaining({
+        source: "oauth",
+        status: "skipped",
+        error: "credentials_invalid",
+      }),
+    );
   });
 
   it("surfaces expired JWT credentials without probing OAuth usage", async () => {
@@ -235,11 +241,13 @@ describe("Codex credential-state reporting", () => {
     });
     expect(fetchMock).not.toHaveBeenCalled();
     expect(result.state.status).toBe("auth_required");
-    expect(result.attempts).toContainEqual({
-      source: "oauth",
-      status: "skipped",
-      error: "credentials_expired",
-    });
+    expect(result.attempts).toContainEqual(
+      expect.objectContaining({
+        source: "oauth",
+        status: "skipped",
+        error: "credentials_expired",
+      }),
+    );
   });
 
   it("treats access-token usability as authoritative when id_token is expired", async () => {
@@ -320,11 +328,13 @@ describe("Codex credential-state reporting", () => {
 
     expect(auth.sources[0]?.status).toBe("expired");
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(result.attempts).toContainEqual({
-      source: "oauth",
-      status: "skipped",
-      error: "credentials_expired",
-    });
+    expect(result.attempts).toContainEqual(
+      expect.objectContaining({
+        source: "oauth",
+        status: "skipped",
+        error: "credentials_expired",
+      }),
+    );
   });
 
   it("surfaces malformed auth JSON as invalid", async () => {
@@ -484,6 +494,84 @@ describe("Codex credential-state reporting", () => {
     ]);
   });
 
+  it("reports a transient Pi failure after native OAuth rejection", async () => {
+    const nativeToken = jwt({ exp: Math.floor(Date.now() / 1000) + 3600 });
+    writeAuth({ tokens: { access_token: nativeToken } });
+    writePiAuth(piOauthEntry());
+    const binary = join(tempDir!, "codex-fixture");
+    process.env.QUOTA_AXI_CODEX_BINARY = binary;
+    const spawn = vi.fn(() => successfulChild());
+    vi.doMock("node:child_process", () => ({ spawn }));
+    vi.doMock("../../src/lib/process.js", () => ({
+      findCommandPath: vi.fn(async () => binary),
+      terminateChild: vi.fn(),
+    }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+        const authorization = (init?.headers as Record<string, string>)
+          ?.authorization;
+        if (authorization === `Bearer ${nativeToken}`) {
+          return new Response(null, { status: 401 });
+        }
+        throw new TypeError("network unavailable");
+      }),
+    );
+
+    const { fetchQuota } = await import("../../src/providers/codex.js");
+    const result = await fetchQuota({
+      allowKeychainPrompt: false,
+      refreshCredentials: false,
+    });
+
+    expect(result.source).toBe("pi:openai-codex");
+    expect(result.state.status).toBe("error");
+    expect(result.state.error).toBe("network unavailable");
+    expect(result.state.status).not.toBe("auth_required");
+    expect(result.attempts).toEqual([
+      { source: "oauth", status: "failed", error: "Codex sign-in required" },
+      {
+        source: "pi:openai-codex",
+        status: "failed",
+        error: "network unavailable",
+      },
+    ]);
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("lets a transient CLI failure outrank earlier auth rejection", async () => {
+    const nativeToken = jwt({ exp: Math.floor(Date.now() / 1000) + 3600 });
+    writeAuth({ tokens: { access_token: nativeToken } });
+    const binary = join(tempDir!, "codex-fixture");
+    process.env.QUOTA_AXI_CODEX_BINARY = binary;
+    const child = failingChild();
+    const spawn = vi.fn(() => {
+      queueMicrotask(() =>
+        child.emit("error", new Error("network unavailable")),
+      );
+      return child;
+    });
+    vi.doMock("node:child_process", () => ({ spawn }));
+    vi.doMock("../../src/lib/process.js", () => ({
+      findCommandPath: vi.fn(async () => binary),
+      terminateChild: vi.fn(),
+    }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(null, { status: 401 })),
+    );
+
+    const { fetchQuota } = await import("../../src/providers/codex.js");
+    const result = await fetchQuota({
+      allowKeychainPrompt: false,
+      refreshCredentials: false,
+    });
+
+    expect(result.state.status).toBe("error");
+    expect(result.state.error).toBe("Codex quota unavailable");
+    expect(result.state.status).not.toBe("auth_required");
+  });
+
   it("keeps a transient native probe failure over an expired Pi credential", async () => {
     const nativeToken = jwt({ exp: Math.floor(Date.now() / 1000) + 3600 });
     writeAuth({ tokens: { access_token: nativeToken } });
@@ -514,70 +602,53 @@ describe("Codex credential-state reporting", () => {
     expect(result.state.status).toBe("error");
     expect(result.state.error).toBe("Codex quota request timed out");
     expect(result.state.status).not.toBe("auth_required");
+    expect(result.source).toBe("oauth");
     expect(result.attempts).toEqual([
       {
         source: "oauth",
         status: "failed",
         error: "Codex quota request timed out",
       },
-      {
-        source: "pi:openai-codex",
-        status: "skipped",
-        error: "credentials_expired_refreshable",
-        credentialPresent: true,
-      },
-      { source: "cli-rpc", status: "failed", error: expect.any(String) },
     ]);
   });
 
-  it.each([401, 429])(
-    "keeps a transient native probe failure over an available Pi credential rejected with %i",
-    async (piStatus) => {
-      const nativeToken = jwt({ exp: Math.floor(Date.now() / 1000) + 3600 });
-      writeAuth({ tokens: { access_token: nativeToken } });
-      writePiAuth(piOauthEntry());
-      const timeout = () => {
-        const error = new Error("The operation was aborted");
-        error.name = "AbortError";
-        return error;
-      };
-      const fetchMock = vi.fn(
-        async (_url: string | URL | Request, init?: RequestInit) => {
-          const authorization = (init?.headers as Record<string, string>)
-            ?.authorization;
-          if (authorization === `Bearer ${nativeToken}`) throw timeout();
-          return new Response(null, {
-            status: piStatus,
-            headers:
-              piStatus === 429
-                ? { "retry-after": "2030-01-01T00:00:00.000Z" }
-                : undefined,
-          });
-        },
-      );
-      vi.stubGlobal("fetch", fetchMock);
+  it("does not switch to working Pi OAuth after a transient native failure", async () => {
+    const nativeToken = jwt({ exp: Math.floor(Date.now() / 1000) + 3600 });
+    const piToken = "working-pi-token";
+    writeAuth({ tokens: { access_token: nativeToken } });
+    writePiAuth(piOauthEntry({ access: piToken }));
+    const bearers: string[] = [];
+    const fetchMock = vi.fn(
+      async (_url: string | URL | Request, init?: RequestInit) => {
+        const authorization =
+          (init?.headers as Record<string, string>)?.authorization ?? "";
+        bearers.push(authorization);
+        if (authorization === `Bearer ${nativeToken}`) {
+          throw new TypeError("network unavailable");
+        }
+        return successfulUsageResponse();
+      },
+    );
+    vi.stubGlobal("fetch", fetchMock);
 
-      const { fetchQuota } = await import("../../src/providers/codex.js");
-      const result = await fetchQuota({
-        allowKeychainPrompt: false,
-        refreshCredentials: false,
-      });
+    const { withQuotaSemantics } = await import("../../src/interpretation.js");
+    const { fetchQuota } = await import("../../src/providers/codex.js");
+    const result = await fetchQuota({
+      allowKeychainPrompt: false,
+      refreshCredentials: false,
+    });
+    const interpreted = withQuotaSemantics(result, new Date().toISOString());
 
-      expect(result.state.status).toBe("error");
-      expect(result.state.error).toBe("Codex quota request timed out");
-      expect(result.state.status).not.toBe("auth_required");
-      expect(result.state.status).not.toBe("rate_limited");
-      expect(result.state.retryAfter).toBeUndefined();
-      expect(result.attempts).toContainEqual({
-        source: "pi:openai-codex",
-        status: "failed",
-        error:
-          piStatus === 429
-            ? "Codex quota endpoint rate limited"
-            : "Codex sign-in required",
-      });
-    },
-  );
+    expect(result.source).toBe("oauth");
+    expect(result.state.status).toBe("error");
+    expect(result.state.error).toBe("network unavailable");
+    expect(result.attempts).toEqual([
+      { source: "oauth", status: "failed", error: "network unavailable" },
+    ]);
+    expect(bearers).toEqual([`Bearer ${nativeToken}`, `Bearer ${nativeToken}`]);
+    expect(bearers).not.toContain(`Bearer ${piToken}`);
+    expect(interpreted.state.degradedSources).toBeUndefined();
+  });
 
   it("keeps an unusable native credential over an expired Pi credential", async () => {
     writeAuth({ tokens: { access_token: jwt({ exp: 1 }) } });
@@ -658,6 +729,65 @@ describe("Codex credential-state reporting", () => {
     ]);
     expect(spawn).toHaveBeenCalledOnce();
   });
+
+  it("keeps unsupported Pi auth degraded when CLI RPC returns quota", async () => {
+    writePiAuth({ type: "api_key", key: "unsupported-api-key" });
+    const binary = join(tempDir!, "codex-fixture");
+    process.env.QUOTA_AXI_CODEX_BINARY = binary;
+    const spawn = vi.fn(() => successfulChild());
+    vi.doMock("node:child_process", () => ({ spawn }));
+    vi.doMock("../../src/lib/process.js", () => ({
+      findCommandPath: vi.fn(async () => binary),
+      terminateChild: vi.fn(),
+    }));
+
+    const { withQuotaSemantics } = await import("../../src/interpretation.js");
+    const { fetchQuota } = await import("../../src/providers/codex.js");
+    const result = await fetchQuota({
+      allowKeychainPrompt: false,
+      refreshCredentials: false,
+    });
+    const interpreted = withQuotaSemantics(result, new Date().toISOString());
+
+    expect(result.source).toBe("cli-rpc");
+    expect(result.windows.length).toBeGreaterThan(0);
+    expect(interpreted.state.degradedSources).toEqual([
+      {
+        source: "pi:openai-codex",
+        error: "unsupported_credential_type",
+      },
+    ]);
+  });
+
+  it.each([{}, null, "invalid", []])(
+    "keeps structurally invalid Pi auth %# degraded when CLI RPC returns quota",
+    async (entry) => {
+      writePiAuthValue(entry);
+      const binary = join(tempDir!, "codex-fixture");
+      process.env.QUOTA_AXI_CODEX_BINARY = binary;
+      const spawn = vi.fn(() => successfulChild());
+      vi.doMock("node:child_process", () => ({ spawn }));
+      vi.doMock("../../src/lib/process.js", () => ({
+        findCommandPath: vi.fn(async () => binary),
+        terminateChild: vi.fn(),
+      }));
+
+      const { withQuotaSemantics } =
+        await import("../../src/interpretation.js");
+      const { fetchQuota } = await import("../../src/providers/codex.js");
+      const result = await fetchQuota({
+        allowKeychainPrompt: false,
+        refreshCredentials: false,
+      });
+      const interpreted = withQuotaSemantics(result, new Date().toISOString());
+
+      expect(result.source).toBe("cli-rpc");
+      expect(result.windows.length).toBeGreaterThan(0);
+      expect(interpreted.state.degradedSources).toEqual([
+        { source: "pi:openai-codex", error: "credentials_invalid" },
+      ]);
+    },
+  );
 
   it("reports refreshable Pi expiry without exchanging or exposing the refresh token", async () => {
     writePiAuth(
@@ -755,6 +885,7 @@ describe("Codex credential-state reporting", () => {
       source: "pi:openai-codex",
       status: "skipped",
       error: "unsupported_credential_type",
+      credentialPresent: true,
     });
 
     writePiAuth(

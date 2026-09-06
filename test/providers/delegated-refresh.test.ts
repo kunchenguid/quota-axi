@@ -248,6 +248,7 @@ setTimeout(() => {
         source: "vendorcli-refresh",
         status: "failed",
         error: "refresh_timed_out",
+        degraded: false,
       });
 
       // The vendor ran to completion on its own: no SIGTERM/SIGINT/SIGHUP
@@ -306,6 +307,7 @@ function processGroupOf(pid) {
         source: "vendorcli-refresh",
         status: "failed",
         error: "refresh_exit_status",
+        degraded: false,
       });
     });
   },
@@ -856,6 +858,7 @@ describe.skipIf(process.platform === "win32")(
         source: "claude-cli-refresh",
         status: "failed",
         error: "refresh_timed_out",
+        degraded: false,
       });
       expect(result.state.status).toBe("stale");
       expect(result.state.stale).toBe(true);
@@ -1143,11 +1146,13 @@ describe.skipIf(process.platform === "win32")(
       // The expired bearer is never offered to the usage endpoint, and the
       // rotation is entirely the vendor CLI's: quota-axi made no HTTP call.
       expect(fetchMock).not.toHaveBeenCalled();
-      expect(result.attempts).toContainEqual({
-        source: "oauth",
-        status: "skipped",
-        error: "credentials_expired",
-      });
+      expect(result.attempts).toContainEqual(
+        expect.objectContaining({
+          source: "oauth",
+          status: "skipped",
+          error: "credentials_expired",
+        }),
+      );
 
       // The vendor rewrote its own store, so the next run has a live bearer.
       const stored = JSON.parse(
