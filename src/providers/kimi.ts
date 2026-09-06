@@ -193,8 +193,8 @@ type KimiCandidate =
       credential: string;
       /**
        * Stored-metadata classification only. A stored-expired credential is
-       * still attempted - the request doubles as its liveness probe - so the
-       * store's own expiry field orders candidates but never skips one.
+       * still attempted in its source's declared position, and the request
+       * doubles as the liveness probe that decides the verdict.
        */
       localState: CandidateLocalState;
     }

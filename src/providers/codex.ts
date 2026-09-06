@@ -66,9 +66,9 @@ type AvailableCredentialState = {
   source: AuthSourceReport;
 };
 /**
- * Stored-expired, and still carrying its credentials: the `exp` claim is
- * advisory ordering metadata, so the bounded read-only quota probe doubles as
- * the liveness check rather than the store's own field deciding the verdict.
+ * Stored-expired, and still carrying its credentials so the bounded read-only
+ * quota probe tests it in its source's declared position. The endpoint, not
+ * the store's own field, decides the verdict.
  */
 type AdvisoryExpiredCredentialState = {
   status: "expired";
@@ -769,8 +769,8 @@ function extractCredentialState(
     stringValue(decoded?.["https://api.openai.com/auth/account_id"]) ??
     stringValue(decoded?.account_id);
   const credentials: CodexCredentials = { accessToken, accountId };
-  // Advisory only: the stored `exp` claim orders this credential behind an
-  // unexpired sibling, but never skips it. Only the endpoint decides.
+  // Stored expiry is liveness metadata only. The credential is still probed
+  // in its source's declared position, and only the endpoint decides.
   if (isExpiredJwtPayload(accessPayload)) {
     return {
       status: "expired",
