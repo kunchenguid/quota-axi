@@ -19,7 +19,16 @@ export type PiCodexCredentialResolution =
   | { status: "missing" }
   | { status: "invalid" }
   | { status: "unsupported" }
-  | { status: "expired"; refreshable: boolean }
+  | {
+      status: "expired";
+      refreshable: boolean;
+      /**
+       * The stored credentials, present so a bounded read-only liveness
+       * probe can test them despite the stored expiry field. Probe use only;
+       * never log or render.
+       */
+      credentials?: PiCodexCredentials;
+    }
   | { status: "error" };
 
 export type PiCodexCredentialInspection = {
@@ -141,6 +150,7 @@ async function resolveCredential(
     return {
       status: "expired",
       refreshable: usableLiteral(entry.refresh) !== undefined,
+      credentials: { accessToken, accountId, expiresAtMs },
     };
   }
 

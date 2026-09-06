@@ -162,9 +162,16 @@ describe("Pi Codex credential broker", () => {
       "openai-codex": oauthEntry({ expires: NOW - 1, refresh: undefined }),
     });
 
+    // The stored token rides along on the expired resolution so the adapter
+    // can probe it: stored expiry orders candidates, it never skips them.
     await expect(brokerFor(refreshable).resolve()).resolves.toEqual({
       status: "expired",
       refreshable: true,
+      credentials: {
+        accessToken: "fixture-codex-access-token",
+        accountId: "acct-fixture-codex",
+        expiresAtMs: NOW - 1,
+      },
     });
     await expect(brokerFor(refreshable).inspect()).resolves.toMatchObject({
       status: "expired",
@@ -174,6 +181,11 @@ describe("Pi Codex credential broker", () => {
     await expect(brokerFor(nonRefreshable).resolve()).resolves.toEqual({
       status: "expired",
       refreshable: false,
+      credentials: {
+        accessToken: "fixture-codex-access-token",
+        accountId: "acct-fixture-codex",
+        expiresAtMs: NOW - 1,
+      },
     });
     const inspection = await brokerFor(nonRefreshable).inspect();
     expect(inspection).toMatchObject({
@@ -193,6 +205,11 @@ describe("Pi Codex credential broker", () => {
       await expect(brokerFor(fixture).resolve()).resolves.toEqual({
         status: "expired",
         refreshable: false,
+        credentials: {
+          accessToken: "fixture-codex-access-token",
+          accountId: "acct-fixture-codex",
+          expiresAtMs: NOW - 1,
+        },
       });
     },
   );

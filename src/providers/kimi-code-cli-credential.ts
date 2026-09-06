@@ -9,7 +9,16 @@ const MINIMUM_FRESHNESS_SECONDS = 60;
 
 export type KimiCodeCliCredentialResolution =
   | { status: "available"; accessToken: string }
-  | { status: "missing" | "invalid" | "expired" | "error" };
+  | {
+      status: "expired";
+      /**
+       * The stored access token, present so a bounded read-only liveness
+       * probe can test it despite the stored expiry field. Probe use only;
+       * never log or render.
+       */
+      accessToken?: string;
+    }
+  | { status: "missing" | "invalid" | "error" };
 
 export type KimiCodeCliCredentialInspection =
   KimiCodeCliCredentialResolution["status"];
@@ -76,7 +85,7 @@ async function resolveCredential(
   const expiresAt = expirySeconds(credential?.expires_at);
   if (!accessToken || expiresAt === undefined) return { status: "invalid" };
   if (expiresAt <= dependencies.now() / 1_000 + MINIMUM_FRESHNESS_SECONDS) {
-    return { status: "expired" };
+    return { status: "expired", accessToken };
   }
   return { status: "available", accessToken };
 }

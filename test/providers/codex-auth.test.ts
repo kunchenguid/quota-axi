@@ -218,9 +218,9 @@ describe("Codex credential-state reporting", () => {
     );
   });
 
-  it("surfaces expired JWT credentials without probing OAuth usage", async () => {
+  it("probes an expired JWT credential and lets the endpoint decide", async () => {
     writeAuth({ tokens: { access_token: jwt({ exp: 1 }) } });
-    const fetchMock = vi.fn();
+    const fetchMock = vi.fn(async () => new Response(null, { status: 401 }));
     vi.stubGlobal("fetch", fetchMock);
 
     const { fetchQuota, inspectAuth } =
@@ -239,13 +239,15 @@ describe("Codex credential-state reporting", () => {
       path: authFile(),
       status: "expired",
     });
-    expect(fetchMock).not.toHaveBeenCalled();
+    // Stored expiry orders the credential, it never skips it: only the
+    // endpoint's own rejection is an authentication verdict.
+    expect(fetchMock).toHaveBeenCalled();
     expect(result.state.status).toBe("auth_required");
     expect(result.attempts).toContainEqual(
       expect.objectContaining({
         source: "oauth",
-        status: "skipped",
-        error: "credentials_expired",
+        status: "failed",
+        error: "Codex sign-in required",
       }),
     );
   });
@@ -305,14 +307,14 @@ describe("Codex credential-state reporting", () => {
     );
   });
 
-  it("still skips OAuth when the access token JWT itself is expired", async () => {
+  it("still probes OAuth when the access token JWT itself is expired", async () => {
     writeAuth({
       tokens: {
         id_token: jwt({ exp: Math.floor(Date.now() / 1000) + 3600 }),
         access_token: jwt({ exp: 1 }),
       },
     });
-    const fetchMock = vi.fn();
+    const fetchMock = vi.fn(async () => new Response(null, { status: 401 }));
     vi.stubGlobal("fetch", fetchMock);
 
     const { fetchQuota, inspectAuth } =
@@ -326,13 +328,15 @@ describe("Codex credential-state reporting", () => {
       refreshCredentials: false,
     });
 
+    // Auth inspection still reports what the store says; the quota read does
+    // not treat that stored field as the verdict.
     expect(auth.sources[0]?.status).toBe("expired");
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalled();
     expect(result.attempts).toContainEqual(
       expect.objectContaining({
         source: "oauth",
-        status: "skipped",
-        error: "credentials_expired",
+        status: "failed",
+        error: "Codex sign-in required",
       }),
     );
   });
@@ -650,7 +654,7 @@ describe("Codex credential-state reporting", () => {
     expect(interpreted.state.degradedSources).toBeUndefined();
   });
 
-  it("keeps an unusable native credential over an expired Pi credential", async () => {
+  it("probes both stored-expired credentials before reporting a sign-out", async () => {
     writeAuth({ tokens: { access_token: jwt({ exp: 1 }) } });
     writePiAuth(
       piOauthEntry({
@@ -658,7 +662,11 @@ describe("Codex credential-state reporting", () => {
         expires: Date.now() - 1,
       }),
     );
-    const fetchMock = vi.fn();
+    const bearers: string[] = [];
+    const fetchMock = vi.fn(async (_input: unknown, init?: RequestInit) => {
+      bearers.push(new Headers(init?.headers).get("authorization") ?? "");
+      return new Response(null, { status: 401 });
+    });
     vi.stubGlobal("fetch", fetchMock);
 
     const { fetchQuota } = await import("../../src/providers/codex.js");
@@ -667,19 +675,21 @@ describe("Codex credential-state reporting", () => {
       refreshCredentials: false,
     });
 
+    // Neither store is skipped on its own expiry field; the sign-out verdict
+    // stands only because the endpoint rejected both of them.
+    expect(bearers).toContain("Bearer expired-pi-access-token");
     expect(result.state.error).toBe("Codex sign-in required");
     expect(result.state.status).toBe("auth_required");
-    expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("still names the expired Pi credential when no native credential exists", async () => {
+  it("probes the expired Pi credential when no native credential exists", async () => {
     writePiAuth(
       piOauthEntry({
         access: "expired-pi-access-token",
         expires: Date.now() - 1,
       }),
     );
-    const fetchMock = vi.fn();
+    const fetchMock = vi.fn(async () => new Response(null, { status: 401 }));
     vi.stubGlobal("fetch", fetchMock);
 
     const { fetchQuota } = await import("../../src/providers/codex.js");
@@ -688,11 +698,16 @@ describe("Codex credential-state reporting", () => {
       refreshCredentials: false,
     });
 
-    // The guard above must not silence the diagnostic that is genuinely the
-    // best explanation available.
-    expect(result.state.error).toBe("Pi Codex access token expired");
+    expect(fetchMock).toHaveBeenCalled();
+    expect(result.state.error).toBe("Codex sign-in required");
     expect(result.state.status).toBe("auth_required");
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(result.attempts).toContainEqual(
+      expect.objectContaining({
+        source: "pi:openai-codex",
+        status: "failed",
+        error: "Codex sign-in required",
+      }),
+    );
   });
 
   it("keeps CLI RPC as the final fallback after both file sources", async () => {
@@ -797,7 +812,11 @@ describe("Codex credential-state reporting", () => {
         expires: Date.now() - 1,
       }),
     );
-    const fetchMock = vi.fn();
+    const bearers: string[] = [];
+    const fetchMock = vi.fn(async (_input: unknown, init?: RequestInit) => {
+      bearers.push(new Headers(init?.headers).get("authorization") ?? "");
+      return new Response(null, { status: 401 });
+    });
     vi.stubGlobal("fetch", fetchMock);
 
     const { fetchQuota, inspectAuth } =
@@ -819,11 +838,15 @@ describe("Codex credential-state reporting", () => {
     expect(result.state.status).toBe("auth_required");
     expect(result.attempts).toContainEqual({
       source: "pi:openai-codex",
-      status: "skipped",
-      error: "credentials_expired_refreshable",
-      credentialPresent: true,
+      status: "failed",
+      error: "Codex sign-in required",
     });
-    expect(fetchMock).not.toHaveBeenCalled();
+    // The access token is probed; the refresh token is never read or sent.
+    expect(bearers.length).toBeGreaterThan(0);
+    expect(new Set(bearers)).toEqual(
+      new Set(["Bearer expired-pi-access-token"]),
+    );
+    expect(JSON.stringify(bearers)).not.toContain("private-refresh-token");
     expect(JSON.stringify({ auth, result })).not.toContain(
       "expired-pi-access-token",
     );
@@ -863,7 +886,7 @@ describe("Codex credential-state reporting", () => {
 
   it("maps unsupported API keys and non-refreshable expiry into source diagnostics", async () => {
     writePiAuth({ type: "api_key", key: "unsupported-api-key" });
-    const fetchMock = vi.fn();
+    const fetchMock = vi.fn(async () => new Response(null, { status: 401 }));
     vi.stubGlobal("fetch", fetchMock);
     const { fetchQuota, inspectAuth } =
       await import("../../src/providers/codex.js");
@@ -908,13 +931,14 @@ describe("Codex credential-state reporting", () => {
       status: "expired",
       error: "credentials_expired",
     });
+    // Auth inspection still names the stored expiry, while the quota read
+    // probes the token rather than trusting that field.
     expect(expiredResult.attempts).toContainEqual({
       source: "pi:openai-codex",
-      status: "skipped",
-      error: "credentials_expired",
-      credentialPresent: true,
+      status: "failed",
+      error: "Codex sign-in required",
     });
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalled();
     expect(
       JSON.stringify({
         apiKeyAuth,

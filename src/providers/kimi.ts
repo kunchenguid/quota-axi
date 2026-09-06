@@ -13,6 +13,10 @@ import type {
 } from "../types.js";
 import { VERSION } from "../version.js";
 import {
+  selectCredential,
+  type CandidateLocalState,
+} from "./credential-selection.js";
+import {
   createKimiCodeCliCredentialSource,
   KIMI_CODE_CLI_CREDENTIAL_SOURCE,
   type KimiCodeCliCredentialResolution,
@@ -184,7 +188,16 @@ type KimiFailureRecord = {
 };
 
 type KimiCandidate =
-  | { status: "available"; credential: string }
+  | {
+      status: "available";
+      credential: string;
+      /**
+       * Stored-metadata classification only. A stored-expired credential is
+       * still attempted - the request doubles as its liveness probe - so the
+       * store's own expiry field orders candidates but never skips one.
+       */
+      localState: CandidateLocalState;
+    }
   | {
       status: "unavailable";
       failure: KimiFailure;
@@ -225,25 +238,48 @@ async function acquireKimiQuota(
         continue;
       }
 
-      attempts.push({ source, status: "failed" });
-      try {
-        const report = await readKimiQuota(
-          candidate.credential,
-          source,
-          attempts,
-          controller.signal,
-          dependencies,
-        );
-        return report;
-      } catch (error) {
-        const failure = asKimiFailure(error);
-        attempts[attempts.length - 1] = {
-          source,
-          status: "failed",
-          error: failure.code,
-        };
-        failures.push({ failure, credentialPresent: true });
-        if (!failure.definitiveAuth || controller.signal.aborted) break;
+      // One candidate per call keeps the declared source order authoritative:
+      // the shared loop orders stored-valid before stored-expired candidates,
+      // which must not reshuffle Pi ahead of, or behind, the Kimi CLI.
+      let report: ProviderQuota | undefined;
+      const selection = await selectCredential(
+        [
+          {
+            source,
+            localState: candidate.localState,
+            credential: candidate.credential,
+          },
+        ],
+        async (selected) => {
+          attempts.push({ source, status: "failed" });
+          try {
+            report = await readKimiQuota(
+              selected.credential,
+              source,
+              attempts,
+              controller.signal,
+              dependencies,
+            );
+            return { kind: "quota", result: report };
+          } catch (error) {
+            const failure = asKimiFailure(error);
+            attempts[attempts.length - 1] = {
+              source,
+              status: "failed",
+              error: failure.code,
+            };
+            failures.push({ failure, credentialPresent: true });
+            return failure.definitiveAuth
+              ? { kind: "rejected", error: failure.code }
+              : { kind: "transient", error: failure.code };
+          }
+        },
+      );
+      if (selection.outcome === "quota" && report) return report;
+      // Handover on credential problems only: a transport, decoding, or
+      // server failure is about the request, so it is reported as-is.
+      if (selection.outcome !== "all_rejected" || controller.signal.aborted) {
+        break;
       }
     }
 
@@ -282,7 +318,21 @@ async function resolveKimiCandidate(
       return unavailableCandidate(asKimiFailure(error), "failed", true);
     }
     if (resolution.status === "available") {
-      return { status: "available", credential: resolution.credential };
+      return {
+        status: "available",
+        credential: resolution.credential,
+        localState: "valid",
+      };
+    }
+    if (
+      resolution.status === "expired" &&
+      resolution.credential !== undefined
+    ) {
+      return {
+        status: "available",
+        credential: resolution.credential,
+        localState: "expired",
+      };
     }
     return unavailableCandidate(
       credentialFailureFor(resolution),
@@ -301,7 +351,18 @@ async function resolveKimiCandidate(
     return unavailableCandidate(asKimiFailure(error), "failed", true);
   }
   if (resolution.status === "available") {
-    return { status: "available", credential: resolution.accessToken };
+    return {
+      status: "available",
+      credential: resolution.accessToken,
+      localState: "valid",
+    };
+  }
+  if (resolution.status === "expired" && resolution.accessToken !== undefined) {
+    return {
+      status: "available",
+      credential: resolution.accessToken,
+      localState: "expired",
+    };
   }
   return unavailableCandidate(
     cliCredentialFailureFor(resolution),
