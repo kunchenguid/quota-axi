@@ -157,7 +157,9 @@ export function createKimiAdapter(
                   ? "kimi_code_cli_region_unrecognized"
                   : cliInspection === "invalid_config"
                     ? "kimi_code_cli_config_invalid"
-                    : undefined;
+                    : cliInspection === "missing_unconfirmed"
+                      ? "kimi_code_cli_credential_unconfirmed"
+                      : undefined;
 
       return {
         provider: "kimi",
@@ -197,7 +199,8 @@ function cliSourceStatus(
   if (
     inspection === "unsupported_storage" ||
     inspection === "unrecognized_region" ||
-    inspection === "invalid_config"
+    inspection === "invalid_config" ||
+    inspection === "missing_unconfirmed"
   ) {
     return "skipped";
   }
@@ -415,7 +418,8 @@ async function resolveKimiCandidate(
   return unavailableCandidate(
     cliCredentialFailureFor(resolution),
     resolution.status === "error" ? "failed" : "skipped",
-    resolution.status !== "missing",
+    resolution.status !== "missing" &&
+      resolution.status !== "missing_unconfirmed",
   );
 }
 
@@ -591,6 +595,17 @@ function cliCredentialFailureFor(
   }
   if (resolution.status === "invalid_config") {
     return new KimiFailure("kimi_code_cli_config_invalid", {
+      staleEligible: true,
+    });
+  }
+  /**
+   * Nothing at an assumed slot is not a credential the user does not have: the
+   * guess, not the account, is what came back empty. Asserting a sign-out here
+   * would claim knowledge quota-axi does not have and would retire cached
+   * numbers that are still the best it can say.
+   */
+  if (resolution.status === "missing_unconfirmed") {
+    return new KimiFailure("kimi_code_cli_credential_unconfirmed", {
       staleEligible: true,
     });
   }

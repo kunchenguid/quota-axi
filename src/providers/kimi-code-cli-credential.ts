@@ -4,6 +4,7 @@ import { open } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import {
+  type KimiCodeConfigSource,
   kimiCredentialPath,
   resolveKimiCodeEnvironment,
 } from "./kimi-code-config.js";
@@ -30,6 +31,8 @@ export type KimiCodeCliCredentialResolution =
   | {
       status:
         | "missing"
+        /** Nothing at a slot this reader assumed rather than read. */
+        | "missing_unconfirmed"
         | "invalid"
         | "error"
         | "unsupported_storage"
@@ -84,7 +87,7 @@ async function resolveCredential(
 ): Promise<KimiCodeCliCredentialResolution> {
   const codeHome = kimiCodeHome(dependencies);
   const environment = resolveKimiCodeEnvironment(
-    await readConfigText(codeHome, dependencies),
+    await readConfigSource(codeHome, dependencies),
   );
   if (environment.status !== "resolved") return { status: environment.status };
 
@@ -93,9 +96,16 @@ async function resolveCredential(
   try {
     contents = await dependencies.readFile(path, CREDENTIAL_FILE_LIMIT_BYTES);
   } catch (error) {
-    return errorCode(error) === "ENOENT"
+    if (errorCode(error) !== "ENOENT") return { status: "error" };
+    /**
+     * Absence only counts against the credential when the slot was named
+     * rather than assumed. Having looked in a place we guessed at, finding
+     * nothing there tells us about the guess, not about the user's account, so
+     * this must not become a sign-out that also retires their cached numbers.
+     */
+    return environment.confirmed
       ? { status: "missing" }
-      : { status: "error" };
+      : { status: "missing_unconfirmed" };
   }
   if (contents.byteLength > CREDENTIAL_FILE_LIMIT_BYTES) {
     return { status: "invalid" };
@@ -155,7 +165,7 @@ export function kimiCredentialContextId(): string {
       homeDirectory: homedir,
     }).normalize("NFC"),
   );
-  const environment = resolveKimiCodeEnvironment(configTextSync(codeHome));
+  const environment = resolveKimiCodeEnvironment(configSourceSync(codeHome));
   const selection =
     environment.status === "resolved"
       ? `slot:${environment.credentialFileName}\nbase:${environment.baseUrl}`
@@ -165,13 +175,15 @@ export function kimiCredentialContextId(): string {
     .digest("hex");
 }
 
-/** `readConfigText`'s rule, for the callers that cannot await it. */
-function configTextSync(codeHome: string): string | undefined {
+/** `readConfigSource`'s rule, for the callers that cannot await it. */
+function configSourceSync(codeHome: string): KimiCodeConfigSource {
   let file: number;
   try {
     file = openSync(join(codeHome, "config.toml"), "r");
-  } catch {
-    return undefined;
+  } catch (error) {
+    return errorCode(error) === "ENOENT"
+      ? { status: "absent" }
+      : { status: "unreadable" };
   }
   try {
     const contents = new Uint8Array(CONFIG_FILE_LIMIT_BYTES + 1);
@@ -188,29 +200,41 @@ function configTextSync(codeHome: string): string | undefined {
       offset += read;
     }
     return offset > CONFIG_FILE_LIMIT_BYTES
-      ? undefined
-      : Buffer.from(contents.buffer, contents.byteOffset, offset).toString(
-          "utf8",
-        );
+      ? { status: "unreadable" }
+      : {
+          status: "read",
+          text: Buffer.from(
+            contents.buffer,
+            contents.byteOffset,
+            offset,
+          ).toString("utf8"),
+        };
   } catch {
-    return undefined;
+    return { status: "unreadable" };
   } finally {
     closeSync(file);
   }
 }
 
 /**
- * The configuration text, or nothing when this reader has none to offer.
+ * What this reader managed to obtain of `config.toml`.
  *
- * An absent file, one it cannot open, and one past the size cap all return
- * nothing on purpose. They are a single epistemic state - quota-axi does not
- * know what the configuration says - which is also the state a file reaches
- * when `scanConfig` stops partway, and states that share their evidence should
- * share their verdict. Giving them one is deliberate, not an oversight.
+ * An absent file, one it cannot open, and one past the size cap all lead to the
+ * same verdict on purpose. In each, quota-axi does not know what the
+ * configuration says - the state a file also reaches when `scanConfig` stops
+ * partway - and states that share their evidence should share their verdict.
+ * Giving them one is deliberate, not an oversight.
  *
  * That verdict is the unsuffixed `kimi-code` slot on the default deployment,
  * because Kimi Code writes that slot only for that deployment, so slot and host
  * match by construction and no token can reach the wrong region.
+ *
+ * They are still reported apart, because the verdict and the confidence in it
+ * are different questions. Nothing exists to describe an environment when the
+ * file is absent, so the only slot Kimi Code could have written is the default
+ * one and finding it empty is a real negative. A file that exists and cannot be
+ * taken in may name any slot, so the same emptiness proves nothing - see the
+ * `confirmed` flag `resolveKimiCodeEnvironment` returns.
  *
  * KNOWN LIMIT, UNVERIFIED: the verdict also assumes Kimi Code removes that slot
  * when a user switches deployments. Confirming that needs a real installation
@@ -222,22 +246,24 @@ function configTextSync(codeHome: string): string | undefined {
  * `config.toml` this reader cannot walk, and reporting an accurate number for
  * them is the obligation this weighs against.
  */
-async function readConfigText(
+async function readConfigSource(
   codeHome: string,
   dependencies: CredentialSourceDependencies,
-): Promise<string | undefined> {
+): Promise<KimiCodeConfigSource> {
   let contents: Buffer;
   try {
     contents = await dependencies.readConfigFile(
       join(codeHome, "config.toml"),
       CONFIG_FILE_LIMIT_BYTES,
     );
-  } catch {
-    return undefined;
+  } catch (error) {
+    return errorCode(error) === "ENOENT"
+      ? { status: "absent" }
+      : { status: "unreadable" };
   }
   return contents.byteLength > CONFIG_FILE_LIMIT_BYTES
-    ? undefined
-    : contents.toString("utf8");
+    ? { status: "unreadable" }
+    : { status: "read", text: contents.toString("utf8") };
 }
 
 async function readBoundedFile(

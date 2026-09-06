@@ -842,6 +842,98 @@ oauth_host = "https://auth.kimi.ai"
     });
   });
 
+  it("never reads an assumed slot's emptiness as a sign-out", () => {
+    const fixture = isolatedFixture();
+    writeCredential(fixture, "kimi-code", "mainland-before-switch-742");
+
+    const fresh = runCli(
+      fixture,
+      ["--provider", "kimi", "--json", "--full"],
+      mockFetch(fixture, MAINLAND_USAGE_URL, "mainland-before-switch-742", 25),
+    );
+    expect(fresh.status).toBe(0);
+    expect(JSON.parse(fresh.stdout)).toMatchObject({
+      providers: [{ provider: "kimi", source: "api" }],
+    });
+
+    rmSync(join(fixture.kimiCodeHome, "credentials"), {
+      recursive: true,
+      force: true,
+    });
+    writeCredential(
+      fixture,
+      "kimi-code-env-synthetic00000014",
+      "global-after-switch-193",
+    );
+    mkdirSync(join(fixture.kimiCodeHome, "config.toml"), { recursive: true });
+
+    const unreadable = runCli(
+      fixture,
+      ["--provider", "kimi", "--json", "--full"],
+      recordingFetch(fixture),
+    );
+
+    expect(requestedOrigin(fixture)).toBeUndefined();
+    expect(unreadable.stdout).not.toContain("global-after-switch-193");
+    expect(JSON.parse(unreadable.stdout)).toMatchObject({
+      providers: [
+        {
+          provider: "kimi",
+          source: "cache",
+          windows: [{ id: "weekly", percentRemaining: 75 }],
+          state: {
+            status: "stale",
+            error: "kimi_code_cli_credential_unconfirmed",
+          },
+        },
+      ],
+    });
+    expect(cachedProviderIds(fixture)).toContain("kimi");
+  });
+
+  it("still reports a sign-out when a named slot's credential is gone", () => {
+    const fixture = isolatedFixture();
+    writeConfig(
+      fixture,
+      `[providers."managed:kimi-code".oauth]
+storage = "file"
+key = "oauth/kimi-code"
+`,
+    );
+    writeCredential(fixture, "kimi-code", "mainland-signed-out-508");
+
+    const fresh = runCli(
+      fixture,
+      ["--provider", "kimi", "--json", "--full"],
+      mockFetch(fixture, MAINLAND_USAGE_URL, "mainland-signed-out-508", 30),
+    );
+    expect(fresh.status).toBe(0);
+
+    rmSync(join(fixture.kimiCodeHome, "credentials"), {
+      recursive: true,
+      force: true,
+    });
+
+    const signedOut = runCli(
+      fixture,
+      ["--provider", "kimi", "--json", "--full"],
+      recordingFetch(fixture),
+    );
+
+    expect(signedOut.status).toBe(1);
+    expect(requestedOrigin(fixture)).toBeUndefined();
+    expect(JSON.parse(signedOut.stdout)).toMatchObject({
+      providers: [
+        {
+          provider: "kimi",
+          source: "unavailable",
+          state: { status: "auth_required" },
+        },
+      ],
+    });
+    expect(cachedProviderIds(fixture)).not.toContain("kimi");
+  });
+
   it("reads the managed provider's own table, not a similarly keyed service", () => {
     const fixture = isolatedFixture();
     writeConfig(
@@ -997,6 +1089,18 @@ function mockFetch(
     { mode: 0o600 },
   );
   return preload;
+}
+
+/** The providers the on-disk quota cache still holds a snapshot for. */
+function cachedProviderIds(fixture: IsolatedFixture): string[] {
+  const file = join(fixture.cacheHome, "quota-axi", "quotas.json");
+  if (!existsSync(file)) return [];
+  const payload = JSON.parse(readFileSync(file, "utf8")) as {
+    providers?: Array<{ provider?: string }>;
+  };
+  return (payload.providers ?? []).flatMap((provider) =>
+    provider.provider ? [provider.provider] : [],
+  );
 }
 
 /** Fails every usage request transiently, so only the cache can answer. */

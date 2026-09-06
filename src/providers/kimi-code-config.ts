@@ -46,8 +46,34 @@ const KIMI_REGION_PROFILES = [
 const PROVIDER_KEYS = ["base_url", "baseUrl"] as const;
 const OAUTH_KEYS = ["storage", "key", "oauth_host", "oauthHost"] as const;
 
+/**
+ * What the caller managed to obtain of `config.toml`. `absent` and `unreadable`
+ * take the same verdict but are not the same evidence: nothing exists to
+ * describe an environment in the first, and something does in the second.
+ */
+export type KimiCodeConfigSource =
+  | { status: "absent" }
+  | { status: "unreadable" }
+  | { status: "read"; text: string };
+
 export type KimiCodeEnvironment =
-  | { status: "resolved"; credentialFileName: string; baseUrl: string }
+  | {
+      status: "resolved";
+      credentialFileName: string;
+      baseUrl: string;
+      /**
+       * Whether the slot was named by evidence rather than assumed.
+       *
+       * It is false only when a configuration exists that this reader could not
+       * take in whole and that had not yet named a slot when it stopped. The
+       * distinction matters downstream because a negative from a guessed
+       * location is worth less than one from a known location: finding no file
+       * where a real OAuth pointer sent us is evidence the credential is gone,
+       * while finding none at a slot we merely assumed says only that our guess
+       * was not there. Callers must not turn the second into a sign-out.
+       */
+      confirmed: boolean;
+    }
   /** The token lives in an OS keyring, which quota-axi does not read. */
   | { status: "unsupported_storage" }
   /** The configured endpoints are not one of Kimi Code's own deployments. */
@@ -67,12 +93,16 @@ export type KimiCodeEnvironment =
  * the default deployment for the unsuffixed slot - see `assumedDeployment`.
  */
 export function resolveKimiCodeEnvironment(
-  configText: string | undefined,
+  source: KimiCodeConfigSource,
 ): KimiCodeEnvironment {
-  if (configText === undefined) return defaultEnvironment();
+  if (source.status !== "read") {
+    return defaultEnvironment(undefined, source.status === "absent");
+  }
 
-  const { provider, oauth } = scanConfig(configText);
-  if (oauth === undefined) return defaultEnvironment(provider?.base_url);
+  const { provider, oauth, complete } = scanConfig(source.text);
+  if (oauth === undefined) {
+    return defaultEnvironment(provider?.base_url, complete);
+  }
 
   const storage = oauth.storage ?? "file";
   if (storage !== "file") return { status: "unsupported_storage" };
@@ -81,11 +111,12 @@ export function resolveKimiCodeEnvironment(
     oauth.key ?? DEFAULT_OAUTH_KEY,
   );
   if (credentialFileName === undefined) return { status: "invalid_config" };
+  const confirmed = oauth.key !== undefined || complete;
 
   const baseUrl = provider?.base_url;
   const oauthHost = oauth.oauth_host;
   if (baseUrl === undefined && oauthHost === undefined) {
-    return assumedDeployment(credentialFileName);
+    return assumedDeployment(credentialFileName, confirmed);
   }
 
   const region = regionFor(baseUrl, oauthHost);
@@ -102,7 +133,12 @@ export function resolveKimiCodeEnvironment(
     return { status: "unrecognized_region" };
   }
 
-  return { status: "resolved", credentialFileName, baseUrl: region.baseUrl };
+  return {
+    status: "resolved",
+    credentialFileName,
+    baseUrl: region.baseUrl,
+    confirmed,
+  };
 }
 
 /**
@@ -116,12 +152,16 @@ export function resolveKimiCodeEnvironment(
  * logged in against - so there is no deployment to assume for it and no reading
  * worth guessing at. Saying so is the answer; picking a host is not.
  */
-function assumedDeployment(credentialFileName: string): KimiCodeEnvironment {
+function assumedDeployment(
+  credentialFileName: string,
+  confirmed: boolean,
+): KimiCodeEnvironment {
   if (!isDefaultSlot(credentialFileName)) return { status: "invalid_config" };
   return {
     status: "resolved",
     credentialFileName,
     baseUrl: DEFAULT_KIMI_CODE_BASE_URL,
+    confirmed,
   };
 }
 
@@ -160,7 +200,10 @@ function isDefaultDeployment(
   return region.baseUrl === DEFAULT_KIMI_CODE_BASE_URL;
 }
 
-function defaultEnvironment(baseUrl?: string): KimiCodeEnvironment {
+function defaultEnvironment(
+  baseUrl: string | undefined,
+  confirmed: boolean,
+): KimiCodeEnvironment {
   if (
     baseUrl !== undefined &&
     normalizeUrl(baseUrl) !== DEFAULT_KIMI_CODE_BASE_URL
@@ -171,6 +214,7 @@ function defaultEnvironment(baseUrl?: string): KimiCodeEnvironment {
     status: "resolved",
     credentialFileName: DEFAULT_CREDENTIAL_NAME,
     baseUrl: DEFAULT_KIMI_CODE_BASE_URL,
+    confirmed,
   };
 }
 
@@ -213,6 +257,8 @@ type ScannedTable = Record<string, string>;
 type ScannedConfig = {
   provider?: ScannedTable;
   oauth?: ScannedTable;
+  /** Whether the walk reached the end of the document. */
+  complete: boolean;
 };
 
 /**
@@ -227,7 +273,7 @@ type ScannedConfig = {
  * names none the default reading it has always had.
  */
 function scanConfig(text: string): ScannedConfig {
-  const scanned: ScannedConfig = {};
+  const scanned: ScannedConfig = { complete: true };
   let table: string[] = [];
   let index = 0;
 
@@ -259,6 +305,7 @@ function scanConfig(text: string): ScannedConfig {
       readKeyValue(table);
     }
   } catch {
+    scanned.complete = false;
     return scanned;
   }
 
