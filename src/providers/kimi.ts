@@ -238,9 +238,8 @@ async function acquireKimiQuota(
         continue;
       }
 
-      // One candidate per call keeps the declared source order authoritative:
-      // the shared loop orders stored-valid before stored-expired candidates,
-      // which must not reshuffle Pi ahead of, or behind, the Kimi CLI.
+      // One candidate per call keeps the declared source order authoritative.
+      // Stored-expired credentials remain in their source's fixed position.
       let report: ProviderQuota | undefined;
       const selection = await selectCredential(
         [
