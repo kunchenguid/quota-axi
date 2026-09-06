@@ -1349,10 +1349,23 @@ function broker(
   };
 }
 
+/**
+ * A resolved CLI credential always names the base URL its environment logged in
+ * against; these cases are about credential priority rather than about the
+ * environment, so they take the default deployment unless they say otherwise.
+ */
+type CliCredentialInput =
+  | { status: "available"; accessToken: string; baseUrl?: string }
+  | Exclude<KimiCodeCliCredentialResolution, { status: "available" }>;
+
 function cliCredentialSource(
-  resolution: KimiCodeCliCredentialResolution,
-  inspection: KimiCodeCliCredentialInspection = resolution.status,
+  input: CliCredentialInput,
+  inspection: KimiCodeCliCredentialInspection = input.status,
 ): KimiCodeCliCredentialSource {
+  const resolution: KimiCodeCliCredentialResolution =
+    input.status === "available"
+      ? { ...input, baseUrl: input.baseUrl ?? "https://api.kimi.com/coding/v1" }
+      : input;
   return {
     resolve: vi.fn(async () => resolution),
     inspect: vi.fn(async () => inspection),

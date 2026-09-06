@@ -19,16 +19,26 @@ import {
 import {
   createKimiCodeCliCredentialSource,
   KIMI_CODE_CLI_CREDENTIAL_SOURCE,
+  type KimiCodeCliCredentialInspection,
   type KimiCodeCliCredentialResolution,
   type KimiCodeCliCredentialSource,
 } from "./kimi-code-cli-credential.js";
+import {
+  DEFAULT_KIMI_CODE_BASE_URL,
+  kimiUsageUrl,
+} from "./kimi-code-config.js";
 import {
   createPiKimiCredentialBroker,
   type KimiCredentialBroker,
   type KimiCredentialResolution,
 } from "./pi-kimi-credential.js";
 
-const KIMI_QUOTA_URL = "https://api.kimi.com/coding/v1/usages";
+/**
+ * Pi brokers a Kimi credential without recording which Kimi deployment issued
+ * it, so its reading keeps the default endpoint. The Kimi Code CLI source knows
+ * its own environment and carries the matching URL with the token.
+ */
+const KIMI_QUOTA_URL = kimiUsageUrl(DEFAULT_KIMI_CODE_BASE_URL);
 const PI_KIMI_CREDENTIAL_SOURCE = "pi:kimi-coding";
 const OPERATION_DEADLINE_MS = 15_000;
 const RESPONSE_LIMIT_BYTES = 262_144;
@@ -138,7 +148,13 @@ export function createKimiAdapter(
             ? "kimi_code_cli_credential_invalid"
             : cliInspection === "expired"
               ? "kimi_code_cli_credential_expired"
-              : undefined;
+              : cliInspection === "unsupported_storage"
+                ? "kimi_code_cli_credential_storage_unsupported"
+                : cliInspection === "unrecognized_region"
+                  ? "kimi_code_cli_region_unrecognized"
+                  : cliInspection === "invalid_config"
+                    ? "kimi_code_cli_config_invalid"
+                    : undefined;
 
       return {
         provider: "kimi",
@@ -157,13 +173,32 @@ export function createKimiAdapter(
           },
           {
             source: KIMI_CODE_CLI_CREDENTIAL_SOURCE,
-            status: cliInspection === "error" ? "invalid" : cliInspection,
+            status: cliSourceStatus(cliInspection),
             ...(cliError ? { error: cliError } : {}),
           },
         ],
       };
     },
   };
+}
+
+/**
+ * An environment quota-axi could not read is reported as a skipped source, not
+ * as a broken credential: the store may hold a perfectly good token this reader
+ * simply does not reach.
+ */
+function cliSourceStatus(
+  inspection: KimiCodeCliCredentialInspection,
+): "available" | "missing" | "invalid" | "expired" | "skipped" {
+  if (inspection === "error") return "invalid";
+  if (
+    inspection === "unsupported_storage" ||
+    inspection === "unrecognized_region" ||
+    inspection === "invalid_config"
+  ) {
+    return "skipped";
+  }
+  return inspection;
 }
 
 export const kimiAdapter = createKimiAdapter();
@@ -191,6 +226,8 @@ type KimiCandidate =
   | {
       status: "available";
       credential: string;
+      /** The endpoint this credential was issued for; it travels with it. */
+      quotaUrl: string;
       /**
        * Stored-metadata classification only. A stored-expired credential is
        * still attempted in its source's declared position, and the request
@@ -254,6 +291,7 @@ async function acquireKimiQuota(
           try {
             report = await readKimiQuota(
               selected.credential,
+              candidate.quotaUrl,
               source,
               attempts,
               controller.signal,
@@ -320,6 +358,7 @@ async function resolveKimiCandidate(
       return {
         status: "available",
         credential: resolution.credential,
+        quotaUrl: KIMI_QUOTA_URL,
         localState: "valid",
       };
     }
@@ -330,6 +369,7 @@ async function resolveKimiCandidate(
       return {
         status: "available",
         credential: resolution.credential,
+        quotaUrl: KIMI_QUOTA_URL,
         localState: "expired",
       };
     }
@@ -353,13 +393,19 @@ async function resolveKimiCandidate(
     return {
       status: "available",
       credential: resolution.accessToken,
+      quotaUrl: kimiUsageUrl(resolution.baseUrl),
       localState: "valid",
     };
   }
-  if (resolution.status === "expired" && resolution.accessToken !== undefined) {
+  if (
+    resolution.status === "expired" &&
+    resolution.accessToken !== undefined &&
+    resolution.baseUrl !== undefined
+  ) {
     return {
       status: "available",
       credential: resolution.accessToken,
+      quotaUrl: kimiUsageUrl(resolution.baseUrl),
       localState: "expired",
     };
   }
@@ -380,6 +426,7 @@ function unavailableCandidate(
 
 async function readKimiQuota(
   credential: string,
+  quotaUrl: string,
   source: string,
   attempts: SourceAttempt[],
   signal: AbortSignal,
@@ -387,6 +434,7 @@ async function readKimiQuota(
 ): Promise<ProviderQuota> {
   const payload = await requestKimiQuota(
     credential,
+    quotaUrl,
     signal,
     dependencies.fetch,
     dependencies.now,
@@ -522,6 +570,27 @@ function cliCredentialFailureFor(
       staleEligible: true,
     });
   }
+  /**
+   * A credential quota-axi cannot read is not a credential the user does not
+   * have. These three say the store was described in a way this reader does not
+   * cover, so they stay non-definitive: they never assert a sign-out and never
+   * retire the cache.
+   */
+  if (resolution.status === "unsupported_storage") {
+    return new KimiFailure("kimi_code_cli_credential_storage_unsupported", {
+      staleEligible: true,
+    });
+  }
+  if (resolution.status === "unrecognized_region") {
+    return new KimiFailure("kimi_code_cli_region_unrecognized", {
+      staleEligible: true,
+    });
+  }
+  if (resolution.status === "invalid_config") {
+    return new KimiFailure("kimi_code_cli_config_invalid", {
+      staleEligible: true,
+    });
+  }
   return new KimiFailure("kimi_code_cli_credential_invalid", {
     status: "auth_required",
     definitiveAuth: true,
@@ -626,6 +695,7 @@ function staleKimiReport(
 
 async function requestKimiQuota(
   apiKey: string,
+  quotaUrl: string,
   signal: AbortSignal,
   fetchImplementation: typeof globalThis.fetch,
   now: () => number,
@@ -633,7 +703,7 @@ async function requestKimiQuota(
   let response: Response;
   try {
     response = await waitForDeadline(
-      fetchImplementation(KIMI_QUOTA_URL, {
+      fetchImplementation(quotaUrl, {
         method: "GET",
         headers: {
           Authorization: `Bearer ${apiKey}`,

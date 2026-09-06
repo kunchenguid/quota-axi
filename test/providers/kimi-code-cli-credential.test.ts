@@ -39,6 +39,7 @@ describe("Kimi Code CLI credential discovery", () => {
     await expect(source.resolve()).resolves.toEqual({
       status: "available",
       accessToken: "default-home-token",
+      baseUrl: "https://api.kimi.com/coding/v1",
     });
   });
 
@@ -61,6 +62,7 @@ describe("Kimi Code CLI credential discovery", () => {
     await expect(source.resolve()).resolves.toEqual({
       status: "available",
       accessToken: "override-token",
+      baseUrl: "https://api.kimi.com/coding/v1",
     });
   });
 
@@ -69,7 +71,10 @@ describe("Kimi Code CLI credential discovery", () => {
       payload?: unknown;
       raw?: string;
       status: "missing" | "invalid" | "expired";
-      /** Stored-expired resolutions carry the token so it can still be probed. */
+      /**
+       * Stored-expired resolutions carry the token, and the deployment it was
+       * issued for, so it can still be probed against its own environment.
+       */
       accessToken?: string;
     }> = [
       { status: "missing" },
@@ -110,7 +115,10 @@ describe("Kimi Code CLI credential discovery", () => {
         status: fixture.status,
         ...(fixture.accessToken === undefined
           ? {}
-          : { accessToken: fixture.accessToken }),
+          : {
+              accessToken: fixture.accessToken,
+              baseUrl: "https://api.kimi.com/coding/v1",
+            }),
       });
       await expect(source.inspect()).resolves.toBe(fixture.status);
     }
@@ -139,6 +147,7 @@ describe("Kimi Code CLI credential discovery", () => {
     await expect(source.resolve()).resolves.toEqual({
       status: "available",
       accessToken: "fresh-token",
+      baseUrl: "https://api.kimi.com/coding/v1",
     });
   });
 
