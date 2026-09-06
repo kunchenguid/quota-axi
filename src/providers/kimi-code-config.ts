@@ -29,9 +29,10 @@ const DEFAULT_CREDENTIAL_NAME = "kimi-code";
 
 /**
  * Kimi Code's own two deployments, transcribed from the region profile table
- * the CLI ships. An environment is accepted only when its OAuth host and API
- * base URL are one of these pairs, so a `config.toml` cannot point quota-axi's
- * bearer request at an origin Kimi does not serve.
+ * the CLI ships. An environment is accepted only when the endpoints it records
+ * belong to one of these profiles, and the request always goes to the profile's
+ * own base URL, so a `config.toml` cannot point quota-axi's bearer request at an
+ * origin Kimi does not serve.
  */
 const KIMI_REGION_PROFILES = [
   { oauthHost: DEFAULT_OAUTH_HOST, baseUrl: DEFAULT_KIMI_CODE_BASE_URL },
@@ -51,7 +52,7 @@ export type KimiCodeEnvironment =
   | { status: "unsupported_storage" }
   /** The configured endpoints are not one of Kimi Code's own deployments. */
   | { status: "unrecognized_region" }
-  /** `config.toml` was unreadable as configuration, or named an unusable slot. */
+  /** `config.toml` named a slot this reader must not open. */
   | { status: "invalid_config" };
 
 /**
@@ -59,20 +60,20 @@ export type KimiCodeEnvironment =
  * no OAuth reference. An absent file is the default too: a mainland-China login
  * persists the default key, so "no reference" and "the default reference" are
  * the same environment, and today's behaviour is preserved exactly.
+ *
+ * A document this reader cannot walk to the end resolves from whatever it did
+ * read before stopping, which for a file naming no reference before that point
+ * is the default slot on the default deployment. Refusing to read the
+ * credential over a construct like an unsupported TOML form would take a
+ * working mainland-China reading away, and the default slot is the one the CLI
+ * writes for the default deployment, so it is never a mismatched pair.
  */
 export function resolveKimiCodeEnvironment(
   configText: string | undefined,
 ): KimiCodeEnvironment {
   if (configText === undefined) return defaultEnvironment();
 
-  let config: ScannedConfig;
-  try {
-    config = scanConfig(configText);
-  } catch {
-    return { status: "invalid_config" };
-  }
-
-  const { provider, oauth } = config;
+  const { provider, oauth } = scanConfig(configText);
   if (oauth === undefined) return defaultEnvironment(provider?.base_url);
 
   const storage = oauth.storage ?? "file";
@@ -83,18 +84,50 @@ export function resolveKimiCodeEnvironment(
   );
   if (credentialFileName === undefined) return { status: "invalid_config" };
 
-  const baseUrl = normalizeUrl(
-    provider?.base_url ?? DEFAULT_KIMI_CODE_BASE_URL,
-  );
-  const oauthHost = normalizeUrl(oauth.oauth_host ?? DEFAULT_OAUTH_HOST);
-  const region = KIMI_REGION_PROFILES.find(
-    (profile) =>
-      normalizeUrl(profile.oauthHost) === oauthHost &&
-      normalizeUrl(profile.baseUrl) === baseUrl,
-  );
+  const region = regionFor(provider?.base_url, oauth.oauth_host);
   if (region === undefined) return { status: "unrecognized_region" };
+  /**
+   * The unsuffixed slot is the one Kimi Code derives for the default
+   * deployment, so a configuration that names it alongside another deployment
+   * describes no environment the CLI writes. Reading it would send that
+   * deployment's token to the other one's host.
+   */
+  if (
+    credentialFileName === DEFAULT_CREDENTIAL_NAME &&
+    region.baseUrl !== DEFAULT_KIMI_CODE_BASE_URL
+  ) {
+    return { status: "unrecognized_region" };
+  }
 
   return { status: "resolved", credentialFileName, baseUrl: region.baseUrl };
+}
+
+/**
+ * The deployment a configuration names, matched on whichever of the two
+ * endpoint fields it records. Kimi Code writes both, but a file that carries
+ * only one still identifies a deployment unambiguously, and the resolved base
+ * URL is taken from the profile rather than from the file either way - so a
+ * half-written record stays inside the same two-deployment allowlist instead of
+ * costing the user a reading.
+ */
+function regionFor(
+  baseUrl: string | undefined,
+  oauthHost: string | undefined,
+): (typeof KIMI_REGION_PROFILES)[number] | undefined {
+  if (baseUrl === undefined && oauthHost === undefined) {
+    return KIMI_REGION_PROFILES[0];
+  }
+  const wantedBaseUrl =
+    baseUrl === undefined ? undefined : normalizeUrl(baseUrl);
+  const wantedOauthHost =
+    oauthHost === undefined ? undefined : normalizeUrl(oauthHost);
+  return KIMI_REGION_PROFILES.find(
+    (profile) =>
+      (wantedBaseUrl === undefined ||
+        normalizeUrl(profile.baseUrl) === wantedBaseUrl) &&
+      (wantedOauthHost === undefined ||
+        normalizeUrl(profile.oauthHost) === wantedOauthHost),
+  );
 }
 
 function defaultEnvironment(baseUrl?: string): KimiCodeEnvironment {
@@ -158,8 +191,10 @@ type ScannedConfig = {
  * above. The provider's literal API key sits in the very table this reads, so
  * nothing outside that
  * whitelist is retained past the value that had to be stepped over to find the
- * next key. Anything it cannot parse raises, and the caller reports that rather
- * than guessing an environment.
+ * next key. A construct it cannot walk ends the scan where it stands and
+ * returns what was already read, so a form outside this reader's coverage
+ * cannot suppress a reference it had already seen, nor cost a document that
+ * names none the default reading it has always had.
  */
 function scanConfig(text: string): ScannedConfig {
   const scanned: ScannedConfig = {};
@@ -181,33 +216,20 @@ function scanConfig(text: string): ScannedConfig {
     }
   };
 
-  while (true) {
-    skipIgnorable();
-    if (atEnd()) break;
+  try {
+    while (true) {
+      skipIgnorable();
+      if (atEnd()) break;
 
-    if (text[index] === "[") {
-      table = readTableHeader();
-      continue;
-    }
-
-    const key = readKey();
-    skipInlineSpace();
-    if (text[index] !== "=") throw new Error("expected '='");
-    index += 1;
-    skipInlineSpace();
-    const value = readValue();
-
-    const target = tableFor(table);
-    if (target !== undefined && value !== undefined) {
-      const allowed =
-        target === "provider"
-          ? (PROVIDER_KEYS as readonly string[])
-          : (OAUTH_KEYS as readonly string[]);
-      if (allowed.includes(key)) {
-        const bucket = (scanned[target] ??= {});
-        bucket[canonicalKey(key)] = value;
+      if (text[index] === "[") {
+        table = readTableHeader();
+        continue;
       }
+
+      readKeyValue(table);
     }
+  } catch {
+    return scanned;
   }
 
   return scanned;
@@ -218,9 +240,35 @@ function scanConfig(text: string): ScannedConfig {
     return undefined;
   }
 
-  function readTableHeader(): string[] {
-    const arrayOfTables = text.startsWith("[[", index);
-    index += arrayOfTables ? 2 : 1;
+  /**
+   * One `key = value`, where the key may be a dotted path. TOML scopes such a
+   * path under the enclosing table, so the owning table is the prefix and only
+   * the last segment is the key - which is also how an `oauth.key` line under
+   * the managed provider's own table reaches the OAuth table.
+   */
+  function readKeyValue(prefix: string[]): void {
+    const path = readKeyPath();
+    skipInlineSpace();
+    if (text[index] !== "=") throw new Error("expected '='");
+    index += 1;
+    skipInlineSpace();
+    const key = path[path.length - 1];
+    const owner = [...prefix, ...path.slice(0, -1)];
+    const value = readValue([...owner, key]);
+    if (value === undefined) return;
+
+    const target = tableFor(owner);
+    if (target === undefined) return;
+    const allowed =
+      target === "provider"
+        ? (PROVIDER_KEYS as readonly string[])
+        : (OAUTH_KEYS as readonly string[]);
+    if (!allowed.includes(key)) return;
+    const bucket = (scanned[target] ??= {});
+    bucket[canonicalKey(key)] = value;
+  }
+
+  function readKeyPath(): string[] {
     const segments: string[] = [];
     while (true) {
       skipInlineSpace();
@@ -232,6 +280,13 @@ function scanConfig(text: string): ScannedConfig {
       }
       break;
     }
+    return segments;
+  }
+
+  function readTableHeader(): string[] {
+    const arrayOfTables = text.startsWith("[[", index);
+    index += arrayOfTables ? 2 : 1;
+    const segments = readKeyPath();
     const closing = arrayOfTables ? "]]" : "]";
     if (!text.startsWith(closing, index)) throw new Error("unterminated table");
     index += closing.length;
@@ -247,8 +302,13 @@ function scanConfig(text: string): ScannedConfig {
     return text.slice(start, index);
   }
 
-  /** Consumes a value entirely; returns it only when it is a plain string. */
-  function readValue(): string | undefined {
+  /**
+   * Consumes a value entirely; returns it only when it is a plain string. An
+   * inline table is a table like any other, so its own keys are scanned under
+   * the path that names it rather than stepped over - a reference written
+   * inline carries exactly the same weight as one written as a table header.
+   */
+  function readValue(path: string[]): string | undefined {
     const char = text[index];
     if (char === '"' || char === "'") return readString();
     if (char === "[") {
@@ -256,13 +316,30 @@ function scanConfig(text: string): ScannedConfig {
       return undefined;
     }
     if (char === "{") {
-      readCollection("{", "}");
+      readInlineTable(path);
       return undefined;
     }
     const start = index;
     while (!atEnd() && !"\n#,]}".includes(text[index])) index += 1;
     if (index === start) throw new Error("expected a value");
     return text.slice(start, index).trim();
+  }
+
+  function readInlineTable(prefix: string[]): void {
+    index += 1;
+    while (true) {
+      skipIgnorable();
+      if (atEnd()) throw new Error("unterminated inline table");
+      if (text[index] === "}") {
+        index += 1;
+        return;
+      }
+      if (text[index] === ",") {
+        index += 1;
+        continue;
+      }
+      readKeyValue(prefix);
+    }
   }
 
   function readCollection(open: string, close: string): void {

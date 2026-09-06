@@ -3,6 +3,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -318,15 +319,296 @@ oauth_host = "https://auth.kimi.ai"
     });
   });
 
-  it("has no credential-write, process-launch, or network surface", () => {
-    const implementation = readFileSync(
-      new URL("../src/providers/kimi-code-config.ts", import.meta.url),
-      "utf8",
+  it("leaves the Kimi Code home untouched by a successful reading", () => {
+    const fixture = isolatedFixture();
+    writeConfig(
+      fixture,
+      `[providers."managed:kimi-code"]
+base_url = "https://api.kimi.ai/coding/v1"
+
+[providers."managed:kimi-code".oauth]
+storage = "file"
+key = "oauth/kimi-code-env-synthetic00000005"
+oauth_host = "https://auth.kimi.ai"
+`,
+    );
+    writeCredential(
+      fixture,
+      "kimi-code-env-synthetic00000005",
+      "read-only-token-471",
+    );
+    const before = snapshotTree(fixture.kimiCodeHome);
+    const preload = mockFetch(
+      fixture,
+      GLOBAL_USAGE_URL,
+      "read-only-token-471",
+      35,
     );
 
-    expect(implementation).not.toMatch(
-      /node:child_process|node:https?|\b(?:spawn|execFile|fetch|writeFile|mkdir|rename|unlink)\b|access_token|refresh_token|api_key/,
+    const result = runCli(
+      fixture,
+      ["--provider", "kimi", "--json", "--full"],
+      preload,
     );
+
+    expect(result.status).toBe(0);
+    expect(snapshotTree(fixture.kimiCodeHome)).toEqual(before);
+    expect(result.stdout).not.toContain("read-only-token-471");
+    expect(result.stdout).not.toContain("ignored-refresh-for");
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      providers: [
+        {
+          provider: "kimi",
+          source: "api",
+          windows: [{ id: "weekly", percentRemaining: 65 }],
+        },
+      ],
+    });
+  });
+
+  it("reads a slot named by dotted keys beside an unrelated dotted key", () => {
+    const fixture = isolatedFixture();
+    writeConfig(
+      fixture,
+      `default.model = "k2"
+default.thinking = true
+
+[providers."managed:kimi-code"]
+base_url = "https://api.kimi.ai/coding/v1"
+oauth.storage = "file"
+oauth.key = "oauth/kimi-code-env-synthetic00000006"
+oauth.oauth_host = "https://auth.kimi.ai"
+`,
+    );
+    writeCredential(
+      fixture,
+      "kimi-code-env-synthetic00000006",
+      "dotted-key-token-283",
+    );
+    const preload = mockFetch(
+      fixture,
+      GLOBAL_USAGE_URL,
+      "dotted-key-token-283",
+      45,
+    );
+
+    const result = runCli(
+      fixture,
+      ["--provider", "kimi", "--json", "--full"],
+      preload,
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).not.toContain("dotted-key-token-283");
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      providers: [
+        {
+          provider: "kimi",
+          source: "api",
+          windows: [{ id: "weekly", percentRemaining: 55 }],
+        },
+      ],
+    });
+  });
+
+  it("honors an inline OAuth table's storage guard instead of defaulting", () => {
+    const fixture = isolatedFixture();
+    writeConfig(
+      fixture,
+      `[providers."managed:kimi-code"]
+oauth = { storage = "keyring", key = "oauth/kimi-code-env-synthetic00000007" }
+`,
+    );
+    writeCredential(fixture, "kimi-code", "contradicted-slot-token-604");
+    const preload = recordingFetch(fixture);
+
+    const result = runCli(
+      fixture,
+      ["auth", "--provider", "kimi", "--json", "--full"],
+      preload,
+    );
+
+    expect(result.status).toBe(0);
+    expect(existsSync(join(fixture.root, "fetch-was-called"))).toBe(false);
+    expect(result.stdout).not.toContain("contradicted-slot-token-604");
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      auth: [
+        {
+          provider: "kimi",
+          sources: [
+            { source: "pi:kimi-coding", status: "missing" },
+            {
+              source: "kimi-code-cli",
+              status: "skipped",
+              error: "kimi_code_cli_credential_storage_unsupported",
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("reads the slot an inline OAuth table names", () => {
+    const fixture = isolatedFixture();
+    writeConfig(
+      fixture,
+      `[providers."managed:kimi-code"]
+base_url = "https://api.kimi.ai/coding/v1"
+oauth = { storage = "file", key = "oauth/kimi-code-env-synthetic00000008", oauth_host = "https://auth.kimi.ai" }
+`,
+    );
+    writeCredential(
+      fixture,
+      "kimi-code-env-synthetic00000008",
+      "inline-table-token-119",
+    );
+    const preload = mockFetch(
+      fixture,
+      GLOBAL_USAGE_URL,
+      "inline-table-token-119",
+      50,
+    );
+
+    const result = runCli(
+      fixture,
+      ["--provider", "kimi", "--json", "--full"],
+      preload,
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).not.toContain("inline-table-token-119");
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      providers: [
+        {
+          provider: "kimi",
+          source: "api",
+          windows: [{ id: "weekly", percentRemaining: 50 }],
+        },
+      ],
+    });
+  });
+
+  it("resolves a deployment from the single endpoint a config records", () => {
+    const fixture = isolatedFixture();
+    writeConfig(
+      fixture,
+      `[providers."managed:kimi-code".oauth]
+storage = "file"
+key = "oauth/kimi-code-env-synthetic00000009"
+oauth_host = "https://auth.kimi.ai"
+`,
+    );
+    writeCredential(
+      fixture,
+      "kimi-code-env-synthetic00000009",
+      "half-specified-token-762",
+    );
+    const preload = mockFetch(
+      fixture,
+      GLOBAL_USAGE_URL,
+      "half-specified-token-762",
+      15,
+    );
+
+    const result = runCli(
+      fixture,
+      ["--provider", "kimi", "--json", "--full"],
+      preload,
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).not.toContain("half-specified-token-762");
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      providers: [
+        {
+          provider: "kimi",
+          source: "api",
+          windows: [{ id: "weekly", percentRemaining: 85 }],
+        },
+      ],
+    });
+  });
+
+  it("never pairs the default slot with the other deployment's host", () => {
+    const fixture = isolatedFixture();
+    writeConfig(
+      fixture,
+      `[providers."managed:kimi-code"]
+base_url = "https://api.kimi.ai/coding/v1"
+
+[providers."managed:kimi-code".oauth]
+storage = "file"
+key = "oauth/kimi-code"
+oauth_host = "https://auth.kimi.ai"
+`,
+    );
+    writeCredential(fixture, "kimi-code", "mainland-only-token-355");
+    const preload = recordingFetch(fixture);
+
+    const result = runCli(
+      fixture,
+      ["auth", "--provider", "kimi", "--json", "--full"],
+      preload,
+    );
+
+    expect(result.status).toBe(0);
+    expect(existsSync(join(fixture.root, "fetch-was-called"))).toBe(false);
+    expect(result.stdout).not.toContain("mainland-only-token-355");
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      auth: [
+        {
+          provider: "kimi",
+          sources: [
+            { source: "pi:kimi-coding", status: "missing" },
+            {
+              source: "kimi-code-cli",
+              status: "skipped",
+              error: "kimi_code_cli_region_unrecognized",
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("keeps the default reading when the config stops being readable", () => {
+    const fixture = isolatedFixture();
+    writeConfig(
+      fixture,
+      `[providers."managed:kimi-code"]
+type = "kimi"
+notes = "this quote is never closed
+
+[providers."managed:kimi-code".oauth]
+storage = "file"
+key = "oauth/kimi-code"
+`,
+    );
+    writeCredential(fixture, "kimi-code", "unparsed-fallback-token-908");
+    const preload = mockFetch(
+      fixture,
+      MAINLAND_USAGE_URL,
+      "unparsed-fallback-token-908",
+      30,
+    );
+
+    const result = runCli(
+      fixture,
+      ["--provider", "kimi", "--json", "--full"],
+      preload,
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).not.toContain("unparsed-fallback-token-908");
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      providers: [
+        {
+          provider: "kimi",
+          source: "api",
+          windows: [{ id: "weekly", percentRemaining: 70 }],
+        },
+      ],
+    });
   });
 
   it("refuses a configured slot key that would leave the credentials directory", () => {
@@ -471,6 +753,25 @@ function writeCredential(
     }),
     { mode: 0o600 },
   );
+}
+
+/**
+ * Every file under a directory with its exact bytes, so a comparison across a
+ * read proves nothing was created, rewritten, or rotated in the store.
+ */
+function snapshotTree(directory: string): Record<string, string> {
+  const snapshot: Record<string, string> = {};
+  const walk = (relative: string): void => {
+    for (const entry of readdirSync(join(directory, relative), {
+      withFileTypes: true,
+    })) {
+      const path = relative ? join(relative, entry.name) : entry.name;
+      if (entry.isDirectory()) walk(path);
+      else snapshot[path] = readFileSync(join(directory, path), "utf8");
+    }
+  };
+  walk("");
+  return snapshot;
 }
 
 /** Answers one usage request, and only when origin and bearer both match. */

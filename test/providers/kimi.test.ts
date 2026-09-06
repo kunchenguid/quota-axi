@@ -1292,6 +1292,45 @@ describe("Kimi credential outcomes and cache policy", () => {
     });
   });
 
+  it("preserves stale cache for a CLI environment it cannot read", async () => {
+    const unreadableEnvironments = [
+      ["unsupported_storage", "kimi_code_cli_credential_storage_unsupported"],
+      ["unrecognized_region", "kimi_code_cli_region_unrecognized"],
+      ["invalid_config", "kimi_code_cli_config_invalid"],
+    ] as const;
+
+    for (const [status, error] of unreadableEnvironments) {
+      const remove = vi.fn();
+      const report = await testAdapter({
+        broker: broker({ status: "missing" }),
+        cliCredentialSource: cliCredentialSource({ status }),
+        readCachedProvider: () => cachedQuota(),
+        deleteCachedProvider: remove,
+      }).fetchQuota(OPTIONS);
+
+      expect(remove).not.toHaveBeenCalled();
+      expect(report).toMatchObject({
+        source: "cache",
+        windows: [{ id: "five_hour" }, { id: "weekly" }],
+        state: {
+          status: "stale",
+          stale: true,
+          error,
+          sourcesTried: ["pi:kimi-coding", "kimi-code-cli", "cache"],
+        },
+        attempts: [
+          { source: "pi:kimi-coding", status: "skipped" },
+          {
+            source: "kimi-code-cli",
+            status: "skipped",
+            error,
+            credentialPresent: true,
+          },
+        ],
+      });
+    }
+  });
+
   it("never exposes a sentinel credential through reports or attempts", async () => {
     const sentinel = "KIMI-SENTINEL-DO-NOT-LEAK-938475";
     const report = await testAdapter({
