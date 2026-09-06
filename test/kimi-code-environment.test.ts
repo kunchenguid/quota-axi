@@ -223,25 +223,23 @@ oauth_host = "https://quota-axi-should-never-reach-this.invalid"
 
     const result = runCli(
       fixture,
-      ["auth", "--provider", "kimi", "--json", "--full"],
+      ["--provider", "kimi", "--json", "--full"],
       preload,
     );
 
-    expect(result.status).toBe(0);
-    expect(existsSync(join(fixture.root, "fetch-was-called"))).toBe(false);
+    expect(result.status).toBe(1);
+    expect(requestedOrigin(fixture)).toBeUndefined();
     expect(result.stdout).not.toContain("must-not-leave-830");
     expect(JSON.parse(result.stdout)).toMatchObject({
-      auth: [
+      providers: [
         {
           provider: "kimi",
-          sources: [
-            { source: "pi:kimi-coding", status: "missing" },
-            {
-              source: "kimi-code-cli",
-              status: "skipped",
-              error: "kimi_code_cli_region_unrecognized",
-            },
-          ],
+          source: "unavailable",
+          windows: [],
+          state: {
+            status: "error",
+            error: "kimi_code_cli_region_unrecognized",
+          },
         },
       ],
     });
@@ -265,7 +263,6 @@ key = "oauth/kimi-code"
     );
 
     expect(result.status).toBe(0);
-    expect(existsSync(join(fixture.root, "fetch-was-called"))).toBe(false);
     expect(JSON.parse(result.stdout)).toMatchObject({
       auth: [
         {
@@ -305,7 +302,6 @@ oauth_host = "https://auth.kimi.ai"
     );
 
     expect(result.status).toBe(0);
-    expect(existsSync(join(fixture.root, "fetch-was-called"))).toBe(false);
     expect(JSON.parse(result.stdout)).toMatchObject({
       auth: [
         {
@@ -424,25 +420,19 @@ oauth = { storage = "keyring", key = "oauth/kimi-code-env-synthetic00000007" }
 
     const result = runCli(
       fixture,
-      ["auth", "--provider", "kimi", "--json", "--full"],
+      ["--provider", "kimi", "--json", "--full"],
       preload,
     );
 
-    expect(result.status).toBe(0);
-    expect(existsSync(join(fixture.root, "fetch-was-called"))).toBe(false);
+    expect(result.status).toBe(1);
+    expect(requestedOrigin(fixture)).toBeUndefined();
     expect(result.stdout).not.toContain("contradicted-slot-token-604");
     expect(JSON.parse(result.stdout)).toMatchObject({
-      auth: [
+      providers: [
         {
           provider: "kimi",
-          sources: [
-            { source: "pi:kimi-coding", status: "missing" },
-            {
-              source: "kimi-code-cli",
-              status: "skipped",
-              error: "kimi_code_cli_credential_storage_unsupported",
-            },
-          ],
+          source: "unavailable",
+          state: { error: "kimi_code_cli_credential_storage_unsupported" },
         },
       ],
     });
@@ -547,25 +537,136 @@ oauth_host = "https://auth.kimi.ai"
 
     const result = runCli(
       fixture,
-      ["auth", "--provider", "kimi", "--json", "--full"],
+      ["--provider", "kimi", "--json", "--full"],
       preload,
     );
 
-    expect(result.status).toBe(0);
-    expect(existsSync(join(fixture.root, "fetch-was-called"))).toBe(false);
+    expect(result.status).toBe(1);
+    expect(requestedOrigin(fixture)).toBeUndefined();
     expect(result.stdout).not.toContain("mainland-only-token-355");
     expect(JSON.parse(result.stdout)).toMatchObject({
-      auth: [
+      providers: [
         {
           provider: "kimi",
-          sources: [
-            { source: "pi:kimi-coding", status: "missing" },
-            {
-              source: "kimi-code-cli",
-              status: "skipped",
-              error: "kimi_code_cli_region_unrecognized",
-            },
-          ],
+          source: "unavailable",
+          state: { error: "kimi_code_cli_region_unrecognized" },
+        },
+      ],
+    });
+  });
+
+  it("never pairs a suffixed slot with the default deployment's host", () => {
+    const fixture = isolatedFixture();
+    writeConfig(
+      fixture,
+      `[providers."managed:kimi-code"]
+base_url = "https://api.kimi.com/coding/v1"
+
+[providers."managed:kimi-code".oauth]
+storage = "file"
+key = "oauth/kimi-code-env-synthetic00000010"
+oauth_host = "https://auth.kimi.com"
+`,
+    );
+    writeCredential(
+      fixture,
+      "kimi-code-env-synthetic00000010",
+      "global-only-token-287",
+    );
+    const preload = recordingFetch(fixture);
+
+    const result = runCli(
+      fixture,
+      ["--provider", "kimi", "--json", "--full"],
+      preload,
+    );
+
+    expect(result.status).toBe(1);
+    expect(requestedOrigin(fixture)).toBeUndefined();
+    expect(result.stdout).not.toContain("global-only-token-287");
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      providers: [
+        {
+          provider: "kimi",
+          source: "unavailable",
+          state: { error: "kimi_code_cli_region_unrecognized" },
+        },
+      ],
+    });
+  });
+
+  it("assumes no deployment for a suffixed slot that records no endpoint", () => {
+    const fixture = isolatedFixture();
+    writeConfig(
+      fixture,
+      `[providers."managed:kimi-code".oauth]
+storage = "file"
+key = "oauth/kimi-code-env-synthetic00000011"
+`,
+    );
+    writeCredential(
+      fixture,
+      "kimi-code-env-synthetic00000011",
+      "unplaceable-token-640",
+    );
+    const preload = recordingFetch(fixture);
+
+    const result = runCli(
+      fixture,
+      ["--provider", "kimi", "--json", "--full"],
+      preload,
+    );
+
+    expect(result.status).toBe(1);
+    expect(requestedOrigin(fixture)).toBeUndefined();
+    expect(result.stdout).not.toContain("unplaceable-token-640");
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      providers: [
+        {
+          provider: "kimi",
+          source: "unavailable",
+          state: { error: "kimi_code_cli_config_invalid" },
+        },
+      ],
+    });
+  });
+
+  it("assumes no deployment when the scan stops before a suffixed slot's endpoints", () => {
+    const fixture = isolatedFixture();
+    writeConfig(
+      fixture,
+      `[providers."managed:kimi-code".oauth]
+storage = "file"
+key = "oauth/kimi-code-env-synthetic00000012"
+note = "C:\\Users\\x"
+oauth_host = "https://auth.kimi.ai"
+
+[providers."managed:kimi-code"]
+base_url = "https://api.kimi.ai/coding/v1"
+`,
+    );
+    writeCredential(
+      fixture,
+      "kimi-code-env-synthetic00000012",
+      "partial-scan-token-733",
+    );
+    const preload = recordingFetch(fixture);
+
+    const result = runCli(
+      fixture,
+      ["--provider", "kimi", "--json", "--full"],
+      preload,
+    );
+
+    expect(result.status).toBe(1);
+    expect(requestedOrigin(fixture)).toBeUndefined();
+    expect(result.stdout).not.toContain("partial-scan-token-733");
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      providers: [
+        {
+          provider: "kimi",
+          source: "unavailable",
+          state: { error: "kimi_code_cli_config_invalid" },
         },
       ],
     });
@@ -629,7 +730,6 @@ key = "oauth/../../escaped"
     );
 
     expect(result.status).toBe(0);
-    expect(existsSync(join(fixture.root, "fetch-was-called"))).toBe(false);
     expect(JSON.parse(result.stdout)).toMatchObject({
       auth: [
         {
@@ -802,6 +902,12 @@ function mockFetch(
     { mode: 0o600 },
   );
   return preload;
+}
+
+/** The origin `recordingFetch` captured, or undefined when none was requested. */
+function requestedOrigin(fixture: IsolatedFixture): string | undefined {
+  const record = join(fixture.root, "fetch-was-called");
+  return existsSync(record) ? readFileSync(record, "utf8") : undefined;
 }
 
 /** Records that a request happened at all, for the cases where none may. */

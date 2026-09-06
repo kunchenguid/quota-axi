@@ -62,11 +62,9 @@ export type KimiCodeEnvironment =
  * the same environment, and today's behaviour is preserved exactly.
  *
  * A document this reader cannot walk to the end resolves from whatever it did
- * read before stopping, which for a file naming no reference before that point
- * is the default slot on the default deployment. Refusing to read the
- * credential over a construct like an unsupported TOML form would take a
- * working mainland-China reading away, and the default slot is the one the CLI
- * writes for the default deployment, so it is never a mismatched pair.
+ * read before stopping, so an unsupported TOML construct never withdraws a
+ * reading the default slot already supported. That silence is only ever read as
+ * the default deployment for the unsuffixed slot - see `assumedDeployment`.
  */
 export function resolveKimiCodeEnvironment(
   configText: string | undefined,
@@ -84,22 +82,47 @@ export function resolveKimiCodeEnvironment(
   );
   if (credentialFileName === undefined) return { status: "invalid_config" };
 
-  const region = regionFor(provider?.base_url, oauth.oauth_host);
+  const baseUrl = provider?.base_url;
+  const oauthHost = oauth.oauth_host;
+  if (baseUrl === undefined && oauthHost === undefined) {
+    return assumedDeployment(credentialFileName);
+  }
+
+  const region = regionFor(baseUrl, oauthHost);
   if (region === undefined) return { status: "unrecognized_region" };
   /**
-   * The unsuffixed slot is the one Kimi Code derives for the default
-   * deployment, so a configuration that names it alongside another deployment
-   * describes no environment the CLI writes. Reading it would send that
-   * deployment's token to the other one's host.
+   * The slot and the deployment identify each other: Kimi Code derives the
+   * unsuffixed slot for the default deployment and a suffixed one for every
+   * other, so either half appearing with the other's counterpart describes no
+   * environment the CLI writes. Reading it would send one deployment's token to
+   * the other one's host, which is the whole failure this module exists to
+   * prevent, so the check runs in both directions.
    */
-  if (
-    credentialFileName === DEFAULT_CREDENTIAL_NAME &&
-    region.baseUrl !== DEFAULT_KIMI_CODE_BASE_URL
-  ) {
+  if (isDefaultSlot(credentialFileName) !== isDefaultDeployment(region)) {
     return { status: "unrecognized_region" };
   }
 
   return { status: "resolved", credentialFileName, baseUrl: region.baseUrl };
+}
+
+/**
+ * The deployment to read for a configuration that records no endpoint at all.
+ *
+ * Assuming one is legitimate for the unsuffixed slot and for nothing else. Kimi
+ * Code writes `kimi-code.json` only for the default deployment, so that slot and
+ * the default base URL are a matching pair by construction, and a mainland-China
+ * user keeps the reading they have always had. A suffixed slot carries the
+ * opposite guarantee - it exists only because some non-default deployment was
+ * logged in against - so there is no deployment to assume for it and no reading
+ * worth guessing at. Saying so is the answer; picking a host is not.
+ */
+function assumedDeployment(credentialFileName: string): KimiCodeEnvironment {
+  if (!isDefaultSlot(credentialFileName)) return { status: "invalid_config" };
+  return {
+    status: "resolved",
+    credentialFileName,
+    baseUrl: DEFAULT_KIMI_CODE_BASE_URL,
+  };
 }
 
 /**
@@ -114,9 +137,6 @@ function regionFor(
   baseUrl: string | undefined,
   oauthHost: string | undefined,
 ): (typeof KIMI_REGION_PROFILES)[number] | undefined {
-  if (baseUrl === undefined && oauthHost === undefined) {
-    return KIMI_REGION_PROFILES[0];
-  }
   const wantedBaseUrl =
     baseUrl === undefined ? undefined : normalizeUrl(baseUrl);
   const wantedOauthHost =
@@ -128,6 +148,16 @@ function regionFor(
       (wantedOauthHost === undefined ||
         normalizeUrl(profile.oauthHost) === wantedOauthHost),
   );
+}
+
+function isDefaultSlot(credentialFileName: string): boolean {
+  return credentialFileName === DEFAULT_CREDENTIAL_NAME;
+}
+
+function isDefaultDeployment(
+  region: (typeof KIMI_REGION_PROFILES)[number],
+): boolean {
+  return region.baseUrl === DEFAULT_KIMI_CODE_BASE_URL;
 }
 
 function defaultEnvironment(baseUrl?: string): KimiCodeEnvironment {
