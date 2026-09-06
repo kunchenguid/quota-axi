@@ -5,7 +5,7 @@ import {
   ensurePrivateParent,
   readJsonFile,
 } from "./lib/fs.js";
-import { kimiCredentialContextId } from "./providers/kimi-code-cli-credential.js";
+import { selectedKimiCodeContextId } from "./providers/kimi-code-cli-credential.js";
 import type {
   ProviderId,
   ProviderQuota,
@@ -50,10 +50,22 @@ const CREDENTIAL_CONTEXT_ID = /^[a-f0-9]{64}$/;
  * `config.toml` selects the deployment. A snapshot from one such context says
  * nothing about another, so each is stamped on write and required to match on
  * stale reuse.
+ *
+ * How that stamp is obtained is not the same question for both. A Claude
+ * profile is fixed by this process's own environment, so deriving it here reads
+ * the same selection the reading used. A Kimi Code environment is not: Kimi
+ * Code rewrites `config.toml` on login, so a read taken here - after the quota
+ * request has already returned - can describe a deployment the numbers never
+ * came from and would file them under its identity. Kimi therefore reports the
+ * environment its reading was actually taken under, and a run that selected
+ * none leaves the snapshot unstamped, which only ever costs a later stale
+ * reuse.
  */
-const CONTEXT_SCOPED_PROVIDERS: Partial<Record<ProviderId, () => string>> = {
+const CONTEXT_SCOPED_PROVIDERS: Partial<
+  Record<ProviderId, () => string | undefined>
+> = {
   claude: claudeCredentialContextId,
-  kimi: kimiCredentialContextId,
+  kimi: selectedKimiCodeContextId,
 };
 
 type CachedProvider = {

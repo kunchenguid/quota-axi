@@ -19,10 +19,10 @@ import {
 import {
   createKimiCodeCliCredentialSource,
   KIMI_CODE_CLI_CREDENTIAL_SOURCE,
-  kimiCredentialContextId,
   type KimiCodeCliCredentialInspection,
   type KimiCodeCliCredentialResolution,
   type KimiCodeCliCredentialSource,
+  type KimiCodeSelection,
 } from "./kimi-code-cli-credential.js";
 import {
   DEFAULT_KIMI_CODE_BASE_URL,
@@ -70,7 +70,6 @@ type KimiDependencies = {
   fetch: typeof globalThis.fetch;
   readCachedProvider: typeof readCachedProviderFromDisk;
   deleteCachedProvider: typeof deleteCachedProviderFromDisk;
-  credentialContextId: typeof kimiCredentialContextId;
   now: () => number;
   deadlineMs: number;
 };
@@ -102,7 +101,6 @@ export function createKimiAdapter(
     fetch: globalThis.fetch,
     readCachedProvider: readCachedProviderFromDisk,
     deleteCachedProvider: deleteCachedProviderFromDisk,
-    credentialContextId: kimiCredentialContextId,
     now: Date.now,
     deadlineMs: OPERATION_DEADLINE_MS,
     ...overrides,
@@ -157,7 +155,7 @@ export function createKimiAdapter(
                   ? "kimi_code_cli_region_unrecognized"
                   : cliInspection === "invalid_config"
                     ? "kimi_code_cli_config_invalid"
-                    : cliInspection === "missing_unconfirmed"
+                    : cliInspection === "environment_unconfirmed"
                       ? "kimi_code_cli_credential_unconfirmed"
                       : undefined;
 
@@ -200,7 +198,7 @@ function cliSourceStatus(
     inspection === "unsupported_storage" ||
     inspection === "unrecognized_region" ||
     inspection === "invalid_config" ||
-    inspection === "missing_unconfirmed"
+    inspection === "environment_unconfirmed"
   ) {
     return "skipped";
   }
@@ -258,11 +256,21 @@ async function acquireKimiQuota(
   );
   const attempts: SourceAttempt[] = [];
   const failures: KimiFailureRecord[] = [];
+  /**
+   * One reading of the Kimi Code environment for the whole run, taken before
+   * any request. Everything this run derives from that file - the slot, its
+   * host, and the cache identity of the numbers that come back - has to come
+   * from the same reading, because the file can be rewritten by a login at any
+   * point and a later reading would describe an environment these numbers never
+   * came from.
+   */
+  const selection = await selectKimiEnvironment(dependencies);
 
   try {
     for (const source of KIMI_SOURCE_ORDER) {
       const candidate = await resolveKimiCandidate(
         source,
+        selection,
         dependencies,
         controller.signal,
       );
@@ -284,7 +292,7 @@ async function acquireKimiQuota(
       // One candidate per call keeps the declared source order authoritative.
       // Stored-expired credentials remain in their source's fixed position.
       let report: ProviderQuota | undefined;
-      const selection = await selectCredential(
+      const credentialSelection = await selectCredential(
         [
           {
             source,
@@ -318,15 +326,23 @@ async function acquireKimiQuota(
           }
         },
       );
-      if (selection.outcome === "quota" && report) return report;
+      if (credentialSelection.outcome === "quota" && report) return report;
       // Handover on credential problems only: a transport, decoding, or
       // server failure is about the request, so it is reported as-is.
-      if (selection.outcome !== "all_rejected" || controller.signal.aborted) {
+      if (
+        credentialSelection.outcome !== "all_rejected" ||
+        controller.signal.aborted
+      ) {
         break;
       }
     }
 
-    return failureReport(definingFailure(failures), attempts, dependencies);
+    return failureReport(
+      definingFailure(failures),
+      attempts,
+      selection,
+      dependencies,
+    );
   } catch (error) {
     const failure = asKimiFailure(error);
     if (attempts.length === 0) {
@@ -342,14 +358,30 @@ async function acquireKimiQuota(
         error: failure.code,
       };
     }
-    return failureReport(failure, attempts, dependencies);
+    return failureReport(failure, attempts, selection, dependencies);
   } finally {
     clearTimeout(deadline);
   }
 }
 
+/**
+ * A run that cannot read the environment at all still reports through the Pi
+ * source; it simply has no cache identity to reuse or to stamp, which is the
+ * only answer that cannot attribute one deployment's numbers to another.
+ */
+async function selectKimiEnvironment(
+  dependencies: KimiDependencies,
+): Promise<KimiCodeSelection | undefined> {
+  try {
+    return await dependencies.cliCredentialSource.select();
+  } catch {
+    return undefined;
+  }
+}
+
 async function resolveKimiCandidate(
   source: (typeof KIMI_SOURCE_ORDER)[number],
+  selection: KimiCodeSelection | undefined,
   dependencies: KimiDependencies,
   signal: AbortSignal,
 ): Promise<KimiCandidate> {
@@ -386,10 +418,18 @@ async function resolveKimiCandidate(
     );
   }
 
+  if (!selection) {
+    return unavailableCandidate(
+      new KimiFailure("credential_resolution_failed", { staleEligible: true }),
+      "failed",
+      false,
+    );
+  }
   let resolution: KimiCodeCliCredentialResolution;
   try {
     resolution = await resolveCliCredential(
       dependencies.cliCredentialSource,
+      selection,
       signal,
     );
   } catch (error) {
@@ -419,7 +459,7 @@ async function resolveKimiCandidate(
     cliCredentialFailureFor(resolution),
     resolution.status === "error" ? "failed" : "skipped",
     resolution.status !== "missing" &&
-      resolution.status !== "missing_unconfirmed",
+      resolution.status !== "environment_unconfirmed",
   );
 }
 
@@ -508,10 +548,11 @@ async function resolveCredential(
 
 async function resolveCliCredential(
   source: KimiCodeCliCredentialSource,
+  selection: KimiCodeSelection,
   signal: AbortSignal,
 ): Promise<KimiCodeCliCredentialResolution> {
   try {
-    return await waitForDeadline(source.resolve(), signal);
+    return await waitForDeadline(source.resolve(selection), signal);
   } catch (error) {
     if (error instanceof KimiFailure) throw error;
     throw new KimiFailure("credential_resolution_failed", {
@@ -599,12 +640,12 @@ function cliCredentialFailureFor(
     });
   }
   /**
-   * Nothing at an assumed slot is not a credential the user does not have: the
-   * guess, not the account, is what came back empty. Asserting a sign-out here
-   * would claim knowledge quota-axi does not have and would retire cached
-   * numbers that are still the best it can say.
+   * An environment quota-axi never established is not an account the user does
+   * not have: the guess, not the account, is what failed to name a slot.
+   * Asserting a sign-out here would claim knowledge quota-axi does not have and
+   * would retire cached numbers that are still the best it can say.
    */
-  if (resolution.status === "missing_unconfirmed") {
+  if (resolution.status === "environment_unconfirmed") {
     return new KimiFailure("kimi_code_cli_credential_unconfirmed", {
       staleEligible: true,
     });
@@ -618,6 +659,7 @@ function cliCredentialFailureFor(
 function failureReport(
   failure: KimiFailure,
   attempts: SourceAttempt[],
+  selection: KimiCodeSelection | undefined,
   dependencies: KimiDependencies,
 ): ProviderQuota {
   if (failure.definitiveAuth) {
@@ -628,11 +670,9 @@ function failureReport(
     }
   }
 
-  if (failure.staleEligible) {
+  if (failure.staleEligible && selection) {
     try {
-      const cached = dependencies.readCachedProvider(
-        dependencies.credentialContextId(),
-      );
+      const cached = dependencies.readCachedProvider(selection.contextId);
       const stale = cached
         ? staleKimiReport(
             cached,

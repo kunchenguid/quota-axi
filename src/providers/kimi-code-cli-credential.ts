@@ -1,10 +1,10 @@
 import { createHash } from "node:crypto";
-import { closeSync, openSync, readSync } from "node:fs";
 import { open } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import {
   type KimiCodeConfigSource,
+  type KimiCodeEnvironment,
   kimiCredentialPath,
   resolveKimiCodeEnvironment,
 } from "./kimi-code-config.js";
@@ -31,8 +31,8 @@ export type KimiCodeCliCredentialResolution =
   | {
       status:
         | "missing"
-        /** Nothing at a slot this reader assumed rather than read. */
-        | "missing_unconfirmed"
+        /** The configuration exists but never named the slot to read. */
+        | "environment_unconfirmed"
         | "invalid"
         | "error"
         | "unsupported_storage"
@@ -43,8 +43,40 @@ export type KimiCodeCliCredentialResolution =
 export type KimiCodeCliCredentialInspection =
   KimiCodeCliCredentialResolution["status"];
 
+/**
+ * One reading of `config.toml`, shared by everything a single run derives from
+ * it: which slot to open, which host that slot's token is good for, and which
+ * cache identity the resulting numbers belong to.
+ *
+ * They travel together because a second read cannot be assumed to describe the
+ * same environment. Kimi Code rewrites this file on login, so re-deriving the
+ * cache identity after the quota request could observe the deployment the user
+ * just switched to and stamp the previous one's numbers with it.
+ */
+export type KimiCodeSelection = {
+  /** The Kimi Code home the environment was read from and is read against. */
+  codeHome: string;
+  environment: KimiCodeEnvironment;
+  /**
+   * Opaque, deterministic cache provenance for this environment, so a cached
+   * snapshot is only reused for the deployment and slot that produced it.
+   *
+   * It hashes the resolved environment rather than the configuration text. The
+   * table this reader parses also holds Kimi Code's literal `api_key`, and a
+   * digest of those bytes would put a credential-derived value in the cache
+   * file and let a secret decide observable behaviour. Resolving first also
+   * keeps the identifier stable across edits that select the same environment,
+   * so changing an unrelated setting does not throw away usable stale quota.
+   */
+  contextId: string;
+};
+
 export type KimiCodeCliCredentialSource = {
-  resolve(): Promise<KimiCodeCliCredentialResolution>;
+  /** Reads `config.toml` once; every consumer of that run shares this answer. */
+  select(): Promise<KimiCodeSelection>;
+  resolve(
+    selection: KimiCodeSelection,
+  ): Promise<KimiCodeCliCredentialResolution>;
   inspect(): Promise<KimiCodeCliCredentialInspection>;
 };
 
@@ -73,39 +105,72 @@ export function createKimiCodeCliCredentialSource(
     ...overrides,
   };
 
+  const select = async (): Promise<KimiCodeSelection> => {
+    const codeHome = kimiCodeHome(dependencies);
+    const environment = resolveKimiCodeEnvironment(
+      await readConfigSource(codeHome, dependencies),
+    );
+    const selection: KimiCodeSelection = {
+      codeHome,
+      environment,
+      contextId: contextIdFor(codeHome, environment),
+    };
+    selectedContextId = selection.contextId;
+    return selection;
+  };
+
   const inspect = async (): Promise<KimiCodeCliCredentialInspection> =>
-    (await resolveCredential(dependencies)).status;
+    (await resolveCredential(await select(), dependencies)).status;
 
   return {
-    resolve: () => resolveCredential(dependencies),
+    select,
+    resolve: (selection) => resolveCredential(selection, dependencies),
     inspect,
   };
 }
 
+/**
+ * The Kimi Code environment this process actually selected, as its cache
+ * identifier, or `undefined` when nothing has been selected yet.
+ *
+ * The cache writer reads this rather than re-deriving the environment for
+ * itself, because by the time a snapshot is written the file that names the
+ * environment may describe a different one than the reading came from. An
+ * unselected run leaves no stamp, and an unstamped snapshot is simply never
+ * reused - the one outcome that cannot attribute one deployment's numbers to
+ * another.
+ */
+let selectedContextId: string | undefined;
+
+export function selectedKimiCodeContextId(): string | undefined {
+  return selectedContextId;
+}
+
 async function resolveCredential(
+  selection: KimiCodeSelection,
   dependencies: CredentialSourceDependencies,
 ): Promise<KimiCodeCliCredentialResolution> {
-  const codeHome = kimiCodeHome(dependencies);
-  const environment = resolveKimiCodeEnvironment(
-    await readConfigSource(codeHome, dependencies),
-  );
+  const { codeHome, environment } = selection;
   if (environment.status !== "resolved") return { status: environment.status };
+  /**
+   * A slot nobody named is not a slot to read. Whatever sits at a location this
+   * reader merely guessed at describes that guess and not the user's account:
+   * its absence is no sign-out, its expiry is no sign-out, and its contents are
+   * no reading either - the credential of a deployment the user has since left
+   * would be reported as the current one's quota. Both halves of that follow
+   * from the same missing evidence, so both stop here rather than at the branch
+   * that happens to be reached first.
+   */
+  if (!environment.confirmed) return { status: "environment_unconfirmed" };
 
   const path = kimiCredentialPath(codeHome, environment.credentialFileName);
   let contents: Buffer;
   try {
     contents = await dependencies.readFile(path, CREDENTIAL_FILE_LIMIT_BYTES);
   } catch (error) {
-    if (errorCode(error) !== "ENOENT") return { status: "error" };
-    /**
-     * Absence only counts against the credential when the slot was named
-     * rather than assumed. Having looked in a place we guessed at, finding
-     * nothing there tells us about the guess, not about the user's account, so
-     * this must not become a sign-out that also retires their cached numbers.
-     */
-    return environment.confirmed
+    return errorCode(error) === "ENOENT"
       ? { status: "missing" }
-      : { status: "missing_unconfirmed" };
+      : { status: "error" };
   }
   if (contents.byteLength > CREDENTIAL_FILE_LIMIT_BYTES) {
     return { status: "invalid" };
@@ -146,74 +211,19 @@ function kimiCodeHome(
   );
 }
 
-/**
- * An opaque, deterministic cache-provenance identifier for the Kimi Code
- * environment selected by the current process, so a cached snapshot is only
- * reused for the deployment and slot that produced it.
- *
- * It hashes the resolved environment rather than the configuration text. The
- * table this reader parses also holds Kimi Code's literal `api_key`, and a
- * digest of those bytes would put a credential-derived value in the cache file
- * and let a secret decide observable behaviour. Resolving first also keeps the
- * identifier stable across edits that select the same environment, so changing
- * an unrelated setting does not throw away usable stale quota.
- */
-export function kimiCredentialContextId(): string {
-  const codeHome = resolve(
-    kimiCodeHome({
-      environment: process.env,
-      homeDirectory: homedir,
-    }).normalize("NFC"),
-  );
-  const environment = resolveKimiCodeEnvironment(configSourceSync(codeHome));
+/** See `KimiCodeSelection.contextId` for why this hashes the environment. */
+function contextIdFor(
+  codeHome: string,
+  environment: KimiCodeEnvironment,
+): string {
+  const home = resolve(codeHome.normalize("NFC"));
   const selection =
     environment.status === "resolved"
       ? `slot:${environment.credentialFileName}\nbase:${environment.baseUrl}`
       : `unresolved:${environment.status}`;
   return createHash("sha256")
-    .update(`kimi-code-home:${codeHome}\n${selection}`)
+    .update(`kimi-code-home:${home}\n${selection}`)
     .digest("hex");
-}
-
-/** `readConfigSource`'s rule, for the callers that cannot await it. */
-function configSourceSync(codeHome: string): KimiCodeConfigSource {
-  let file: number;
-  try {
-    file = openSync(join(codeHome, "config.toml"), "r");
-  } catch (error) {
-    return errorCode(error) === "ENOENT"
-      ? { status: "absent" }
-      : { status: "unreadable" };
-  }
-  try {
-    const contents = new Uint8Array(CONFIG_FILE_LIMIT_BYTES + 1);
-    let offset = 0;
-    while (offset < contents.byteLength) {
-      const read = readSync(
-        file,
-        contents,
-        offset,
-        contents.byteLength - offset,
-        null,
-      );
-      if (read === 0) break;
-      offset += read;
-    }
-    return offset > CONFIG_FILE_LIMIT_BYTES
-      ? { status: "unreadable" }
-      : {
-          status: "read",
-          text: Buffer.from(
-            contents.buffer,
-            contents.byteOffset,
-            offset,
-          ).toString("utf8"),
-        };
-  } catch {
-    return { status: "unreadable" };
-  } finally {
-    closeSync(file);
-  }
 }
 
 /**
@@ -232,19 +242,12 @@ function configSourceSync(codeHome: string): KimiCodeConfigSource {
  * They are still reported apart, because the verdict and the confidence in it
  * are different questions. Nothing exists to describe an environment when the
  * file is absent, so the only slot Kimi Code could have written is the default
- * one and finding it empty is a real negative. A file that exists and cannot be
- * taken in may name any slot, so the same emptiness proves nothing - see the
- * `confirmed` flag `resolveKimiCodeEnvironment` returns.
- *
- * KNOWN LIMIT, UNVERIFIED: the verdict also assumes Kimi Code removes that slot
- * when a user switches deployments. Confirming that needs a real installation
- * to switch, which was not available. If a stale `kimi-code.json` does survive a
- * move to a global login, a user whose `config.toml` later becomes unreadable
- * would get a fresh reading of the previous mainland account. The cost is a
- * wrong account's numbers, not a token sent to another region. The fallback is
- * kept because removing it would strand a signed-in mainland user whose
- * `config.toml` this reader cannot walk, and reporting an accurate number for
- * them is the obligation this weighs against.
+ * one, and a mainland-China user with no configuration keeps the reading they
+ * have always had. A file that exists and cannot be taken in may name any slot,
+ * so the same default is a guess rather than a reading, and nothing found at it
+ * is reported either way - see the `confirmed` flag
+ * `resolveKimiCodeEnvironment` returns and the check `resolveCredential` makes
+ * on it.
  */
 async function readConfigSource(
   codeHome: string,

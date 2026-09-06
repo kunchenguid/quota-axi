@@ -17,7 +17,7 @@ import {
   writeCachedProviders,
 } from "../src/cache.js";
 import { cacheFilePath, claudeCredentialContextId } from "../src/lib/fs.js";
-import { kimiCredentialContextId } from "../src/providers/kimi-code-cli-credential.js";
+import { createKimiCodeCliCredentialSource } from "../src/providers/kimi-code-cli-credential.js";
 import type { ProviderId, ProviderQuota } from "../src/types.js";
 
 const originalXdgCacheHome = process.env.XDG_CACHE_HOME;
@@ -210,7 +210,7 @@ describe("quota cache", () => {
     expect(readCachedClaudeProvider(claudeCredentialContextId())).toBeDefined();
   });
 
-  it("refuses Kimi cache captured under another Kimi Code environment", () => {
+  it("refuses Kimi cache captured under another Kimi Code environment", async () => {
     useTempCache();
     const codeHome = join(tempDir!, "synthetic-kimi-code-home");
     const config = join(codeHome, "config.toml");
@@ -223,6 +223,7 @@ type = "kimi"
 api_key = "cache-context-must-not-depend-on-this-118"
 `,
     );
+    const mainland = await selectKimiEnvironment();
 
     writeCachedProviders([{ ...quota("kimi", 42), source: "api" as const }]);
 
@@ -231,7 +232,7 @@ api_key = "cache-context-must-not-depend-on-this-118"
     };
     expect(payload.providers[0]?.credentialContext).toMatch(/^[a-f0-9]{64}$/);
     expect(JSON.stringify(payload)).not.toContain(codeHome);
-    expect(readCachedKimiProvider(kimiCredentialContextId())).toBeDefined();
+    expect(readCachedKimiProvider(mainland)).toBeDefined();
 
     writeFileSync(
       config,
@@ -242,15 +243,57 @@ default_model = "k2"
 `,
     );
 
-    expect(readCachedKimiProvider(kimiCredentialContextId())).toBeDefined();
+    expect(await selectKimiEnvironment()).toBe(mainland);
+    expect(readCachedKimiProvider(mainland)).toBeDefined();
 
     writeFileSync(
       config,
       '[providers."managed:kimi-code"]\nbase_url = "https://api.kimi.ai/coding/v1"\n',
     );
+    const global = await selectKimiEnvironment();
 
-    expect(readCachedKimiProvider(kimiCredentialContextId())).toBeUndefined();
+    expect(global).not.toBe(mainland);
+    expect(readCachedKimiProvider(global)).toBeUndefined();
     expect(readCachedProvider("kimi")).toBeDefined();
+  });
+
+  /**
+   * Kimi Code rewrites `config.toml` on login, so the environment can already
+   * have changed by the time a reading is written. The stamp has to name the
+   * environment the numbers came from, not whichever one the file describes
+   * afterwards, or one deployment's quota is filed under the other's identity
+   * and later served back as its stale reading.
+   */
+  it("stamps a Kimi snapshot with the environment its reading was taken under", async () => {
+    useTempCache();
+    const codeHome = join(tempDir!, "switching-kimi-code-home");
+    const config = join(codeHome, "config.toml");
+    mkdirSync(codeHome, { recursive: true });
+    process.env.KIMI_CODE_HOME = codeHome;
+    writeFileSync(
+      config,
+      '[providers."managed:kimi-code"]\nbase_url = "https://api.kimi.com/coding/v1"\n',
+    );
+    const readingEnvironment = await selectKimiEnvironment();
+
+    writeFileSync(
+      config,
+      `[providers."managed:kimi-code"]
+base_url = "https://api.kimi.ai/coding/v1"
+
+[providers."managed:kimi-code".oauth]
+storage = "file"
+key = "oauth/kimi-code-env-synthetic00000031"
+oauth_host = "https://auth.kimi.ai"
+`,
+    );
+
+    writeCachedProviders([{ ...quota("kimi", 42), source: "api" as const }]);
+
+    expect(readCachedKimiProvider(readingEnvironment)).toBeDefined();
+    expect(
+      readCachedKimiProvider(await selectKimiEnvironment()),
+    ).toBeUndefined();
   });
 
   it("writes normalized cache data with mode 0600 and no attempts or sentinel secret", () => {
@@ -363,6 +406,15 @@ function useTempCache(): void {
   tempDir = mkdtempSync(join(tmpdir(), "quota-axi-cache-"));
   process.env.XDG_CACHE_HOME = tempDir;
   process.env.CLAUDE_CONFIG_DIR = join(tempDir, "synthetic-claude-context");
+}
+
+/**
+ * Selects the Kimi Code environment the way a reading does, and returns the
+ * cache identity that selection carries.
+ */
+async function selectKimiEnvironment(): Promise<string> {
+  const { contextId } = await createKimiCodeCliCredentialSource().select();
+  return contextId;
 }
 
 function quota(provider: ProviderId, percentUsed: number): ProviderQuota {

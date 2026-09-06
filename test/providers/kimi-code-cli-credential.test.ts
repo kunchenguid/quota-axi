@@ -10,7 +10,11 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createKimiCodeCliCredentialSource } from "../../src/providers/kimi-code-cli-credential.js";
+import {
+  createKimiCodeCliCredentialSource,
+  type KimiCodeCliCredentialResolution,
+  type KimiCodeCliCredentialSource,
+} from "../../src/providers/kimi-code-cli-credential.js";
 
 const NOW = 1_800_000_000_000;
 let temporaryDirectories: string[] = [];
@@ -36,7 +40,7 @@ describe("Kimi Code CLI credential discovery", () => {
       now: () => NOW,
     });
 
-    await expect(source.resolve()).resolves.toEqual({
+    await expect(resolveOnce(source)).resolves.toEqual({
       status: "available",
       accessToken: "default-home-token",
       baseUrl: "https://api.kimi.com/coding/v1",
@@ -59,7 +63,7 @@ describe("Kimi Code CLI credential discovery", () => {
       now: () => NOW,
     });
 
-    await expect(source.resolve()).resolves.toEqual({
+    await expect(resolveOnce(source)).resolves.toEqual({
       status: "available",
       accessToken: "override-token",
       baseUrl: "https://api.kimi.com/coding/v1",
@@ -111,7 +115,7 @@ describe("Kimi Code CLI credential discovery", () => {
         now: () => NOW,
       });
 
-      await expect(source.resolve()).resolves.toEqual({
+      await expect(resolveOnce(source)).resolves.toEqual({
         status: fixture.status,
         ...(fixture.accessToken === undefined
           ? {}
@@ -144,7 +148,7 @@ describe("Kimi Code CLI credential discovery", () => {
       ),
     });
 
-    await expect(source.resolve()).resolves.toEqual({
+    await expect(resolveOnce(source)).resolves.toEqual({
       status: "available",
       accessToken: "fresh-token",
       baseUrl: "https://api.kimi.com/coding/v1",
@@ -166,7 +170,7 @@ describe("Kimi Code CLI credential discovery", () => {
       now: () => NOW,
     });
 
-    await source.resolve();
+    await resolveOnce(source);
 
     expect(snapshotTree(home)).toEqual(before);
     expect(readFileSync(credential, "utf8")).toContain(
@@ -200,7 +204,7 @@ describe("Kimi Code CLI credential discovery", () => {
       readFile,
     });
 
-    const resolution = await source.resolve();
+    const resolution = await resolveOnce(source);
 
     expect(resolution).toEqual({ status: "invalid" });
     expect(JSON.stringify(resolution)).not.toContain(sentinel);
@@ -219,10 +223,20 @@ describe("Kimi Code CLI credential discovery", () => {
       }),
     });
 
-    await expect(source.resolve()).resolves.toEqual({ status: "error" });
+    await expect(resolveOnce(source)).resolves.toEqual({ status: "error" });
     await expect(source.inspect()).resolves.toBe("error");
   });
 });
+
+/**
+ * The environment is read once and the credential resolved against that
+ * reading, which is how the provider drives this source.
+ */
+function resolveOnce(
+  source: KimiCodeCliCredentialSource,
+): Promise<KimiCodeCliCredentialResolution> {
+  return source.select().then((selection) => source.resolve(selection));
+}
 
 function temporaryDirectory(): string {
   const directory = mkdtempSync(join(tmpdir(), "quota-axi-kimi-code-"));

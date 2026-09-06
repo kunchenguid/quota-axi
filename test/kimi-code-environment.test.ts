@@ -672,7 +672,7 @@ base_url = "https://api.kimi.ai/coding/v1"
     });
   });
 
-  it("keeps the default reading when the config stops being readable", () => {
+  it("never reads a slot a config it could not walk had not yet named", () => {
     const fixture = isolatedFixture();
     writeConfig(
       fixture,
@@ -682,31 +682,34 @@ notes = "this quote is never closed
 
 [providers."managed:kimi-code".oauth]
 storage = "file"
-key = "oauth/kimi-code"
+key = "oauth/kimi-code-env-synthetic00000021"
+oauth_host = "https://auth.kimi.ai"
 `,
     );
-    writeCredential(fixture, "kimi-code", "unparsed-fallback-token-908");
-    const preload = mockFetch(
+    writeCredential(fixture, "kimi-code", "left-behind-mainland-token-908");
+    writeCredential(
       fixture,
-      MAINLAND_USAGE_URL,
-      "unparsed-fallback-token-908",
-      30,
+      "kimi-code-env-synthetic00000021",
+      "current-global-token-908",
     );
 
     const result = runCli(
       fixture,
       ["--provider", "kimi", "--json", "--full"],
-      preload,
+      recordingFetch(fixture),
     );
 
-    expect(result.status).toBe(0);
-    expect(result.stdout).not.toContain("unparsed-fallback-token-908");
+    expect(requestedOrigin(fixture)).toBeUndefined();
+    expect(result.stdout).not.toContain("left-behind-mainland-token-908");
     expect(JSON.parse(result.stdout)).toMatchObject({
       providers: [
         {
           provider: "kimi",
-          source: "api",
-          windows: [{ id: "weekly", percentRemaining: 70 }],
+          source: "unavailable",
+          state: {
+            status: "error",
+            error: "kimi_code_cli_credential_unconfirmed",
+          },
         },
       ],
     });
@@ -747,34 +750,78 @@ key = "oauth/../../escaped"
     });
   });
 
-  it("keeps a config.toml quota-axi cannot open on the default reading", () => {
+  it("never reads an assumed slot's contents as the current account's quota", () => {
     const fixture = isolatedFixture();
     mkdirSync(join(fixture.kimiCodeHome, "config.toml"), { recursive: true });
-    writeCredential(fixture, "kimi-code", "unopenable-config-token-512");
-    const preload = mockFetch(
+    writeCredential(fixture, "kimi-code", "left-behind-mainland-token-512");
+    writeCredential(
       fixture,
-      MAINLAND_USAGE_URL,
-      "unopenable-config-token-512",
-      20,
+      "kimi-code-env-synthetic00000022",
+      "current-global-token-512",
     );
 
     const result = runCli(
       fixture,
       ["--provider", "kimi", "--json", "--full"],
-      preload,
+      recordingFetch(fixture),
     );
 
-    expect(result.status).toBe(0);
-    expect(result.stdout).not.toContain("unopenable-config-token-512");
+    expect(requestedOrigin(fixture)).toBeUndefined();
+    expect(result.stdout).not.toContain("left-behind-mainland-token-512");
     expect(JSON.parse(result.stdout)).toMatchObject({
       providers: [
         {
           provider: "kimi",
-          source: "api",
-          windows: [{ id: "weekly", percentRemaining: 80 }],
+          source: "unavailable",
+          state: {
+            status: "error",
+            error: "kimi_code_cli_credential_unconfirmed",
+          },
         },
       ],
     });
+  });
+
+  it("never reads an assumed slot's stale credential as a sign-out", () => {
+    const fixture = isolatedFixture();
+    writeCredential(fixture, "kimi-code", "mainland-before-switch-628");
+
+    const fresh = runCli(
+      fixture,
+      ["--provider", "kimi", "--json", "--full"],
+      mockFetch(fixture, MAINLAND_USAGE_URL, "mainland-before-switch-628", 45),
+    );
+    expect(fresh.status).toBe(0);
+
+    writeCredential(
+      fixture,
+      "kimi-code",
+      "left-behind-expired-token-628",
+      1_600_000_000,
+    );
+    mkdirSync(join(fixture.kimiCodeHome, "config.toml"), { recursive: true });
+
+    const unreadable = runCli(
+      fixture,
+      ["--provider", "kimi", "--json", "--full"],
+      recordingFetch(fixture),
+    );
+
+    expect(requestedOrigin(fixture)).toBeUndefined();
+    expect(JSON.parse(unreadable.stdout)).toMatchObject({
+      providers: [
+        {
+          provider: "kimi",
+          source: "cache",
+          windows: [{ id: "weekly", percentRemaining: 55 }],
+          state: {
+            status: "stale",
+            error: "kimi_code_cli_credential_unconfirmed",
+          },
+        },
+      ],
+    });
+    expect(cachedProviderIds(fixture)).toContain("kimi");
   });
 
   it("never serves one deployment's cached numbers for the other", () => {
@@ -1024,6 +1071,7 @@ function writeCredential(
   fixture: IsolatedFixture,
   name: string,
   accessToken: string,
+  expiresAt = 4_102_444_800,
 ): void {
   const credentialPath = join(
     fixture.kimiCodeHome,
@@ -1036,7 +1084,7 @@ function writeCredential(
     JSON.stringify({
       access_token: accessToken,
       refresh_token: `ignored-refresh-for-${name}`,
-      expires_at: 4_102_444_800,
+      expires_at: expiresAt,
     }),
     { mode: 0o600 },
   );

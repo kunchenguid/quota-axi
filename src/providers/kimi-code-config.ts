@@ -66,11 +66,13 @@ export type KimiCodeEnvironment =
        *
        * It is false only when a configuration exists that this reader could not
        * take in whole and that had not yet named a slot when it stopped. The
-       * distinction matters downstream because a negative from a guessed
-       * location is worth less than one from a known location: finding no file
-       * where a real OAuth pointer sent us is evidence the credential is gone,
-       * while finding none at a slot we merely assumed says only that our guess
-       * was not there. Callers must not turn the second into a sign-out.
+       * distinction matters downstream because nothing found at a guessed
+       * location describes the user's account: an absent file there says only
+       * that the guess was wrong rather than that the credential is gone, and a
+       * file that is present there is as likely to belong to a deployment the
+       * user has left as to the one they are on. Callers must therefore read
+       * neither outcome - not the emptiness as a sign-out, and not the contents
+       * as the current account's quota.
        */
       confirmed: boolean;
     }

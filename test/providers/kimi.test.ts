@@ -12,6 +12,7 @@ import type {
   KimiCodeCliCredentialInspection,
   KimiCodeCliCredentialResolution,
   KimiCodeCliCredentialSource,
+  KimiCodeSelection,
 } from "../../src/providers/kimi-code-cli-credential.js";
 import {
   createPiKimiCredentialBroker,
@@ -1371,7 +1372,6 @@ function testAdapter(
     ) as unknown as typeof fetch,
     readCachedProvider: () => undefined,
     deleteCachedProvider: () => undefined,
-    credentialContextId: () => TEST_CREDENTIAL_CONTEXT_ID,
     now: () => NOW,
     ...overrides,
   });
@@ -1409,10 +1409,22 @@ function cliCredentialSource(
       ? { ...input, baseUrl: input.baseUrl ?? "https://api.kimi.com/coding/v1" }
       : input;
   return {
+    select: vi.fn(async () => TEST_SELECTION),
     resolve: vi.fn(async () => resolution),
     inspect: vi.fn(async () => inspection),
   };
 }
+
+const TEST_SELECTION: KimiCodeSelection = {
+  codeHome: "/synthetic/kimi-code-home",
+  environment: {
+    status: "resolved",
+    credentialFileName: "kimi-code",
+    baseUrl: "https://api.kimi.com/coding/v1",
+    confirmed: true,
+  },
+  contextId: TEST_CREDENTIAL_CONTEXT_ID,
+};
 
 function jsonResponse(payload: unknown): Response {
   return new Response(JSON.stringify(payload), {
