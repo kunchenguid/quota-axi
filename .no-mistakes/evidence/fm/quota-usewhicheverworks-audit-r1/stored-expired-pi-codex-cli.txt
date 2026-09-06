@@ -1,0 +1,16 @@
+$ quota-axi --provider codex
+bin: quota-axi
+description: Report local agent-provider quota windows for routing-aware agents
+generatedAt: "2026-09-06T22:07:49.712Z"
+quota[1]{provider,scope,effectivePercentRemaining,spendPriority,runway,confidence,limitedBy,resetsAt}:
+  codex,all_models,70,1.6686,through_reset,established,weekly,"2026-09-09T05:41:09.717Z"
+exhaustion[0]:
+attention[1]{provider,scope,kind,detail,remedy}:
+  codex,all,degraded_source,oauth · Codex sign-in required,none
+help[1]:
+  Run `quota-axi --full` for windows, pace, reserve, and account evidence
+
+Observed probe source order: oauth -> oauth -> pi:openai-codex
+Full-report source: pi:openai-codex
+Full-report state: fresh, stale=false
+Source attempts: oauth:failed (Codex sign-in required) -> pi:openai-codex:success
