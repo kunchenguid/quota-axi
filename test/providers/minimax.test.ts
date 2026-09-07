@@ -14,6 +14,7 @@ import {
   extractMiniMaxCredential,
   normalizeMiniMaxPayload,
   resolveMiniMaxCredential,
+  resolveMiniMaxCredentials,
 } from "../../src/providers/minimax.js";
 import { withQuotaSemantics } from "../../src/interpretation.js";
 
@@ -246,6 +247,8 @@ describe("MiniMax provider", () => {
         model_remains: [
           {
             model_name: "MiniMax-M3",
+            start_time: 1788264000000,
+            end_time: 1788282000000,
             current_interval_total_count: 100,
             current_interval_usage_count: 25,
             current_interval_status: 1,
@@ -262,6 +265,50 @@ describe("MiniMax provider", () => {
     expect(normalizeMiniMaxPayload({ model_remains: [{}] })).toEqual({
       windows: [],
     });
+  });
+
+  it("omits MiniMax model rows with no allocation", () => {
+    expect(
+      normalizeMiniMaxPayload({
+        model_remains: [
+          {
+            model_name: "Speech-HD",
+            current_interval_total_count: 0,
+            current_interval_usage_count: 0,
+            current_interval_remaining_percent: 100,
+            current_interval_status: 3,
+            current_weekly_total_count: 0,
+            current_weekly_usage_count: 0,
+            current_weekly_remaining_percent: 100,
+            current_weekly_status: 3,
+          },
+        ],
+      }).windows,
+    ).toEqual([]);
+  });
+
+  it("labels MiniMax interval windows from reported duration", () => {
+    expect(
+      normalizeMiniMaxPayload({
+        model_remains: [
+          {
+            model_name: "Speech-HD",
+            start_time: 1788264000000,
+            end_time: 1788350400000,
+            current_interval_total_count: 100,
+            current_interval_usage_count: 75,
+            current_interval_status: 1,
+          },
+        ],
+      }).windows,
+    ).toEqual([
+      expect.objectContaining({
+        id: "model:speech-hd:window:1d",
+        label: "Speech-HD 1d",
+        percentRemaining: 75,
+        windowSeconds: 86_400,
+      }),
+    ]);
   });
 
   it("preserves rate limits with an invalid Retry-After date", async () => {
@@ -348,6 +395,61 @@ describe("MiniMax provider", () => {
       path: "/auth.json",
       error: "credential_missing",
     });
+  });
+
+  it("uses co-stored MiniMax CLI credentials in OAuth-first order", async () => {
+    const originalHome = process.env.HOME;
+    const originalPiDir = process.env.PI_CODING_AGENT_DIR;
+    const originalMmxDir = process.env.MMX_CONFIG_DIR;
+    const originalApiKey = process.env.MINIMAX_API_KEY;
+    const tempDir = mkdtempSync(join(tmpdir(), "quota-axi-minimax-"));
+    const mmxDir = join(tempDir, "mmx");
+    try {
+      process.env.HOME = tempDir;
+      process.env.PI_CODING_AGENT_DIR = join(tempDir, "missing-pi");
+      process.env.MMX_CONFIG_DIR = mmxDir;
+      delete process.env.MINIMAX_API_KEY;
+      mkdirSync(mmxDir, { recursive: true });
+      writeFileSync(
+        join(mmxDir, "config.json"),
+        JSON.stringify({
+          api_key: "sk-api-synthetic",
+          oauth: { access_token: "stale-oauth-token" },
+        }),
+      );
+      const request = vi.fn(async (_url: string, init?: RequestInit) => {
+        const bearer = new Headers(init?.headers).get("authorization");
+        if (bearer === "Bearer stale-oauth-token") {
+          return new Response(null, { status: 401 });
+        }
+        return new Response(JSON.stringify(fixture("balance")));
+      });
+
+      const report = await createMiniMaxAdapter({
+        credential: resolveMiniMaxCredentials,
+        fetch: request,
+      }).fetchQuota(OPTIONS);
+
+      expect(
+        request.mock.calls.map(([, init]) =>
+          new Headers(init?.headers).get("authorization"),
+        ),
+      ).toEqual(["Bearer stale-oauth-token", "Bearer sk-api-synthetic"]);
+      expect(report).toMatchObject({
+        state: { status: "fresh" },
+        credits: { remaining: 12.5, unit: "usd" },
+      });
+    } finally {
+      if (originalHome === undefined) delete process.env.HOME;
+      else process.env.HOME = originalHome;
+      if (originalPiDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = originalPiDir;
+      if (originalMmxDir === undefined) delete process.env.MMX_CONFIG_DIR;
+      else process.env.MMX_CONFIG_DIR = originalMmxDir;
+      if (originalApiKey === undefined) delete process.env.MINIMAX_API_KEY;
+      else process.env.MINIMAX_API_KEY = originalApiKey;
+      rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("uses the shared Pi auth path expansion", () => {

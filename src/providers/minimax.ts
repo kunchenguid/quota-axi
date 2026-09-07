@@ -113,34 +113,64 @@ export function extractMiniMaxCliCredential(
   value: unknown,
   path: string,
 ): MiniMaxCredentialResolution {
+  return (
+    extractMiniMaxCliCredentials(value, path)[0] ?? missingCliCredential(path)
+  );
+}
+
+function extractMiniMaxCliCredentials(
+  value: unknown,
+  path: string,
+): MiniMaxCredentialResolution[] {
   const root = objectValue(value);
   if (!root)
-    return {
-      status: "invalid",
-      source: MINIMAX_CLI_SOURCE,
-      path,
-      error: "json_parse_error",
-    };
+    return [
+      {
+        status: "invalid",
+        source: MINIMAX_CLI_SOURCE,
+        path,
+        error: "json_parse_error",
+      },
+    ];
   const apiKey = usableLiteralSecret(root.api_key);
   const oauth = objectValue(root.oauth);
   const accessToken = usableLiteralSecret(oauth?.access_token);
-  const key = apiKey ?? accessToken;
-  if (!key) {
-    const hasCredential = Object.hasOwn(root, "api_key") || oauth !== undefined;
-    return {
-      status: hasCredential ? "invalid" : "missing",
+  const baseUrl = configBaseUrl(root);
+  const credentials: MiniMaxCredentialResolution[] = [];
+  if (accessToken) {
+    credentials.push({
+      status: "available",
+      key: accessToken,
       source: MINIMAX_CLI_SOURCE,
       path,
-      ...(hasCredential ? { error: "credential_missing" } : {}),
-    };
+      baseUrl,
+    });
   }
-  return {
-    status: "available",
-    key,
-    source: MINIMAX_CLI_SOURCE,
-    path,
-    baseUrl: configBaseUrl(root),
-  };
+  if (apiKey) {
+    credentials.push({
+      status: "available",
+      key: apiKey,
+      source: MINIMAX_CLI_SOURCE,
+      path,
+      baseUrl,
+    });
+  }
+  if (credentials.length > 0) return credentials;
+  const hasCredential = Object.hasOwn(root, "api_key") || oauth !== undefined;
+  return [
+    hasCredential
+      ? {
+          status: "invalid",
+          source: MINIMAX_CLI_SOURCE,
+          path,
+          error: "credential_missing",
+        }
+      : missingCliCredential(path),
+  ];
+}
+
+function missingCliCredential(path: string): MiniMaxCredentialResolution {
+  return { status: "missing", source: MINIMAX_CLI_SOURCE, path };
 }
 
 export function resolveMiniMaxCredential(): MiniMaxCredentialResolution {
@@ -177,8 +207,10 @@ export function resolveMiniMaxCredentials(): MiniMaxCredentialResolution[] {
   const cliPath = minimaxConfigPath();
   const cliResult = readBoundedJsonFile(cliPath);
   if (cliResult.status === "success") {
-    const resolution = extractMiniMaxCliCredential(cliResult.value, cliPath);
-    if (resolution.status !== "missing") credentials.push(resolution);
+    const resolutions = extractMiniMaxCliCredentials(cliResult.value, cliPath);
+    credentials.push(
+      ...resolutions.filter((resolution) => resolution.status !== "missing"),
+    );
   } else if (cliResult.status === "invalid") {
     credentials.push({
       status: cliResult.error === "file_read_error" ? "error" : "invalid",
@@ -380,14 +412,12 @@ function normalizeModelRemain(raw: unknown): QuotaWindow[] {
     modelId,
     modelName,
     "current_interval",
-    "5h",
   );
   const weekly = normalizeModelWindow(
     row,
     modelId,
     modelName,
     "current_weekly",
-    "7d",
   );
   return [interval, weekly].filter(
     (window): window is QuotaWindow => window !== undefined,
@@ -399,28 +429,12 @@ function normalizeModelWindow(
   modelId: string,
   modelName: string,
   prefix: "current_interval" | "current_weekly",
-  suffix: "5h" | "7d",
 ): QuotaWindow | undefined {
   const status = numberValue(row[`${prefix}_status`]);
   const total = numberValue(row[`${prefix}_total_count`]);
   const reported = numberValue(row[`${prefix}_usage_count`]);
-  const explicit = numberValue(row[`${prefix}_remaining_percent`]);
-  const percentRemaining =
-    explicit !== undefined
-      ? clampPercent(explicit)
-      : remainingFromCounts(reported, total);
-  // Status 3 is the vendor's unlimited/no-bucket marker. Do not turn it into
-  // a synthetic 100% bound when the response contains no numeric observation.
-  if (percentRemaining === undefined && status === 3) return undefined;
-  if (
-    percentRemaining === undefined &&
-    status !== 2 &&
-    parseEpoch(
-      row[`${prefix === "current_interval" ? "end_time" : "weekly_end_time"}`],
-    ) === undefined
-  ) {
-    return undefined;
-  }
+  if (status === 3 && total === 0 && reported === 0) return undefined;
+
   const startKey =
     prefix === "current_interval" ? "start_time" : "weekly_start_time";
   const endKey = prefix === "current_interval" ? "end_time" : "weekly_end_time";
@@ -430,10 +444,24 @@ function normalizeModelWindow(
     startsAt && resetsAt
       ? (Date.parse(resetsAt) - Date.parse(startsAt)) / 1000
       : undefined;
+  const explicit = numberValue(row[`${prefix}_remaining_percent`]);
+  const percentRemaining =
+    explicit !== undefined
+      ? clampPercent(explicit)
+      : remainingFromCounts(reported, total);
+  if (percentRemaining === undefined && status === 3) return undefined;
+  if (
+    percentRemaining === undefined &&
+    status !== 2 &&
+    resetsAt === undefined
+  ) {
+    return undefined;
+  }
+  const identity = miniMaxWindowIdentity(prefix, windowSeconds);
   const remaining = percentRemaining ?? (status === 2 ? 0 : undefined);
   return {
-    id: `model:${modelId}:${suffix}`,
-    label: `${modelName} ${suffix}`,
+    id: `model:${modelId}:${identity.idSuffix}`,
+    label: `${modelName} ${identity.label}`,
     kind: "model",
     ...(remaining !== undefined
       ? {
@@ -447,6 +475,28 @@ function normalizeModelWindow(
       ? { windowSeconds }
       : {}),
   };
+}
+
+function miniMaxWindowIdentity(
+  prefix: "current_interval" | "current_weekly",
+  windowSeconds: number | undefined,
+): { idSuffix: string; label: string } {
+  if (windowSeconds === 18_000) return { idSuffix: "5h", label: "5h" };
+  if (windowSeconds === 604_800) return { idSuffix: "7d", label: "7d" };
+  if (windowSeconds !== undefined && windowSeconds > 0) {
+    const label = formatMiniMaxWindowSeconds(windowSeconds);
+    return { idSuffix: `window:${label}`, label };
+  }
+  return prefix === "current_weekly"
+    ? { idSuffix: "window:weekly", label: "weekly" }
+    : { idSuffix: "window:current_interval", label: "current interval" };
+}
+
+function formatMiniMaxWindowSeconds(seconds: number): string {
+  if (Number.isInteger(seconds / 86_400)) return `${seconds / 86_400}d`;
+  if (Number.isInteger(seconds / 3_600)) return `${seconds / 3_600}h`;
+  if (Number.isInteger(seconds / 60)) return `${seconds / 60}m`;
+  return `${seconds}s`;
 }
 
 function remainingFromCounts(
