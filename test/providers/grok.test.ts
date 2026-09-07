@@ -1958,16 +1958,23 @@ describe("Grok dual-source CLI and Pi xAI usability", () => {
     const present = await cliAdvice("present");
 
     expect(hidden.grok?.state.authStatus).toBe("expired_refreshable");
+    expect(hidden.grok?.state.status).toBe("stale");
+    expect(hidden.grok?.state.reason).toBe("credentials_expired");
+    expect(hidden.grok?.state.remedyCommand).toBe("grok");
+    expect(hidden.help).toContain(grokRefreshHelp);
+    expect(hidden.toon).toContain(
+      `grok,all,stale,"last refreshed 2026-07-20T00:00:00.000Z · ${hidden.grok?.state.error} · reason credentials_expired (auth expired_refreshable)",grok`,
+    );
+
     expect(present.grok?.state.authStatus).toBe("usable");
-    for (const result of [hidden, present]) {
-      expect(result.grok?.state.status).toBe("stale");
-      expect(result.grok?.state.reason).toBe("credentials_expired");
-      expect(result.grok?.state.remedyCommand).toBe("grok");
-      expect(result.help).toContain(grokRefreshHelp);
-      expect(result.toon).toContain(
-        `grok,all,stale,"last refreshed 2026-07-20T00:00:00.000Z · ${result.grok?.state.error} · reason credentials_expired (auth ${result.grok?.state.authStatus})",grok`,
-      );
-    }
+    expect(present.grok?.state.status).toBe("unavailable");
+    expect(present.grok?.windows).toEqual([]);
+    expect(present.grok?.state.reason).toBe("credentials_expired");
+    expect(present.grok?.state.remedyCommand).toBe("grok");
+    expect(present.help).toContain(grokRefreshHelp);
+    expect(present.toon).toContain(
+      "grok,all,unavailable,Grok model access available; quota unavailable · reason credentials_expired (auth usable),grok",
+    );
   });
 
   it("does not emit grok refresh advice when Pi oauth fetches grok.com credits", async () => {

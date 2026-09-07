@@ -283,9 +283,6 @@ async function fetchQuotaWithDependencies(
     [...cliResults].reverse().find((result) => result.outcome === "rejected") ??
     cliResults.find((result) => result.outcome !== "not_tried");
   const consumerTransient = selection.transientError !== undefined;
-  const grokQuotaSourceRejected = selection.results.some(
-    (result) => result.source === GROK_SOURCE && result.outcome === "rejected",
-  );
   const consumerError = selection.transientError ?? cliResult?.error;
   const retryAfter = selection.retryAfter;
   const cliRefreshNeeded = selection.results.some(
@@ -322,10 +319,7 @@ async function fetchQuotaWithDependencies(
   if (authStatus === "usable") {
     // Valid model auth (CLI and/or Pi) without consumer windows is not logout.
     const cached = readCachedProvider("grok");
-    if (
-      cached?.source === GROK_SOURCE &&
-      (consumerTransient || grokQuotaSourceRejected)
-    ) {
+    if (cached?.source === GROK_SOURCE && consumerTransient) {
       const stale = staleFromCache(
         cached,
         (consumerTransient ? consumerError : undefined) ??
