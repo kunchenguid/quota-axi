@@ -162,9 +162,16 @@ describe("Pi Codex credential broker", () => {
       "openai-codex": oauthEntry({ expires: NOW - 1, refresh: undefined }),
     });
 
+    // The stored token rides along on the expired resolution so the adapter
+    // can probe it: stored expiry orders candidates, it never skips them.
     await expect(brokerFor(refreshable).resolve()).resolves.toEqual({
       status: "expired",
       refreshable: true,
+      credentials: {
+        accessToken: "fixture-codex-access-token",
+        accountId: "acct-fixture-codex",
+        expiresAtMs: NOW - 1,
+      },
     });
     await expect(brokerFor(refreshable).inspect()).resolves.toMatchObject({
       status: "expired",
@@ -174,6 +181,11 @@ describe("Pi Codex credential broker", () => {
     await expect(brokerFor(nonRefreshable).resolve()).resolves.toEqual({
       status: "expired",
       refreshable: false,
+      credentials: {
+        accessToken: "fixture-codex-access-token",
+        accountId: "acct-fixture-codex",
+        expiresAtMs: NOW - 1,
+      },
     });
     const inspection = await brokerFor(nonRefreshable).inspect();
     expect(inspection).toMatchObject({
@@ -185,14 +197,19 @@ describe("Pi Codex credential broker", () => {
   });
 
   it.each([null, false, { opaque: true }, "$REFRESH_TOKEN"])(
-    "does not classify an unusable refresh value as refreshable",
+    "classifies refreshability from property presence without consuming its value",
     async (refresh) => {
       const fixture = authFixture({
         "openai-codex": oauthEntry({ expires: NOW - 1, refresh }),
       });
       await expect(brokerFor(fixture).resolve()).resolves.toEqual({
         status: "expired",
-        refreshable: false,
+        refreshable: true,
+        credentials: {
+          accessToken: "fixture-codex-access-token",
+          accountId: "acct-fixture-codex",
+          expiresAtMs: NOW - 1,
+        },
       });
     },
   );

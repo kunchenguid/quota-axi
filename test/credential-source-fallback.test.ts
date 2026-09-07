@@ -170,8 +170,50 @@ describe("per-provider credential source fallback", { timeout: 30_000 }, () => {
     expect(quotaRows(report)).toContainEqual(
       expect.stringContaining("codex,all_models,70,"),
     );
-    expect(report).not.toContain("sign-in required");
+    // The provider itself is healthy: the rejection belongs to the superseded
+    // source's attention row, never to Codex's own status.
+    expect(attentionRows(report)).not.toContainEqual(
+      expect.stringContaining("codex,all,auth_required"),
+    );
     expect(api.bearers).toContain(`Bearer ${PI_ACCESS_TOKEN}`);
+  });
+
+  it("uses a stored-expired Pi credential the endpoint still accepts", async () => {
+    // Both stores say expired. The standalone token really is dead, but the
+    // Pi token's stored `expires` is stale metadata and the endpoint still
+    // accepts it - so the reading must be fresh Pi quota, not a stale report.
+    writeExpiredCodexAuthFile();
+    writePiCodexCredential({ expires: Date.now() - 3_600_000 });
+    const api = stubUsageApi([PI_ACCESS_TOKEN]);
+
+    const report = await runQuota([]);
+
+    expect(quotaRows(report)).toContainEqual(
+      expect.stringContaining("codex,all_models,70,"),
+    );
+    expect(api.bearers).toContain(`Bearer ${PI_ACCESS_TOKEN}`);
+    expect(attentionRows(report)).not.toContainEqual(
+      expect.stringContaining("codex,all,stale"),
+    );
+  });
+
+  it("names the stored-expired store that answered as the reporting source", async () => {
+    writeExpiredCodexAuthFile();
+    writePiCodexCredential({ expires: Date.now() - 3_600_000 });
+    stubUsageApi([PI_ACCESS_TOKEN]);
+
+    // `source` is a --full-tier field, so the reporting store is asserted there.
+    const parsed = JSON.parse(
+      await runQuota(["--json", "--full"]),
+    ) as QuotaAxiResponse;
+    const codex = parsed.providers[0];
+
+    expect(codex.source).toBe("pi:openai-codex");
+    expect(codex.attempts).toContainEqual(
+      expect.objectContaining({ source: "pi:openai-codex", status: "success" }),
+    );
+    expect(codex.state.status).toBe("fresh");
+    expect(codex.state.stale).toBe(false);
   });
 
   it("keeps the superseded Codex sign-in visible as a degraded source", async () => {
@@ -181,8 +223,10 @@ describe("per-provider credential source fallback", { timeout: 30_000 }, () => {
 
     const report = await runQuota([]);
 
+    // The superseded source is named with the endpoint's own verdict rather
+    // than the store's expiry field, because it was actually probed.
     expect(attentionRows(report)).toContain(
-      "codex,all,degraded_source,oauth · credentials_expired,none",
+      "codex,all,degraded_source,oauth · Codex sign-in required,none",
     );
   });
 
@@ -197,7 +241,7 @@ describe("per-provider credential source fallback", { timeout: 30_000 }, () => {
     expect(codex.state.status).toBe("fresh");
     expect(codex.state.stale).toBe(false);
     expect(codex.state.degradedSources).toEqual([
-      { source: "oauth", error: "credentials_expired" },
+      { source: "oauth", error: "Codex sign-in required" },
     ]);
   });
 
@@ -214,7 +258,9 @@ describe("per-provider credential source fallback", { timeout: 30_000 }, () => {
     );
     expect(report).toContain("Codex sign-in required");
     expect(report).not.toMatch(/codex,all_models/);
-    expect(api.bearers).toEqual([]);
+    // The stored-expired credential was empirically tested before the
+    // sign-out verdict: its expiry field alone never decides.
+    expect(api.bearers.length).toBeGreaterThan(0);
   });
 
   it("adds no degraded row when the first source answers on its own", async () => {

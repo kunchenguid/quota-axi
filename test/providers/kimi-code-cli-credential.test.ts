@@ -69,6 +69,8 @@ describe("Kimi Code CLI credential discovery", () => {
       payload?: unknown;
       raw?: string;
       status: "missing" | "invalid" | "expired";
+      /** Stored-expired resolutions carry the token so it can still be probed. */
+      accessToken?: string;
     }> = [
       { status: "missing" },
       { raw: "{not-json", status: "invalid" },
@@ -85,10 +87,12 @@ describe("Kimi Code CLI credential discovery", () => {
       {
         payload: { access_token: "token", expires_at: NOW / 1_000 - 1 },
         status: "expired",
+        accessToken: "token",
       },
       {
         payload: { access_token: "token", expires_at: NOW / 1_000 + 60 },
         status: "expired",
+        accessToken: "token",
       },
     ];
 
@@ -104,6 +108,9 @@ describe("Kimi Code CLI credential discovery", () => {
 
       await expect(source.resolve()).resolves.toEqual({
         status: fixture.status,
+        ...(fixture.accessToken === undefined
+          ? {}
+          : { accessToken: fixture.accessToken }),
       });
       await expect(source.inspect()).resolves.toBe(fixture.status);
     }

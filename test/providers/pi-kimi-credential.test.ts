@@ -384,10 +384,14 @@ describe("Pi Kimi credential broker", () => {
 
     const resolution = await createPiKimiCredentialBroker().resolve();
 
-    expect(resolution).toEqual({ status: "expired", refreshable: true });
-    expect(JSON.stringify(resolution)).not.toContain(
-      "pi-oauth-expired-access-770",
-    );
+    // The access token rides along for probe use only - stored expiry orders
+    // candidates rather than skipping them - while the refresh token, which
+    // quota-axi must never read, stays out of the resolution entirely.
+    expect(resolution).toEqual({
+      status: "expired",
+      refreshable: true,
+      credential: "pi-oauth-expired-access-770",
+    });
     expect(JSON.stringify(resolution)).not.toContain("must-not-be-refreshed");
     await expect(createPiKimiCredentialBroker().inspect()).resolves.toBe(
       "expired",
@@ -404,6 +408,7 @@ describe("Pi Kimi credential broker", () => {
     await expect(createPiKimiCredentialBroker().resolve()).resolves.toEqual({
       status: "expired",
       refreshable: false,
+      credential: "pi-oauth-terminal-access-119",
     });
   });
 
