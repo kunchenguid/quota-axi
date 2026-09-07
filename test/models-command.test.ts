@@ -2,7 +2,11 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { main } from "../src/cli.js";
 import { PROVIDERS } from "../src/providers/index.js";
-import type { ProviderAdapter, ProviderQuota } from "../src/types.js";
+import type {
+  ProviderAdapter,
+  ProviderId,
+  ProviderQuota,
+} from "../src/types.js";
 
 const originalClaude = PROVIDERS.claude;
 const originalCodex = PROVIDERS.codex;
@@ -10,6 +14,8 @@ const originalCursor = PROVIDERS.cursor;
 const originalCopilot = PROVIDERS.copilot;
 const originalGrok = PROVIDERS.grok;
 const originalKimi = PROVIDERS.kimi;
+const originalMinimax = PROVIDERS.minimax;
+const originalMimo = PROVIDERS.mimo;
 
 afterEach(() => {
   PROVIDERS.claude = originalClaude;
@@ -18,6 +24,8 @@ afterEach(() => {
   PROVIDERS.copilot = originalCopilot;
   PROVIDERS.grok = originalGrok;
   PROVIDERS.kimi = originalKimi;
+  PROVIDERS.minimax = originalMinimax;
+  PROVIDERS.mimo = originalMimo;
   process.exitCode = undefined;
 });
 
@@ -139,7 +147,14 @@ describe("models command", () => {
   });
 
   it("fails when every catalog provider fails and rejects non-catalog scopes", async () => {
-    for (const provider of ["claude", "codex", "grok", "kimi"] as const) {
+    for (const provider of [
+      "claude",
+      "codex",
+      "grok",
+      "kimi",
+      "minimax",
+      "mimo",
+    ] as const) {
       PROVIDERS[provider] = adapter(failedQuota(provider));
     }
     PROVIDERS.cursor = adapter({
@@ -151,7 +166,7 @@ describe("models command", () => {
     });
 
     const json = JSON.parse(await capture(["models", "--json"]));
-    expect(json.models).toHaveLength(12);
+    expect(json.models).toHaveLength(17);
     expect(process.exitCode).toBe(1);
 
     process.exitCode = undefined;
@@ -184,9 +199,7 @@ function adapter(quota: ProviderQuota): ProviderAdapter {
   };
 }
 
-function failedQuota(
-  provider: "claude" | "codex" | "grok" | "kimi",
-): ProviderQuota {
+function failedQuota(provider: ProviderId): ProviderQuota {
   return {
     provider,
     label: provider,

@@ -1,4 +1,10 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -86,7 +92,7 @@ describe("Z.AI request transport", () => {
       protocol: "https:",
       hostname: "api.z.ai",
       port: "443",
-      pathname: "/api/monitor/usage/quota/limit",
+      pathname: "/api/monitor/usage",
       search: "",
       hash: "",
     });
@@ -139,7 +145,7 @@ describe("Z.AI request transport", () => {
 
     const url = new URL(String(request.mock.calls[0][0]));
     expect(url.hostname).toBe("open.bigmodel.cn");
-    expect(url.pathname).toBe("/api/monitor/usage/quota/limit");
+    expect(url.pathname).toBe("/api/monitor/usage");
   });
 
   it("coalesces concurrent acquisitions into one provider request", async () => {
@@ -310,6 +316,25 @@ describe("Z.AI request transport", () => {
 });
 
 describe("Z.AI payload normalization", () => {
+  it("accepts the current CREDIT_LIMIT response from the vendor usage route", () => {
+    const payload = JSON.parse(
+      readFileSync("test/fixtures/zai/usage-credit.json", "utf8"),
+    );
+    const windows = normalizeZaiPayload(payload).windows;
+    expect(windows).toHaveLength(3);
+    expect(windows[0]).toMatchObject({ id: "five_hour" });
+    expect(windows[0].percentUsed).toBeCloseTo(82.7);
+    expect(windows[0].percentRemaining).toBeCloseTo(17.3);
+    expect(windows[1]).toMatchObject({ id: "weekly" });
+    expect(windows[1].percentUsed).toBeCloseTo(42);
+    expect(windows[1].percentRemaining).toBeCloseTo(58);
+    expect(windows[2]).toMatchObject({
+      id: "mcp_month",
+      percentUsed: 15,
+      percentRemaining: 85,
+    });
+  });
+
   it("maps the live capture to five-hour, weekly, and MCP-month windows", () => {
     const normalized = normalizeZaiPayload(QUOTA_PAYLOAD);
     expect(normalized.plan).toBe("max");
