@@ -235,7 +235,7 @@ function preferCredentialFailure(
   resolution: Exclude<CredentialResolution, { status: "available" }>,
 ): { status: ProviderStatus; error: string } {
   const next = {
-    status: resolution.status === "missing" ? "auth_required" : "error",
+    status: resolution.status === "error" ? "error" : "auth_required",
     error: credentialError(resolution),
   } as { status: ProviderStatus; error: string };
   if (!current || (current.status === "auth_required" && next.status === "error"))

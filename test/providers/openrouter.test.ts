@@ -192,18 +192,30 @@ describe("OpenRouter provider", () => {
     );
   });
 
-  it("reports missing credentials as auth_required", async () => {
+  it("reports unusable local credentials as auth_required", async () => {
     const request = vi.fn();
-    const report = await createOpenRouterAdapter({
+    const missing = await createOpenRouterAdapter({
       credential: () => ({ status: "missing", source: "pi:openrouter" }),
       fetch: request,
     }).fetchQuota(OPTIONS);
-    expect(report).toMatchObject({
+    const invalid = await createOpenRouterAdapter({
+      credential: () => ({ status: "invalid", source: "pi:openrouter" }),
+      fetch: request,
+    }).fetchQuota(OPTIONS);
+    expect(missing).toMatchObject({
       provider: "openrouter",
       source: "api",
       state: {
         status: "auth_required",
         error: "openrouter_credential_unavailable",
+      },
+    });
+    expect(invalid).toMatchObject({
+      provider: "openrouter",
+      source: "api",
+      state: {
+        status: "auth_required",
+        error: "openrouter_credential_invalid",
       },
     });
     expect(request).not.toHaveBeenCalled();

@@ -119,18 +119,30 @@ describe("DeepSeek provider", () => {
     ).toThrow("invalid_amount");
   });
 
-  it("reports missing credentials as auth_required", async () => {
+  it("reports unusable local credentials as auth_required", async () => {
     const request = vi.fn();
-    const report = await createDeepSeekAdapter({
+    const missing = await createDeepSeekAdapter({
       credential: () => ({ status: "missing", source: "pi:deepseek" }),
       fetch: request,
     }).fetchQuota(OPTIONS);
-    expect(report).toMatchObject({
+    const invalid = await createDeepSeekAdapter({
+      credential: () => ({ status: "invalid", source: "pi:deepseek" }),
+      fetch: request,
+    }).fetchQuota(OPTIONS);
+    expect(missing).toMatchObject({
       provider: "deepseek",
       source: "api",
       state: {
         status: "auth_required",
         error: "deepseek_credential_unavailable",
+      },
+    });
+    expect(invalid).toMatchObject({
+      provider: "deepseek",
+      source: "api",
+      state: {
+        status: "auth_required",
+        error: "deepseek_credential_invalid",
       },
     });
     expect(request).not.toHaveBeenCalled();
