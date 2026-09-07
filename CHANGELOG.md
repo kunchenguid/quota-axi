@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.39](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.38...quota-axi-v0.1.39) (2026-09-07)
+
+
+### Bug Fixes
+
+* **providers:** probe stored-expired credentials instead of skipping them ([#150](https://github.com/kunchenguid/quota-axi/issues/150)) ([bf9e0a7](https://github.com/kunchenguid/quota-axi/commit/bf9e0a74be8e2382d28583d8e894d14e860e1b4f))
+
 ## [0.1.38](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.37...quota-axi-v0.1.38) (2026-09-05)
 
 
