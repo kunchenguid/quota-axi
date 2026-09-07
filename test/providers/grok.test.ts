@@ -901,12 +901,53 @@ describe("Grok auth discovery", () => {
         Authorization: "Bearer official-build-oauth-token-fixture",
         Accept: "application/json",
       },
+      credentials: "omit",
+      redirect: "manual",
     });
     expect(modelRequest?.body).toBeUndefined();
     expect(JSON.stringify(result)).not.toContain(
       "official-build-oauth-token-fixture",
     );
     expect(JSON.stringify(result)).not.toContain("fixture-refresh-token");
+  });
+
+  it("does not accept a redirected model probe as live auth", async () => {
+    writeAuth({
+      "https://auth.x.ai::official-cli-fixture": {
+        key: "official-build-oauth-token-fixture",
+        authMode: "oidc",
+        expiresAt: "2035-01-01T00:00:00.000Z",
+      },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) =>
+        url === GROK_BUILD_MODELS_URL
+          ? new Response(undefined, {
+              status: 302,
+              headers: { location: "https://grok.com/login" },
+            })
+          : grpcResponse(new Uint8Array(), { status: 403 }),
+      ),
+    );
+
+    const result = await fetchQuota({
+      allowKeychainPrompt: false,
+      refreshCredentials: false,
+    });
+
+    expect(result.state).toMatchObject({
+      status: "error",
+      error: "Grok model access probe unavailable",
+    });
+    expect(result.attempts?.[0]).toMatchObject({
+      source: "web",
+      status: "failed",
+      error: "Grok model access probe unavailable",
+    });
+    expect(result.state.error).not.toBe(
+      "Grok model access available; quota unavailable",
+    );
   });
 
   it("keeps official Grok Build OAuth usable when its model probe is rate limited", async () => {

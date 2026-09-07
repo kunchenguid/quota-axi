@@ -200,6 +200,12 @@ describe("MiniMax provider", () => {
       key: KEY,
       baseUrl: "https://api.minimaxi.com",
     });
+    expect(extractMiniMaxCredential({ minimax: KEY }, "/auth.json")).toEqual({
+      status: "invalid",
+      source: "pi:minimax",
+      path: "/auth.json",
+      error: "credential_missing",
+    });
   });
 
   it("uses the shared Pi auth path expansion", () => {

@@ -147,6 +147,9 @@ describe("OpenRouter provider", () => {
     expect(() => normalizeOpenRouterPayload({ error: "test" })).toThrow(
       "missing_data",
     );
+    expect(() => normalizeOpenRouterPayload({ data: { usage: 10 } })).toThrow(
+      "invalid_limit",
+    );
   });
 
   it("reports missing credentials as auth_required", async () => {

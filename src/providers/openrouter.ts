@@ -253,11 +253,12 @@ export function normalizeOpenRouterPayload(
   const data = objectValue(root.data);
   if (!data) throw new Error("missing_data");
 
-  const limit = asNonnegativeNumber(data.limit);
+  const unlimited = data.limit === null;
+  const limit = unlimited ? undefined : asNonnegativeNumber(data.limit);
+  if (!unlimited && limit === undefined) throw new Error("invalid_limit");
   const remaining = asNonnegativeNumber(data.limit_remaining);
   const period = asString(data.limit_reset);
   const label = asString(data.label);
-  const unlimited = data.limit === null || data.limit === undefined;
 
   return {
     label,

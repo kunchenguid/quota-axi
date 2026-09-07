@@ -7,6 +7,7 @@ import {
 } from "../cache.js";
 import type { JsonFileReadResult } from "../lib/fs.js";
 import { providerFetch } from "../lib/http.js";
+import { classifyPiAuthEntry } from "../lib/pi-auth-store.js";
 import { usableLiteralSecret } from "../lib/secret.js";
 import { clampPercent } from "../lib/time.js";
 import { piAuthFilePath } from "./pi-auth.js";
@@ -91,11 +92,11 @@ export function extractMiniMaxCredential(
   const root = objectValue(value);
   if (!root)
     return { status: "invalid", source, path, error: "json_parse_error" };
-  const rawEntry = root.minimax;
-  const entry = objectValue(rawEntry);
-  const key = usableLiteralSecret(rawEntry) ?? extractKey(entry);
-  if (rawEntry === undefined || rawEntry === null)
-    return { status: "missing", source, path };
+  const classified = classifyPiAuthEntry(root, "minimax");
+  if (classified.status === "missing") return { status: "missing", source, path };
+  if (classified.status === "invalid")
+    return { status: "invalid", source, path, error: "credential_missing" };
+  const key = extractKey(classified.entry);
   if (!key)
     return { status: "invalid", source, path, error: "credential_missing" };
   return {

@@ -552,6 +552,8 @@ async function probeGrokModelAccess(
           Authorization: `Bearer ${token}`,
           Accept: "application/json",
         },
+        credentials: "omit",
+        redirect: "manual",
         signal: controller.signal,
       });
     } catch (error) {
