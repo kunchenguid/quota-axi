@@ -957,6 +957,28 @@ describe("default TOON decision blocks", () => {
     ]);
   });
 
+  it("names a bound conflict in attention[] instead of an exhausted quota[] row", async () => {
+    useTempCache();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-07T05:27:00.000Z"));
+    PROVIDERS.codex = providerWithQuota(codexBoundConflictQuota());
+
+    const output = await capture(["--provider", "codex"]);
+    const quota = toonRows(output, "quota").map((row) => row[1]);
+
+    expect(quota).toEqual(["all_models"]);
+    expect(toonRows(output, "attention")).toContainEqual([
+      "codex",
+      "model:codex_bengalfox",
+      "bound_conflict",
+      "weekly reads 0 · model:codex_bengalfox:5h + model:codex_bengalfox:7d still report allowance",
+      "none",
+    ]);
+    expect(toonRows(output, "exhaustion").map((row) => row[1])).toEqual([
+      "all_models",
+    ]);
+  });
+
   it("states a positive auth fact for a provider with no quota[] row", async () => {
     useTempCache();
     PROVIDERS.grok = providerWithQuota(grokModelAuthOnlyQuota());
@@ -1719,5 +1741,58 @@ function unavailableAgyQuota(): ProviderQuota {
       error: "Antigravity/agy is not running",
       sourcesTried: ["loopback"],
     },
+  };
+}
+
+/**
+ * The 2026-09-07 capture: the Codex account weekly reads zero while the named
+ * model's own 5h and 7d meters are visibly drawing down, and a live call to
+ * that model succeeded.
+ */
+function codexBoundConflictQuota(): ProviderQuota {
+  return {
+    provider: "codex",
+    label: "Codex",
+    source: "cli-rpc",
+    plan: "pro",
+    windows: [
+      {
+        id: "five_hour",
+        label: "session",
+        kind: "session",
+        percentUsed: 8,
+        percentRemaining: 92,
+        startsAt: "2026-09-07T05:27:00.000Z",
+        resetsAt: "2026-09-07T10:27:00.000Z",
+      },
+      {
+        id: "weekly",
+        label: "week",
+        kind: "weekly",
+        percentUsed: 100,
+        percentRemaining: 0,
+        startsAt: "2026-08-31T17:27:00.000Z",
+        resetsAt: "2026-09-07T17:27:00.000Z",
+      },
+      {
+        id: "model:codex_bengalfox:5h",
+        label: "Spark session",
+        kind: "model",
+        percentUsed: 8,
+        percentRemaining: 92,
+        startsAt: "2026-09-07T05:27:00.000Z",
+        resetsAt: "2026-09-07T10:27:00.000Z",
+      },
+      {
+        id: "model:codex_bengalfox:7d",
+        label: "Spark week",
+        kind: "model",
+        percentUsed: 4,
+        percentRemaining: 96,
+        startsAt: "2026-09-07T05:27:00.000Z",
+        resetsAt: "2026-09-14T05:27:00.000Z",
+      },
+    ],
+    state: { status: "fresh", stale: false, sourcesTried: ["cli-rpc"] },
   };
 }

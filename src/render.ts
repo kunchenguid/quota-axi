@@ -5,6 +5,7 @@ import { isUsageFetchFailure } from "./providers/usage-fetch-failure.js";
 import { SELECTION_SCALAR_KEY } from "./types.js";
 import type {
   AuthProviderReport,
+  BoundConflict,
   EffectiveAvailability,
   ModelsResponse,
   ProviderId,
@@ -113,8 +114,10 @@ function quotaBlocks(response: QuotaAxiResponse): ProviderBlocks {
         scopeAttention.push({
           provider: provider.provider,
           scope: scope.scope,
-          kind: "headroom_unknown",
-          detail: unknownHeadroomDetail(scope),
+          kind: scope.boundConflict ? "bound_conflict" : "headroom_unknown",
+          detail: scope.boundConflict
+            ? boundConflictDetail(scope.boundConflict)
+            : unknownHeadroomDetail(scope),
           remedy: NONE,
         });
       } else {
@@ -289,6 +292,17 @@ function primaryProviderRow(provider: ProviderQuota): AttentionRow | undefined {
       : detail,
     remedy: state.remedyCommand ?? NONE,
   };
+}
+
+/**
+ * State both sides of a bound conflict, so the reason the scope has no number
+ * is the contradiction itself rather than a bare list of blocking windows.
+ */
+function boundConflictDetail(conflict: BoundConflict): string {
+  return [
+    `${joinIds(conflict.exhaustedWindowIds) ?? UNKNOWN} reads 0`,
+    `${joinIds(conflict.liveWindowIds) ?? UNKNOWN} still report allowance`,
+  ].join(DETAIL_SEPARATOR);
 }
 
 /** Which windows suppress the scope's headroom, so absence is explained. */

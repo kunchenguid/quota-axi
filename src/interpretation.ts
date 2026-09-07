@@ -6,6 +6,7 @@ import {
   summarizeEffectiveSelection,
 } from "./pace.js";
 import type {
+  BoundConflict,
   EffectiveAvailability,
   ProviderQuota,
   QuotaSemantics,
@@ -242,7 +243,7 @@ function codexSemantics(
   if (unresolved.length > 0) {
     return partialSemantics(
       unresolved,
-      "Codex base account windows bound every model and named model windows add model-specific bounds, but unfamiliar windows prevent a definitive effective percentage.",
+      "Codex base account windows bound the models that have no window of their own and named model windows are separately metered budgets, but unfamiliar windows prevent a definitive effective percentage.",
     );
   }
 
@@ -259,12 +260,17 @@ function codexSemantics(
   }
   for (const [scope, modelWindows] of models) {
     effectiveAvailability.push(
-      availability(scope, [...account, ...modelWindows], generatedAt),
+      availability(
+        scope,
+        [...account, ...modelWindows],
+        generatedAt,
+        modelWindows,
+      ),
     );
   }
   return knownSemantics(
     effectiveAvailability,
-    "Codex base account windows bound every model. Named model windows add bounds for that model; code-review windows describe a separate workload and are not included in model availability.",
+    "Codex base account windows bound the models that have no window of their own. A named model window is a separately metered budget the vendor reports alongside the base limit, so a base window at zero while that model's own windows still report allowance is published as a bound conflict rather than as the model's exhaustion. Code-review windows describe a separate workload and are not included in model availability.",
   );
 }
 
@@ -474,15 +480,79 @@ function unresolvedAvailability(
   };
 }
 
+/**
+ * A scope's own meter contradicting a bound it only inherits: the inherited
+ * window reports zero remaining while every window metered for this scope alone
+ * still reports allowance. Publishing the inherited zero as this scope's
+ * effective remaining would assert an exhaustion the readings dispute, so the
+ * caller reports the conflict instead of a settled number.
+ *
+ * A zero on one of the scope's *own* windows is not a conflict: that is the
+ * scope's own meter reporting exhaustion, which stands.
+ *
+ * @param windows every window bounding the scope, own and inherited
+ * @param ownWindows the subset metered for this scope alone
+ * @returns the contradiction when one exists, otherwise `undefined`
+ */
+function boundConflict(
+  windows: QuotaWindow[],
+  ownWindows: QuotaWindow[],
+): BoundConflict | undefined {
+  if (ownWindows.length === 0) return undefined;
+  const live = ownWindows.every(
+    ({ percentRemaining }) =>
+      percentRemaining !== undefined && percentRemaining > 0,
+  );
+  if (!live) return undefined;
+  const own = new Set(ownWindows);
+  const exhausted = windows.filter(
+    (window) => !own.has(window) && window.percentRemaining === 0,
+  );
+  if (exhausted.length === 0) return undefined;
+  return {
+    exhaustedWindowIds: exhausted.map(({ id }) => id),
+    liveWindowIds: ownWindows.map(({ id }) => id),
+  };
+}
+
 function availability(
   scope: string,
   windows: QuotaWindow[],
   generatedAt: string,
+  /**
+   * The subset of `windows` metered for this scope alone; the rest are bounds
+   * inherited from a broader scope. Pass it only for a provider where the
+   * inherited bound's enforcement over this scope is not established, so an
+   * inherited zero that the scope's own meter contradicts is reported as a
+   * conflict instead of as exhaustion.
+   */
+  ownWindows?: QuotaWindow[],
 ): EffectiveAvailability {
   const boundedBy = windows.map(({ id }) => id);
   const remaining = windows.map(({ percentRemaining }) => percentRemaining);
   const pace = summarizeEffectivePace(windows);
   const selection = summarizeEffectiveSelection(windows);
+  const conflict = ownWindows && boundConflict(windows, ownWindows);
+  if (conflict) {
+    // Both sides of the contradiction block the aggregate: the inherited zero
+    // is not established over this scope, and the live own windows cannot
+    // stand alone as the bound set either.
+    const unmeasurableWindowIds = [
+      ...conflict.exhaustedWindowIds,
+      ...conflict.liveWindowIds,
+    ];
+    return {
+      scope,
+      status: "unknown",
+      boundedBy,
+      boundConflict: conflict,
+      // Per-window pace is each window's own draw-down and stays true; it is
+      // the very evidence that the own meter is live.
+      pace,
+      runway: { status: "unknown", unmeasurableWindowIds },
+      selection: { status: "unknown", unmeasurableWindowIds },
+    };
+  }
   if (
     remaining.length === 0 ||
     remaining.some((value) => value === undefined)
