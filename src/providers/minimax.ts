@@ -213,7 +213,6 @@ export function createMiniMaxAdapter(
 }
 
 export const minimaxAdapter = createMiniMaxAdapter();
-export const createMinimaxAdapter = createMiniMaxAdapter;
 
 async function fetchQuotaWithDependencies(
   dependencies: MiniMaxDependencies,
@@ -369,8 +368,6 @@ export function normalizeMiniMaxPayload(
   return { windows, ...(plan ? { plan } : {}) };
 }
 
-export const normalizeMinimaxPayload = normalizeMiniMaxPayload;
-
 function normalizeModelRemain(raw: unknown): QuotaWindow[] {
   const row = objectValue(raw);
   const modelName = stringValue(row?.model_name);
@@ -509,8 +506,13 @@ async function requestMiniMax(
     }
     const body = await readResponseBody(response, controller.signal);
     try {
-      return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(body));
-    } catch {
+      const parsed = JSON.parse(
+        new TextDecoder("utf-8", { fatal: true }).decode(body),
+      ) as unknown;
+      rejectMiniMaxApplicationError(parsed);
+      return parsed;
+    } catch (error) {
+      if (error instanceof MiniMaxFailure) throw error;
       throw new MiniMaxFailure("malformed_json", { staleEligible: true });
     }
   } catch (error) {
@@ -521,6 +523,21 @@ async function requestMiniMax(
   } finally {
     clearTimeout(timer);
   }
+}
+
+function rejectMiniMaxApplicationError(payload: unknown): void {
+  const baseResp = objectValue(payload)?.base_resp;
+  const statusCode = numberValue(objectValue(baseResp)?.status_code);
+  if (statusCode === undefined || statusCode === 0) return;
+  if (statusCode === 1004) {
+    throw new MiniMaxFailure("provider_auth_rejected", {
+      status: "auth_required",
+      definitiveAuth: true,
+    });
+  }
+  throw new MiniMaxFailure("provider_request_rejected", {
+    staleEligible: true,
+  });
 }
 
 async function readResponseBody(

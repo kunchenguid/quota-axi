@@ -2462,11 +2462,15 @@ attributes:
     );
   });
 
-  it("does not treat Keychain exit 44 as signed-out or retire the Claude cache", async () => {
+  it("does not treat Keychain exit 44 plus sidecar 401 as signed-out", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-06T20:00:00.000Z"));
     usePlatform("darwin");
-    useTempHome();
+    const home = useTempHome();
+    writeClaudeCredential(home, {
+      accessToken: "expired-sidecar",
+      expiresAt: "2000-01-01T00:00:00.000Z",
+    });
     const { readCachedProvider, writeCachedProviders } =
       await import("../../src/cache.js");
     writeCachedProviders([cachedClaudeQuota(34)]);
@@ -2474,6 +2478,10 @@ attributes:
       throw Object.assign(new Error("not found"), { code: 44 });
     });
     vi.doMock("../../src/lib/process.js", () => ({ execFileText }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(null, { status: 401 })),
+    );
     const { fetchQuota } = await import("../../src/providers/claude.js");
     const result = await fetchQuota({
       allowKeychainPrompt: true,

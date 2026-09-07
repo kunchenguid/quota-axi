@@ -46,7 +46,6 @@ export function createMimoAdapter(
 }
 
 export const mimoAdapter = createMimoAdapter();
-export const createMiMoAdapter = createMimoAdapter;
 
 async function fetchQuotaWithDependencies(
   dependencies: MimoDependencies,
