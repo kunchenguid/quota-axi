@@ -45,12 +45,14 @@ export type MiniMaxCredentialResolution =
       source: string;
       path?: string;
       baseUrl: string;
+      attempts?: SourceAttempt[];
     }
   | {
       status: "missing" | "invalid" | "error";
       source: string;
       path?: string;
       error?: string;
+      attempts?: SourceAttempt[];
     };
 
 type MiniMaxDependencies = {
@@ -163,45 +165,62 @@ export function resolveMiniMaxCredential(): MiniMaxCredentialResolution {
     };
   }
 
+  const failedAttempts: SourceAttempt[] = [];
+  const failedResolutions: MiniMaxCredentialResolution[] = [];
+  const recordFailure = (resolution: MiniMaxCredentialResolution): void => {
+    if (resolution.status === "missing" || resolution.status === "available")
+      return;
+    failedResolutions.push(resolution);
+    failedAttempts.push({
+      source: resolution.source,
+      status: "failed",
+      error: credentialError(resolution),
+    });
+  };
+
   const piPath = miniMaxPiAuthFilePath();
   const piResult = readBoundedJsonFile(piPath);
-  let invalidPiResolution: MiniMaxCredentialResolution | undefined;
   if (piResult.status === "success") {
     const resolution = extractMiniMaxCredential(piResult.value, piPath);
     if (resolution.status === "available") return resolution;
-    if (resolution.status === "invalid") invalidPiResolution = resolution;
-  } else if (
-    piResult.status === "invalid" &&
-    piResult.error === "file_read_error"
-  ) {
-    return {
-      status: "error",
+    recordFailure(resolution);
+  } else if (piResult.status === "invalid") {
+    recordFailure({
+      status: piResult.error === "file_read_error" ? "error" : "invalid",
       source: MINIMAX_PI_SOURCE,
       path: piPath,
       error: piResult.error,
-    };
+    });
   }
 
   const cliPath = minimaxConfigPath();
   const cliResult = readBoundedJsonFile(cliPath);
-  if (cliResult.status === "success")
-    return extractMiniMaxCliCredential(cliResult.value, cliPath);
-  if (cliResult.status === "invalid") {
-    return {
+  if (cliResult.status === "success") {
+    const resolution = extractMiniMaxCliCredential(cliResult.value, cliPath);
+    if (resolution.status === "available")
+      return withCredentialAttempts(resolution, [
+        ...failedAttempts,
+        { source: resolution.source, status: "success" },
+      ]);
+    recordFailure(resolution);
+  } else if (cliResult.status === "invalid") {
+    recordFailure({
       status: cliResult.error === "file_read_error" ? "error" : "invalid",
       source: MINIMAX_CLI_SOURCE,
       path: cliPath,
       error: cliResult.error,
-    };
+    });
   }
 
-  return (
-    invalidPiResolution ?? {
-      status: "missing",
-      source: MINIMAX_CLI_SOURCE,
-      path: cliPath,
-    }
-  );
+  if (failedResolutions.length > 0) {
+    return withCredentialAttempts(failedResolutions[0], failedAttempts);
+  }
+
+  return {
+    status: "missing",
+    source: MINIMAX_CLI_SOURCE,
+    path: cliPath,
+  };
 }
 
 export function createMiniMaxAdapter(
@@ -231,22 +250,24 @@ async function fetchQuotaWithDependencies(
   dependencies: MiniMaxDependencies,
 ): Promise<ProviderQuota> {
   const resolution = dependencies.credential();
-  const attempts: SourceAttempt[] = [
-    {
-      source: resolution.source,
-      status: resolution.status === "available" ? "failed" : "skipped",
-      ...(resolution.status !== "available"
-        ? { error: credentialError(resolution) }
-        : {}),
-    },
-  ];
+  const attempts: SourceAttempt[] = resolution.attempts
+    ? resolution.attempts.map((attempt) => ({ ...attempt }))
+    : [
+        {
+          source: resolution.source,
+          status: resolution.status === "available" ? "failed" : "skipped",
+          ...(resolution.status !== "available"
+            ? { error: credentialError(resolution) }
+            : {}),
+        },
+      ];
   if (resolution.status !== "available") {
     const failure = credentialFailure(resolution);
-    attempts[0] = {
+    replaceCredentialAttempt(attempts, resolution.source, {
       source: resolution.source,
       status: resolution.status === "missing" ? "skipped" : "failed",
       error: failure.code,
-    };
+    });
     if (failure.definitiveAuth) {
       try {
         dependencies.deleteCachedProvider("minimax");
@@ -276,7 +297,10 @@ async function fetchQuotaWithDependencies(
     if (normalized.windows.length === 0 && normalized.credits === undefined) {
       throw new MiniMaxFailure("quota_missing", { staleEligible: true });
     }
-    attempts[0] = { source: resolution.source, status: "success" };
+    replaceCredentialAttempt(attempts, resolution.source, {
+      source: resolution.source,
+      status: "success",
+    });
     return successProvider({
       provider: "minimax",
       label: LABEL,
@@ -293,11 +317,11 @@ async function fetchQuotaWithDependencies(
       error instanceof MiniMaxFailure
         ? error
         : new MiniMaxFailure(errorCode(error), { staleEligible: true });
-    attempts[0] = {
+    replaceCredentialAttempt(attempts, resolution.source, {
       source: resolution.source,
       status: "failed",
       error: failure.code,
-    };
+    });
     if (failure.definitiveAuth) {
       try {
         dependencies.deleteCachedProvider("minimax");
@@ -579,6 +603,27 @@ async function cancelBody(response: Response): Promise<void> {
   } catch {
     // Releasing a rejected response body is best effort.
   }
+}
+
+function withCredentialAttempts<T extends MiniMaxCredentialResolution>(
+  resolution: T,
+  attempts: SourceAttempt[],
+): T {
+  return { ...resolution, attempts };
+}
+
+function replaceCredentialAttempt(
+  attempts: SourceAttempt[],
+  source: string,
+  attempt: SourceAttempt,
+): void {
+  for (let index = attempts.length - 1; index >= 0; index -= 1) {
+    if (attempts[index].source === source) {
+      attempts[index] = attempt;
+      return;
+    }
+  }
+  attempts.push(attempt);
 }
 
 function credentialFailure(

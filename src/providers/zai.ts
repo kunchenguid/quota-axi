@@ -25,7 +25,7 @@ import type {
 } from "../types.js";
 import { VERSION } from "../version.js";
 
-export const ZAI_USAGE_PATH = "/api/monitor/usage";
+export const ZAI_USAGE_PATH = "/api/monitor/usage/quota/limit";
 const OPERATION_DEADLINE_MS = 15_000;
 const RESPONSE_LIMIT_BYTES = 262_144;
 const FIVE_HOURS_SECONDS = 18_000;

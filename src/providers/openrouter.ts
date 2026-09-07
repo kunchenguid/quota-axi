@@ -1,7 +1,8 @@
 import { readJsonFileResult, type JsonFileReadResult } from "../lib/fs.js";
 import { providerFetch } from "../lib/http.js";
-import { piAuthFilePath } from "./pi-auth.js";
+import { classifyPiAuthEntry } from "../lib/pi-auth-store.js";
 import { usableLiteralSecret } from "../lib/secret.js";
+import { piAuthFilePath } from "./pi-auth.js";
 import type {
   AuthProviderReport,
   AuthSourceReport,
@@ -63,16 +64,15 @@ export function extractOpenRouterCredential(
   value: unknown,
   path: string,
 ): CredentialResolution {
-  const root = objectValue(value);
-  if (!root) return { status: "invalid", source: OPENROUTER_PI_SOURCE, path };
-  const entry = objectValue(root.openrouter);
-  if (!entry) return { status: "missing", source: OPENROUTER_PI_SOURCE, path };
+  const classified = classifyPiAuthEntry(value, "openrouter");
+  if (classified.status !== "present")
+    return { status: classified.status, source: OPENROUTER_PI_SOURCE, path };
   const key = [
-    entry.key,
-    entry.apiKey,
-    entry.api_key,
-    entry.access,
-    entry.token,
+    classified.entry.key,
+    classified.entry.apiKey,
+    classified.entry.api_key,
+    classified.entry.access,
+    classified.entry.token,
   ]
     .map(usableLiteralSecret)
     .find((candidate): candidate is string => candidate !== undefined);
@@ -159,9 +159,11 @@ async function fetchQuota(dependencies: Dependencies): Promise<ProviderQuota> {
       source: "api",
       account: normalized.label ? { accountId: normalized.label } : undefined,
       windows,
-      credits: normalized.unlimited
-        ? { unlimited: true, unit: "usd" }
-        : { remaining: normalized.remaining ?? 0, unit: "usd" },
+      ...(normalized.unlimited
+        ? { credits: { unlimited: true, unit: "usd" } }
+        : normalized.remaining !== undefined
+          ? { credits: { remaining: normalized.remaining, unit: "usd" } }
+          : {}),
       refreshedAt: new Date(dependencies.now()).toISOString(),
       sourcesTried: sourceNames(attempts),
       attempts,

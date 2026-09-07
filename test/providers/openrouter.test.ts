@@ -97,6 +97,26 @@ describe("OpenRouter provider", () => {
     });
   });
 
+  it("omits credits when a finite cap lacks remaining balance", async () => {
+    const report = await createOpenRouterAdapter({
+      credential: () => ({
+        status: "available",
+        key: KEY,
+        source: "env:OPENROUTER_API_KEY",
+      }),
+      fetch: async () =>
+        new Response(
+          JSON.stringify({ data: { limit: 100, usage: 10 } }),
+          { headers: { "content-type": "application/json" } },
+        ),
+      now: () => Date.parse("2026-09-01T00:00:00.000Z"),
+    }).fetchQuota(OPTIONS);
+
+    expect(report.state.status).toBe("fresh");
+    expect(report.windows).toEqual([]);
+    expect(report.credits).toBeUndefined();
+  });
+
   it("rejects an invalid payload", () => {
     expect(() => normalizeOpenRouterPayload({ error: "test" })).toThrow(
       "missing_data",
@@ -131,12 +151,19 @@ describe("OpenRouter provider", () => {
     });
   });
 
-  it("rejects template values as missing", () => {
+  it("rejects template and scalar Pi auth entries as invalid", () => {
     expect(
       extractOpenRouterCredential(
         { openrouter: { apiKey: "${OPENROUTER_API_KEY}" } },
         "/auth.json",
       ),
+    ).toEqual({
+      status: "invalid",
+      source: "pi:openrouter",
+      path: "/auth.json",
+    });
+    expect(
+      extractOpenRouterCredential({ openrouter: KEY }, "/auth.json"),
     ).toEqual({
       status: "invalid",
       source: "pi:openrouter",

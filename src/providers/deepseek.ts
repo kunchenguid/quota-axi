@@ -1,7 +1,8 @@
 import { readJsonFileResult, type JsonFileReadResult } from "../lib/fs.js";
 import { providerFetch } from "../lib/http.js";
-import { piAuthFilePath } from "./pi-auth.js";
+import { classifyPiAuthEntry } from "../lib/pi-auth-store.js";
 import { usableLiteralSecret } from "../lib/secret.js";
+import { piAuthFilePath } from "./pi-auth.js";
 import type {
   AuthProviderReport,
   AuthSourceReport,
@@ -66,16 +67,15 @@ export function extractDeepSeekCredential(
   value: unknown,
   path: string,
 ): CredentialResolution {
-  const root = objectValue(value);
-  if (!root) return { status: "invalid", source: DEEPSEEK_PI_SOURCE, path };
-  const entry = objectValue(root.deepseek);
-  if (!entry) return { status: "missing", source: DEEPSEEK_PI_SOURCE, path };
+  const classified = classifyPiAuthEntry(value, "deepseek");
+  if (classified.status !== "present")
+    return { status: classified.status, source: DEEPSEEK_PI_SOURCE, path };
   const key = [
-    entry.key,
-    entry.apiKey,
-    entry.api_key,
-    entry.access,
-    entry.token,
+    classified.entry.key,
+    classified.entry.apiKey,
+    classified.entry.api_key,
+    classified.entry.access,
+    classified.entry.token,
   ]
     .map(usableLiteralSecret)
     .find((candidate): candidate is string => candidate !== undefined);

@@ -101,13 +101,18 @@ describe("DeepSeek provider", () => {
     });
   });
 
-  it("rejects template values as invalid", () => {
+  it("rejects template and scalar Pi auth entries as invalid", () => {
     expect(
       extractDeepSeekCredential(
         { deepseek: { key: "${DEEPSEEK_API_KEY}" } },
         "/auth.json",
       ),
     ).toEqual({ status: "invalid", source: "pi:deepseek", path: "/auth.json" });
+    expect(extractDeepSeekCredential({ deepseek: KEY }, "/auth.json")).toEqual({
+      status: "invalid",
+      source: "pi:deepseek",
+      path: "/auth.json",
+    });
   });
 
   it("reports 401 as auth_required", async () => {

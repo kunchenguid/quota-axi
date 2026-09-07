@@ -94,7 +94,7 @@ describe("Z.AI request transport", () => {
       protocol: "https:",
       hostname: "api.z.ai",
       port: "443",
-      pathname: "/api/monitor/usage",
+      pathname: "/api/monitor/usage/quota/limit",
       search: "",
       hash: "",
     });
@@ -147,7 +147,7 @@ describe("Z.AI request transport", () => {
 
     const url = new URL(String(request.mock.calls[0][0]));
     expect(url.hostname).toBe("open.bigmodel.cn");
-    expect(url.pathname).toBe("/api/monitor/usage");
+    expect(url.pathname).toBe("/api/monitor/usage/quota/limit");
   });
 
   it("coalesces concurrent acquisitions into one provider request", async () => {
