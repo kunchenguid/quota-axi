@@ -243,7 +243,7 @@ function codexSemantics(
   if (unresolved.length > 0) {
     return partialSemantics(
       unresolved,
-      "Codex base account windows bound the models that have no window of their own and named model windows are separately metered budgets, but unfamiliar windows prevent a definitive effective percentage.",
+      "Codex base account windows are applied as a bound to every model scope, including scopes that have named model windows of their own, and a named model window is an additional, separately metered budget the vendor reports alongside the base limit. A base window at zero while that model's own windows all still report allowance is published as a bound conflict rather than as the model's exhaustion. Unfamiliar windows prevent a definitive effective percentage.",
     );
   }
 
@@ -270,7 +270,7 @@ function codexSemantics(
   }
   return knownSemantics(
     effectiveAvailability,
-    "Codex base account windows bound the models that have no window of their own. A named model window is a separately metered budget the vendor reports alongside the base limit, so a base window at zero while that model's own windows still report allowance is published as a bound conflict rather than as the model's exhaustion. Code-review windows describe a separate workload and are not included in model availability.",
+    "Codex base account windows are applied as a bound to every model scope, including scopes that have named model windows of their own, so that model's effective remaining percentage is the minimum across the named windows. A named model window is an additional, separately metered budget the vendor reports alongside the base limit, so a base window at zero while that model's own windows all still report allowance is a contradiction between the two readings and is published as a bound conflict rather than as the model's exhaustion. Code-review windows describe a separate workload and are not included in model availability.",
   );
 }
 
