@@ -501,6 +501,45 @@ describe("quota semantics", () => {
     expect(model?.boundConflict).toBeUndefined();
   });
 
+  // The bound conflict is opted into per provider. Claude's account 5h/7d bound
+  // is enforced across models, so the same reading shape must still resolve to
+  // the account's zero rather than degrading a correct verdict into `unknown`.
+  it("keeps a Claude model exhausted when the account window it inherits reads zero", () => {
+    const result = withQuotaSemantics(
+      provider("claude", [
+        window("five_hour", "session", 88, {
+          windowSeconds: 18_000,
+          resetsAt: offsetFromGeneratedAt(9_000),
+        }),
+        window("seven_day", "weekly", 0, {
+          windowSeconds: WEEK_SECONDS,
+          resetsAt: offsetFromGeneratedAt(WEEK_SECONDS / 2),
+        }),
+        window("model:fable", "model", 74, {
+          windowSeconds: WEEK_SECONDS,
+          resetsAt: offsetFromGeneratedAt(WEEK_SECONDS / 2),
+        }),
+      ]),
+      GENERATED_AT,
+    );
+
+    const model = result.quotaSemantics?.effectiveAvailability.find(
+      (scope) => scope.scope === "model:fable",
+    );
+
+    expect(model).toMatchObject({
+      status: "known",
+      effectivePercentRemaining: 0,
+      boundedBy: ["five_hour", "seven_day", "model:fable"],
+      limitingWindowIds: ["seven_day"],
+      runway: expect.objectContaining({
+        status: "exhausted_now",
+        limitingWindowId: "seven_day",
+      }),
+    });
+    expect(model?.boundConflict).toBeUndefined();
+  });
+
   it("marks unfamiliar Codex windows partial instead of ignoring them", () => {
     const result = withQuotaSemantics(
       provider("codex", [
