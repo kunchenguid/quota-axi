@@ -3,7 +3,6 @@ import {
   createOpenRouterAdapter,
   extractOpenRouterCredential,
   normalizeOpenRouterPayload,
-  resolveOpenRouterCredential,
 } from "../../src/providers/openrouter.js";
 
 const OPTIONS = { allowKeychainPrompt: false, refreshCredentials: false };
@@ -194,8 +193,10 @@ describe("OpenRouter provider", () => {
   });
 
   it("reports missing credentials as auth_required", async () => {
+    const request = vi.fn();
     const report = await createOpenRouterAdapter({
-      credential: () => resolveOpenRouterCredential({}),
+      credential: () => ({ status: "missing", source: "pi:openrouter" }),
+      fetch: request,
     }).fetchQuota(OPTIONS);
     expect(report).toMatchObject({
       provider: "openrouter",
@@ -205,6 +206,7 @@ describe("OpenRouter provider", () => {
         error: "openrouter_credential_unavailable",
       },
     });
+    expect(request).not.toHaveBeenCalled();
   });
 
   it("extracts a Pi auth.json openrouter entry", () => {

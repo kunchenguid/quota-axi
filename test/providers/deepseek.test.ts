@@ -3,7 +3,6 @@ import {
   createDeepSeekAdapter,
   extractDeepSeekCredential,
   normalizeDeepSeekPayload,
-  resolveDeepSeekCredential,
 } from "../../src/providers/deepseek.js";
 
 const OPTIONS = { allowKeychainPrompt: false, refreshCredentials: false };
@@ -121,8 +120,10 @@ describe("DeepSeek provider", () => {
   });
 
   it("reports missing credentials as auth_required", async () => {
+    const request = vi.fn();
     const report = await createDeepSeekAdapter({
-      credential: () => resolveDeepSeekCredential({}),
+      credential: () => ({ status: "missing", source: "pi:deepseek" }),
+      fetch: request,
     }).fetchQuota(OPTIONS);
     expect(report).toMatchObject({
       provider: "deepseek",
@@ -132,6 +133,7 @@ describe("DeepSeek provider", () => {
         error: "deepseek_credential_unavailable",
       },
     });
+    expect(request).not.toHaveBeenCalled();
   });
 
   it("extracts a Pi auth.json deepseek entry", () => {
