@@ -13,8 +13,7 @@
  * stale reading.
  *
  * Publishing the identity of whatever actually produced the reading is the only
- * stamp that cannot make either mistake. A run that publishes none leaves the
- * snapshot unstamped, and an unstamped snapshot is simply never reused.
+ * stamp that cannot make either mistake.
  */
 let readingContextId: string | undefined;
 
