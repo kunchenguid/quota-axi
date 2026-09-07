@@ -168,49 +168,76 @@ describe("MiniMax provider", () => {
     expect(deleteCachedProvider).not.toHaveBeenCalled();
   });
 
-  it("tries CLI config after a MiniMax application auth error", async () => {
-    const request = vi.fn(async (_url: string, init?: RequestInit) => {
-      const bearer = new Headers(init?.headers).get("authorization");
-      if (bearer === "Bearer stale-pi-key") {
-        return new Response(
-          JSON.stringify({ base_resp: { status_code: 1004 } }),
-        );
-      }
-      return new Response(JSON.stringify(fixture("balance")));
-    });
+  it.each([1004, 2049])(
+    "tries CLI config after MiniMax application auth error %s",
+    async (statusCode) => {
+      const request = vi.fn(async (_url: string, init?: RequestInit) => {
+        const bearer = new Headers(init?.headers).get("authorization");
+        if (bearer === "Bearer stale-pi-key") {
+          return new Response(
+            JSON.stringify({ base_resp: { status_code: statusCode } }),
+          );
+        }
+        return new Response(JSON.stringify(fixture("balance")));
+      });
+
+      const report = await createMiniMaxAdapter({
+        credential: () => [
+          {
+            status: "available",
+            key: "stale-pi-key",
+            source: "pi:minimax",
+            baseUrl: "https://api.minimax.io",
+          },
+          {
+            status: "available",
+            key: "sk-api-synthetic",
+            source: "minimax:config.json",
+            baseUrl: "https://api.minimax.io",
+          },
+        ],
+        fetch: request,
+        deleteCachedProvider: vi.fn(),
+      }).fetchQuota(OPTIONS);
+
+      expect(report).toMatchObject({
+        state: { status: "fresh" },
+        attempts: [
+          {
+            source: "pi:minimax",
+            status: "failed",
+            error: "provider_auth_rejected",
+          },
+          { source: "minimax:config.json", status: "success" },
+        ],
+        credits: { remaining: 12.5, unit: "usd" },
+      });
+      expect(request).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it("reports MiniMax application rate limits", async () => {
+    const request = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ base_resp: { status_code: 1002 } })),
+    );
 
     const report = await createMiniMaxAdapter({
-      credential: () => [
-        {
-          status: "available",
-          key: "stale-pi-key",
-          source: "pi:minimax",
-          baseUrl: "https://api.minimax.io",
-        },
-        {
-          status: "available",
-          key: "sk-api-synthetic",
-          source: "minimax:config.json",
-          baseUrl: "https://api.minimax.io",
-        },
-      ],
+      credential: () => ({
+        status: "available",
+        key: KEY,
+        source: "pi:minimax",
+        baseUrl: "https://api.minimax.io",
+      }),
       fetch: request,
-      deleteCachedProvider: vi.fn(),
+      readCachedProvider: () => undefined,
     }).fetchQuota(OPTIONS);
 
     expect(report).toMatchObject({
-      state: { status: "fresh" },
-      attempts: [
-        {
-          source: "pi:minimax",
-          status: "failed",
-          error: "provider_auth_rejected",
-        },
-        { source: "minimax:config.json", status: "success" },
-      ],
-      credits: { remaining: 12.5, unit: "usd" },
+      source: "unavailable",
+      state: { status: "rate_limited", error: "provider_rate_limited" },
     });
-    expect(request).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenCalledTimes(1);
   });
 
   it("accepts the vendor's legacy remaining-count fallback only when no percentage exists", () => {

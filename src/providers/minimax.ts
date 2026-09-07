@@ -93,7 +93,8 @@ export function extractMiniMaxCredential(
   if (!root)
     return { status: "invalid", source, path, error: "json_parse_error" };
   const classified = classifyPiAuthEntry(root, "minimax");
-  if (classified.status === "missing") return { status: "missing", source, path };
+  if (classified.status === "missing")
+    return { status: "missing", source, path };
   if (classified.status === "invalid")
     return { status: "invalid", source, path, error: "credential_missing" };
   const key = extractKey(classified.entry);
@@ -529,10 +530,15 @@ function rejectMiniMaxApplicationError(payload: unknown): void {
   const baseResp = objectValue(payload)?.base_resp;
   const statusCode = numberValue(objectValue(baseResp)?.status_code);
   if (statusCode === undefined || statusCode === 0) return;
-  if (statusCode === 1004) {
+  if (statusCode === 1004 || statusCode === 2049) {
     throw new MiniMaxFailure("provider_auth_rejected", {
       status: "auth_required",
       definitiveAuth: true,
+    });
+  }
+  if (statusCode === 1002) {
+    throw new MiniMaxFailure("provider_rate_limited", {
+      status: "rate_limited",
     });
   }
   throw new MiniMaxFailure("provider_request_rejected", {

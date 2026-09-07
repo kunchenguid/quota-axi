@@ -627,7 +627,7 @@ async function attemptClaudeQuota(
         "keychain_presence_check_failed",
         KEYCHAIN_UNREACHABLE_ERROR,
       ].includes(state.source.error ?? ""),
-  );
+  );  );
   let failure =
     transientFailure ??
     definitiveFailure ??
