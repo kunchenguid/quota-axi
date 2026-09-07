@@ -202,6 +202,42 @@ describe("MiniMax provider", () => {
     });
   });
 
+  it("uses the shared Pi auth path expansion", () => {
+    const originalHome = process.env.HOME;
+    const originalPiDir = process.env.PI_CODING_AGENT_DIR;
+    const originalMmxDir = process.env.MMX_CONFIG_DIR;
+    const originalApiKey = process.env.MINIMAX_API_KEY;
+    const tempDir = mkdtempSync(join(tmpdir(), "quota-axi-minimax-"));
+    const piDir = join(tempDir, "pi-agent");
+    try {
+      process.env.HOME = tempDir;
+      process.env.PI_CODING_AGENT_DIR = "~\\pi-agent";
+      process.env.MMX_CONFIG_DIR = join(tempDir, "missing-mmx");
+      delete process.env.MINIMAX_API_KEY;
+      mkdirSync(piDir, { recursive: true });
+      writeFileSync(
+        join(piDir, "auth.json"),
+        JSON.stringify({ minimax: { api_key: KEY } }),
+      );
+
+      expect(resolveMiniMaxCredential()).toMatchObject({
+        status: "available",
+        key: KEY,
+        source: "pi:minimax",
+      });
+    } finally {
+      if (originalHome === undefined) delete process.env.HOME;
+      else process.env.HOME = originalHome;
+      if (originalPiDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = originalPiDir;
+      if (originalMmxDir === undefined) delete process.env.MMX_CONFIG_DIR;
+      else process.env.MMX_CONFIG_DIR = originalMmxDir;
+      if (originalApiKey === undefined) delete process.env.MINIMAX_API_KEY;
+      else process.env.MINIMAX_API_KEY = originalApiKey;
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("falls through to CLI config while reporting a broken Pi source", async () => {
     const originalPiDir = process.env.PI_CODING_AGENT_DIR;
     const originalMmxDir = process.env.MMX_CONFIG_DIR;
@@ -256,6 +292,58 @@ describe("MiniMax provider", () => {
         { source: "pi:minimax", error: "credential_missing" },
       ]);
       expect(request).toHaveBeenCalledOnce();
+    } finally {
+      if (originalPiDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = originalPiDir;
+      if (originalMmxDir === undefined) delete process.env.MMX_CONFIG_DIR;
+      else process.env.MMX_CONFIG_DIR = originalMmxDir;
+      if (originalApiKey === undefined) delete process.env.MINIMAX_API_KEY;
+      else process.env.MINIMAX_API_KEY = originalApiKey;
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps cache on a later transient source failure", async () => {
+    const originalPiDir = process.env.PI_CODING_AGENT_DIR;
+    const originalMmxDir = process.env.MMX_CONFIG_DIR;
+    const originalApiKey = process.env.MINIMAX_API_KEY;
+    const tempDir = mkdtempSync(join(tmpdir(), "quota-axi-minimax-"));
+    const piDir = join(tempDir, "pi-agent");
+    const mmxFile = join(tempDir, "mmx-file");
+    try {
+      process.env.PI_CODING_AGENT_DIR = piDir;
+      process.env.MMX_CONFIG_DIR = mmxFile;
+      delete process.env.MINIMAX_API_KEY;
+      mkdirSync(piDir, { recursive: true });
+      writeFileSync(
+        join(piDir, "auth.json"),
+        JSON.stringify({ minimax: { api_key: "${MINIMAX_API_KEY}" } }),
+      );
+      writeFileSync(mmxFile, "not a directory");
+      const deleteCachedProvider = vi.fn();
+
+      const report = await createMiniMaxAdapter({
+        credential: resolveMiniMaxCredential,
+        fetch: vi.fn() as typeof globalThis.fetch,
+        deleteCachedProvider,
+      }).fetchQuota(OPTIONS);
+
+      expect(report).toMatchObject({
+        state: { status: "error", error: "credential_resolution_failed" },
+        attempts: [
+          {
+            source: "pi:minimax",
+            status: "failed",
+            error: "credential_missing",
+          },
+          {
+            source: "minimax:config.json",
+            status: "failed",
+            error: "credential_resolution_failed",
+          },
+        ],
+      });
+      expect(deleteCachedProvider).not.toHaveBeenCalled();
     } finally {
       if (originalPiDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
       else process.env.PI_CODING_AGENT_DIR = originalPiDir;

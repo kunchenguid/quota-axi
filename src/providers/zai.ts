@@ -803,11 +803,7 @@ function identifyWindow(
       windowSeconds?: number;
     }
   | undefined {
-  if (
-    (type === "TOKENS_LIMIT" || type === "CREDIT_LIMIT") &&
-    unit === 3 &&
-    number === 5
-  ) {
+  if (type === "TOKENS_LIMIT" && unit === 3 && number === 5) {
     return {
       id: "five_hour",
       label: "session",
@@ -815,11 +811,7 @@ function identifyWindow(
       windowSeconds: FIVE_HOURS_SECONDS,
     };
   }
-  if (
-    (type === "TOKENS_LIMIT" || type === "CREDIT_LIMIT") &&
-    unit === 6 &&
-    number === 1
-  ) {
+  if (type === "TOKENS_LIMIT" && unit === 6 && number === 1) {
     return {
       id: "weekly",
       label: "week",

@@ -117,6 +117,32 @@ describe("OpenRouter provider", () => {
     expect(report.credits).toBeUndefined();
   });
 
+  it("reports a zero finite cap as fully spent", async () => {
+    const report = await createOpenRouterAdapter({
+      credential: () => ({
+        status: "available",
+        key: KEY,
+        source: "env:OPENROUTER_API_KEY",
+      }),
+      fetch: async () =>
+        new Response(
+          JSON.stringify({ data: { limit: 0, limit_remaining: 0 } }),
+          { headers: { "content-type": "application/json" } },
+        ),
+      now: () => Date.parse("2026-09-01T00:00:00.000Z"),
+    }).fetchQuota(OPTIONS);
+
+    expect(report.windows).toEqual([
+      expect.objectContaining({
+        id: "key-limit",
+        limitUsd: 0,
+        spentUsd: 0,
+        percentRemaining: 0,
+      }),
+    ]);
+    expect(report.credits).toEqual({ remaining: 0, unit: "usd" });
+  });
+
   it("rejects an invalid payload", () => {
     expect(() => normalizeOpenRouterPayload({ error: "test" })).toThrow(
       "missing_data",

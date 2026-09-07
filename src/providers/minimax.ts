@@ -9,6 +9,7 @@ import type { JsonFileReadResult } from "../lib/fs.js";
 import { providerFetch } from "../lib/http.js";
 import { usableLiteralSecret } from "../lib/secret.js";
 import { clampPercent } from "../lib/time.js";
+import { piAuthFilePath } from "./pi-auth.js";
 import type {
   AuthProviderReport,
   AuthSourceReport,
@@ -76,20 +77,6 @@ export type NormalizedMiniMaxPayload = {
   windows: QuotaWindow[];
   credits?: ProviderQuota["credits"];
 };
-
-export function miniMaxPiAuthFilePath(): string {
-  const configured = process.env.PI_CODING_AGENT_DIR?.trim();
-  const home = process.env.HOME?.trim() || homedir();
-  const directory =
-    configured === undefined || configured === ""
-      ? join(home, ".pi", "agent")
-      : configured === "~"
-        ? home
-        : configured.startsWith("~/")
-          ? join(home, configured.slice(2))
-          : configured;
-  return join(directory, "auth.json");
-}
 
 export function minimaxConfigPath(): string {
   const configured = process.env.MMX_CONFIG_DIR?.trim();
@@ -178,7 +165,7 @@ export function resolveMiniMaxCredential(): MiniMaxCredentialResolution {
     });
   };
 
-  const piPath = miniMaxPiAuthFilePath();
+  const piPath = piAuthFilePath();
   const piResult = readBoundedJsonFile(piPath);
   if (piResult.status === "success") {
     const resolution = extractMiniMaxCredential(piResult.value, piPath);
@@ -212,8 +199,11 @@ export function resolveMiniMaxCredential(): MiniMaxCredentialResolution {
     });
   }
 
-  if (failedResolutions.length > 0) {
-    return withCredentialAttempts(failedResolutions[0], failedAttempts);
+  const failedResolution =
+    failedResolutions.find((resolution) => resolution.status === "error") ??
+    failedResolutions[0];
+  if (failedResolution) {
+    return withCredentialAttempts(failedResolution, failedAttempts);
   }
 
   return {

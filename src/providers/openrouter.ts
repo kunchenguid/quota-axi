@@ -140,17 +140,23 @@ async function fetchQuota(dependencies: Dependencies): Promise<ProviderQuota> {
       normalized.remaining !== undefined
     ) {
       const used = Math.max(0, normalized.limit - normalized.remaining);
-      const percentUsed =
-        normalized.limit > 0 ? (used / normalized.limit) * 100 : 0;
-      windows.push({
-        id: "key-limit",
-        label: "Key spend cap",
-        kind: "credits",
-        spentUsd: used,
-        limitUsd: normalized.limit,
-        percentRemaining: clampPercent(100 - percentUsed),
-        ...(normalized.period ? { resetText: normalized.period } : {}),
-      });
+      const percentRemaining =
+        normalized.limit > 0
+          ? clampPercent(100 - (used / normalized.limit) * 100)
+          : normalized.remaining === 0
+            ? 0
+            : undefined;
+      if (percentRemaining !== undefined) {
+        windows.push({
+          id: "key-limit",
+          label: "Key spend cap",
+          kind: "credits",
+          spentUsd: used,
+          limitUsd: normalized.limit,
+          percentRemaining,
+          ...(normalized.period ? { resetText: normalized.period } : {}),
+        });
+      }
     }
 
     return successProvider({

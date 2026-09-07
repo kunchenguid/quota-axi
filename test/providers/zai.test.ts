@@ -318,19 +318,29 @@ describe("Z.AI request transport", () => {
 });
 
 describe("Z.AI payload normalization", () => {
-  it("accepts the current CREDIT_LIMIT response from the vendor usage route", () => {
+  it("reports CREDIT_LIMIT response rows as untrusted unknown windows", () => {
     const payload = JSON.parse(
       readFileSync("test/fixtures/zai/usage-credit.json", "utf8"),
     );
-    const windows = normalizeZaiPayload(payload).windows;
-    expect(windows).toHaveLength(3);
-    expect(windows[0]).toMatchObject({ id: "five_hour" });
-    expect(windows[0].percentUsed).toBeCloseTo(82.7);
-    expect(windows[0].percentRemaining).toBeCloseTo(17.3);
-    expect(windows[1]).toMatchObject({ id: "weekly" });
-    expect(windows[1].percentUsed).toBeCloseTo(42);
-    expect(windows[1].percentRemaining).toBeCloseTo(58);
-    expect(windows[2]).toMatchObject({
+    const normalized = normalizeZaiPayload(payload);
+    expect(normalized.diagnostics).toEqual([
+      { code: "entry_unrecognized", index: 1 },
+      { code: "entry_unrecognized", index: 2 },
+    ]);
+    expect(normalized.windows).toHaveLength(3);
+    expect(normalized.windows[0]).toMatchObject({
+      id: "limit:1",
+      kind: "unknown",
+    });
+    expect(normalized.windows[0].percentUsed).toBeCloseTo(82.7);
+    expect(normalized.windows[0].percentRemaining).toBeCloseTo(17.3);
+    expect(normalized.windows[1]).toMatchObject({
+      id: "limit:2",
+      kind: "unknown",
+    });
+    expect(normalized.windows[1].percentUsed).toBeCloseTo(42);
+    expect(normalized.windows[1].percentRemaining).toBeCloseTo(58);
+    expect(normalized.windows[2]).toMatchObject({
       id: "mcp_month",
       percentUsed: 15,
       percentRemaining: 85,
