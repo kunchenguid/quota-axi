@@ -58,7 +58,7 @@ export type MiniMaxCredentialResolution =
     };
 
 type MiniMaxDependencies = {
-  credential: () => MiniMaxCredentialResolution;
+  credential: () => MiniMaxCredentialResolution | MiniMaxCredentialResolution[];
   fetch: typeof globalThis.fetch;
   readCachedProvider: typeof readCachedProviderFromDisk;
   deleteCachedProvider: typeof deleteCachedProviderFromDisk;
@@ -143,37 +143,29 @@ export function extractMiniMaxCliCredential(
 }
 
 export function resolveMiniMaxCredential(): MiniMaxCredentialResolution {
+  const credentials = resolveMiniMaxCredentials();
+  return chooseMiniMaxCredential(credentials);
+}
+
+export function resolveMiniMaxCredentials(): MiniMaxCredentialResolution[] {
+  const credentials: MiniMaxCredentialResolution[] = [];
   const envKey = usableLiteralSecret(process.env.MINIMAX_API_KEY);
   if (envKey) {
-    return {
+    credentials.push({
       status: "available",
       key: envKey,
       source: MINIMAX_ENV_SOURCE,
       baseUrl: configuredBaseUrl(),
-    };
-  }
-
-  const failedAttempts: SourceAttempt[] = [];
-  const failedResolutions: MiniMaxCredentialResolution[] = [];
-  const recordFailure = (resolution: MiniMaxCredentialResolution): void => {
-    if (resolution.status === "missing" || resolution.status === "available")
-      return;
-    failedResolutions.push(resolution);
-    failedAttempts.push({
-      source: resolution.source,
-      status: "failed",
-      error: credentialError(resolution),
     });
-  };
+  }
 
   const piPath = piAuthFilePath();
   const piResult = readBoundedJsonFile(piPath);
   if (piResult.status === "success") {
     const resolution = extractMiniMaxCredential(piResult.value, piPath);
-    if (resolution.status === "available") return resolution;
-    recordFailure(resolution);
+    if (resolution.status !== "missing") credentials.push(resolution);
   } else if (piResult.status === "invalid") {
-    recordFailure({
+    credentials.push({
       status: piResult.error === "file_read_error" ? "error" : "invalid",
       source: MINIMAX_PI_SOURCE,
       path: piPath,
@@ -185,14 +177,9 @@ export function resolveMiniMaxCredential(): MiniMaxCredentialResolution {
   const cliResult = readBoundedJsonFile(cliPath);
   if (cliResult.status === "success") {
     const resolution = extractMiniMaxCliCredential(cliResult.value, cliPath);
-    if (resolution.status === "available")
-      return withCredentialAttempts(resolution, [
-        ...failedAttempts,
-        { source: resolution.source, status: "success" },
-      ]);
-    recordFailure(resolution);
+    if (resolution.status !== "missing") credentials.push(resolution);
   } else if (cliResult.status === "invalid") {
-    recordFailure({
+    credentials.push({
       status: cliResult.error === "file_read_error" ? "error" : "invalid",
       source: MINIMAX_CLI_SOURCE,
       path: cliPath,
@@ -200,25 +187,16 @@ export function resolveMiniMaxCredential(): MiniMaxCredentialResolution {
     });
   }
 
-  const failedResolution =
-    failedResolutions.find((resolution) => resolution.status === "error") ??
-    failedResolutions[0];
-  if (failedResolution) {
-    return withCredentialAttempts(failedResolution, failedAttempts);
-  }
-
-  return {
-    status: "missing",
-    source: MINIMAX_CLI_SOURCE,
-    path: cliPath,
-  };
+  return credentials.length > 0
+    ? credentials
+    : [{ status: "missing", source: MINIMAX_CLI_SOURCE, path: cliPath }];
 }
 
 export function createMiniMaxAdapter(
   overrides: Partial<MiniMaxDependencies> = {},
 ): ProviderAdapter {
   const dependencies: MiniMaxDependencies = {
-    credential: resolveMiniMaxCredential,
+    credential: resolveMiniMaxCredentials,
     fetch: providerFetch,
     readCachedProvider: readCachedProviderFromDisk,
     deleteCachedProvider: deleteCachedProviderFromDisk,
@@ -240,135 +218,136 @@ export const createMinimaxAdapter = createMiniMaxAdapter;
 async function fetchQuotaWithDependencies(
   dependencies: MiniMaxDependencies,
 ): Promise<ProviderQuota> {
-  const resolution = dependencies.credential();
-  const attempts: SourceAttempt[] = resolution.attempts
-    ? resolution.attempts.map((attempt) => ({ ...attempt }))
-    : [
-        {
-          source: resolution.source,
-          status: resolution.status === "available" ? "failed" : "skipped",
-          ...(resolution.status !== "available"
-            ? { error: credentialError(resolution) }
-            : {}),
-        },
-      ];
-  if (resolution.status !== "available") {
-    const failure = credentialFailure(resolution);
-    replaceCredentialAttempt(attempts, resolution.source, {
-      source: resolution.source,
-      status: resolution.status === "missing" ? "skipped" : "failed",
-      error: failure.code,
-    });
-    if (failure.definitiveAuth) {
-      try {
-        dependencies.deleteCachedProvider("minimax");
-      } catch {
-        // A definitive local auth result remains definitive if cache cleanup fails.
-      }
+  const attempts: SourceAttempt[] = [];
+  let finalFailure: MiniMaxFailure | undefined;
+  for (const resolution of credentialCandidates(dependencies)) {
+    if (resolution.attempts) attempts.push(...resolution.attempts);
+    if (resolution.status !== "available") {
+      const failure = credentialFailure(resolution);
+      replaceCredentialAttempt(attempts, resolution.source, {
+        source: resolution.source,
+        status: resolution.status === "missing" ? "skipped" : "failed",
+        error: failure.code,
+      });
+      finalFailure = preferMiniMaxFailure(finalFailure, failure);
+      continue;
     }
-    return failedProvider({
-      provider: "minimax",
-      label: LABEL,
-      status: failure.status,
-      error: failure.code,
-      source: "unavailable",
-      sourcesTried: sourceNames(attempts),
-      attempts,
-    });
+
+    try {
+      const payload = await requestMiniMax(
+        resolution.key,
+        resolution.baseUrl,
+        dependencies.fetch,
+        dependencies.deadlineMs,
+      );
+      const normalized = normalizeMiniMaxPayload(payload);
+      if (normalized.windows.length === 0 && normalized.credits === undefined) {
+        throw new MiniMaxFailure("quota_missing", { staleEligible: true });
+      }
+      replaceCredentialAttempt(attempts, resolution.source, {
+        source: resolution.source,
+        status: "success",
+      });
+      return successProvider({
+        provider: "minimax",
+        label: LABEL,
+        source: "api",
+        ...(normalized.plan ? { plan: normalized.plan } : {}),
+        windows: normalized.windows,
+        ...(normalized.credits ? { credits: normalized.credits } : {}),
+        refreshedAt: new Date(dependencies.now()).toISOString(),
+        sourcesTried: sourceNames(attempts),
+        attempts,
+      });
+    } catch (error) {
+      const failure =
+        error instanceof MiniMaxFailure
+          ? error
+          : new MiniMaxFailure(errorCode(error), { staleEligible: true });
+      replaceCredentialAttempt(attempts, resolution.source, {
+        source: resolution.source,
+        status: "failed",
+        error: failure.code,
+      });
+      if (failure.definitiveAuth) {
+        finalFailure = preferMiniMaxFailure(finalFailure, failure);
+        continue;
+      }
+      if (failure.staleEligible) {
+        try {
+          const cached = dependencies.readCachedProvider("minimax");
+          if (cached) {
+            return staleFromCache(
+              cached,
+              failure.code,
+              sourceNames(attempts),
+              attempts,
+            );
+          }
+        } catch {
+          // Cache I/O cannot replace the bounded provider failure.
+        }
+      }
+      return failedProvider({
+        provider: "minimax",
+        label: LABEL,
+        status: failure.status,
+        error: failure.code,
+        source: "unavailable",
+        retryAfter: failure.retryAfter,
+        sourcesTried: sourceNames(attempts),
+        attempts,
+      });
+    }
   }
 
-  try {
-    const payload = await requestMiniMax(
-      resolution.key,
-      resolution.baseUrl,
-      dependencies.fetch,
-      dependencies.deadlineMs,
-    );
-    const normalized = normalizeMiniMaxPayload(payload);
-    if (normalized.windows.length === 0 && normalized.credits === undefined) {
-      throw new MiniMaxFailure("quota_missing", { staleEligible: true });
+  const failure =
+    finalFailure ??
+    new MiniMaxFailure("minimax_credential_unavailable", {
+      status: "auth_required",
+      definitiveAuth: true,
+    });
+  if (failure.definitiveAuth) {
+    try {
+      dependencies.deleteCachedProvider("minimax");
+    } catch {
+      // Preserve the current definitive auth result.
     }
-    replaceCredentialAttempt(attempts, resolution.source, {
-      source: resolution.source,
-      status: "success",
-    });
-    return successProvider({
-      provider: "minimax",
-      label: LABEL,
-      source: "api",
-      ...(normalized.plan ? { plan: normalized.plan } : {}),
-      windows: normalized.windows,
-      ...(normalized.credits ? { credits: normalized.credits } : {}),
-      refreshedAt: new Date(dependencies.now()).toISOString(),
-      sourcesTried: sourceNames(attempts),
-      attempts,
-    });
-  } catch (error) {
-    const failure =
-      error instanceof MiniMaxFailure
-        ? error
-        : new MiniMaxFailure(errorCode(error), { staleEligible: true });
-    replaceCredentialAttempt(attempts, resolution.source, {
-      source: resolution.source,
-      status: "failed",
-      error: failure.code,
-    });
-    if (failure.definitiveAuth) {
-      try {
-        dependencies.deleteCachedProvider("minimax");
-      } catch {
-        // Preserve the current definitive auth result.
-      }
-    }
-    if (failure.staleEligible) {
-      try {
-        const cached = dependencies.readCachedProvider("minimax");
-        if (cached) {
-          return staleFromCache(
-            cached,
-            failure.code,
-            sourceNames(attempts),
-            attempts,
-          );
-        }
-      } catch {
-        // Cache I/O cannot replace the bounded provider failure.
-      }
-    }
-    return failedProvider({
-      provider: "minimax",
-      label: LABEL,
-      status: failure.status,
-      error: failure.code,
-      source: "unavailable",
-      retryAfter: failure.retryAfter,
-      sourcesTried: sourceNames(attempts),
-      attempts,
-    });
   }
+  return failedProvider({
+    provider: "minimax",
+    label: LABEL,
+    status: failure.status,
+    error: failure.code,
+    source: "unavailable",
+    retryAfter: failure.retryAfter,
+    sourcesTried: sourceNames(attempts),
+    attempts,
+  });
 }
 
 async function inspectAuthWithDependencies(
   dependencies: MiniMaxDependencies,
 ): Promise<AuthProviderReport> {
-  const resolution = dependencies.credential();
-  const source: AuthSourceReport = {
-    source: resolution.source,
-    ...(resolution.path ? { path: resolution.path } : {}),
-    status:
-      resolution.status === "available"
-        ? "available"
-        : resolution.status === "missing"
-          ? "missing"
-          : resolution.status === "error"
-            ? "error"
-            : "invalid",
-    ...(resolution.status !== "available" && resolution.error
-      ? { error: resolution.error }
-      : {}),
-    ...(resolution.status === "available" ? { credentialPresent: true } : {}),
-  };
-  return { provider: "minimax", sources: [source] };
+  const sources: AuthSourceReport[] = credentialCandidates(dependencies).map(
+    (resolution) => ({
+      source: resolution.source,
+      ...(resolution.path ? { path: resolution.path } : {}),
+      status:
+        resolution.status === "available"
+          ? "available"
+          : resolution.status === "missing"
+            ? "missing"
+            : resolution.status === "error"
+              ? "error"
+              : "invalid",
+      ...(resolution.status !== "available" && resolution.error
+        ? { error: resolution.error }
+        : {}),
+      ...(resolution.status === "available" ? { credentialPresent: true } : {}),
+    }),
+  );
+  return { provider: "minimax", sources };
 }
 
 export function normalizeMiniMaxPayload(
@@ -594,6 +573,43 @@ async function cancelBody(response: Response): Promise<void> {
   } catch {
     // Releasing a rejected response body is best effort.
   }
+}
+
+function credentialCandidates(
+  dependencies: MiniMaxDependencies,
+): MiniMaxCredentialResolution[] {
+  const credentials = dependencies.credential();
+  return Array.isArray(credentials) ? credentials : [credentials];
+}
+
+function chooseMiniMaxCredential(
+  resolutions: MiniMaxCredentialResolution[],
+): MiniMaxCredentialResolution {
+  const attempts: SourceAttempt[] = [];
+  for (const resolution of resolutions) {
+    if (resolution.status === "available") {
+      return withCredentialAttempts(resolution, attempts);
+    }
+    attempts.push({
+      source: resolution.source,
+      status: resolution.status === "missing" ? "skipped" : "failed",
+      error: credentialError(resolution),
+    });
+  }
+  const failed =
+    resolutions.find((resolution) => resolution.status === "error") ??
+    resolutions.find((resolution) => resolution.status === "invalid") ??
+    resolutions[0] ??
+    ({ status: "missing", source: MINIMAX_CLI_SOURCE } as const);
+  return withCredentialAttempts(failed, attempts);
+}
+
+function preferMiniMaxFailure(
+  current: MiniMaxFailure | undefined,
+  next: MiniMaxFailure,
+): MiniMaxFailure {
+  if (!current || (current.definitiveAuth && !next.definitiveAuth)) return next;
+  return current;
 }
 
 function withCredentialAttempts<T extends MiniMaxCredentialResolution>(

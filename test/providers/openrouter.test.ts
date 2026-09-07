@@ -66,6 +66,47 @@ describe("OpenRouter provider", () => {
     );
   });
 
+  it("tries Pi auth after an environment key is rejected", async () => {
+    const request = vi.fn(async (_url: string, init?: RequestInit) => {
+      const bearer = new Headers(init?.headers).get("authorization");
+      if (bearer === "Bearer stale-env-key") return new Response(null, { status: 401 });
+      return new Response(
+        JSON.stringify({ data: { limit: 100, limit_remaining: 40 } }),
+        { headers: { "content-type": "application/json" } },
+      );
+    });
+
+    const report = await createOpenRouterAdapter({
+      credential: () => [
+        {
+          status: "available",
+          key: "stale-env-key",
+          source: "env:OPENROUTER_API_KEY",
+        },
+        { status: "available", key: KEY, source: "pi:openrouter" },
+      ],
+      fetch: request,
+      now: () => Date.parse("2026-09-01T00:00:00.000Z"),
+    }).fetchQuota(OPTIONS);
+
+    expect(report).toMatchObject({
+      state: {
+        status: "fresh",
+        sourcesTried: ["env:OPENROUTER_API_KEY", "pi:openrouter"],
+      },
+      attempts: [
+        {
+          source: "env:OPENROUTER_API_KEY",
+          status: "failed",
+          error: "provider_auth_rejected",
+        },
+        { source: "pi:openrouter", status: "success" },
+      ],
+      credits: { remaining: 40, unit: "usd" },
+    });
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
   it("treats a null cap as unlimited and omits the window", async () => {
     const report = await createOpenRouterAdapter({
       credential: () => ({

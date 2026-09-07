@@ -28,7 +28,7 @@ type CredentialResolution =
   | { status: "missing" | "invalid" | "error"; source: string; path?: string };
 
 type Dependencies = {
-  credential: () => CredentialResolution;
+  credential: () => CredentialResolution | CredentialResolution[];
   fetch: typeof providerFetch;
   now: () => number;
   deadlineMs: number;
@@ -47,20 +47,35 @@ export function resolveDeepSeekCredential(
   environment: Readonly<Record<string, string | undefined>> = process.env,
   path = piAuthFilePath(),
 ): CredentialResolution {
+  return chooseDeepSeekCredential(resolveDeepSeekCredentials(environment, path));
+}
+
+export function resolveDeepSeekCredentials(
+  environment: Readonly<Record<string, string | undefined>> = process.env,
+  path = piAuthFilePath(),
+): CredentialResolution[] {
+  const credentials: CredentialResolution[] = [];
   const envKey = usableLiteralSecret(environment.DEEPSEEK_API_KEY);
-  if (envKey)
-    return { status: "available", key: envKey, source: DEEPSEEK_ENV_SOURCE };
+  if (envKey) {
+    credentials.push({
+      status: "available",
+      key: envKey,
+      source: DEEPSEEK_ENV_SOURCE,
+    });
+  }
   const result: JsonFileReadResult = readJsonFileResult(path);
-  if (result.status === "missing")
-    return { status: "missing", source: DEEPSEEK_PI_SOURCE, path };
-  if (result.status === "invalid") {
-    return {
+  if (result.status === "missing") {
+    credentials.push({ status: "missing", source: DEEPSEEK_PI_SOURCE, path });
+  } else if (result.status === "invalid") {
+    credentials.push({
       status: result.error === "file_read_error" ? "error" : "invalid",
       source: DEEPSEEK_PI_SOURCE,
       path,
-    };
+    });
+  } else {
+    credentials.push(extractDeepSeekCredential(result.value, path));
   }
-  return extractDeepSeekCredential(result.value, path);
+  return credentials;
 }
 
 export function extractDeepSeekCredential(
@@ -88,7 +103,7 @@ export function createDeepSeekAdapter(
   overrides: Partial<Dependencies> = {},
 ): ProviderAdapter {
   const dependencies: Dependencies = {
-    credential: () => resolveDeepSeekCredential(),
+    credential: () => resolveDeepSeekCredentials(),
     fetch: providerFetch,
     now: Date.now,
     deadlineMs: DEADLINE_MS,
@@ -105,82 +120,135 @@ export function createDeepSeekAdapter(
 export const deepseekAdapter = createDeepSeekAdapter();
 
 async function fetchQuota(dependencies: Dependencies): Promise<ProviderQuota> {
-  const resolution = dependencies.credential();
-  const attempts: SourceAttempt[] = [
-    {
-      source: resolution.source,
-      status: resolution.status === "available" ? "success" : "skipped",
-      ...(resolution.status !== "available"
-        ? { error: credentialError(resolution) }
-        : {}),
-    },
-  ];
-  if (resolution.status !== "available") {
-    return failedProvider({
-      provider: "deepseek",
-      label: LABEL,
-      status: resolution.status === "missing" ? "auth_required" : "error",
-      error: credentialError(resolution),
-      source: "api",
-      sourcesTried: sourceNames(attempts),
-      attempts,
-    });
+  const attempts: SourceAttempt[] = [];
+  let finalFailure: { status: ProviderStatus; error: string } | undefined;
+  for (const resolution of credentialCandidates(dependencies)) {
+    if (resolution.status !== "available") {
+      attempts.push({
+        source: resolution.source,
+        status: resolution.status === "missing" ? "skipped" : "failed",
+        error: credentialError(resolution),
+      });
+      finalFailure = preferCredentialFailure(finalFailure, resolution);
+      continue;
+    }
+
+    try {
+      const payload = await requestUsage(
+        resolution.key,
+        dependencies.fetch,
+        dependencies.deadlineMs,
+      );
+      const normalized = normalizeDeepSeekPayload(payload);
+      attempts.push({ source: resolution.source, status: "success" });
+
+      return successProvider({
+        provider: "deepseek",
+        label: LABEL,
+        source: "api",
+        windows: [],
+        credits: computeCredits(normalized.metrics),
+        refreshedAt: new Date(dependencies.now()).toISOString(),
+        sourcesTried: sourceNames(attempts),
+        attempts,
+      });
+    } catch (error) {
+      const code = errorCode(error);
+      attempts.push({
+        source: resolution.source,
+        status: "failed",
+        error: code,
+      });
+      if (code === "provider_auth_rejected") {
+        finalFailure = preferRemoteAuthFailure(finalFailure, code);
+        continue;
+      }
+      return failedProvider({
+        provider: "deepseek",
+        label: LABEL,
+        status: statusFromError(code),
+        error: code,
+        source: "api",
+        sourcesTried: sourceNames(attempts),
+        attempts,
+      });
+    }
   }
 
-  try {
-    const payload = await requestUsage(
-      resolution.key,
-      dependencies.fetch,
-      dependencies.deadlineMs,
-    );
-    const normalized = normalizeDeepSeekPayload(payload);
-    attempts[0] = { source: resolution.source, status: "success" };
-
-    return successProvider({
-      provider: "deepseek",
-      label: LABEL,
-      source: "api",
-      windows: [],
-      credits: computeCredits(normalized.metrics),
-      refreshedAt: new Date(dependencies.now()).toISOString(),
-      sourcesTried: sourceNames(attempts),
-      attempts,
-    });
-  } catch (error) {
-    const code = errorCode(error);
-    attempts[0] = { source: resolution.source, status: "failed", error: code };
-    return failedProvider({
-      provider: "deepseek",
-      label: LABEL,
-      status: statusFromError(code),
-      error: code,
-      source: "api",
-      sourcesTried: sourceNames(attempts),
-      attempts,
-    });
-  }
+  const failure = finalFailure ?? {
+    status: "auth_required" as const,
+    error: "deepseek_credential_unavailable",
+  };
+  return failedProvider({
+    provider: "deepseek",
+    label: LABEL,
+    status: failure.status,
+    error: failure.error,
+    source: "api",
+    sourcesTried: sourceNames(attempts),
+    attempts,
+  });
 }
 
 async function inspectAuth(
   dependencies: Dependencies,
 ): Promise<AuthProviderReport> {
-  const resolution = dependencies.credential();
-  const source: AuthSourceReport = {
-    source: resolution.source,
-    path: resolution.path,
-    status:
-      resolution.status === "available"
-        ? "available"
-        : resolution.status === "missing"
-          ? "missing"
-          : resolution.status === "error"
-            ? "error"
-            : "invalid",
-    ...(resolution.status === "error" || resolution.status === "invalid"
-      ? { error: "credential_resolution_failed" }
-      : {}),
-  };
-  return { provider: "deepseek", sources: [source] };
+  const sources: AuthSourceReport[] = credentialCandidates(dependencies).map(
+    (resolution) => ({
+      source: resolution.source,
+      path: resolution.path,
+      status:
+        resolution.status === "available"
+          ? "available"
+          : resolution.status === "missing"
+            ? "missing"
+            : resolution.status === "error"
+              ? "error"
+              : "invalid",
+      ...(resolution.status === "error" || resolution.status === "invalid"
+        ? { error: "credential_resolution_failed" }
+        : {}),
+    }),
+  );
+  return { provider: "deepseek", sources };
+}
+
+function credentialCandidates(dependencies: Dependencies): CredentialResolution[] {
+  const credentials = dependencies.credential();
+  return Array.isArray(credentials) ? credentials : [credentials];
+}
+
+function chooseDeepSeekCredential(
+  resolutions: CredentialResolution[],
+): CredentialResolution {
+  return (
+    resolutions.find((resolution) => resolution.status === "available") ??
+    resolutions.find((resolution) => resolution.status === "error") ??
+    resolutions.find((resolution) => resolution.status === "invalid") ??
+    resolutions[0] ??
+    { status: "missing", source: DEEPSEEK_PI_SOURCE }
+  );
+}
+
+function preferCredentialFailure(
+  current: { status: ProviderStatus; error: string } | undefined,
+  resolution: Exclude<CredentialResolution, { status: "available" }>,
+): { status: ProviderStatus; error: string } {
+  const next = {
+    status: resolution.status === "missing" ? "auth_required" : "error",
+    error: credentialError(resolution),
+  } as { status: ProviderStatus; error: string };
+  if (!current || (current.status === "auth_required" && next.status === "error"))
+    return next;
+  return current;
+}
+
+function preferRemoteAuthFailure(
+  current: { status: ProviderStatus; error: string } | undefined,
+  error: string,
+): { status: ProviderStatus; error: string } {
+  if (current?.status === "error") return current;
+  return { status: "auth_required", error };
 }
 
 async function requestUsage(

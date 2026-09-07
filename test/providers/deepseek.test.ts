@@ -60,6 +60,50 @@ describe("DeepSeek provider", () => {
     );
   });
 
+  it("tries Pi auth after an environment key is rejected", async () => {
+    const request = vi.fn(async (_url: string, init?: RequestInit) => {
+      const bearer = new Headers(init?.headers).get("authorization");
+      if (bearer === "Bearer stale-env-key") return new Response(null, { status: 401 });
+      return new Response(
+        JSON.stringify({
+          is_available: true,
+          balance_infos: [{ currency: "USD", total_balance: "7.50" }],
+        }),
+        { headers: { "content-type": "application/json" } },
+      );
+    });
+
+    const report = await createDeepSeekAdapter({
+      credential: () => [
+        {
+          status: "available",
+          key: "stale-env-key",
+          source: "env:DEEPSEEK_API_KEY",
+        },
+        { status: "available", key: KEY, source: "pi:deepseek" },
+      ],
+      fetch: request,
+      now: () => Date.parse("2026-09-01T00:00:00.000Z"),
+    }).fetchQuota(OPTIONS);
+
+    expect(report).toMatchObject({
+      state: {
+        status: "fresh",
+        sourcesTried: ["env:DEEPSEEK_API_KEY", "pi:deepseek"],
+      },
+      attempts: [
+        {
+          source: "env:DEEPSEEK_API_KEY",
+          status: "failed",
+          error: "provider_auth_rejected",
+        },
+        { source: "pi:deepseek", status: "success" },
+      ],
+      credits: { remaining: 7.5, unit: "usd" },
+    });
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
   it("rejects an invalid balance amount", () => {
     expect(() =>
       normalizeDeepSeekPayload({
