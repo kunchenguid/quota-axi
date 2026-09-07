@@ -812,15 +812,17 @@ key = "oauth/../../escaped"
       providers: [
         {
           provider: "kimi",
-          source: "cache",
-          windows: [{ id: "weekly", percentRemaining: 55 }],
+          source: "unavailable",
+          windows: [],
           state: {
-            status: "stale",
+            status: "error",
             error: "kimi_code_cli_credential_unconfirmed",
           },
         },
       ],
     });
+    // Not a sign-out: the verdict stays `error` rather than `auth_required`,
+    // and the snapshot survives for the environment that did produce it.
     expect(cachedProviderIds(fixture)).toContain("kimi");
   });
 
@@ -971,7 +973,14 @@ oauth_host = "https://auth.kimi.ai"
     expect(cachedProviderIds(fixture)).toContain("kimi");
   });
 
-  it("never reads an assumed slot's emptiness as a sign-out", () => {
+  /**
+   * The assumed environment and a mainland login name the same slot on the same
+   * host, so an identifier derived from that pair alone would let the mainland
+   * account's snapshot be served as this global login's own stale reading. The
+   * guess is what named the slot here, and a snapshot filed under a confirmed
+   * environment is no more readable through it than a credential sitting in it.
+   */
+  it("never serves an assumed environment a confirmed one's cached numbers", () => {
     const fixture = isolatedFixture();
     writeCredential(fixture, "kimi-code", "mainland-before-switch-742");
 
@@ -1008,15 +1017,17 @@ oauth_host = "https://auth.kimi.ai"
       providers: [
         {
           provider: "kimi",
-          source: "cache",
-          windows: [{ id: "weekly", percentRemaining: 75 }],
+          source: "unavailable",
+          windows: [],
           state: {
-            status: "stale",
+            status: "error",
             error: "kimi_code_cli_credential_unconfirmed",
           },
         },
       ],
     });
+    // Still not a sign-out: the mainland snapshot is withheld, not retired, so
+    // the environment that produced it keeps it.
     expect(cachedProviderIds(fixture)).toContain("kimi");
   });
 

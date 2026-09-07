@@ -60,7 +60,8 @@ export type KimiCodeSelection = {
   environment: KimiCodeEnvironment;
   /**
    * Opaque, deterministic cache provenance for this environment, so a cached
-   * snapshot is only reused for the deployment and slot that produced it.
+   * snapshot is only reused for the deployment and slot that produced it, and
+   * only by an environment this reader established rather than assumed.
    *
    * It hashes the resolved environment rather than the configuration text. The
    * table this reader parses also holds Kimi Code's literal `api_key`, and a
@@ -201,9 +202,25 @@ function contextIdFor(
   environment: KimiCodeEnvironment,
 ): string {
   const home = resolve(codeHome.normalize("NFC"));
+  /**
+   * An assumed environment is its own identity, never the confirmed one it
+   * happens to name. The default slot and host are what a configuration this
+   * reader could not walk falls back to, and they are also exactly what a
+   * mainland login resolves to - so sharing an identifier would hand a global
+   * user the mainland account's cached numbers as their own stale reading, the
+   * substitution this scoping exists to prevent. Reading a guessed slot's
+   * contents and reusing a snapshot filed under it are the same claim, and the
+   * evidence for neither exists. Nothing is ever written under this identity
+   * either: an unconfirmed environment stops before any credential is opened,
+   * so it produces no reading of its own to file here.
+   */
+  const slot =
+    environment.status === "resolved" && !environment.confirmed
+      ? "assumed-slot"
+      : "slot";
   const selection =
     environment.status === "resolved"
-      ? `slot:${environment.credentialFileName}\nbase:${environment.baseUrl}`
+      ? `${slot}:${environment.credentialFileName}\nbase:${environment.baseUrl}`
       : `unresolved:${environment.status}`;
   return createHash("sha256")
     .update(`kimi-code-home:${home}\n${selection}`)
