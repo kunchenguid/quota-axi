@@ -508,7 +508,7 @@ Each `effectiveAvailability` entry also carries a compact `pace` summary over **
 | `exhausted_now`        | A bounding window reports zero remaining now. `usableRunwaySeconds` is `0`; `limitingWindowId` names that bound. Not reported when that zero is only an inherited bound the scope's own live windows contradict - see [`boundConflict`](#quota-windows). |
 | `projected_exhaustion` | Every bound is measurable and one or more cycle-average projections exhaust before their own resets. The earliest one supplies `usableRunwaySeconds`, `projectedExhaustedAt`, `limitingWindowId`, and `projectionConfidence`.                            |
 | `through_reset`        | Every measurable bound reaches its own current-cycle reset before projected exhaustion. There is deliberately no synthetic finite deadline or combined reset timestamp.                                                                                  |
-| `unknown`              | A stale, missing, malformed, or otherwise unmeasurable authoritative bound prevents a sound aggregate conclusion. `unmeasurableWindowIds` names the blockers.                                                                                            |
+| `unknown`              | A stale, missing, malformed, or otherwise unmeasurable authoritative bound prevents a sound aggregate conclusion, as does a disclosed [`boundConflict`](#quota-windows). `unmeasurableWindowIds` names the blockers.                                     |
 
 In default TOON the finite-runway detail moves to `exhaustion[]`; `runway` and `projectionConfidence` stay as the `runway` and `confidence` columns of the scope's `quota[]` row, and `unmeasurableWindowIds` becomes an `attention[]` row naming the blocked signals.
 
@@ -522,11 +522,11 @@ A bounding window with no `resetsAt` at all has not been triggered yet (e.g. a C
 
 In default TOON the scalar is the `spendPriority` column of the scope's `quota[]` row - there is no separate `selection[]` block, at any tier, because the column already carries it. An unmeasurable scalar renders the literal `unknown`, never `0`: `0` is exact utilization, a completely different claim.
 
-| Field                   | Meaning                                                                             |
-| ----------------------- | ----------------------------------------------------------------------------------- |
-| `status`                | `known` when every bounding window is measurable; otherwise `unknown`               |
-| `spendPriority`         | The clamped scope scalar. Present only when `status` is `known`                     |
-| `unmeasurableWindowIds` | Bounding windows without usable pace. Present whenever one made the scope `unknown` |
+| Field                   | Meaning                                                                                                                     |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `status`                | `known` when every bounding window is measurable and no [`boundConflict`](#quota-windows) is disclosed; otherwise `unknown` |
+| `spendPriority`         | The clamped scope scalar. Present only when `status` is `known`                                                             |
+| `unmeasurableWindowIds` | The bounding windows that blocked the scalar. Present whenever one made the scope `unknown`                                 |
 
 For each bounding window `w` of the scope:
 
