@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.40](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.39...quota-axi-v0.1.40) (2026-09-07)
+
+
+### Bug Fixes
+
+* **interpretation:** publish a bound conflict instead of asserting model exhaustion ([#153](https://github.com/kunchenguid/quota-axi/issues/153)) ([213b041](https://github.com/kunchenguid/quota-axi/commit/213b041977bfe2f99323387d0d94b62b70422c28))
+
 ## [0.1.39](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.38...quota-axi-v0.1.39) (2026-09-07)
 
 
