@@ -61,7 +61,7 @@
     "@toon-format/toon": "2.1.0",
     "axi-sdk-js": "^0.1.10",
     "proxy-from-env": "2.1.0",
-    "undici": "6.24.1"
+    "undici": "6.28.0"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
