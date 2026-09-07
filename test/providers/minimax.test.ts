@@ -192,6 +192,28 @@ describe("MiniMax provider", () => {
     });
   });
 
+  it("preserves rate limits with an invalid Retry-After date", async () => {
+    const report = await createMiniMaxAdapter({
+      credential: () => ({
+        status: "available",
+        key: KEY,
+        source: "pi:minimax",
+        baseUrl: "https://api.minimax.io",
+      }),
+      fetch: async () =>
+        new Response(null, {
+          status: 429,
+          headers: { "retry-after": "999999999999999999999" },
+        }),
+      readCachedProvider: () => undefined,
+    }).fetchQuota(OPTIONS);
+
+    expect(report).toMatchObject({
+      state: { status: "rate_limited", error: "provider_rate_limited" },
+    });
+    expect(report.state.retryAfter).toBeUndefined();
+  });
+
   it("reports missing and invalid local credentials without making a request", async () => {
     const fetch = vi.fn();
     const deleteCachedProvider = vi.fn();

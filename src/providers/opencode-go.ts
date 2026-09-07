@@ -466,7 +466,7 @@ function normalizeWindow(
   const parsedReset =
     safeParseReset(reset) ??
     (resetInSec !== undefined && resetInSec >= 0
-      ? new Date(now + resetInSec * 1_000).toISOString()
+      ? isoFromTimestamp(now + resetInSec * 1_000)
       : undefined);
   const hasAuthoritativeDuration = windowSeconds === 18_000;
   const normalizedIdentity =
@@ -491,6 +491,12 @@ function safeParseReset(value: unknown): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+function isoFromTimestamp(timestamp: number): string | undefined {
+  if (!Number.isFinite(timestamp)) return undefined;
+  const date = new Date(timestamp);
+  return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
 }
 
 function credentialError(

@@ -136,6 +136,24 @@ describe("OpenCode Go provider", () => {
         usage: { weekly: { percentRemaining: 77, resetsAt: 1_790_000_000 } },
       }).windows,
     ).toMatchObject([{ id: "weekly", percentRemaining: 77, percentUsed: 23 }]);
+    expect(
+      normalizeOpenCodeGoPayload(
+        { rollingUsage: { usagePercent: 18, resetInSec: 10_000_000_000_000 } },
+        Date.parse("2026-09-01T00:00:00.000Z"),
+      ).windows,
+    ).toEqual([
+      expect.objectContaining({
+        id: "rolling",
+        percentUsed: 18,
+        percentRemaining: 82,
+      }),
+    ]);
+    expect(
+      normalizeOpenCodeGoPayload(
+        { rollingUsage: { usagePercent: 18, resetInSec: 10_000_000_000_000 } },
+        Date.parse("2026-09-01T00:00:00.000Z"),
+      ).windows[0]?.resetsAt,
+    ).toBeUndefined();
 
     const report = await createOpenCodeGoAdapter({
       credential: () => ({ status: "available", key: KEY, path: "/auth.json" }),

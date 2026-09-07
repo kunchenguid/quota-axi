@@ -746,13 +746,15 @@ function normalizeRetryAfter(value: string | null): string | undefined {
   const raw = value?.trim();
   if (!raw) return undefined;
   if (/^\d+$/.test(raw)) {
-    const timestamp = Date.now() + Number(raw) * 1000;
-    return Number.isFinite(timestamp)
-      ? new Date(timestamp).toISOString()
-      : undefined;
+    return isoFromTimestamp(Date.now() + Number(raw) * 1000);
   }
-  const parsed = Date.parse(raw);
-  return Number.isFinite(parsed) ? new Date(parsed).toISOString() : undefined;
+  return isoFromTimestamp(Date.parse(raw));
+}
+
+function isoFromTimestamp(timestamp: number): string | undefined {
+  if (!Number.isFinite(timestamp)) return undefined;
+  const date = new Date(timestamp);
+  return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
 }
 
 function modelSlug(value: string): string {
