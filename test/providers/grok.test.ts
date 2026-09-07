@@ -2683,6 +2683,38 @@ describe("Grok cache provenance", () => {
       },
     });
   });
+
+  it("does not reuse web quota cache for model-only Pi auth", async () => {
+    writeValidPiXaiOauth();
+    writeCachedProviders([cachedGrok("web")]);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) =>
+        url === XAI_MODELS_URL
+          ? new Response(JSON.stringify({ object: "list", data: [] }), {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            })
+          : grpcResponse(new Uint8Array(), { status: 403 }),
+      ),
+    );
+
+    const result = await fetchQuota({
+      allowKeychainPrompt: false,
+      refreshCredentials: false,
+    });
+
+    expect(result).toMatchObject({
+      source: "unavailable",
+      windows: [],
+      state: {
+        status: "unavailable",
+        stale: false,
+        authStatus: "usable",
+        error: "Grok model access available; quota unavailable",
+      },
+    });
+  });
 });
 
 describe("Grok CLI rendering regression", () => {

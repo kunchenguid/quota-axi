@@ -283,6 +283,9 @@ async function fetchQuotaWithDependencies(
     [...cliResults].reverse().find((result) => result.outcome === "rejected") ??
     cliResults.find((result) => result.outcome !== "not_tried");
   const consumerTransient = selection.transientError !== undefined;
+  const grokQuotaSourceRejected = selection.results.some(
+    (result) => result.source === GROK_SOURCE && result.outcome === "rejected",
+  );
   const consumerError = selection.transientError ?? cliResult?.error;
   const retryAfter = selection.retryAfter;
   const cliRefreshNeeded = selection.results.some(
@@ -321,7 +324,7 @@ async function fetchQuotaWithDependencies(
     const cached = readCachedProvider("grok");
     if (
       cached?.source === GROK_SOURCE &&
-      (consumerTransient || cliState.status !== "available")
+      (consumerTransient || grokQuotaSourceRejected)
     ) {
       const stale = staleFromCache(
         cached,

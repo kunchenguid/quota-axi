@@ -62,7 +62,8 @@ describe("DeepSeek provider", () => {
   it("tries Pi auth after an environment key is rejected", async () => {
     const request = vi.fn(async (_url: string, init?: RequestInit) => {
       const bearer = new Headers(init?.headers).get("authorization");
-      if (bearer === "Bearer stale-env-key") return new Response(null, { status: 401 });
+      if (bearer === "Bearer stale-env-key")
+        return new Response(null, { status: 403 });
       return new Response(
         JSON.stringify({
           is_available: true,

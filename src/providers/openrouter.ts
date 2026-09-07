@@ -301,7 +301,8 @@ async function requestUsage(
       redirect: "manual",
       signal: controller.signal,
     });
-    if (response.status === 401) throw new Error("provider_auth_rejected");
+    if (response.status === 401 || response.status === 403)
+      throw new Error("provider_auth_rejected");
     if (response.status === 429) throw new Error("provider_rate_limited");
     if (!response.ok) throw new Error("provider_error:" + response.status);
     const text = await response.text();
