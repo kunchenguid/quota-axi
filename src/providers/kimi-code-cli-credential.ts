@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { open } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
+import { publishKimiReadingContextId } from "./kimi-cache-context.js";
 import {
   type KimiCodeConfigSource,
   type KimiCodeEnvironment,
@@ -115,7 +116,7 @@ export function createKimiCodeCliCredentialSource(
       environment,
       contextId: contextIdFor(codeHome, environment),
     };
-    selectedContextId = selection.contextId;
+    publishKimiReadingContextId(selection.contextId);
     return selection;
   };
 
@@ -127,23 +128,6 @@ export function createKimiCodeCliCredentialSource(
     resolve: (selection) => resolveCredential(selection, dependencies),
     inspect,
   };
-}
-
-/**
- * The Kimi Code environment this process actually selected, as its cache
- * identifier, or `undefined` when nothing has been selected yet.
- *
- * The cache writer reads this rather than re-deriving the environment for
- * itself, because by the time a snapshot is written the file that names the
- * environment may describe a different one than the reading came from. An
- * unselected run leaves no stamp, and an unstamped snapshot is simply never
- * reused - the one outcome that cannot attribute one deployment's numbers to
- * another.
- */
-let selectedContextId: string | undefined;
-
-export function selectedKimiCodeContextId(): string | undefined {
-  return selectedContextId;
 }
 
 async function resolveCredential(

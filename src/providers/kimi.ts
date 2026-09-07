@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   deleteCachedProvider as deleteCachedProviderFromDisk,
   readCachedKimiProvider as readCachedProviderFromDisk,
@@ -12,6 +13,7 @@ import type {
   SourceAttempt,
 } from "../types.js";
 import { VERSION } from "../version.js";
+import { publishKimiReadingContextId } from "./kimi-cache-context.js";
 import {
   selectCredential,
   type CandidateLocalState,
@@ -41,6 +43,23 @@ import {
  */
 const KIMI_QUOTA_URL = kimiUsageUrl(DEFAULT_KIMI_CODE_BASE_URL);
 const PI_KIMI_CREDENTIAL_SOURCE = "pi:kimi-coding";
+/**
+ * The cache identity a Pi-brokered reading belongs to. Pi names no Kimi Code
+ * deployment and always asks the default endpoint, so its numbers are that
+ * endpoint's and not the environment `config.toml` happens to select. Stamping
+ * them with a Kimi Code environment would let a mainland reading be served back
+ * as a global login's stale quota - the exact substitution the environment
+ * scoping exists to prevent - so a Pi reading carries its own source and
+ * endpoint instead, and is reused only when the Pi source is what failed.
+ *
+ * Like the environment identifier, it discriminates source and endpoint rather
+ * than accounts, so it does not distinguish two Pi credentials.
+ */
+const PI_KIMI_CACHE_CONTEXT_ID = createHash("sha256")
+  .update(
+    `kimi-source:${PI_KIMI_CREDENTIAL_SOURCE}\nbase:${DEFAULT_KIMI_CODE_BASE_URL}`,
+  )
+  .digest("hex");
 const OPERATION_DEADLINE_MS = 15_000;
 const RESPONSE_LIMIT_BYTES = 262_144;
 const FIVE_HOURS_SECONDS = 18_000;
@@ -224,6 +243,12 @@ type KimiFailureRecord = {
   failure: KimiFailure;
   /** Whether the store held a credential, so a bare gap cannot speak for one that did. */
   credentialPresent: boolean;
+  /**
+   * The cache identity a reading from this source would have belonged to, so
+   * the stale fallback for a failure asks for the numbers that source produced
+   * rather than for whatever the single Kimi cache slot happens to hold.
+   */
+  cacheContextId?: string;
 };
 
 type KimiCandidate =
@@ -256,18 +281,30 @@ async function acquireKimiQuota(
   );
   const attempts: SourceAttempt[] = [];
   const failures: KimiFailureRecord[] = [];
-  /**
-   * One reading of the Kimi Code environment for the whole run, taken before
-   * any request. Everything this run derives from that file - the slot, its
-   * host, and the cache identity of the numbers that come back - has to come
-   * from the same reading, because the file can be rewritten by a login at any
-   * point and a later reading would describe an environment these numbers never
-   * came from.
-   */
-  const selection = await selectKimiEnvironment(dependencies);
+  /** The cache identity of the source being consulted, for the failure paths. */
+  let cacheContextId: string | undefined;
 
   try {
+    /**
+     * One reading of the Kimi Code environment for the whole run, taken before
+     * any request and inside the run's deadline, because a configuration file
+     * that never answers - a FIFO, or a stalled network mount - would otherwise
+     * outlive the operation quota-axi promises to bound. Everything this run
+     * derives from that file - the slot, its host, and the cache identity of the
+     * numbers that come back - has to come from the same reading, because the
+     * file can be rewritten by a login at any point and a later reading would
+     * describe an environment these numbers never came from.
+     */
+    const selection = await selectKimiEnvironment(
+      dependencies,
+      controller.signal,
+    );
+
     for (const source of KIMI_SOURCE_ORDER) {
+      cacheContextId =
+        source === PI_KIMI_CREDENTIAL_SOURCE
+          ? PI_KIMI_CACHE_CONTEXT_ID
+          : selection?.contextId;
       const candidate = await resolveKimiCandidate(
         source,
         selection,
@@ -284,6 +321,7 @@ async function acquireKimiQuota(
         failures.push({
           failure: candidate.failure,
           credentialPresent: candidate.credentialPresent,
+          cacheContextId,
         });
         if (controller.signal.aborted) break;
         continue;
@@ -311,6 +349,12 @@ async function acquireKimiQuota(
               controller.signal,
               dependencies,
             );
+            /**
+             * These numbers belong to the source that produced them, so that is
+             * the identity they are cached under - not the Kimi Code
+             * environment, which a Pi reading never contacted.
+             */
+            if (cacheContextId) publishKimiReadingContextId(cacheContextId);
             return { kind: "quota", result: report };
           } catch (error) {
             const failure = asKimiFailure(error);
@@ -319,7 +363,11 @@ async function acquireKimiQuota(
               status: "failed",
               error: failure.code,
             };
-            failures.push({ failure, credentialPresent: true });
+            failures.push({
+              failure,
+              credentialPresent: true,
+              cacheContextId,
+            });
             return failure.definitiveAuth
               ? { kind: "rejected", error: failure.code }
               : { kind: "transient", error: failure.code };
@@ -337,10 +385,11 @@ async function acquireKimiQuota(
       }
     }
 
+    const defining = definingFailure(failures);
     return failureReport(
-      definingFailure(failures),
+      defining.failure,
+      defining.cacheContextId,
       attempts,
-      selection,
       dependencies,
     );
   } catch (error) {
@@ -358,22 +407,27 @@ async function acquireKimiQuota(
         error: failure.code,
       };
     }
-    return failureReport(failure, attempts, selection, dependencies);
+    return failureReport(failure, cacheContextId, attempts, dependencies);
   } finally {
     clearTimeout(deadline);
   }
 }
 
 /**
- * A run that cannot read the environment at all still reports through the Pi
- * source; it simply has no cache identity to reuse or to stamp, which is the
- * only answer that cannot attribute one deployment's numbers to another.
+ * A run that cannot read the environment at all - including one whose deadline
+ * expires while trying - still reports through the Pi source; it simply has no
+ * Kimi Code cache identity to reuse or to stamp, which is the only answer that
+ * cannot attribute one deployment's numbers to another.
  */
 async function selectKimiEnvironment(
   dependencies: KimiDependencies,
+  signal: AbortSignal,
 ): Promise<KimiCodeSelection | undefined> {
   try {
-    return await dependencies.cliCredentialSource.select();
+    return await waitForDeadline(
+      dependencies.cliCredentialSource.select(),
+      signal,
+    );
   } catch {
     return undefined;
   }
@@ -517,12 +571,16 @@ async function readKimiQuota(
  * among definitive verdicts a store that actually held a credential outranks
  * one that was simply absent.
  */
-function definingFailure(failures: KimiFailureRecord[]): KimiFailure {
+function definingFailure(failures: KimiFailureRecord[]): KimiFailureRecord {
   return (
-    failures.find((record) => !record.failure.definitiveAuth)?.failure ??
-    failures.find((record) => record.credentialPresent)?.failure ??
-    failures[0]?.failure ??
-    new KimiFailure("credential_resolution_failed", { staleEligible: true })
+    failures.find((record) => !record.failure.definitiveAuth) ??
+    failures.find((record) => record.credentialPresent) ??
+    failures[0] ?? {
+      failure: new KimiFailure("credential_resolution_failed", {
+        staleEligible: true,
+      }),
+      credentialPresent: false,
+    }
   );
 }
 
@@ -658,8 +716,8 @@ function cliCredentialFailureFor(
 
 function failureReport(
   failure: KimiFailure,
+  cacheContextId: string | undefined,
   attempts: SourceAttempt[],
-  selection: KimiCodeSelection | undefined,
   dependencies: KimiDependencies,
 ): ProviderQuota {
   if (failure.definitiveAuth) {
@@ -670,9 +728,9 @@ function failureReport(
     }
   }
 
-  if (failure.staleEligible && selection) {
+  if (failure.staleEligible && cacheContextId) {
     try {
-      const cached = dependencies.readCachedProvider(selection.contextId);
+      const cached = dependencies.readCachedProvider(cacheContextId);
       const stale = cached
         ? staleKimiReport(
             cached,

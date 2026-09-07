@@ -1332,6 +1332,30 @@ describe("Kimi credential outcomes and cache policy", () => {
     }
   });
 
+  /**
+   * The environment read is filesystem I/O like every other step of the run,
+   * and a `config.toml` that never answers - a FIFO, or a stalled mount - must
+   * expire with the operation rather than outlive it.
+   */
+  it("bounds a Kimi Code environment read that never answers", async () => {
+    const stalled: KimiCodeCliCredentialSource = {
+      select: vi.fn(() => new Promise<KimiCodeSelection>(() => {})),
+      resolve: vi.fn(async () => ({ status: "missing" }) as const),
+      inspect: vi.fn(async () => "missing" as const),
+    };
+
+    const report = await testAdapter({
+      cliCredentialSource: stalled,
+      deadlineMs: 20,
+    }).fetchQuota(OPTIONS);
+
+    expect(report).toMatchObject({
+      source: "unavailable",
+      windows: [],
+      state: { status: "error", stale: false, error: "request_timeout" },
+    });
+  });
+
   it("never exposes a sentinel credential through reports or attempts", async () => {
     const sentinel = "KIMI-SENTINEL-DO-NOT-LEAK-938475";
     const report = await testAdapter({

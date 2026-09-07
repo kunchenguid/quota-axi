@@ -889,6 +889,88 @@ oauth_host = "https://auth.kimi.ai"
     });
   });
 
+  /**
+   * Pi brokers a credential for the default endpoint and names no Kimi Code
+   * deployment, so its numbers are the default endpoint's. They stay reusable
+   * for a later Pi failure and are never handed to a Kimi Code environment that
+   * was never contacted, which for a global login would be another region's
+   * quota reported as its own.
+   */
+  it("never serves a Pi reading as a Kimi Code deployment's stale numbers", () => {
+    const fixture = isolatedFixture();
+    writeConfig(
+      fixture,
+      `[providers."managed:kimi-code"]
+base_url = "https://api.kimi.ai/coding/v1"
+
+[providers."managed:kimi-code".oauth]
+storage = "file"
+key = "oauth/kimi-code-env-synthetic00000041"
+oauth_host = "https://auth.kimi.ai"
+`,
+    );
+    writeCredential(
+      fixture,
+      "kimi-code-env-synthetic00000041",
+      "global-cli-token-041",
+    );
+    writePiCredential(fixture, "pi-brokered-key-041");
+
+    const brokered = runCli(
+      fixture,
+      ["--provider", "kimi", "--json", "--full"],
+      mockFetch(fixture, MAINLAND_USAGE_URL, "pi-brokered-key-041", 90),
+    );
+    expect(brokered.status).toBe(0);
+    expect(JSON.parse(brokered.stdout)).toMatchObject({
+      providers: [
+        {
+          provider: "kimi",
+          source: "api",
+          windows: [{ id: "weekly", percentRemaining: 10 }],
+          attempts: [{ source: "pi:kimi-coding", status: "success" }],
+        },
+      ],
+    });
+
+    const brokeredAgain = runCli(
+      fixture,
+      ["--provider", "kimi", "--json", "--full"],
+      failingFetch(fixture),
+    );
+    expect(JSON.parse(brokeredAgain.stdout)).toMatchObject({
+      providers: [
+        {
+          provider: "kimi",
+          source: "cache",
+          windows: [{ id: "weekly", percentRemaining: 10 }],
+          state: { status: "stale", error: "provider_unavailable" },
+        },
+      ],
+    });
+
+    rmSync(join(fixture.home, ".pi"), { recursive: true, force: true });
+
+    const globalLogin = runCli(
+      fixture,
+      ["--provider", "kimi", "--json", "--full"],
+      failingFetch(fixture),
+    );
+
+    expect(globalLogin.status).toBe(1);
+    expect(JSON.parse(globalLogin.stdout)).toMatchObject({
+      providers: [
+        {
+          provider: "kimi",
+          source: "unavailable",
+          windows: [],
+          state: { status: "error", error: "provider_unavailable" },
+        },
+      ],
+    });
+    expect(cachedProviderIds(fixture)).toContain("kimi");
+  });
+
   it("never reads an assumed slot's emptiness as a sign-out", () => {
     const fixture = isolatedFixture();
     writeCredential(fixture, "kimi-code", "mainland-before-switch-742");
@@ -1086,6 +1168,17 @@ function writeCredential(
       refresh_token: `ignored-refresh-for-${name}`,
       expires_at: expiresAt,
     }),
+    { mode: 0o600 },
+  );
+}
+
+/** A Pi `kimi-coding` login, the credential source that outranks the CLI's. */
+function writePiCredential(fixture: IsolatedFixture, key: string): void {
+  const authPath = join(fixture.home, ".pi", "agent", "auth.json");
+  mkdirSync(dirname(authPath), { recursive: true, mode: 0o700 });
+  writeFileSync(
+    authPath,
+    JSON.stringify({ "kimi-coding": { type: "api_key", key } }),
     { mode: 0o600 },
   );
 }
