@@ -33,6 +33,8 @@ const originalAlibabaProvider = PROVIDERS.alibaba;
 const originalOpenCodeGoProvider = PROVIDERS["opencode-go"];
 const originalMinimaxProvider = PROVIDERS.minimax;
 const originalMimoProvider = PROVIDERS.mimo;
+const originalDeepSeekProvider = PROVIDERS.deepseek;
+const originalOpenRouterProvider = PROVIDERS.openrouter;
 const originalXdgCacheHome = process.env.XDG_CACHE_HOME;
 const originalClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
 const originalCodexHome = process.env.CODEX_HOME;
@@ -57,6 +59,8 @@ afterEach(() => {
   PROVIDERS["opencode-go"] = originalOpenCodeGoProvider;
   PROVIDERS.minimax = originalMinimaxProvider;
   PROVIDERS.mimo = originalMimoProvider;
+  PROVIDERS.deepseek = originalDeepSeekProvider;
+  PROVIDERS.openrouter = originalOpenRouterProvider;
   vi.unstubAllGlobals();
   if (originalXdgCacheHome === undefined) delete process.env.XDG_CACHE_HOME;
   else process.env.XDG_CACHE_HOME = originalXdgCacheHome;
@@ -1578,11 +1582,15 @@ describe("CLI plumbing via the axi SDK", () => {
     PROVIDERS["opencode-go"] = providerWithAuth("opencode-go", "OpenCode Go");
     PROVIDERS.minimax = providerWithAuth("minimax", "MiniMax");
     PROVIDERS.mimo = providerWithAuth("mimo", "MiMo");
+    PROVIDERS.deepseek = providerWithAuth("deepseek", "DeepSeek");
+    PROVIDERS.openrouter = providerWithAuth("openrouter", "OpenRouter");
 
     const output = await capture(["--allow-keychain-prompt", "auth"]);
     expect(output).toContain(
       "Inspect local quota auth sources without printing secret values",
     );
+    expect(output).toContain("deepseek,test,none,available,none");
+    expect(output).toContain("openrouter,test,none,available,none");
     expect(output).not.toContain("unknown argument");
     expect(process.exitCode).toBeUndefined();
   });

@@ -267,6 +267,57 @@ describe("MiniMax provider", () => {
     });
   });
 
+  it.each(["current_interval", "current_weekly"] as const)(
+    "keeps incomplete %s bounds from overstating model headroom",
+    async (prefix) => {
+      const readablePrefix =
+        prefix === "current_interval" ? "current_weekly" : "current_interval";
+      const report = await createMiniMaxAdapter({
+        credential: () => ({
+          status: "available",
+          key: KEY,
+          source: "pi:minimax",
+          baseUrl: "https://api.minimax.io",
+        }),
+        fetch: async () =>
+          new Response(
+            JSON.stringify({
+              model_remains: [
+                {
+                  model_name: "MiniMax-M3",
+                  [`${readablePrefix}_remaining_percent`]: 90,
+                  [`${prefix}_status`]: 1,
+                  [`${prefix}_total_count`]: 100,
+                },
+              ],
+            }),
+          ),
+      }).fetchQuota(OPTIONS);
+
+      expect(report.state.status).toBe("fresh");
+      expect(report.windows).toHaveLength(2);
+      expect(
+        report.windows.map(({ percentRemaining }) => percentRemaining),
+      ).toContain(undefined);
+      const interpreted = withQuotaSemantics(
+        report,
+        "2026-09-01T00:00:00.000Z",
+      );
+      const availability = interpreted.quotaSemantics?.effectiveAvailability;
+      expect(availability).toEqual([
+        expect.objectContaining({
+          scope: "model:minimax-m3",
+          status: "unknown",
+          boundedBy: [
+            "model:minimax-m3:window:current_interval",
+            "model:minimax-m3:window:weekly",
+          ],
+        }),
+      ]);
+      expect(availability?.[0]?.effectivePercentRemaining).toBeUndefined();
+    },
+  );
+
   it("reports no-allocation MiniMax rows as fresh empty quota", async () => {
     const payload = {
       model_remains: [

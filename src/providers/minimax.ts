@@ -442,6 +442,18 @@ function normalizeModelWindow(
   const startKey =
     prefix === "current_interval" ? "start_time" : "weekly_start_time";
   const endKey = prefix === "current_interval" ? "end_time" : "weekly_end_time";
+  if (
+    ![
+      `${prefix}_status`,
+      `${prefix}_total_count`,
+      `${prefix}_usage_count`,
+      `${prefix}_remaining_percent`,
+      startKey,
+      endKey,
+    ].some((key) => Object.hasOwn(row, key))
+  ) {
+    return undefined;
+  }
   const startsAt = parseEpoch(row[startKey]);
   const resetsAt = parseEpoch(row[endKey]);
   const windowSeconds =
@@ -453,14 +465,6 @@ function normalizeModelWindow(
     explicit !== undefined
       ? clampPercent(explicit)
       : remainingFromCounts(reported, total);
-  if (percentRemaining === undefined && status === 3) return undefined;
-  if (
-    percentRemaining === undefined &&
-    status !== 2 &&
-    resetsAt === undefined
-  ) {
-    return undefined;
-  }
   const identity = miniMaxWindowIdentity(prefix, windowSeconds);
   const remaining = percentRemaining ?? (status === 2 ? 0 : undefined);
   return {
