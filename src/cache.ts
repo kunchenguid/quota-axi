@@ -5,6 +5,7 @@ import {
   ensurePrivateParent,
   readJsonFile,
 } from "./lib/fs.js";
+import { kimiReadingContextId } from "./providers/kimi-cache-context.js";
 import type {
   ProviderId,
   ProviderQuota,
@@ -41,11 +42,35 @@ const WINDOW_KINDS = [
   "unknown",
 ] as const satisfies readonly QuotaWindow["kind"][];
 const CACHE_SCHEMA_VERSION = 2;
-const CLAUDE_CONTEXT_ID = /^[a-f0-9]{64}$/;
+const CREDENTIAL_CONTEXT_ID = /^[a-f0-9]{64}$/;
+
+/**
+ * Providers whose local configuration decides which account a reading belongs
+ * to: a Claude profile selects the credential store, and a Kimi Code
+ * `config.toml` selects the deployment. A snapshot from one such context says
+ * nothing about another, so each is stamped on write and required to match on
+ * stale reuse.
+ *
+ * How that stamp is obtained is not the same question for both. A Claude
+ * profile is fixed by this process's own environment, so deriving it here reads
+ * the same selection the reading used. Kimi's is not derivable here at all.
+ * Kimi Code rewrites `config.toml` on login, so a read taken after the quota
+ * request has returned can describe a deployment the numbers never came from;
+ * and a Kimi reading need not come from that configuration in the first place,
+ * because Pi brokers a credential for the default endpoint while naming no
+ * deployment. Kimi therefore reports the identity of whatever actually produced
+ * its reading.
+ */
+const CONTEXT_SCOPED_PROVIDERS: Partial<
+  Record<ProviderId, () => string | undefined>
+> = {
+  claude: claudeCredentialContextId,
+  kimi: kimiReadingContextId,
+};
 
 type CachedProvider = {
   snapshot: ProviderQuota;
-  claudeCredentialContextId?: string;
+  credentialContextId?: string;
 };
 
 export function readCachedProvider(
@@ -63,11 +88,30 @@ export function readCachedProvider(
 export function readCachedClaudeProvider(
   contextId: string,
 ): ProviderQuota | undefined {
-  if (!CLAUDE_CONTEXT_ID.test(contextId)) return undefined;
+  return readCachedProviderInContext("claude", contextId);
+}
+
+/**
+ * Kimi stale quota may only be reused when the cache record proves it was
+ * captured from the same source and endpoint the caller is asking about, so one
+ * deployment's numbers can never stand in for the other's and a Pi reading of
+ * the default endpoint can never stand in for either.
+ */
+export function readCachedKimiProvider(
+  contextId: string,
+): ProviderQuota | undefined {
+  return readCachedProviderInContext("kimi", contextId);
+}
+
+function readCachedProviderInContext(
+  provider: ProviderId,
+  contextId: string,
+): ProviderQuota | undefined {
+  if (!CREDENTIAL_CONTEXT_ID.test(contextId)) return undefined;
   return readCacheProviders().find(
     (item) =>
-      item.snapshot.provider === "claude" &&
-      item.claudeCredentialContextId === contextId,
+      item.snapshot.provider === provider &&
+      item.credentialContextId === contextId,
   )?.snapshot;
 }
 
@@ -171,11 +215,10 @@ function toCacheProvider(provider: ProviderQuota): CachedProvider | undefined {
     CACHE_SCHEMA_VERSION,
   )?.snapshot;
   if (!snapshot) return undefined;
+  const contextId = CONTEXT_SCOPED_PROVIDERS[provider.provider]?.();
   return {
     snapshot,
-    ...(provider.provider === "claude"
-      ? { claudeCredentialContextId: claudeCredentialContextId() }
-      : {}),
+    ...(contextId ? { credentialContextId: contextId } : {}),
   };
 }
 
@@ -184,8 +227,8 @@ function serializeCachedProvider(
 ): Record<string, unknown> {
   return {
     ...provider.snapshot,
-    ...(provider.claudeCredentialContextId
-      ? { credentialContext: provider.claudeCredentialContextId }
+    ...(provider.credentialContextId
+      ? { credentialContext: provider.credentialContextId }
       : {}),
   };
 }
@@ -243,10 +286,10 @@ function normalizeCachedProvider(
   return {
     snapshot,
     ...(schemaVersion === CACHE_SCHEMA_VERSION &&
-    snapshot.provider === "claude" &&
+    snapshot.provider in CONTEXT_SCOPED_PROVIDERS &&
     credentialContext &&
-    CLAUDE_CONTEXT_ID.test(credentialContext)
-      ? { claudeCredentialContextId: credentialContext }
+    CREDENTIAL_CONTEXT_ID.test(credentialContext)
+      ? { credentialContextId: credentialContext }
       : {}),
   };
 }

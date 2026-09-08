@@ -12,6 +12,7 @@ import type {
   KimiCodeCliCredentialInspection,
   KimiCodeCliCredentialResolution,
   KimiCodeCliCredentialSource,
+  KimiCodeSelection,
 } from "../../src/providers/kimi-code-cli-credential.js";
 import {
   createPiKimiCredentialBroker,
@@ -1292,6 +1293,69 @@ describe("Kimi credential outcomes and cache policy", () => {
     });
   });
 
+  it("preserves stale cache for a CLI environment it cannot read", async () => {
+    const unreadableEnvironments = [
+      ["unsupported_storage", "kimi_code_cli_credential_storage_unsupported"],
+      ["unrecognized_region", "kimi_code_cli_region_unrecognized"],
+      ["invalid_config", "kimi_code_cli_config_invalid"],
+    ] as const;
+
+    for (const [status, error] of unreadableEnvironments) {
+      const remove = vi.fn();
+      const report = await testAdapter({
+        broker: broker({ status: "missing" }),
+        cliCredentialSource: cliCredentialSource({ status }),
+        readCachedProvider: () => cachedQuota(),
+        deleteCachedProvider: remove,
+      }).fetchQuota(OPTIONS);
+
+      expect(remove).not.toHaveBeenCalled();
+      expect(report).toMatchObject({
+        source: "cache",
+        windows: [{ id: "five_hour" }, { id: "weekly" }],
+        state: {
+          status: "stale",
+          stale: true,
+          error,
+          sourcesTried: ["pi:kimi-coding", "kimi-code-cli", "cache"],
+        },
+        attempts: [
+          { source: "pi:kimi-coding", status: "skipped" },
+          {
+            source: "kimi-code-cli",
+            status: "skipped",
+            error,
+            credentialPresent: true,
+          },
+        ],
+      });
+    }
+  });
+
+  /**
+   * The environment read is filesystem I/O like every other step of the run,
+   * and a `config.toml` that never answers - a FIFO, or a stalled mount - must
+   * expire with the operation rather than outlive it.
+   */
+  it("bounds a Kimi Code environment read that never answers", async () => {
+    const stalled: KimiCodeCliCredentialSource = {
+      select: vi.fn(() => new Promise<KimiCodeSelection>(() => {})),
+      resolve: vi.fn(async () => ({ status: "missing" }) as const),
+      inspect: vi.fn(async () => "missing" as const),
+    };
+
+    const report = await testAdapter({
+      cliCredentialSource: stalled,
+      deadlineMs: 20,
+    }).fetchQuota(OPTIONS);
+
+    expect(report).toMatchObject({
+      source: "unavailable",
+      windows: [],
+      state: { status: "error", stale: false, error: "request_timeout" },
+    });
+  });
+
   it("never exposes a sentinel credential through reports or attempts", async () => {
     const sentinel = "KIMI-SENTINEL-DO-NOT-LEAK-938475";
     const report = await testAdapter({
@@ -1337,6 +1401,8 @@ function testAdapter(
   });
 }
 
+const TEST_CREDENTIAL_CONTEXT_ID = "a".repeat(64);
+
 function broker(
   resolution: KimiCredentialResolution,
   inspection: KimiCredentialInspection = resolution.status === "available"
@@ -1349,15 +1415,40 @@ function broker(
   };
 }
 
+/**
+ * A resolved CLI credential always names the base URL its environment logged in
+ * against; these cases are about credential priority rather than about the
+ * environment, so they take the default deployment unless they say otherwise.
+ */
+type CliCredentialInput =
+  | { status: "available"; accessToken: string; baseUrl?: string }
+  | Exclude<KimiCodeCliCredentialResolution, { status: "available" }>;
+
 function cliCredentialSource(
-  resolution: KimiCodeCliCredentialResolution,
-  inspection: KimiCodeCliCredentialInspection = resolution.status,
+  input: CliCredentialInput,
+  inspection: KimiCodeCliCredentialInspection = input.status,
 ): KimiCodeCliCredentialSource {
+  const resolution: KimiCodeCliCredentialResolution =
+    input.status === "available"
+      ? { ...input, baseUrl: input.baseUrl ?? "https://api.kimi.com/coding/v1" }
+      : input;
   return {
+    select: vi.fn(async () => TEST_SELECTION),
     resolve: vi.fn(async () => resolution),
     inspect: vi.fn(async () => inspection),
   };
 }
+
+const TEST_SELECTION: KimiCodeSelection = {
+  codeHome: "/synthetic/kimi-code-home",
+  environment: {
+    status: "resolved",
+    credentialFileName: "kimi-code",
+    baseUrl: "https://api.kimi.com/coding/v1",
+    confirmed: true,
+  },
+  contextId: TEST_CREDENTIAL_CONTEXT_ID,
+};
 
 function jsonResponse(payload: unknown): Response {
   return new Response(JSON.stringify(payload), {
