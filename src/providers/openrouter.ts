@@ -171,9 +171,7 @@ async function fetchQuota(dependencies: Dependencies): Promise<ProviderQuota> {
         provider: "openrouter",
         label: LABEL,
         source: "api",
-        account: normalized.label
-          ? { accountId: normalized.label }
-          : undefined,
+        account: normalized.label ? { accountId: normalized.label } : undefined,
         windows,
         ...(normalized.unlimited
           ? { credits: { unlimited: true, unit: "usd" } }
@@ -245,7 +243,9 @@ async function inspectAuth(
   return { provider: "openrouter", sources };
 }
 
-function credentialCandidates(dependencies: Dependencies): CredentialResolution[] {
+function credentialCandidates(
+  dependencies: Dependencies,
+): CredentialResolution[] {
   const credentials = dependencies.credential();
   return Array.isArray(credentials) ? credentials : [credentials];
 }
@@ -257,8 +257,7 @@ function chooseOpenRouterCredential(
     resolutions.find((resolution) => resolution.status === "available") ??
     resolutions.find((resolution) => resolution.status === "error") ??
     resolutions.find((resolution) => resolution.status === "invalid") ??
-    resolutions[0] ??
-    { status: "missing", source: OPENROUTER_PI_SOURCE }
+    resolutions[0] ?? { status: "missing", source: OPENROUTER_PI_SOURCE }
   );
 }
 
@@ -270,7 +269,10 @@ function preferCredentialFailure(
     status: resolution.status === "error" ? "error" : "auth_required",
     error: credentialError(resolution),
   } as { status: ProviderStatus; error: string };
-  if (!current || (current.status === "auth_required" && next.status === "error"))
+  if (
+    !current ||
+    (current.status === "auth_required" && next.status === "error")
+  )
     return next;
   return current;
 }

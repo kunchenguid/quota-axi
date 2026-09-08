@@ -531,8 +531,8 @@ async function attemptClaudeQuota(
       source: state.source.source,
       status: "skipped",
       error: `credentials_${state.status}`,
-      // A malformed store still holds a credential, so a sibling source that
-      // answers supersedes it rather than replacing it silently.
+      // A malformed store is not confirmed absent; retain its diagnostic
+      // even when a sibling source answers.
       ...(state.status === "invalid" ? { credentialPresent: true } : {}),
     });
   }
@@ -627,7 +627,7 @@ async function attemptClaudeQuota(
         "keychain_presence_check_failed",
         KEYCHAIN_UNREACHABLE_ERROR,
       ].includes(state.source.error ?? ""),
-  );  );
+  );
   let failure =
     transientFailure ??
     definitiveFailure ??
