@@ -43,15 +43,6 @@ export type NormalizedDeepSeekPayload = {
   }[];
 };
 
-export function resolveDeepSeekCredential(
-  environment: Readonly<Record<string, string | undefined>> = process.env,
-  path = piAuthFilePath(),
-): CredentialResolution {
-  return chooseDeepSeekCredential(
-    resolveDeepSeekCredentials(environment, path),
-  );
-}
-
 export function resolveDeepSeekCredentials(
   environment: Readonly<Record<string, string | undefined>> = process.env,
   path = piAuthFilePath(),
@@ -220,17 +211,6 @@ function credentialCandidates(
 ): CredentialResolution[] {
   const credentials = dependencies.credential();
   return Array.isArray(credentials) ? credentials : [credentials];
-}
-
-function chooseDeepSeekCredential(
-  resolutions: CredentialResolution[],
-): CredentialResolution {
-  return (
-    resolutions.find((resolution) => resolution.status === "available") ??
-    resolutions.find((resolution) => resolution.status === "error") ??
-    resolutions.find((resolution) => resolution.status === "invalid") ??
-    resolutions[0] ?? { status: "missing", source: DEEPSEEK_PI_SOURCE }
-  );
 }
 
 function preferCredentialFailure(

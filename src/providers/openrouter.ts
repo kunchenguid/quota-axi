@@ -40,15 +40,6 @@ export type NormalizedOpenRouterPayload = {
   unlimited: boolean;
 };
 
-export function resolveOpenRouterCredential(
-  environment: Readonly<Record<string, string | undefined>> = process.env,
-  path = piAuthFilePath(),
-): CredentialResolution {
-  return chooseOpenRouterCredential(
-    resolveOpenRouterCredentials(environment, path),
-  );
-}
-
 export function resolveOpenRouterCredentials(
   environment: Readonly<Record<string, string | undefined>> = process.env,
   path = piAuthFilePath(),
@@ -248,17 +239,6 @@ function credentialCandidates(
 ): CredentialResolution[] {
   const credentials = dependencies.credential();
   return Array.isArray(credentials) ? credentials : [credentials];
-}
-
-function chooseOpenRouterCredential(
-  resolutions: CredentialResolution[],
-): CredentialResolution {
-  return (
-    resolutions.find((resolution) => resolution.status === "available") ??
-    resolutions.find((resolution) => resolution.status === "error") ??
-    resolutions.find((resolution) => resolution.status === "invalid") ??
-    resolutions[0] ?? { status: "missing", source: OPENROUTER_PI_SOURCE }
-  );
 }
 
 function preferCredentialFailure(
