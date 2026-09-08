@@ -225,7 +225,7 @@ function minimaxSemantics(
   }
   return knownSemantics(
     effectiveAvailability,
-    "MiniMax reports five-hour and weekly quota windows for each named model. Each model scope is bounded only by the windows the provider reports for that model; no account-wide bound is inferred.",
+    "MiniMax reports quota windows for named models. Each model scope is bounded only by the windows the provider reports for that model; no account-wide bound is inferred.",
   );
 }
 
