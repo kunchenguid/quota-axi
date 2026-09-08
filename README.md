@@ -606,8 +606,7 @@ Source attempts can include `credentialPresent` when a source is not genuinely a
 
 ### Model catalog and `models`
 
-`quota-axi models [--intelligence high|medium|low] [--sort runway] [--provider ...] [--json|--full]` joins a reviewed catalog of native Claude, Codex, Grok, Kimi, Z.AI, Antigravity, Alibaba, OpenCode Go, MiniMax, MiMo, DeepSeek, and OpenRouter models with the local quota evidence each provider reports.
-
+`quota-axi models [--intelligence high|medium|low] [--sort runway] [--provider ...] [--json|--full]` joins a reviewed catalog of native Claude, Codex, Grok, Kimi, MiniMax, and MiMo models to the provider's effective quota evidence. MiMo has catalog names for discovery, but no quota windows are established, so its model rows remain unevidenced. It queries catalog-backed providers by default and accepts only those providers in an explicit models scope. Cursor, Copilot, Z.AI, Alibaba, OpenCode Go, DeepSeek, OpenRouter, and Antigravity report quota but have no reviewed catalog entries yet, so they are not `models` providers.
 Catalog buckets are coarse editorial classifications relative to the current frontier, not scores. They are curated from public provider material and public leaderboards with a documented provenance string, so a stale catalog is detectable rather than silently refreshed.
 
 Every models response includes `catalog.version` and `catalog.provenance`; callers must treat catalog freshness and unmapped `unmatchedWindowIds` as explicit unknowns, never as missing evidence.

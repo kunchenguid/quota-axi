@@ -146,10 +146,9 @@ describe("OpenRouter provider", () => {
         source: "env:OPENROUTER_API_KEY",
       }),
       fetch: async () =>
-        new Response(
-          JSON.stringify({ data: { limit: 100, usage: 10 } }),
-          { headers: { "content-type": "application/json" } },
-        ),
+        new Response(JSON.stringify({ data: { limit: 100, usage: 10 } }), {
+          headers: { "content-type": "application/json" },
+        }),
       now: () => Date.parse("2026-09-01T00:00:00.000Z"),
     }).fetchQuota(OPTIONS);
 
