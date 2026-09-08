@@ -1665,6 +1665,117 @@ describe("Grok dual-source CLI and Pi xAI usability", () => {
     expect(JSON.stringify(result)).not.toContain("pi-xai-access-token-fixture");
   });
 
+  describe.each([
+    { source: "cli", expiry: "valid" },
+    { source: "cli", expiry: "expired" },
+    { source: "cli", expiry: "refreshable" },
+    { source: "pi", expiry: "valid" },
+    { source: "pi", expiry: "expired" },
+    { source: "pi", expiry: "refreshable" },
+  ])("$source $expiry OAuth probe failures", ({ source, expiry }) => {
+    beforeEach(() => {
+      const expires = Date.now() + (expiry === "valid" ? 3_600_000 : -60_000);
+      if (source === "cli") {
+        writeAuth({
+          "https://auth.x.ai::fixture-client": {
+            key: "probe-access-token",
+            auth_mode: "oidc",
+            expires_at: new Date(expires).toISOString(),
+            ...(expiry === "refreshable"
+              ? { refresh_token: "fixture-refresh-token" }
+              : {}),
+          },
+        });
+      } else {
+        writePiXaiAuth({
+          xai: {
+            type: "oauth",
+            access: "probe-access-token",
+            expires,
+            ...(expiry === "refreshable"
+              ? { refresh: "fixture-refresh-token" }
+              : {}),
+          },
+        });
+      }
+    });
+
+    it.each([
+      { cached: false, status: 503 },
+      { cached: true, status: 503 },
+      { cached: false, status: 429 },
+      { cached: true, status: 429 },
+    ])(
+      "keeps catalog HTTP $status indeterminate, cache=$cached",
+      async ({ cached, status }) => {
+        if (cached) writeCachedProviders([cachedGrok("web")]);
+        const fetchMock = vi.fn(
+          async (url: string) =>
+            new Response(null, {
+              status: url === CONSUMER_QUOTA_URL ? 403 : status,
+              headers: { "retry-after": "60" },
+            }),
+        );
+        vi.stubGlobal("fetch", fetchMock);
+
+        const result = withQuotaSemantics(
+          await fetchQuota({
+            allowKeychainPrompt: false,
+            refreshCredentials: false,
+          }),
+          new Date().toISOString(),
+        );
+
+        expect(result).toMatchObject({
+          source: "unavailable",
+          windows: [],
+          state: {
+            status: status === 429 ? "rate_limited" : "error",
+            stale: false,
+            authStatus:
+              expiry === "valid"
+                ? "usable"
+                : expiry === "refreshable"
+                  ? "expired_refreshable"
+                  : "unusable",
+            error:
+              status === 429
+                ? "Grok model access probe rate limited"
+                : "Grok model access probe unavailable",
+          },
+        });
+        expect(result.state.reason).toBeUndefined();
+        expect(result.state.remedyCommand).toBeUndefined();
+        if (status === 429) expect(result.state.retryAfter).toBeDefined();
+        expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+          CONSUMER_QUOTA_URL,
+          source === "cli" ? GROK_BUILD_MODELS_URL : XAI_MODELS_URL,
+        ]);
+      },
+    );
+
+    it("still permits cache fallback for consumer quota outages", async () => {
+      writeCachedProviders([cachedGrok("web")]);
+      const fetchMock = vi.fn(async () => new Response(null, { status: 503 }));
+      vi.stubGlobal("fetch", fetchMock);
+
+      const result = await fetchQuota({
+        allowKeychainPrompt: false,
+        refreshCredentials: false,
+      });
+
+      expect(result).toMatchObject({
+        source: "cache",
+        windows: [{ percentUsed: 20, percentRemaining: 80 }],
+        state: {
+          status: "stale",
+          error: "Grok quota unavailable",
+        },
+      });
+      expect(fetchMock).toHaveBeenCalledOnce();
+    });
+  });
+
   it("preserves usable auth for a transient valid Pi oauth failure", async () => {
     writeValidPiXaiOauth();
     vi.stubGlobal(
@@ -2104,7 +2215,9 @@ describe("Grok dual-source CLI and Pi xAI usability", () => {
     ) as QuotaAxiResponse;
     const grok = json.providers[0];
 
-    expect(grok?.state.status).toBe("stale");
+    expect(grok?.state.status).toBe("error");
+    expect(grok?.windows).toEqual([]);
+    expect(grok?.state.error).toBe("Grok model access probe unavailable");
     expect(grok?.state.authStatus).toBe("usable");
     expect(grok?.state.reason).toBeUndefined();
     expect(grok?.state.remedyCommand).toBeUndefined();
@@ -2202,7 +2315,7 @@ describe("Grok dual-source CLI and Pi xAI usability", () => {
     ]);
   });
 
-  it("classifies both sources expired refreshable without claiming sign-out", async () => {
+  it("classifies both rejected sources expired refreshable without claiming sign-out", async () => {
     writeAuth({
       "https://auth.x.ai::fixture-client": {
         key: "expired-access-token",
@@ -2219,7 +2332,10 @@ describe("Grok dual-source CLI and Pi xAI usability", () => {
         expires: Date.now() - 60_000,
       },
     });
-    vi.stubGlobal("fetch", vi.fn());
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(null, { status: 403 })),
+    );
 
     const result = await fetchQuota({
       allowKeychainPrompt: false,
@@ -2450,7 +2566,10 @@ describe("Grok dual-source CLI and Pi xAI usability", () => {
         expires: Date.now() - 60_000,
       },
     });
-    vi.stubGlobal("fetch", vi.fn());
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(null, { status: 403 })),
+    );
 
     const result = await fetchQuota({
       allowKeychainPrompt: false,
@@ -2556,7 +2675,10 @@ describe("Grok dual-source CLI and Pi xAI usability", () => {
         expires: Date.now() - 60_000,
       },
     });
-    vi.stubGlobal("fetch", vi.fn());
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(null, { status: 403 })),
+    );
 
     const jsonText = await captureCli(["--provider", "grok", "--json"]);
     const json = JSON.parse(jsonText) as QuotaAxiResponse;
