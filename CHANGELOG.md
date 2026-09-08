@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.41](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.40...quota-axi-v0.1.41) (2026-09-08)
+
+
+### Bug Fixes
+
+* **deps:** update undici to 6.28.0 for security fixes ([#156](https://github.com/kunchenguid/quota-axi/issues/156)) ([ba32e0a](https://github.com/kunchenguid/quota-axi/commit/ba32e0a33742b247dfa48e1e972f30e5d9d621f9))
+* **providers:** resolve the Kimi Code credential slot and endpoint together ([#151](https://github.com/kunchenguid/quota-axi/issues/151)) ([aa2fa97](https://github.com/kunchenguid/quota-axi/commit/aa2fa973b817f096dd2a0c448c04fc2b82b2f691))
+
 ## [0.1.40](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.39...quota-axi-v0.1.40) (2026-09-07)
 
 
