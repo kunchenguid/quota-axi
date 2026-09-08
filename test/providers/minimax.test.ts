@@ -267,24 +267,61 @@ describe("MiniMax provider", () => {
     });
   });
 
-  it("omits MiniMax model rows with no allocation", () => {
-    expect(
-      normalizeMiniMaxPayload({
-        model_remains: [
-          {
-            model_name: "Speech-HD",
-            current_interval_total_count: 0,
-            current_interval_usage_count: 0,
-            current_interval_remaining_percent: 100,
-            current_interval_status: 3,
-            current_weekly_total_count: 0,
-            current_weekly_usage_count: 0,
-            current_weekly_remaining_percent: 100,
-            current_weekly_status: 3,
-          },
-        ],
-      }).windows,
-    ).toEqual([]);
+  it("reports no-allocation MiniMax rows as fresh empty quota", async () => {
+    const payload = {
+      model_remains: [
+        {
+          model_name: "Speech-HD",
+          current_interval_total_count: 0,
+          current_interval_usage_count: 0,
+          current_interval_remaining_percent: 100,
+          current_interval_status: 3,
+          current_weekly_total_count: 0,
+          current_weekly_usage_count: 0,
+          current_weekly_remaining_percent: 100,
+          current_weekly_status: 3,
+        },
+      ],
+    };
+    expect(normalizeMiniMaxPayload(payload).windows).toEqual([]);
+
+    const readCachedProvider = vi.fn(() => ({
+      provider: "minimax",
+      label: "MiniMax",
+      source: "api",
+      windows: [
+        {
+          id: "model:old:5h",
+          label: "Old 5h",
+          kind: "model",
+          percentRemaining: 25,
+        },
+      ],
+      state: {
+        status: "fresh",
+        stale: false,
+        refreshedAt: "2026-09-01T00:00:00.000Z",
+        sourcesTried: ["pi:minimax"],
+      },
+    }));
+    const report = await createMiniMaxAdapter({
+      credential: () => ({
+        status: "available",
+        key: KEY,
+        source: "pi:minimax",
+        baseUrl: "https://api.minimax.io",
+      }),
+      fetch: async () => new Response(JSON.stringify(payload)),
+      readCachedProvider,
+      now: () => Date.parse("2026-09-02T00:00:00.000Z"),
+    }).fetchQuota(OPTIONS);
+
+    expect(report).toMatchObject({
+      source: "api",
+      windows: [],
+      state: { status: "fresh", stale: false },
+    });
+    expect(readCachedProvider).not.toHaveBeenCalled();
   });
 
   it("labels MiniMax interval windows from reported duration", () => {

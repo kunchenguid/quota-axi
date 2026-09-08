@@ -273,7 +273,11 @@ async function fetchQuotaWithDependencies(
         dependencies.deadlineMs,
       );
       const normalized = normalizeMiniMaxPayload(payload);
-      if (normalized.windows.length === 0 && normalized.credits === undefined) {
+      if (
+        normalized.windows.length === 0 &&
+        normalized.credits === undefined &&
+        !isAuthoritativeEmptyMiniMaxAllocation(payload)
+      ) {
         throw new MiniMaxFailure("quota_missing", { staleEligible: true });
       }
       replaceCredentialAttempt(attempts, resolution.source, {
@@ -433,7 +437,7 @@ function normalizeModelWindow(
   const status = numberValue(row[`${prefix}_status`]);
   const total = numberValue(row[`${prefix}_total_count`]);
   const reported = numberValue(row[`${prefix}_usage_count`]);
-  if (status === 3 && total === 0 && reported === 0) return undefined;
+  if (isNoAllocationModelWindow(row, prefix)) return undefined;
 
   const startKey =
     prefix === "current_interval" ? "start_time" : "weekly_start_time";
@@ -475,6 +479,35 @@ function normalizeModelWindow(
       ? { windowSeconds }
       : {}),
   };
+}
+
+function isAuthoritativeEmptyMiniMaxAllocation(payload: unknown): boolean {
+  const root = objectValue(payload);
+  const data = objectValue(objectValue(root)?.data) ?? root;
+  const rows =
+    data && Array.isArray(data.model_remains) ? data.model_remains : [];
+  return rows.length > 0 && rows.every(isNoAllocationModelRemain);
+}
+
+function isNoAllocationModelRemain(raw: unknown): boolean {
+  const row = objectValue(raw);
+  return (
+    row !== undefined &&
+    stringValue(row.model_name) !== undefined &&
+    isNoAllocationModelWindow(row, "current_interval") &&
+    isNoAllocationModelWindow(row, "current_weekly")
+  );
+}
+
+function isNoAllocationModelWindow(
+  row: Record<string, unknown>,
+  prefix: "current_interval" | "current_weekly",
+): boolean {
+  return (
+    numberValue(row[`${prefix}_status`]) === 3 &&
+    numberValue(row[`${prefix}_total_count`]) === 0 &&
+    numberValue(row[`${prefix}_usage_count`]) === 0
+  );
 }
 
 function miniMaxWindowIdentity(
