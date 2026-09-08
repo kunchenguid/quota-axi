@@ -173,11 +173,6 @@ function missingCliCredential(path: string): MiniMaxCredentialResolution {
   return { status: "missing", source: MINIMAX_CLI_SOURCE, path };
 }
 
-export function resolveMiniMaxCredential(): MiniMaxCredentialResolution {
-  const credentials = resolveMiniMaxCredentials();
-  return chooseMiniMaxCredential(credentials);
-}
-
 export function resolveMiniMaxCredentials(): MiniMaxCredentialResolution[] {
   const credentials: MiniMaxCredentialResolution[] = [];
   const envKey = usableLiteralSecret(process.env.MINIMAX_API_KEY);
@@ -692,41 +687,12 @@ function credentialCandidates(
   return Array.isArray(credentials) ? credentials : [credentials];
 }
 
-function chooseMiniMaxCredential(
-  resolutions: MiniMaxCredentialResolution[],
-): MiniMaxCredentialResolution {
-  const attempts: SourceAttempt[] = [];
-  for (const resolution of resolutions) {
-    if (resolution.status === "available") {
-      return withCredentialAttempts(resolution, attempts);
-    }
-    attempts.push({
-      source: resolution.source,
-      status: resolution.status === "missing" ? "skipped" : "failed",
-      error: credentialError(resolution),
-    });
-  }
-  const failed =
-    resolutions.find((resolution) => resolution.status === "error") ??
-    resolutions.find((resolution) => resolution.status === "invalid") ??
-    resolutions[0] ??
-    ({ status: "missing", source: MINIMAX_CLI_SOURCE } as const);
-  return withCredentialAttempts(failed, attempts);
-}
-
 function preferMiniMaxFailure(
   current: MiniMaxFailure | undefined,
   next: MiniMaxFailure,
 ): MiniMaxFailure {
   if (!current || (current.definitiveAuth && !next.definitiveAuth)) return next;
   return current;
-}
-
-function withCredentialAttempts<T extends MiniMaxCredentialResolution>(
-  resolution: T,
-  attempts: SourceAttempt[],
-): T {
-  return { ...resolution, attempts };
 }
 
 function replaceCredentialAttempt(
@@ -759,17 +725,6 @@ function credentialFailure(
   return new MiniMaxFailure("credential_resolution_failed", {
     staleEligible: true,
   });
-}
-
-function credentialError(
-  resolution: Exclude<MiniMaxCredentialResolution, { status: "available" }>,
-): string {
-  if (resolution.error) return resolution.error;
-  return resolution.status === "missing"
-    ? "minimax_credential_unavailable"
-    : resolution.status === "invalid"
-      ? "minimax_credential_invalid"
-      : "credential_resolution_failed";
 }
 
 function configuredBaseUrl(): string {

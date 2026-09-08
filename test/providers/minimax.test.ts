@@ -13,7 +13,6 @@ import {
   extractMiniMaxCliCredential,
   extractMiniMaxCredential,
   normalizeMiniMaxPayload,
-  resolveMiniMaxCredential,
   resolveMiniMaxCredentials,
 } from "../../src/providers/minimax.js";
 import { withQuotaSemantics } from "../../src/interpretation.js";
@@ -558,11 +557,13 @@ describe("MiniMax provider", () => {
         JSON.stringify({ minimax: { api_key: KEY } }),
       );
 
-      expect(resolveMiniMaxCredential()).toMatchObject({
-        status: "available",
-        key: KEY,
-        source: "pi:minimax",
-      });
+      expect(resolveMiniMaxCredentials()).toMatchObject([
+        {
+          status: "available",
+          key: KEY,
+          source: "pi:minimax",
+        },
+      ]);
     } finally {
       if (originalHome === undefined) delete process.env.HOME;
       else process.env.HOME = originalHome;
@@ -602,7 +603,7 @@ describe("MiniMax provider", () => {
       );
 
       const report = await createMiniMaxAdapter({
-        credential: resolveMiniMaxCredential,
+        credential: resolveMiniMaxCredentials,
         fetch: request,
         now: () => Date.parse("2026-09-01T00:00:00.000Z"),
       }).fetchQuota(OPTIONS);
@@ -620,14 +621,14 @@ describe("MiniMax provider", () => {
           {
             source: "pi:minimax",
             status: "failed",
-            error: "credential_missing",
+            error: "minimax_credential_invalid",
           },
           { source: "minimax:config.json", status: "success" },
         ],
         credits: { remaining: 12.5, unit: "usd" },
       });
       expect(interpreted.state.degradedSources).toEqual([
-        { source: "pi:minimax", error: "credential_missing" },
+        { source: "pi:minimax", error: "minimax_credential_invalid" },
       ]);
       expect(request).toHaveBeenCalledOnce();
     } finally {
@@ -661,7 +662,7 @@ describe("MiniMax provider", () => {
       const deleteCachedProvider = vi.fn();
 
       const report = await createMiniMaxAdapter({
-        credential: resolveMiniMaxCredential,
+        credential: resolveMiniMaxCredentials,
         fetch: vi.fn() as typeof globalThis.fetch,
         deleteCachedProvider,
       }).fetchQuota(OPTIONS);
@@ -672,7 +673,7 @@ describe("MiniMax provider", () => {
           {
             source: "pi:minimax",
             status: "failed",
-            error: "credential_missing",
+            error: "minimax_credential_invalid",
           },
           {
             source: "minimax:config.json",
@@ -715,7 +716,7 @@ describe("MiniMax provider", () => {
       );
 
       const report = await createMiniMaxAdapter({
-        credential: resolveMiniMaxCredential,
+        credential: resolveMiniMaxCredentials,
         fetch: request,
       }).fetchQuota(OPTIONS);
 
@@ -725,7 +726,7 @@ describe("MiniMax provider", () => {
           {
             source: "pi:minimax",
             status: "failed",
-            error: "file_read_error",
+            error: "credential_resolution_failed",
           },
           { source: "minimax:config.json", status: "success" },
         ],
