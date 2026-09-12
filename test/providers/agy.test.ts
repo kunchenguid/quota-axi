@@ -15,6 +15,7 @@ import {
   portsFromLsof,
   processInfosFromPs,
   requestLoopbackJson,
+  reshapeAgyCliQuota,
   type AgyConnectionEndpoint,
   type AgyProbeRuntime,
 } from "../../src/providers/agy.js";
@@ -55,6 +56,7 @@ describe("Antigravity quota parsing", () => {
         percentUsed: 9,
         percentRemaining: 91,
         resetsAt: "2026-06-15T11:39:34.000Z",
+        windowSeconds: 5 * 60 * 60,
       },
       {
         id: "gemini_weekly",
@@ -63,6 +65,7 @@ describe("Antigravity quota parsing", () => {
         percentUsed: 18,
         percentRemaining: 82,
         resetsAt: "2026-06-19T08:45:39.000Z",
+        windowSeconds: 7 * 24 * 60 * 60,
       },
       {
         id: "claude_gpt_5h",
@@ -71,6 +74,7 @@ describe("Antigravity quota parsing", () => {
         percentUsed: 27,
         percentRemaining: 73,
         resetsAt: "2026-06-15T12:52:10.000Z",
+        windowSeconds: 5 * 60 * 60,
       },
       {
         id: "claude_gpt_weekly",
@@ -79,9 +83,9 @@ describe("Antigravity quota parsing", () => {
         percentUsed: 36,
         percentRemaining: 64,
         resetsAt: "2026-06-20T00:39:54.000Z",
+        windowSeconds: 7 * 24 * 60 * 60,
       },
     ]);
-    expect(result?.windows.every((window) => !window.windowSeconds)).toBe(true);
   });
 
   it("normalizes oneof remaining values", () => {
@@ -105,7 +109,36 @@ describe("Antigravity quota parsing", () => {
       percentUsed: 50,
       percentRemaining: 50,
     });
-    expect(result?.windows[0]?.windowSeconds).toBeUndefined();
+    expect(result?.windows[0]?.windowSeconds).toBe(7 * 24 * 60 * 60);
+  });
+
+  it("reshapes agy CLI /quota JSON into quota-summary groups", () => {
+    const result = normalizeAgyQuotaSummary(
+      reshapeAgyCliQuota(fixture("cli-quota.json")),
+    );
+
+    expect(result?.windows.map(({ id }) => id)).toEqual([
+      "gemini_weekly",
+      "claude_gpt_5h",
+      "claude_gpt_weekly",
+    ]);
+    expect(result?.windows).toMatchObject([
+      {
+        id: "gemini_weekly",
+        percentRemaining: 0,
+        windowSeconds: 7 * 24 * 60 * 60,
+      },
+      {
+        id: "claude_gpt_5h",
+        percentRemaining: 100,
+        windowSeconds: 5 * 60 * 60,
+      },
+      {
+        id: "claude_gpt_weekly",
+        percentRemaining: 90,
+        windowSeconds: 7 * 24 * 60 * 60,
+      },
+    ]);
   });
 
   it("falls back to model windows from user status payloads", () => {
@@ -541,6 +574,63 @@ describe("Antigravity provider", () => {
     ]);
     expect(commands.map((call) => call.command)).not.toContain("agy");
   });
+
+  it("reads agy CLI /quota when loopback is down", async () => {
+    const commands: Array<{ command: string; args: string[] }> = [];
+    const result = await fetchQuotaWithRuntime(
+      runtimeWith({
+        ps: "",
+        cliQuota: JSON.stringify(fixture("cli-quota.json")),
+        onExec(command, args) {
+          commands.push({ command, args });
+        },
+      }),
+    );
+
+    expect(result.state.status).toBe("fresh");
+    expect(result.source).toBe("cli");
+    expect(result.windows.map(({ id }) => id)).toEqual([
+      "gemini_weekly",
+      "claude_gpt_5h",
+      "claude_gpt_weekly",
+    ]);
+    expect(result.attempts).toEqual([
+      {
+        source: "loopback",
+        status: "skipped",
+        error: "Antigravity/agy is not running",
+      },
+      { source: "cli", status: "success" },
+    ]);
+    expect(commands).toContainEqual({
+      command: "agy",
+      args: ["-p", "/quota", "--output-format", "json"],
+    });
+  });
+
+  it("does not treat a missing agy CLI as remaining quota", async () => {
+    const result = await fetchQuotaWithRuntime(
+      runtimeWith({
+        ps: "",
+        cliQuota: Object.assign(new Error("agy missing"), { code: "ENOENT" }),
+      }),
+    );
+
+    expect(result.state.status).toBe("unavailable");
+    expect(result.state.error).toBe("Antigravity/agy is not running");
+    expect(result.attempts).toEqual([
+      {
+        source: "loopback",
+        status: "skipped",
+        error: "Antigravity/agy is not running",
+      },
+      {
+        source: "cli",
+        status: "skipped",
+        error: "agy CLI is not installed",
+      },
+    ]);
+  });
 });
 
 function runtimeWith(options: {
@@ -549,6 +639,7 @@ function runtimeWith(options: {
   psError?: Error;
   lsofError?: Error;
   lsofByPid?: Record<number, string | Error>;
+  cliQuota?: string | Error;
   requestJson?: AgyProbeRuntime["requestJson"];
   responses?: Record<string, unknown>;
   onExec?: (command: string, args: string[]) => void;
@@ -567,6 +658,10 @@ function runtimeWith(options: {
         const output = options.lsofByPid?.[pid];
         if (output instanceof Error) throw output;
         return output ?? options.lsof ?? "";
+      }
+      if (command === "agy") {
+        if (options.cliQuota instanceof Error) throw options.cliQuota;
+        if (typeof options.cliQuota === "string") return options.cliQuota;
       }
       throw new Error(`unexpected command: ${command}`);
     },

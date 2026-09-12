@@ -240,6 +240,11 @@ describe("argv normalization", () => {
 
   it("routes leading flags to the quota command", () => {
     expect(normalizeArgv(["--json"])).toEqual(["quota", "--json"]);
+    expect(normalizeArgv(["--", "--provider", "agy"])).toEqual([
+      "quota",
+      "--provider",
+      "agy",
+    ]);
     expect(normalizeArgv(["--provider", "claude"])).toEqual([
       "quota",
       "--provider",

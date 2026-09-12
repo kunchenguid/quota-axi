@@ -119,11 +119,12 @@ function semanticsFor(
     case "cursor":
       return cursorSemantics(provider.windows, generatedAt);
     case "copilot":
-    case "agy":
       return unknownSemantics(
         provider.windows,
         `quota-axi does not know whether ${provider.label ?? provider.provider}'s reported windows are independent or jointly bounding, so it does not claim an effective remaining percentage.`,
       );
+    case "agy":
+      return agySemantics(provider.windows, generatedAt);
     case "alibaba":
       return alibabaSemantics(provider.windows, generatedAt);
     case "opencode-go":
@@ -619,6 +620,39 @@ function partialSemantics(
     effectiveAvailability: [],
     unresolvedWindowIds: unresolved.map(({ id }) => id),
   };
+}
+
+function agySemantics(
+  windows: QuotaWindow[],
+  generatedAt: string,
+): QuotaSemantics {
+  const gemini = windows.filter(({ id }) => id.startsWith("gemini_"));
+  const claudeGpt = windows.filter(({ id }) => id.startsWith("claude_gpt_"));
+  const unresolved = windows.filter(
+    ({ id }) => !id.startsWith("gemini_") && !id.startsWith("claude_gpt_"),
+  );
+  const effectiveAvailability: EffectiveAvailability[] = [];
+  if (gemini.length > 0) {
+    effectiveAvailability.push(availability("gemini", gemini, generatedAt));
+  }
+  if (claudeGpt.length > 0) {
+    effectiveAvailability.push(
+      availability("claude_gpt", claudeGpt, generatedAt),
+    );
+  }
+  if (unresolved.length > 0) {
+    return {
+      status: effectiveAvailability.length > 0 ? "partial" : "unknown",
+      description:
+        "Antigravity groups Gemini windows separately from Claude/GPT windows. Within a group, the weekly and 5-hour windows jointly bound that group. Unfamiliar windows are not folded into either bound, so they stay unresolved.",
+      effectiveAvailability,
+      unresolvedWindowIds: unresolved.map(({ id }) => id),
+    };
+  }
+  return knownSemantics(
+    effectiveAvailability,
+    "Antigravity groups Gemini windows separately from Claude/GPT windows. Within a group, the weekly and 5-hour windows jointly bound that group, so that group's effective remaining percentage is the minimum across the named windows.",
+  );
 }
 
 function unknownSemantics(
