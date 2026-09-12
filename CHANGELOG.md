@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.42](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.41...quota-axi-v0.1.42) (2026-09-12)
+
+
+### Bug Fixes
+
+* **providers:** recognize Z.AI CREDIT_LIMIT quota windows ([#160](https://github.com/kunchenguid/quota-axi/issues/160)) ([2a8b018](https://github.com/kunchenguid/quota-axi/commit/2a8b0186ae30873d1f808f5ea464414209ab92e4))
+
 ## [0.1.41](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.40...quota-axi-v0.1.41) (2026-09-08)
 
 
