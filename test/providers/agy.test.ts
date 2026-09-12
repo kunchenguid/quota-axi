@@ -608,6 +608,50 @@ describe("Antigravity provider", () => {
     });
   });
 
+  it("surfaces a genuine CLI failure over the skipped loopback error", async () => {
+    const result = await fetchQuotaWithRuntime(
+      runtimeWith({
+        ps: "",
+        cliQuota: "not json",
+      }),
+    );
+
+    expect(result.state).toMatchObject({
+      status: "error",
+      error: "agy /quota returned invalid JSON",
+    });
+    expect(result.attempts).toEqual([
+      {
+        source: "loopback",
+        status: "skipped",
+        error: "Antigravity/agy is not running",
+      },
+      {
+        source: "cli",
+        status: "failed",
+        error: "agy /quota returned invalid JSON",
+      },
+    ]);
+  });
+
+  it("still serves stale cache when both loopback and the CLI are unavailable", async () => {
+    writeCachedProviders([cachedAgyQuota()]);
+
+    const result = await fetchQuotaWithRuntime(
+      runtimeWith({
+        ps: "",
+        cliQuota: Object.assign(new Error("agy missing"), { code: "ENOENT" }),
+      }),
+    );
+
+    expect(result.state.status).toBe("stale");
+    expect(result.source).toBe("cache");
+    expect(result.windows[0]).toMatchObject({
+      id: "gemini_5h",
+      percentRemaining: 88,
+    });
+  });
+
   it("does not treat a missing agy CLI as remaining quota", async () => {
     const result = await fetchQuotaWithRuntime(
       runtimeWith({

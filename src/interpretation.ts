@@ -626,11 +626,14 @@ function agySemantics(
   windows: QuotaWindow[],
   generatedAt: string,
 ): QuotaSemantics {
-  const gemini = windows.filter(({ id }) => id.startsWith("gemini_"));
-  const claudeGpt = windows.filter(({ id }) => id.startsWith("claude_gpt_"));
-  const unresolved = windows.filter(
-    ({ id }) => !id.startsWith("gemini_") && !id.startsWith("claude_gpt_"),
+  const gemini = windows.filter(
+    ({ id }) => id === "gemini_5h" || id === "gemini_weekly",
   );
+  const claudeGpt = windows.filter(
+    ({ id }) => id === "claude_gpt_5h" || id === "claude_gpt_weekly",
+  );
+  const resolved = new Set([...gemini, ...claudeGpt]);
+  const unresolved = windows.filter((window) => !resolved.has(window));
   const effectiveAvailability: EffectiveAvailability[] = [];
   if (gemini.length > 0) {
     effectiveAvailability.push(availability("gemini", gemini, generatedAt));

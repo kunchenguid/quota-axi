@@ -133,14 +133,17 @@ export async function fetchQuotaWithRuntime(
       attempts,
     });
   } catch (error) {
-    const cliError = errorMessage(error);
+    const skipped =
+      error instanceof AgyUnavailableError || isMissingCommandError(error);
+    // A skipped CLI (unavailable/not installed) did not meaningfully run, so the
+    // loopback error stays authoritative and the stale-cache path is preserved.
+    // A genuine CLI failure is the source that actually answered, so let it win
+    // when it is more definitive than the loopback error.
+    if (!skipped) finalFailure = strongerFailure(finalFailure, error);
     attempts[attempts.length - 1] = {
       source: "cli",
-      status:
-        error instanceof AgyUnavailableError || isMissingCommandError(error)
-          ? "skipped"
-          : "failed",
-      error: cliError,
+      status: skipped ? "skipped" : "failed",
+      error: errorMessage(error),
     };
   }
 

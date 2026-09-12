@@ -797,6 +797,26 @@ describe("quota semantics", () => {
       ],
     });
 
+    const agyUnknownKind = withQuotaSemantics(
+      provider("agy", [
+        window("gemini_5h", "session", 100),
+        window("gemini_weekly", "weekly", 70),
+        window("gemini_unknown", "unknown", 10),
+      ]),
+      GENERATED_AT,
+    );
+    expect(agyUnknownKind.quotaSemantics).toMatchObject({
+      status: "partial",
+      unresolvedWindowIds: ["gemini_unknown"],
+      effectiveAvailability: [
+        expect.objectContaining({
+          scope: "gemini",
+          effectivePercentRemaining: 70,
+          boundedBy: ["gemini_5h", "gemini_weekly"],
+        }),
+      ],
+    });
+
     const kimi = withQuotaSemantics(
       provider("kimi", [
         window("weekly", "weekly", 59),
