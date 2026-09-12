@@ -470,6 +470,46 @@ describe("Z.AI payload normalization", () => {
     ]);
   });
 
+  it("identifies the two token windows in the captured live CREDIT_LIMIT payload", () => {
+    const normalized = normalizeZaiPayload({
+      data: {
+        limits: [
+          {
+            type: "CREDIT_LIMIT",
+            unit: 3,
+            number: 5,
+            usage: 12000,
+            currentValue: 84,
+            remaining: 11915,
+            percentage: 1,
+            nextResetTime: 1_789_253_947_222,
+          },
+          {
+            type: "CREDIT_LIMIT",
+            unit: 6,
+            number: 1,
+            usage: 60000,
+            currentValue: 709,
+            remaining: 59290,
+            percentage: 1,
+            nextResetTime: 1_789_250_576_984,
+          },
+        ],
+        level: "pro",
+      },
+    });
+    const byId = Object.fromEntries(
+      normalized.windows.map((window) => [window.id, window]),
+    );
+    expect(Object.keys(byId).sort()).toEqual(["five_hour", "weekly"]);
+    expect(byId.five_hour.kind).toBe("session");
+    expect(byId.five_hour.windowSeconds).toBe(18_000);
+    expect(byId.weekly.kind).toBe("weekly");
+    expect(byId.weekly.windowSeconds).toBe(604_800);
+    // Empty diagnostics means no untrusted `limit:<index>` unknown windows.
+    expect(normalized.diagnostics).toEqual([]);
+  });
+
   it("derives MCP percentage from currentValue/usage when percentage is absent", () => {
     const normalized = normalizeZaiPayload({
       data: {
