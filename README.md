@@ -713,7 +713,7 @@ Auth source entries can include `credentialPresent` when a source is not genuine
 
 **Ollama Cloud**
 
-- It reads Pi's `ollama-cloud` API-key entry from `$PI_CODING_AGENT_DIR/auth.json` (default `~/.pi/agent/auth.json`) before the literal `OLLAMA_API_KEY` environment variable. `auth` reports both sources without exposing key values.
+- It reads Pi's `ollama-cloud` API-key entry from `$PI_CODING_AGENT_DIR/auth.json` (default `~/.pi/agent/auth.json`) before the literal `OLLAMA_API_KEY` environment variable. An unreadable Pi auth file is an indeterminate local failure: it does not hand over to the environment source and remains eligible for stale cache fallback. `auth` reports both sources without exposing key values.
 - It sends exactly one redirect-disabled `GET` to `https://ollama.com/api/usage` with `Authorization: Bearer <key>` and `Accept: application/json`. Requests use the standard 15 second deadline, bounded response body, and host proxy policy; browser cookies, custom origins, and extra account headers are not used.
 - Only finite numeric `limits.session.usage` and `limits.weekly.usage` values in the observed `[0, 1]` fraction range become `five_hour` and `weekly` windows. Missing or invalid fields are omitted; a valid response with no usable fields is a fresh report with `windows: []`. `activity.period` is a last-four-weeks activity scan and is never mapped to a quota window.
 - The endpoint currently provides no reset timestamps. Ollama Cloud's window relationship is not established, so quota-axi reports the raw windows but does not claim `all_models`, pace, a cycle duration, or a reset. It never invents `0%` when usage is missing.
