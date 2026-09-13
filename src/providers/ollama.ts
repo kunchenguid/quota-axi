@@ -137,6 +137,9 @@ async function acquireOllamaQuota(
         error: failure.code,
         ...(present ? { credentialPresent: true } : {}),
       });
+      if (resolution.status === "error") {
+        return failureReport(failure, attempts, dependencies);
+      }
       if (failure.definitiveAuth) {
         if (present || authFailure === undefined) authFailure = failure;
       } else if (transientFailure === undefined) {

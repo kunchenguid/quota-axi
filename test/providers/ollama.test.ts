@@ -307,6 +307,33 @@ describe("Ollama Cloud quota provider", () => {
     ]);
   });
 
+  it("stops at a Pi auth read error and preserves stale cache", async () => {
+    const request = vi.fn(async () => jsonResponse({ limits: {} }));
+    const deleteCache = vi.fn();
+    const report = await testAdapter({
+      piResolution: {
+        status: "error",
+        path: "/tmp/pi-agent/auth.json",
+      },
+      environment: { OLLAMA_API_KEY: ENV_KEY },
+      fetch: request,
+      readCachedProvider: () => cachedQuota(),
+      deleteCachedProvider: deleteCache,
+    }).fetchQuota(OPTIONS);
+
+    expect(request).not.toHaveBeenCalled();
+    expect(report).toMatchObject({
+      source: "cache",
+      state: {
+        status: "stale",
+        stale: true,
+        error: "credential_resolution_failed",
+        sourcesTried: [OLLAMA_PI_CREDENTIAL_SOURCE, "cache"],
+      },
+    });
+    expect(deleteCache).not.toHaveBeenCalled();
+  });
+
   it("does not retry a sibling source after a transient provider failure", async () => {
     const request = vi.fn(async () => new Response(null, { status: 503 }));
     const report = await testAdapter({
