@@ -219,6 +219,42 @@ describe("quota semantics", () => {
     });
   });
 
+  it("does not block named-model runway when its fully available cycle has not opened yet", () => {
+    const result = withQuotaSemantics(
+      provider("claude", [
+        window("seven_day", "weekly", 90, {
+          windowSeconds: WEEK_SECONDS,
+          resetsAt: weeklyResetsAt(0.5),
+        }),
+        window("model:fable", "model", 100, {
+          percentUsed: 0,
+          windowSeconds: WEEK_SECONDS,
+          // The provider has assigned the next full cycle, but its start is
+          // still just ahead of this report's snapshot clock.
+          resetsAt: offsetFromGeneratedAt(WEEK_SECONDS + 1),
+        }),
+      ]),
+      GENERATED_AT,
+    );
+
+    const availability = result.quotaSemantics?.effectiveAvailability ?? [];
+    expect(
+      availability.find(({ scope }) => scope === "all_models")?.runway,
+    ).toEqual({
+      status: "through_reset",
+      projectionConfidence: "established",
+    });
+    expect(result.windows.find(({ id }) => id === "model:fable")?.pace).toEqual(
+      { status: "unknown", reason: "future_cycle_start" },
+    );
+    expect(
+      availability.find(({ scope }) => scope === "model:fable")?.runway,
+    ).toEqual({
+      status: "through_reset",
+      projectionConfidence: "established",
+    });
+  });
+
   it("does not promote a model's lower Alibaba limit into the account bound", () => {
     const result = withQuotaSemantics(
       provider("alibaba", [
