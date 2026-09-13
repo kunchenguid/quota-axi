@@ -36,6 +36,7 @@ const UNLEASH_PATH =
 const PROCESS_TIMEOUT_MS = 5_000;
 const PORT_TIMEOUT_MS = 2_000;
 const REQUEST_TIMEOUT_MS = 3_000;
+const CLI_QUOTA_TIMEOUT_MS = 15_000;
 const PROBE_BUDGET_MS = 10_000;
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 
@@ -116,6 +117,36 @@ export async function fetchQuotaWithRuntime(
     };
   }
 
+  attempts.push({ source: "cli", status: "failed" });
+  try {
+    const quota = await fetchCliQuota(runtime);
+    attempts[attempts.length - 1] = { source: "cli", status: "success" };
+    return successProvider({
+      provider: "agy",
+      label: "Antigravity",
+      source: "cli",
+      plan: quota.plan,
+      account: quota.account,
+      windows: quota.windows,
+      refreshedAt: quota.refreshedAt,
+      sourcesTried: sourceNames(attempts),
+      attempts,
+    });
+  } catch (error) {
+    const skipped =
+      error instanceof AgyUnavailableError || isMissingCommandError(error);
+    // A skipped CLI (unavailable/not installed) did not meaningfully run, so the
+    // loopback error stays authoritative and the stale-cache path is preserved.
+    // A genuine CLI failure is the source that actually answered, so let it win
+    // when it is more definitive than the loopback error.
+    if (!skipped) finalFailure = strongerFailure(finalFailure, error);
+    attempts[attempts.length - 1] = {
+      source: "cli",
+      status: skipped ? "skipped" : "failed",
+      error: errorMessage(error),
+    };
+  }
+
   const finalError = errorMessage(finalFailure);
   if (staleEligibleFailure(finalFailure)) {
     const cached = readCachedProvider("agy");
@@ -180,6 +211,72 @@ export async function inspectAuthWithRuntime(
       ],
     };
   }
+}
+
+async function fetchCliQuota(runtime: AgyProbeRuntime): Promise<{
+  plan?: string;
+  account?: ProviderQuota["account"];
+  windows: QuotaWindow[];
+  refreshedAt: string;
+}> {
+  let text: string;
+  try {
+    text = await runtime.execFileText(
+      "agy",
+      ["-p", "/quota", "--output-format", "json"],
+      CLI_QUOTA_TIMEOUT_MS,
+    );
+  } catch (error) {
+    throw new AgyUnavailableError(
+      isMissingCommandError(error)
+        ? "agy CLI is not installed"
+        : errorMessage(error),
+    );
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new AgyMalformedResponseError("agy /quota returned invalid JSON");
+  }
+  const summary = normalizeAgyQuotaSummary(reshapeAgyCliQuota(parsed));
+  if (!summary || summary.windows.length === 0) {
+    throw new AgyMalformedResponseError("agy /quota quota summary malformed");
+  }
+  return summary;
+}
+
+export function reshapeAgyCliQuota(raw: unknown): { groups: unknown[] } {
+  const root = objectValue(raw);
+  const command = objectValue(root?.command);
+  const data = objectValue(command?.data) ?? root;
+  const groups = arrayValue(data?.groups).map((groupRaw) => {
+    const group = objectValue(groupRaw) ?? {};
+    return {
+      displayName: stringValue(group.name) ?? stringValue(group.displayName),
+      buckets: arrayValue(group.buckets).map((bucketRaw) => {
+        const bucket = objectValue(bucketRaw) ?? {};
+        return {
+          bucketId:
+            stringValue(bucket.id) ??
+            stringValue(bucket.bucketId) ??
+            stringValue(bucket.bucket_id),
+          remaining_fraction:
+            bucket.remaining_fraction ?? bucket.remainingFraction,
+          reset_time: bucket.reset_time ?? bucket.resetTime,
+          window: bucket.window,
+          description: bucket.description,
+          disabled: bucket.disabled,
+        };
+      }),
+    };
+  });
+  return { groups };
+}
+
+function isMissingCommandError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  return code === "ENOENT";
 }
 
 export function normalizeAgyQuotaSummary(raw: unknown):
@@ -543,6 +640,11 @@ function normalizeQuotaSummaryBucket(
     resetsAt:
       parseEpochOrIso(bucket.resetTime) ?? parseEpochOrIso(bucket.reset_time),
     resetText: stringValue(bucket.description),
+    ...(windowKind.id === "5h"
+      ? { windowSeconds: 5 * 60 * 60 }
+      : windowKind.id === "weekly"
+        ? { windowSeconds: 7 * 24 * 60 * 60 }
+        : {}),
   };
   const remaining = remainingFraction(bucket);
   if (remaining !== undefined) {

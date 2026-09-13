@@ -134,17 +134,40 @@ export function computeEffectiveRunway(
     const pace = window.pace;
     const resetsAt = resolveResetsAtOutcome(window.resetsAt);
 
-    if (resetsAt.kind === "missing") {
-      // A missing resetsAt is non-bounding only when it also reports no
-      // usage (100% remaining, 0% used) - e.g. a Claude five_hour window
-      // before its first request this window. That shape's countdown has
-      // simply not started yet, so it does not block the aggregate. A
-      // missing resetsAt paired with any other usage shape (unknown usage,
-      // or nonzero usage without an active clock) is a real data gap, not
-      // "not yet triggered", and still fails closed.
-      if (remaining !== undefined && isZeroUse(window, remaining)) {
+    if (resetsAt.kind === "malformed") {
+      unmeasurableWindowIds.push(window.id);
+      continue;
+    }
+
+    if (remaining !== undefined && isZeroUse(window, remaining)) {
+      const unknownReason =
+        pace?.status === "unknown" ? pace.reason : undefined;
+      if (
+        pace === undefined ||
+        unknownReason === "missing_cycle" ||
+        unknownReason === "future_cycle_start" ||
+        resetsAt.kind === "missing"
+      ) {
+        // Unused windows have not started their countdown, so they do not
+        // block the aggregate. That includes a missing resetsAt at 100%
+        // remaining / 0% used - e.g. a Claude five_hour window before its
+        // first request this window.
         continue;
       }
+      if (unknownReason !== undefined) {
+        unmeasurableWindowIds.push(window.id);
+        continue;
+      }
+      if ((pace.elapsedPercent ?? 0) < PACE_EARLY_ELAPSED_PERCENT) {
+        lowestConfidence = "early";
+      }
+      continue;
+    }
+
+    if (resetsAt.kind === "missing") {
+      // A missing resetsAt paired with any other usage shape (unknown usage,
+      // or nonzero usage without an active clock) is a real data gap, not
+      // "not yet triggered", and still fails closed.
       unmeasurableWindowIds.push(window.id);
       continue;
     }
@@ -155,20 +178,12 @@ export function computeEffectiveRunway(
       remaining > 100 ||
       pace === undefined ||
       pace.status === "unknown" ||
-      resetsAt.kind === "malformed" ||
       resetsAt.ms <= generatedAtMs
     ) {
       unmeasurableWindowIds.push(window.id);
       continue;
     }
     const resetsAtMs = resetsAt.ms;
-
-    if (isZeroUse(window, remaining)) {
-      if ((pace.elapsedPercent ?? 0) < PACE_EARLY_ELAPSED_PERCENT) {
-        lowestConfidence = "early";
-      }
-      continue;
-    }
 
     // A window pace only carries a projection pair when the cycle-average
     // projection succeeded, so the pair itself is the basis check.
@@ -299,6 +314,18 @@ export function summarizeEffectiveSelection(
   let cycleSecondsSum = 0;
 
   for (const window of windows) {
+    const remaining = finiteNumber(window.percentRemaining);
+    if (remaining !== undefined && isZeroUse(window, remaining)) {
+      const unknownReason =
+        window.pace?.status === "unknown" ? window.pace.reason : undefined;
+      if (
+        window.pace === undefined ||
+        unknownReason === "missing_cycle" ||
+        unknownReason === "future_cycle_start"
+      ) {
+        continue;
+      }
+    }
     const gap = windowSelectionGap(window);
     const cycleSeconds = finiteNumber(window.pace?.cycleSeconds);
     if (gap === undefined || cycleSeconds === undefined || cycleSeconds <= 0) {
