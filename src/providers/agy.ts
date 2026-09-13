@@ -736,19 +736,40 @@ function isAgyMcpScript(token: string | undefined): boolean {
 
 function isAgyAppExecutable(command: string): boolean {
   const normalized = normalizedPath(command);
+  // App bundle names can contain spaces ("Antigravity IDE.app", "Google Antigravity.app").
+  // Match the language-server binary on the full command line before the first --flag,
+  // not tokenizeCommand's first whitespace token (which splits those paths).
   if (
-    /^\/applications\/[^\n]*antigravity\.app\/contents\/[^\n]*\/language[-_]server(?:_[a-z0-9_]+)?(?=\s+--|$)/.test(
+    /(?:^|\s)\/applications\/[^\n]*antigravity[^/\n]*\.app\/[^\n]*\/language[-_]server(?:_[a-z0-9_]+)?(?:\.exe)?(?=\s+--|$)/.test(
       normalized,
     )
-  )
+  ) {
     return true;
-  const firstToken = tokenizeCommand(command)[0];
-  if (!firstToken) return false;
-  const path = normalizedPath(firstToken);
+  }
+
+  const executablePath = executablePathFromCommand(command);
+  if (!executablePath) return false;
+  const path = normalizedPath(executablePath);
   return (
     path.includes("antigravity") &&
     /(?:^|\/)language[-_]server(?:_[a-z0-9_]+)?(?:\.exe)?$/.test(path)
   );
+}
+
+/** Invoked binary path, allowing unquoted spaces before the first --flag. */
+function executablePathFromCommand(command: string): string | undefined {
+  const trimmed = command.trim();
+  if (!trimmed) return undefined;
+  if (trimmed.startsWith('"') || trimmed.startsWith("'")) {
+    return tokenizeCommand(trimmed)[0];
+  }
+  const flagAt = trimmed.search(/\s+--[A-Za-z0-9_]/);
+  if (flagAt !== -1) return trimmed.slice(0, flagAt);
+  const serverMatch = trimmed.match(
+    /^(.*[/\\]language[-_]server(?:_[A-Za-z0-9_]+)?(?:\.exe)?)$/i,
+  );
+  if (serverMatch) return serverMatch[1];
+  return tokenizeCommand(trimmed)[0];
 }
 
 function normalizedPath(value: string): string {

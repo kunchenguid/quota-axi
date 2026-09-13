@@ -137,6 +137,8 @@ describe("Antigravity quota parsing", () => {
       104 codex --prompt "antigravity-cli mcp-server.cjs language_server"
       105 /usr/bin/node /opt/runner.cjs --prompt "/opt/antigravity-cli/mcp-server.cjs"
       106 /usr/bin/codex --prompt "/Applications/Antigravity.app/Contents/bin/language_server --csrf_token fake"
+      107 /Applications/Antigravity IDE.app/Contents/Resources/app/extensions/antigravity/bin/language_server_macos_arm --csrf_token ide-token --extension_server_port 63904 --extension_server_csrf_token ext-token --app_data_dir antigravity-ide
+      108 /Applications/Antigravity.app/Contents/Resources/bin/language_server --csrf_token desktop-token --extension_server_port 64001
     `);
 
     expect(processes).toMatchObject([
@@ -148,6 +150,19 @@ describe("Antigravity quota parsing", () => {
         extensionPort: 64123,
       },
       { pid: 103, source: "agy" },
+      {
+        pid: 107,
+        source: "app",
+        csrfToken: "ide-token",
+        extensionPort: 63904,
+        extensionServerCsrfToken: "ext-token",
+      },
+      {
+        pid: 108,
+        source: "app",
+        csrfToken: "desktop-token",
+        extensionPort: 64001,
+      },
     ]);
     expect(
       portsFromLsof(`
