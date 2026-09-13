@@ -24,6 +24,7 @@ const originalZaiProvider = PROVIDERS.zai;
 const originalAgyProvider = PROVIDERS.agy;
 const originalAlibabaProvider = PROVIDERS.alibaba;
 const originalOpenCodeGoProvider = PROVIDERS["opencode-go"];
+const originalOllamaProvider = PROVIDERS.ollama;
 const originalXdgCacheHome = process.env.XDG_CACHE_HOME;
 let tempDir: string | undefined;
 
@@ -38,6 +39,7 @@ afterEach(() => {
   PROVIDERS.agy = originalAgyProvider;
   PROVIDERS.alibaba = originalAlibabaProvider;
   PROVIDERS["opencode-go"] = originalOpenCodeGoProvider;
+  PROVIDERS.ollama = originalOllamaProvider;
   if (originalXdgCacheHome === undefined) delete process.env.XDG_CACHE_HOME;
   else process.env.XDG_CACHE_HOME = originalXdgCacheHome;
   if (tempDir) rmSync(tempDir, { recursive: true, force: true });
@@ -59,6 +61,7 @@ describe("CLI flag parsing", () => {
       "agy",
       "alibaba",
       "opencode-go",
+      "ollama",
     ]);
   });
 
@@ -96,6 +99,7 @@ describe("CLI flag parsing", () => {
           "agy",
           "alibaba",
           "opencode-go",
+          "ollama",
         ],
         json: true,
         full: true,
@@ -793,6 +797,7 @@ describe("default TOON decision blocks", () => {
     PROVIDERS.agy = providerWithQuota(unavailableAgyQuota());
     PROVIDERS.alibaba = providerWithQuota(freshAlibabaQuota());
     PROVIDERS["opencode-go"] = providerWithQuota(freshOpenCodeGoQuota());
+    PROVIDERS.ollama = providerWithQuota(freshOllamaQuota());
 
     const output = await capture([]);
     const named = new Set([
@@ -809,6 +814,7 @@ describe("default TOON decision blocks", () => {
       "cursor",
       "grok",
       "kimi",
+      "ollama",
       "opencode-go",
       "zai",
     ]);
@@ -1167,6 +1173,7 @@ describe("CLI plumbing via the axi SDK", () => {
     PROVIDERS.agy = providerWithAuth("agy", "Antigravity");
     PROVIDERS.alibaba = providerWithAuth("alibaba", "Alibaba Coding Plan");
     PROVIDERS["opencode-go"] = providerWithAuth("opencode-go", "OpenCode Go");
+    PROVIDERS.ollama = providerWithAuth("ollama", "Ollama Cloud");
 
     const output = await capture(["--allow-keychain-prompt", "auth"]);
     expect(output).toContain(
@@ -1700,6 +1707,29 @@ function freshAlibabaQuota(): ProviderQuota {
       stale: false,
       refreshedAt: "2026-07-06T18:10:00Z",
       sourcesTried: ["pi:alibaba-plan"],
+    },
+  };
+}
+
+function freshOllamaQuota(): ProviderQuota {
+  return {
+    provider: "ollama",
+    label: "Ollama Cloud",
+    source: "api",
+    windows: [
+      {
+        id: "five_hour",
+        label: "session",
+        kind: "session",
+        percentUsed: 10,
+        percentRemaining: 90,
+      },
+    ],
+    state: {
+      status: "fresh",
+      stale: false,
+      refreshedAt: "2026-07-06T18:10:00Z",
+      sourcesTried: ["pi:ollama-cloud"],
     },
   };
 }

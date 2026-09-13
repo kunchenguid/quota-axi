@@ -83,6 +83,7 @@ describe("quota semantics", () => {
       ["grok", [window("credits", "credits", 44)]],
       ["kimi", [window("weekly", "weekly", 59)]],
       ["zai", [window("weekly", "weekly", 42)]],
+      ["ollama", [window("weekly", "weekly", 42)]],
       ["agy", [window("gemini_weekly", "weekly", 98)]],
       ["cursor", [window("included_usage", "monthly", 72)]],
       ["copilot", [window("premium_interactions", "monthly", 81)]],

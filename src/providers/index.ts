@@ -7,6 +7,7 @@ import { cursorAdapter } from "./cursor.js";
 import { grokAdapter } from "./grok.js";
 import { kimiAdapter } from "./kimi.js";
 import { opencodeGoAdapter } from "./opencode-go.js";
+import { ollamaAdapter } from "./ollama.js";
 import { zaiAdapter } from "./zai.js";
 import {
   PROVIDER_IDS,
@@ -25,6 +26,7 @@ export const PROVIDERS: Record<ProviderId, ProviderAdapter> = {
   agy: agyAdapter,
   alibaba: alibabaAdapter,
   "opencode-go": opencodeGoAdapter,
+  ollama: ollamaAdapter,
 };
 
 export function parseProviders(value: string | undefined): ProviderId[] {

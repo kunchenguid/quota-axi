@@ -131,6 +131,11 @@ function semanticsFor(
         provider.windows,
         "OpenCode Go reports rolling, weekly, and monthly windows, but quota-axi has no provider evidence that they jointly bound all models, so it does not claim an effective combined percentage.",
       );
+    case "ollama":
+      return unknownSemantics(
+        provider.windows,
+        "Ollama Cloud reports session and weekly usage, but quota-axi has no provider evidence that those windows jointly bound all models, so it does not claim an effective combined percentage.",
+      );
   }
 }
 
