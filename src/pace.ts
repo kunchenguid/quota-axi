@@ -128,6 +128,12 @@ export function computeEffectiveRunway(
     return unknownRunway(windows);
   }
 
+  const accountWindows = windows.filter(({ kind }) => kind !== "model");
+  const accountBoundsEstablishRunway =
+    windows.some(({ kind }) => kind === "model") &&
+    accountWindows.length > 0 &&
+    computeEffectiveRunway(accountWindows, generatedAt).status !== "unknown";
+
   const unmeasurableWindowIds: string[] = [];
   const projections: Array<{
     window: QuotaWindow;
@@ -169,6 +175,7 @@ export function computeEffectiveRunway(
         pace,
         resetsAt,
         generatedAtMs,
+        accountBoundsEstablishRunway,
       )
     ) {
       continue;
@@ -421,9 +428,12 @@ function isProvablyUnopenedFutureCycle(
   pace: QuotaPace | undefined,
   resetsAt: ResetsAtOutcome,
   generatedAtMs: number,
+  accountBoundsEstablishRunway: boolean,
 ): boolean {
   const windowSeconds = finiteNumber(window.windowSeconds);
   if (
+    window.kind !== "model" ||
+    !accountBoundsEstablishRunway ||
     percentRemaining !== 100 ||
     window.percentUsed !== 0 ||
     pace?.status !== "unknown" ||

@@ -510,6 +510,50 @@ describe("computeEffectiveRunway", () => {
     });
   });
 
+  it("keeps a provably unopened model unmeasurable without an account bound", () => {
+    const unopened = window({
+      id: "model:fable",
+      kind: "model",
+      percentUsed: 0,
+      percentRemaining: 100,
+      windowSeconds: WEEK_SECONDS,
+      resetsAt: new Date(
+        Date.parse(GENERATED_AT) + (WEEK_SECONDS + 1) * 1000,
+      ).toISOString(),
+    });
+    unopened.pace = computeWindowPace(unopened, GENERATED_AT);
+
+    expect(computeEffectiveRunway([unopened], GENERATED_AT)).toEqual({
+      status: "unknown",
+      unmeasurableWindowIds: ["model:fable"],
+    });
+  });
+
+  it("keeps a future unopened account window unmeasurable", () => {
+    const futureAccount = window({
+      id: "five_hour",
+      kind: "session",
+      percentUsed: 0,
+      percentRemaining: 100,
+      windowSeconds: FIVE_HOURS_SECONDS,
+      resetsAt: new Date(
+        Date.parse(GENERATED_AT) + (FIVE_HOURS_SECONDS + 1) * 1000,
+      ).toISOString(),
+    });
+    futureAccount.pace = computeWindowPace(futureAccount, GENERATED_AT);
+    const establishedAccount = pacedWindow("seven_day", 90, 0.5);
+
+    expect(
+      computeEffectiveRunway(
+        [establishedAccount, futureAccount],
+        GENERATED_AT,
+      ),
+    ).toEqual({
+      status: "unknown",
+      unmeasurableWindowIds: ["five_hour"],
+    });
+  });
+
   it.each([
     {
       name: "partially used",
