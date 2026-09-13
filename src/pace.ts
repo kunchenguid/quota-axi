@@ -149,6 +149,23 @@ export function computeEffectiveRunway(
       continue;
     }
 
+    // A provider can publish a fresh named-model window just before its cycle
+    // opens. When both usage fields prove that nothing has been consumed, the
+    // reset is valid and ahead, and pace identifies only that clock skew, the
+    // unopened window has no exhaustion projection and does not block one
+    // established by the scope's other bounds. Keep every other unknown pace
+    // fail-closed.
+    if (
+      remaining === 100 &&
+      window.percentUsed === 0 &&
+      pace?.status === "unknown" &&
+      pace.reason === "future_cycle_start" &&
+      resetsAt.kind === "ok" &&
+      resetsAt.ms > generatedAtMs
+    ) {
+      continue;
+    }
+
     if (
       remaining === undefined ||
       remaining < 0 ||
