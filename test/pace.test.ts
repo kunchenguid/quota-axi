@@ -544,10 +544,7 @@ describe("computeEffectiveRunway", () => {
     const establishedAccount = pacedWindow("seven_day", 90, 0.5);
 
     expect(
-      computeEffectiveRunway(
-        [establishedAccount, futureAccount],
-        GENERATED_AT,
-      ),
+      computeEffectiveRunway([establishedAccount, futureAccount], GENERATED_AT),
     ).toEqual({
       status: "unknown",
       unmeasurableWindowIds: ["five_hour"],
