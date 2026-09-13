@@ -485,6 +485,81 @@ describe("computeEffectiveRunway", () => {
     expect(["through_reset", "projected_exhaustion"]).toContain(runway.status);
   });
 
+  it("does not block established runway on a provably unopened future cycle", () => {
+    const unopened = window({
+      id: "model:fable",
+      kind: "model",
+      percentUsed: 0,
+      percentRemaining: 100,
+      windowSeconds: WEEK_SECONDS,
+      resetsAt: new Date(
+        Date.parse(GENERATED_AT) + (WEEK_SECONDS + 1) * 1000,
+      ).toISOString(),
+    });
+    unopened.pace = computeWindowPace(unopened, GENERATED_AT);
+    expect(unopened.pace).toEqual({
+      status: "unknown",
+      reason: "future_cycle_start",
+    });
+
+    const account = pacedWindow("seven_day", 90, 0.5);
+    expect(computeEffectiveRunway([account, unopened], GENERATED_AT)).toEqual({
+      status: "through_reset",
+      projectionConfidence: "established",
+    });
+  });
+
+  it.each([
+    {
+      name: "partially used",
+      percentUsed: 1,
+      percentRemaining: 99,
+      reason: "future_cycle_start" as const,
+    },
+    {
+      name: "contradictory usage",
+      percentUsed: 1,
+      percentRemaining: 100,
+      reason: "future_cycle_start" as const,
+    },
+    {
+      name: "missing explicit usage",
+      percentUsed: undefined,
+      percentRemaining: 100,
+      reason: "future_cycle_start" as const,
+    },
+    {
+      name: "differently unexplained",
+      percentUsed: 0,
+      percentRemaining: 100,
+      reason: "missing_cycle" as const,
+    },
+    {
+      name: "stale",
+      percentUsed: 0,
+      percentRemaining: 100,
+      reason: "stale" as const,
+    },
+  ])("keeps $name future-window evidence unmeasurable", (candidate) => {
+    const future = window({
+      id: "model:fable",
+      kind: "model",
+      percentUsed: candidate.percentUsed,
+      percentRemaining: candidate.percentRemaining,
+      windowSeconds: WEEK_SECONDS,
+      resetsAt: new Date(
+        Date.parse(GENERATED_AT) + (WEEK_SECONDS + 1) * 1000,
+      ).toISOString(),
+      pace: { status: "unknown", reason: candidate.reason },
+    });
+    const account = pacedWindow("seven_day", 90, 0.5);
+
+    expect(computeEffectiveRunway([account, future], GENERATED_AT)).toEqual({
+      status: "unknown",
+      unmeasurableWindowIds: ["model:fable"],
+    });
+  });
+
   it("reports through_reset when every window in scope has not yet triggered", () => {
     const fiveHour = window({
       id: "five_hour",
