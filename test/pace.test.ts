@@ -8,6 +8,7 @@ import {
   SELECTION_MIN_TIME_REMAINING_PERCENT,
   summarizeEffectivePace,
   summarizeEffectiveSelection,
+  UNOPENED_WINDOW_MAX_FUTURE_START_SKEW_SECONDS,
 } from "../src/pace.js";
 import { SELECTION_SCALAR_KEY } from "../src/types.js";
 import type { QuotaPace, QuotaWindow } from "../src/types.js";
@@ -555,6 +556,32 @@ describe("computeEffectiveRunway", () => {
     const account = pacedWindow("seven_day", 90, 0.5);
 
     expect(computeEffectiveRunway([account, future], GENERATED_AT)).toEqual({
+      status: "unknown",
+      unmeasurableWindowIds: ["model:fable"],
+    });
+  });
+
+  it("keeps an unused but implausibly far-future cycle unmeasurable", () => {
+    const farFuture = window({
+      id: "model:fable",
+      kind: "model",
+      percentUsed: 0,
+      percentRemaining: 100,
+      windowSeconds: WEEK_SECONDS,
+      resetsAt: new Date(
+        Date.parse(GENERATED_AT) +
+          (WEEK_SECONDS + UNOPENED_WINDOW_MAX_FUTURE_START_SKEW_SECONDS + 1) *
+            1000,
+      ).toISOString(),
+    });
+    farFuture.pace = computeWindowPace(farFuture, GENERATED_AT);
+    expect(farFuture.pace).toEqual({
+      status: "unknown",
+      reason: "future_cycle_start",
+    });
+
+    const account = pacedWindow("seven_day", 90, 0.5);
+    expect(computeEffectiveRunway([account, farFuture], GENERATED_AT)).toEqual({
       status: "unknown",
       unmeasurableWindowIds: ["model:fable"],
     });

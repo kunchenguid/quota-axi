@@ -21,6 +21,12 @@ export const PACE_EARLY_ELAPSED_PERCENT = 10;
 export const SELECTION_CLAMP_PERCENT_POINTS = 100;
 
 /**
+ * Maximum snapshot-clock skew accepted beyond one declared window duration
+ * when identifying a fully unused future cycle as not yet opened.
+ */
+export const UNOPENED_WINDOW_MAX_FUTURE_START_SKEW_SECONDS = 5 * 60;
+
+/**
  * Below this much remaining cycle time the selection ratio is dominated by the
  * four-decimal rounding of `timeRemainingPercent` rather than by real signal,
  * so the window is treated as unmeasurable instead of producing a runaway or
@@ -151,17 +157,19 @@ export function computeEffectiveRunway(
 
     // A provider can publish a fresh named-model window just before its cycle
     // opens. When both usage fields prove that nothing has been consumed, the
-    // reset is valid and ahead, and pace identifies only that clock skew, the
-    // unopened window has no exhaustion projection and does not block one
+    // reset is valid and no more than one declared cycle plus the bounded
+    // snapshot skew ahead, and pace identifies only that skew, the unopened
+    // window has no exhaustion projection and does not block one
     // established by the scope's other bounds. Keep every other unknown pace
     // fail-closed.
     if (
-      remaining === 100 &&
-      window.percentUsed === 0 &&
-      pace?.status === "unknown" &&
-      pace.reason === "future_cycle_start" &&
-      resetsAt.kind === "ok" &&
-      resetsAt.ms > generatedAtMs
+      isProvablyUnopenedFutureCycle(
+        window,
+        remaining,
+        pace,
+        resetsAt,
+        generatedAtMs,
+      )
     ) {
       continue;
     }
@@ -404,6 +412,36 @@ function isZeroUse(window: QuotaWindow, percentRemaining: number): boolean {
   const percentUsed = finiteNumber(window.percentUsed);
   return (
     percentRemaining === 100 && (percentUsed === undefined || percentUsed === 0)
+  );
+}
+
+function isProvablyUnopenedFutureCycle(
+  window: QuotaWindow,
+  percentRemaining: number | undefined,
+  pace: QuotaPace | undefined,
+  resetsAt: ResetsAtOutcome,
+  generatedAtMs: number,
+): boolean {
+  const windowSeconds = finiteNumber(window.windowSeconds);
+  if (
+    percentRemaining !== 100 ||
+    window.percentUsed !== 0 ||
+    pace?.status !== "unknown" ||
+    pace.reason !== "future_cycle_start" ||
+    resetsAt.kind !== "ok" ||
+    windowSeconds === undefined ||
+    windowSeconds <= 0
+  ) {
+    return false;
+  }
+
+  const latestPlausibleResetMs =
+    generatedAtMs +
+    (windowSeconds + UNOPENED_WINDOW_MAX_FUTURE_START_SKEW_SECONDS) * 1000;
+  return (
+    isRepresentableDateMs(latestPlausibleResetMs) &&
+    resetsAt.ms > generatedAtMs &&
+    resetsAt.ms <= latestPlausibleResetMs
   );
 }
 
