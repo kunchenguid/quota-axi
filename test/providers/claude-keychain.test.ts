@@ -228,17 +228,20 @@ describe("Claude macOS Keychain discovery", () => {
   );
 
   it.each([false, true])(
-    "keeps explicit profiles pinned and classifies exact item-not-found (prompt=%s)",
+    "keeps explicit profiles pinned and never reads absence from an exact read (prompt=%s)",
     async (allowKeychainPrompt) => {
       vi.stubEnv("CLAUDE_CONFIG_DIR", join(home, "managed"));
       mockItems(item());
       const { inspectAuth, claudeKeychainService } =
         await import("../../src/providers/claude.js");
       const auth = await inspectAuth({ ...options, allowKeychainPrompt });
-      expect(auth.sources).toContainEqual({
-        source: "keychain",
-        status: "missing",
-      });
+      expect(auth.sources).toContainEqual(
+        expect.objectContaining({
+          source: "keychain",
+          status: "skipped",
+          error: "keychain_unreachable",
+        }),
+      );
       expect(execFileText).toHaveBeenCalledTimes(1);
       expect(execFileText.mock.calls[0]?.[1]).toContain(
         claudeKeychainService(),
@@ -309,7 +312,7 @@ describe("Claude macOS Keychain discovery", () => {
       expect.objectContaining({
         source: "keychain",
         status: "skipped",
-        error: "keychain_presence_check_failed",
+        error: "keychain_unreachable",
       }),
     );
     expect(valueReadArgs()).toContain("Claude Code-credentials");
@@ -341,38 +344,51 @@ describe("Claude macOS Keychain discovery", () => {
     },
   );
 
-  it("reports a selected item deleted between listing and read as missing", async () => {
+  it("reports a selected item that cannot be read as unreachable, not absent", async () => {
     mockItems(item(), "unavailable-service");
     const { inspectAuth } = await import("../../src/providers/claude.js");
     expect((await inspectAuth(options)).sources).toContainEqual({
       source: "keychain",
-      status: "missing",
+      status: "skipped",
+      error: "keychain_unreachable",
+      credentialPresent: true,
     });
     expect(execFileText).toHaveBeenCalledTimes(3);
   });
 
-  it.each([false, true])(
-    "does not mistake a search setup failure followed by not-found for absence (prompt=%s)",
-    async (allowKeychainPrompt) => {
-      vi.stubEnv("CLAUDE_CONFIG_DIR", join(home, "managed"));
-      execFileText.mockRejectedValue(
-        Object.assign(new Error("search failed"), {
-          code: 44,
-          stderr:
-            "security: SecKeychainSearchCreateFromAttributes: The specified keychain could not be found.\nsecurity: SecKeychainSearchCopyNext: The specified item could not be found in the keychain.\n",
-        }),
-      );
-      const { inspectAuth } = await import("../../src/providers/claude.js");
-      const auth = await inspectAuth({ ...options, allowKeychainPrompt });
-      expect(auth.sources).toContainEqual(
-        expect.objectContaining({
-          source: "keychain",
-          status: "skipped",
-          error: "keychain_unreachable",
-        }),
-      );
-    },
-  );
+  it("keeps an unchecked Keychain visible behind the file credential that answered", async () => {
+    mkdirSync(join(home, ".claude"));
+    writeFileSync(
+      join(home, ".claude", ".credentials.json"),
+      JSON.stringify({
+        claudeAiOauth: {
+          accessToken: "synthetic-file-token",
+          expiresAt: Date.parse("2035-01-01T00:00:00Z"),
+        },
+      }),
+    );
+    execFileText.mockRejectedValue(
+      Object.assign(new Error("listing failed"), {
+        code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER",
+      }),
+    );
+    const chunks: string[] = [];
+    const { main } = await import("../../src/cli.js");
+    await main({
+      argv: ["--provider", "claude"],
+      binPath: "quota-axi",
+      stdout: {
+        write(chunk) {
+          chunks.push(String(chunk));
+          return true;
+        },
+      },
+    });
+
+    expect(chunks.join("")).toContain(
+      "claude,all,degraded_source,keychain · keychain_presence_check_failed,none",
+    );
+  });
 
   it.each([
     ["unreachable", { code: 44 }, "keychain_unreachable"],

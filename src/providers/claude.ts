@@ -47,7 +47,7 @@ const CLAUDE_CODE_USER_AGENT = "claude-code/2.1.202";
 const API_TIMEOUT_MS = 15_000;
 const KEYCHAIN_PROMPT_TIMEOUT_MS = 60_000;
 const KEYCHAIN_PRESENCE_TIMEOUT_MS = 5_000;
-/** Exit 44 alone is ambiguous; only the exact item-not-found diagnostic is absence. */
+/** `security` exit 44 is cannot-reach (locked, TCC, daemon), not item-absent. */
 const KEYCHAIN_ITEM_UNREACHABLE_EXIT_CODE = 44;
 const KEYCHAIN_UNREACHABLE_ERROR = "keychain_unreachable";
 const DEFAULT_KEYCHAIN_SERVICE = "Claude Code-credentials";
@@ -85,7 +85,12 @@ type UnavailableCredentialState = {
   status: "missing" | "invalid";
   source: AuthSourceReport;
 };
-type SkippedCredentialState = { status: "skipped"; source: AuthSourceReport };
+type SkippedCredentialState = {
+  status: "skipped";
+  source: AuthSourceReport;
+  /** Overrides the attempt's derived degraded classification when set. */
+  degraded?: boolean;
+};
 type CredentialState =
   | AvailableCredentialState
   | AdvisoryExpiredCredentialState
@@ -346,6 +351,7 @@ async function attemptClaudeQuota(
         error: state.source.error,
       };
       if (state.source.credentialPresent) attempt.credentialPresent = true;
+      if (state.degraded !== undefined) attempt.degraded = state.degraded;
       attempts.push(attempt);
       continue;
     }
@@ -744,7 +750,6 @@ async function readCredentialStates(
   if (process.platform === "darwin") {
     // Explicit profiles retain their exact path-derived service. The default
     // profile discovers current Claude Code's opaque suffixes, never guesses them.
-    let unlistable: "unknown" | "unreachable" | undefined;
     if (locations.keychainService === DEFAULT_KEYCHAIN_SERVICE) {
       const selection = await discoverKeychainItem(locations.keychainAccount);
       if (selection.status === "missing") {
@@ -752,20 +757,15 @@ async function readCredentialStates(
         return states;
       }
       // A keychain that could not be listed is not evidence about the item, so
-      // fall back to the exact default-service read and never call it absent.
-      if (selection.status === "present") {
+      // fall back to the exact default-service read.
+      if (selection.status === "present")
         locations = withDiscoveredKeychainItem(locations, selection.item);
-      } else {
-        unlistable = selection.status;
-      }
     }
-    let state =
-      options.allowKeychainPrompt || hasKeychainAccessMarker(locations)
-        ? await readKeychainCredentialState(locations)
-        : await readSkippedKeychainCredentialState(locations);
-    if (unlistable && state.status === "missing")
-      state = keychainPresenceState(unlistable);
-    states.push(state);
+    if (options.allowKeychainPrompt || hasKeychainAccessMarker(locations)) {
+      states.push(await readKeychainCredentialState(locations));
+    } else {
+      states.push(await readSkippedKeychainCredentialState(locations));
+    }
   }
 
   return states;
@@ -800,8 +800,11 @@ function keychainPresenceState(
       source: { source: "keychain", status: "missing" },
     };
   }
+  // A store that could not be checked still stays visible behind a sibling
+  // that answered, without claiming the item is there.
   return {
     status: "skipped",
+    degraded: true,
     source: {
       source: "keychain",
       status: "skipped",
@@ -830,7 +833,6 @@ async function readKeychainItemPresence(
     );
     return "present";
   } catch (error) {
-    if (isKeychainItemMissing(error)) return "missing";
     return isKeychainItemUnreachable(error) ? "unreachable" : "unknown";
   }
 }
@@ -1087,38 +1089,7 @@ function isKeychainItemUnreachable(error: unknown): boolean {
   );
 }
 
-function isKeychainItemMissing(error: unknown): boolean {
-  const failure = error as {
-    code?: number | string | null;
-    stderr?: unknown;
-    message?: unknown;
-    killed?: boolean;
-    signal?: unknown;
-  };
-  // errSecItemNotFound (-25300) is truncated to 44 by the shell. A search
-  // setup failure can also finish with that diagnostic, so require it to be
-  // the sole stderr line; never infer absence from the exit code or message alone.
-  // execFileText rejects Node's callback error, which embeds stderr after the
-  // command line in message; promisified callers may attach stderr separately.
-  const diagnostic =
-    typeof failure.stderr === "string"
-      ? failure.stderr
-      : typeof failure.message === "string" &&
-          failure.message.startsWith("Command failed: ")
-        ? failure.message.slice(failure.message.indexOf("\n") + 1)
-        : "";
-  return (
-    !failure.killed &&
-    !failure.signal &&
-    failure.code === KEYCHAIN_ITEM_UNREACHABLE_EXIT_CODE &&
-    /^security: SecKeychainSearchCopyNext: The specified item could not be found in the keychain\.$/.test(
-      diagnostic.trim(),
-    )
-  );
-}
-
 function keychainFailureState(error: unknown): CredentialState {
-  if (isKeychainItemMissing(error)) return keychainPresenceState("missing");
   const failure = error as {
     killed?: boolean;
     signal?: string | null;
