@@ -1210,6 +1210,56 @@ describe("Z.AI multi-source credentials", () => {
     ]);
     expect(request).toHaveBeenCalledTimes(1);
   });
+
+  it("keeps a Pi read error instead of reporting sign-out when opencode is missing", async () => {
+    const deleteCached = vi.fn();
+    const adapter = createZaiAdapter({
+      credentialSources: [
+        {
+          name: "pi:zai",
+          source: credentialSource({
+            status: "error",
+            path: "/home/user/.pi/agent/auth.json",
+            error: "file_read_error",
+          }),
+        },
+        {
+          name: "opencode:auth.json",
+          source: credentialSource({
+            status: "missing",
+            path: "/home/user/.local/share/opencode/auth.json",
+          }),
+        },
+      ],
+      fetch: vi.fn(async () => {
+        throw new Error("should not fetch");
+      }),
+      readCachedProvider: () => undefined,
+      deleteCachedProvider: deleteCached,
+      now: () => NOW,
+    });
+
+    const report = await adapter.fetchQuota(OPTIONS);
+    expect(report.state).toMatchObject({
+      status: "error",
+      stale: false,
+      error: "credential_resolution_failed",
+      sourcesTried: ["pi:zai", "opencode:auth.json"],
+    });
+    expect(deleteCached).not.toHaveBeenCalled();
+    expect(report.attempts).toEqual([
+      {
+        source: "pi:zai",
+        status: "failed",
+        error: "credential_resolution_failed",
+      },
+      {
+        source: "opencode:auth.json",
+        status: "skipped",
+        error: "zai_credential_unavailable",
+      },
+    ]);
+  });
 });
 
 function testAdapter(

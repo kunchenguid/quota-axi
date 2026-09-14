@@ -10,6 +10,7 @@ import {
   readCachedProvider as readCachedProviderFromDisk,
 } from "../cache.js";
 import { readJsonFileResult, type JsonFileReadResult } from "../lib/fs.js";
+import { resolvePiAuthFilePath } from "../lib/pi-agent-dir.js";
 import { usableLiteralSecret } from "../lib/secret.js";
 import type {
   AuthProviderReport,
@@ -113,24 +114,7 @@ export function piAuthFilePath(
   environment: NodeJS.ProcessEnv = process.env,
   homeDirectory: () => string = homedir,
 ): string {
-  return join(piAgentDirectory(environment, homeDirectory), "auth.json");
-}
-
-function piAgentDirectory(
-  environment: NodeJS.ProcessEnv,
-  homeDirectory: () => string,
-): string {
-  const home = () => stringValue(environment.HOME) ?? homeDirectory();
-  const configured = stringValue(environment.PI_CODING_AGENT_DIR);
-  if (configured === undefined) return join(home(), ".pi", "agent");
-  if (configured === "~") return home();
-  if (
-    configured.startsWith("~/") ||
-    (process.platform === "win32" && configured.startsWith("~\\"))
-  ) {
-    return join(home(), configured.slice(2));
-  }
-  return configured;
+  return resolvePiAuthFilePath(environment, homeDirectory);
 }
 
 export function extractZaiCredential(
@@ -278,7 +262,7 @@ async function acquireZaiQuota(
           status: resolution.status === "missing" ? "skipped" : "failed",
           error: failure.code,
         });
-        lastFailure = failure;
+        lastFailure = preferCredentialFailure(lastFailure, failure);
         continue;
       }
 
@@ -327,7 +311,7 @@ async function acquireZaiQuota(
           status: "failed",
           error: failure.code,
         };
-        lastFailure = failure;
+        lastFailure = preferCredentialFailure(lastFailure, failure);
         if (failure.definitiveAuth) {
           continue;
         }
@@ -388,6 +372,16 @@ function credentialFailureFor(
     status: "auth_required",
     definitiveAuth: true,
   });
+}
+
+function preferCredentialFailure(
+  current: ZaiFailure | undefined,
+  next: ZaiFailure,
+): ZaiFailure {
+  if (!current) return next;
+  if (!current.definitiveAuth && next.definitiveAuth) return current;
+  if (current.definitiveAuth && !next.definitiveAuth) return next;
+  return next;
 }
 
 function failureReport(
