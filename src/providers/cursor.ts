@@ -1,6 +1,5 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { readCachedCursorProvider } from "../cache.js";
 import { providerFetch } from "../lib/http.js";
 import { execFileText, commandExists } from "../lib/process.js";
 import { clampPercent, nowIso, retryAfterToIso } from "../lib/time.js";
@@ -17,15 +16,11 @@ import type {
 import {
   failedProvider,
   sourceNames,
-  staleFromCache,
   statusFromError,
   successProvider,
   withRemaining,
 } from "./common.js";
-import {
-  cursorAccountContextId,
-  withCursorCacheContext,
-} from "./cursor-cache-context.js";
+import { withCursorCacheContext } from "./cursor-cache-context.js";
 import {
   isCursorCliSourceSupported,
   readCursorCliCredentialState,
@@ -123,7 +118,6 @@ async function fetchQuotaWithDependencies(
   const unavailable: UnavailableCredentialState[] = [];
   let finalError = "Cursor quota unavailable";
   let retryAfter: string | undefined;
-  let remoteAccountId: string | undefined;
   let rejected = false;
   let rejectedExpiredRefreshable = false;
 
@@ -163,9 +157,6 @@ async function fetchQuotaWithDependencies(
             error,
             candidate.credential.accessToken,
           );
-          // Identity evidence belongs to this credential attempt only. Never
-          // carry an earlier source's account across a later source switch.
-          remoteAccountId = remoteIdentityFromError(error);
           const definitiveAuth = error instanceof CursorAuthError;
           attempts[attempts.length - 1] = {
             source:
@@ -195,12 +186,7 @@ async function fetchQuotaWithDependencies(
     if (selection.outcome === "transient") {
       finalError = selection.transientError ?? finalError;
       retryAfter = selection.retryAfter;
-      return cursorFailureReport(
-        finalError,
-        retryAfter,
-        attempts,
-        remoteAccountId,
-      );
+      return cursorFailureReport(finalError, retryAfter, attempts);
     }
     if (selection.outcome === "all_rejected") {
       rejected = true;
@@ -222,13 +208,7 @@ async function fetchQuotaWithDependencies(
     if (finalError === "Cursor sign-in required") authStatus = "unusable";
   }
 
-  return cursorFailureReport(
-    finalError,
-    retryAfter,
-    attempts,
-    remoteAccountId,
-    authStatus,
-  );
+  return cursorFailureReport(finalError, retryAfter, attempts, authStatus);
 }
 
 export async function inspectAuth(
@@ -515,14 +495,8 @@ async function fetchCursorUsage(credentials: CursorCredentials): Promise<{
       postDashboardRpc(credentials.accessToken, "GetSandUsageStatus"),
       getCursorAccountProfile(credentials.accessToken),
     ]);
-  const remoteAccountId = cursorRemoteAccountId(
-    profileResult.status === "fulfilled" ? profileResult.value : undefined,
-    usageResult.status === "fulfilled" ? usageResult.value : undefined,
-    planResult.status === "fulfilled" ? planResult.value : undefined,
-    sandResult.status === "fulfilled" ? sandResult.value : undefined,
-  );
   if (usageResult.status === "rejected") {
-    throw withRemoteIdentity(usageResult.reason, remoteAccountId);
+    throw usageResult.reason;
   }
   const quota = normalizeCursorUsage(
     usageResult.value,
@@ -532,7 +506,7 @@ async function fetchCursorUsage(credentials: CursorCredentials): Promise<{
     profileResult.status === "fulfilled" ? profileResult.value : undefined,
   );
   if (!quota) {
-    throw new CursorRequestError("Cursor quota unavailable", remoteAccountId);
+    throw new CursorRequestError("Cursor quota unavailable");
   }
   return quota;
 }
@@ -881,23 +855,17 @@ function cursorFailureReport(
   error: string,
   retryAfter: string | undefined,
   attempts: SourceAttempt[],
-  remoteAccountId: string | undefined,
   authStatus?: ProviderAuthStatus,
 ): ProviderQuota {
-  const cached = remoteAccountId
-    ? readCachedCursorProvider(cursorAccountContextId(remoteAccountId))
-    : undefined;
-  const report = cached
-    ? staleFromCache(cached, error, sourceNames(attempts), attempts)
-    : failedProvider({
-        provider: "cursor",
-        label: "Cursor",
-        status: retryAfter ? "rate_limited" : statusFromError(error),
-        error,
-        retryAfter,
-        sourcesTried: sourceNames(attempts),
-        attempts,
-      });
+  const report = failedProvider({
+    provider: "cursor",
+    label: "Cursor",
+    status: retryAfter ? "rate_limited" : statusFromError(error),
+    error,
+    retryAfter,
+    sourcesTried: sourceNames(attempts),
+    attempts,
+  });
   if (!authStatus) return report;
   return {
     ...report,
@@ -954,28 +922,6 @@ function remoteIdentityString(value: unknown): string | undefined {
     : value;
 }
 
-function withRemoteIdentity(
-  error: unknown,
-  remoteAccountId: string | undefined,
-): unknown {
-  if (!remoteAccountId) return error;
-  if (error instanceof CursorAuthError) {
-    return new CursorAuthError(remoteAccountId);
-  }
-  if (error instanceof RateLimitError) {
-    return new RateLimitError(error.retryAfter, remoteAccountId);
-  }
-  return new CursorRequestError(errorMessage(error), remoteAccountId);
-}
-
-function remoteIdentityFromError(error: unknown): string | undefined {
-  return error instanceof CursorRequestError ||
-    error instanceof CursorAuthError ||
-    error instanceof RateLimitError
-    ? error.remoteAccountId
-    : undefined;
-}
-
 function credentialSafeErrorMessage(
   error: unknown,
   credential: string,
@@ -984,25 +930,19 @@ function credentialSafeErrorMessage(
 }
 
 class CursorRequestError extends Error {
-  constructor(
-    message: string,
-    readonly remoteAccountId?: string,
-  ) {
+  constructor(message: string) {
     super(message);
   }
 }
 
 class CursorAuthError extends Error {
-  constructor(readonly remoteAccountId?: string) {
+  constructor() {
     super("Cursor sign-in required");
   }
 }
 
 class RateLimitError extends Error {
-  constructor(
-    readonly retryAfter: string | undefined,
-    readonly remoteAccountId?: string,
-  ) {
+  constructor(readonly retryAfter: string | undefined) {
     super("Cursor quota endpoint rate limited");
   }
 }

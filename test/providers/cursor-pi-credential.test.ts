@@ -403,7 +403,7 @@ describe("Cursor Pi credential source", () => {
     });
   });
 
-  it("reuses stale quota only with matching remote account evidence across sources", async () => {
+  it("does not serve cached quota when a live Cursor request fails", async () => {
     writePiCredential();
     const processState: ProcessState = { editorToken: EDITOR_TOKEN };
     mockProcess(processState);
@@ -434,9 +434,11 @@ describe("Cursor Pi credential source", () => {
       processState.editorToken = undefined;
       behavior[PI_TOKEN].usageStatus = 500;
       const sameAccount = await fetchQuota(options);
-      expect(sameAccount.state.status).toBe("stale");
-      expect(sameAccount.windows[0]?.percentUsed).toBe(44);
-      expect(sameAccount.state.sourcesTried).toContain("cache");
+      expect(sameAccount.state.status).toBe("error");
+      expect(sameAccount.state.stale).toBe(false);
+      expect(sameAccount.windows).toEqual([]);
+      expect(sameAccount.state.sourcesTried).not.toContain("cache");
+      expect(sameAccount.state.error).toBe("Cursor quota unavailable (500)");
 
       behavior[PI_TOKEN].accountId = "acct-different";
       const differentAccount = await fetchQuota(options);
