@@ -281,15 +281,40 @@ describe("Claude macOS Keychain discovery", () => {
     ).toHaveLength(1);
   });
 
-  it("keeps a lone opaque suffix uncertain without reading another profile", async () => {
+  it("reads the default profile's lone opaque item whatever its suffix", async () => {
     const opaqueService = "Claude Code-credentials-abcdef12";
-    mockItems(item(opaqueService), "unavailable-service");
+    expect(opaqueService).not.toBe(profileService(join(home, ".claude")));
+    mockItems(item(opaqueService), opaqueService);
     const { fetchQuota } = await import("../../src/providers/claude.js");
     const report = await fetchQuota(options);
 
-    expect(report.state.status).not.toBe("auth_required");
+    expect(report.state.status).toBe("fresh");
+    expect(valueReadArgs()).toContain(opaqueService);
+    expect(
+      execFileText.mock.calls.filter(([, args]) => args.includes("-w")),
+    ).toHaveLength(1);
+  });
+
+  it("opens no opaque item when the default profile has more than one", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-13T01:00:00Z"));
+    const first = "Claude Code-credentials-abcdef12";
+    const second = profileService(join(home, ".claude"));
+    mockItems(item(first) + item(second), "unavailable-service");
+    const { readCachedProvider, writeCachedProviders } =
+      await import("../../src/cache.js");
+    writeCachedProviders([cachedClaude()]);
+    const { fetchQuota } = await import("../../src/providers/claude.js");
+    const report = await fetchQuota(options);
+
+    expect(report.state).toMatchObject({
+      status: "stale",
+      error: "keychain_unreachable",
+    });
+    expect(readCachedProvider("claude")).toBeDefined();
     expect(valueReadArgs()).toContain(service);
-    expect(valueReadArgs()).not.toContain(opaqueService);
+    expect(valueReadArgs()).not.toContain(first);
+    expect(valueReadArgs()).not.toContain(second);
     expect(fetch).not.toHaveBeenCalled();
   });
 

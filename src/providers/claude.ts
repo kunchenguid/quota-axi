@@ -12,6 +12,7 @@ import {
 import { providerFetch } from "../lib/http.js";
 import {
   CLAUDE_KEYCHAIN_SERVICE,
+  isOpaqueSuffixedKeychainService,
   claudeProfileLocations,
 } from "../lib/claude-profile.js";
 import { execFileText } from "../lib/process.js";
@@ -114,7 +115,7 @@ type ClaudeProfileLocations = {
   credentialFile?: string;
   keychainAccount: string;
   keychainService: string;
-  keychainServiceAlias?: string;
+  acceptsOpaqueDefaultItem: boolean;
   keychainPath?: string;
   keychainAccessMarker: string;
 };
@@ -875,7 +876,10 @@ function selectKeychainItem(
   locations: ClaudeProfileLocations,
   paths: string[],
 ): KeychainSelection {
-  let selected: (KeychainCandidate & { exact: boolean }) | undefined;
+  let exactItem: KeychainCandidate | undefined;
+  // Keyed by service: the same item can appear in several search-list
+  // keychains, and only distinct services are distinct candidates.
+  const opaqueItems = new Map<string, KeychainCandidate>();
   const seenKeychains = new Set<string>();
   let inconclusive = false;
   for (const record of metadata.split(/(?=^keychain: )/m)) {
@@ -900,34 +904,35 @@ function selectKeychainItem(
       inconclusive = true;
       continue;
     }
-    // Other eight-hex suffixes can belong to explicit profiles or MCP OAuth,
-    // and another account name can own the live session's item. Never open
-    // them or use them to assert that the selected profile has signed out.
+    // Another account name can own the live session's item, and an unfamiliar
+    // Claude-prefixed item can belong to a profile this process did not
+    // select. Never open those or use them to assert a sign-out.
     const claudeOwned = service.startsWith(CLAUDE_KEYCHAIN_SERVICE);
     if (itemAccount !== locations.keychainAccount) {
       if (claudeOwned) inconclusive = true;
       continue;
     }
-    const exact = service === locations.keychainService;
-    if (!exact && service !== locations.keychainServiceAlias) {
+    const opaque =
+      locations.acceptsOpaqueDefaultItem &&
+      isOpaqueSuffixedKeychainService(service);
+    if (service !== locations.keychainService && !opaque) {
       if (claudeOwned) inconclusive = true;
       continue;
     }
-    // Prefer the exact selector over the default directory's other spelling,
-    // then match the vendor's lookup ordering, independent of dump order.
-    if (
-      !selected ||
-      (exact && !selected.exact) ||
-      (exact === selected.exact &&
-        paths.indexOf(keychain) < paths.indexOf(selected.keychain))
-    )
-      selected = { service, keychain, exact };
+    // Duplicates follow the vendor's lookup ordering, independent of dump order.
+    const earlier = opaque ? opaqueItems.get(service) : exactItem;
+    if (earlier && paths.indexOf(earlier.keychain) <= paths.indexOf(keychain))
+      continue;
+    if (opaque) opaqueItems.set(service, { service, keychain });
+    else exactItem = { service, keychain };
   }
-  if (selected)
-    return {
-      status: "present",
-      item: { service: selected.service, keychain: selected.keychain },
-    };
+  // The exact selector always wins. Failing that, a default selection cannot
+  // re-derive its own opaque suffix, so it accepts one only when a single
+  // eligible item exists; several are indistinguishable and none is opened.
+  if (exactItem) return { status: "present", item: exactItem };
+  if (opaqueItems.size === 1)
+    return { status: "present", item: [...opaqueItems.values()][0]! };
+  if (opaqueItems.size > 1) return { status: "unknown" };
   // A silent/partial listing is not evidence about unobserved keychains.
   if (inconclusive || paths.some((path) => !seenKeychains.has(path)))
     return { status: "unknown" };
@@ -1045,7 +1050,7 @@ function resolveClaudeProfileLocations(): ClaudeProfileLocations {
     configDir,
     secureStorageSelected,
     keychainService,
-    keychainServiceAlias,
+    acceptsOpaqueDefaultItem,
   } = claudeProfileLocations();
   const keychainAccount = claudeKeychainAccount();
   return {
@@ -1055,7 +1060,7 @@ function resolveClaudeProfileLocations(): ClaudeProfileLocations {
         : join(configDir, ".credentials.json"),
     keychainAccount,
     keychainService,
-    keychainServiceAlias,
+    acceptsOpaqueDefaultItem,
     keychainAccessMarker: claudeKeychainAccessMarkerPath(
       keychainAccount,
       keychainService,
