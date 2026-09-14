@@ -1,12 +1,19 @@
+import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const originalXdgCacheHome = process.env.XDG_CACHE_HOME;
 const originalClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
+const originalClaudeStorageDir = process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR;
 const originalCwd = process.cwd();
 let tempDir: string | undefined;
+
+beforeEach(() => {
+  delete process.env.CLAUDE_CONFIG_DIR;
+  delete process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR;
+});
 
 afterEach(() => {
   vi.doUnmock("node:os");
@@ -16,6 +23,9 @@ afterEach(() => {
   if (originalClaudeConfigDir === undefined)
     delete process.env.CLAUDE_CONFIG_DIR;
   else process.env.CLAUDE_CONFIG_DIR = originalClaudeConfigDir;
+  if (originalClaudeStorageDir === undefined)
+    delete process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR;
+  else process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR = originalClaudeStorageDir;
   process.chdir(originalCwd);
   if (tempDir) rmSync(tempDir, { recursive: true, force: true });
   tempDir = undefined;
@@ -93,6 +103,54 @@ describe("cache paths", () => {
 });
 
 describe("claudeCredentialContextId", () => {
+  it("includes the credential storage selector without exposing either path", async () => {
+    const { claudeCredentialContextId } =
+      await importFsWithHome("/fixture/home");
+    process.env.CLAUDE_CONFIG_DIR = "/fixture/config";
+    const configuredId = claudeCredentialContextId();
+
+    process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR = "/fixture/storage-a";
+    const firstStorageId = claudeCredentialContextId();
+    process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR = "/fixture/storage-b";
+    const secondStorageId = claudeCredentialContextId();
+    process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR = "";
+    const defaultStorageId = claudeCredentialContextId();
+
+    expect(
+      new Set([configuredId, firstStorageId, secondStorageId, defaultStorageId])
+        .size,
+    ).toBe(4);
+    for (const context of [
+      configuredId,
+      firstStorageId,
+      secondStorageId,
+      defaultStorageId,
+    ]) {
+      expect(context).toMatch(/^[a-f0-9]{64}$/);
+      expect(context).not.toContain("fixture");
+    }
+  });
+
+  it("changes provenance from the legacy profile-only context", async () => {
+    const { claudeCredentialContextId } =
+      await importFsWithHome("/fixture/home");
+    process.env.CLAUDE_CONFIG_DIR = "/fixture/config";
+    const legacyContext = createHash("sha256")
+      .update("claude-config-dir:/fixture/config")
+      .digest("hex");
+
+    expect(claudeCredentialContextId()).not.toBe(legacyContext);
+  });
+
+  it("normalizes equivalent NFC storage selectors to one context", async () => {
+    const { claudeCredentialContextId } =
+      await importFsWithHome("/fixture/home");
+    process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR = "/fixture/cafe\u0301";
+    const decomposed = claudeCredentialContextId();
+    process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR = "/fixture/caf\u00e9";
+
+    expect(claudeCredentialContextId()).toBe(decomposed);
+  });
   it("separates identical relative config dirs resolved from different directories", async () => {
     const { claudeCredentialContextId } = await importFsWithHome("/Users/kun");
     tempDir = realpathSync(mkdtempSync(join(tmpdir(), "quota-axi-context-")));
@@ -112,6 +170,8 @@ describe("claudeCredentialContextId", () => {
     expect(secondId).not.toBe(firstId);
 
     process.env.CLAUDE_CONFIG_DIR = join(second, ".claude-profile");
-    expect(claudeCredentialContextId()).toBe(secondId);
+    // The file path is identical, but the vendor hashes the literal selector
+    // for the Keychain service, so the relative and absolute forms differ.
+    expect(claudeCredentialContextId()).not.toBe(secondId);
   });
 });

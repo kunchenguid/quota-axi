@@ -7,6 +7,7 @@ for (const name of [
   "no_proxy",
   "ALL_PROXY",
   "all_proxy",
+  "CLAUDE_SECURESTORAGE_CONFIG_DIR",
 ]) {
   delete process.env[name];
 }

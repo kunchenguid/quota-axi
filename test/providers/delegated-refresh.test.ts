@@ -539,7 +539,7 @@ describe.skipIf(process.platform === "win32")(
         return {
           ...actual,
           execFileText: vi.fn(async (_command: string, args: string[]) =>
-            args[0] === "default-keychain"
+            args[0] === "list-keychains"
               ? CLAUDE_LOGIN_KEYCHAIN
               : args[0] === "dump-keychain"
                 ? CLAUDE_KEYCHAIN_METADATA
@@ -610,7 +610,7 @@ describe.skipIf(process.platform === "win32")(
         return {
           ...actual,
           execFileText: vi.fn(async (_command: string, args: string[]) =>
-            args[0] === "default-keychain"
+            args[0] === "list-keychains"
               ? CLAUDE_LOGIN_KEYCHAIN
               : CLAUDE_KEYCHAIN_METADATA,
           ),

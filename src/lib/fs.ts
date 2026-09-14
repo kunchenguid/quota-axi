@@ -2,6 +2,7 @@ import { mkdirSync, readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { claudeProfileLocations } from "./claude-profile.js";
 
 export type JsonFileReadResult =
   | { status: "success"; value: unknown }
@@ -53,13 +54,20 @@ export function cacheFilePath(): string {
  * selected by the current process. The selected path never leaves this helper.
  */
 export function claudeCredentialContextId(): string {
-  const configDir = resolve(
-    (process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude")).normalize(
-      "NFC",
-    ),
-  );
+  const { configDir, credentialDir, keychainService } =
+    claudeProfileLocations();
+  // Include the secure-storage selector and exact service: a default config
+  // can use a separate credential store, including a relative raw path hash.
+  // Version the identity to withhold snapshots from earlier opaque discovery.
   return createHash("sha256")
-    .update(`claude-config-dir:${configDir}`)
+    .update(
+      JSON.stringify([
+        "claude-profile-v2",
+        resolve(configDir),
+        resolve(credentialDir),
+        keychainService,
+      ]),
+    )
     .digest("hex");
 }
 

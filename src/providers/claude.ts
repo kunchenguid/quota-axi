@@ -1,6 +1,5 @@
 import { chmodSync, existsSync, renameSync, writeFileSync } from "node:fs";
-import { createHash } from "node:crypto";
-import { homedir, userInfo } from "node:os";
+import { userInfo } from "node:os";
 import { join } from "node:path";
 import { deleteCachedProvider, readCachedClaudeProvider } from "../cache.js";
 import {
@@ -11,6 +10,10 @@ import {
   type JsonFileReadResult,
 } from "../lib/fs.js";
 import { providerFetch } from "../lib/http.js";
+import {
+  CLAUDE_KEYCHAIN_SERVICE,
+  claudeProfileLocations,
+} from "../lib/claude-profile.js";
 import { execFileText } from "../lib/process.js";
 import { listRunningCommandLines } from "../lib/running-processes.js";
 import { clampPercent, nowIso, retryAfterToIso } from "../lib/time.js";
@@ -50,8 +53,6 @@ const KEYCHAIN_PRESENCE_TIMEOUT_MS = 5_000;
 /** `security` exit 44 is cannot-reach (locked, TCC, daemon), not item-absent. */
 const KEYCHAIN_ITEM_UNREACHABLE_EXIT_CODE = 44;
 const KEYCHAIN_UNREACHABLE_ERROR = "keychain_unreachable";
-const DEFAULT_KEYCHAIN_SERVICE = "Claude Code-credentials";
-const KEYCHAIN_SERVICE_PATTERN = /^Claude Code-credentials(?:-[0-9a-f]{8})?$/;
 const DEFAULT_KEYCHAIN_ACCOUNT = "claude-code-user";
 const SAFE_KEYCHAIN_ACCOUNT = /^[a-zA-Z0-9._-]+$/;
 const FIVE_HOURS_MS = 5 * 60 * 60 * 1_000;
@@ -100,7 +101,6 @@ type KeychainItemPresence = "present" | "missing" | "unknown" | "unreachable";
 type KeychainCandidate = {
   service: string;
   keychain: string;
-  modified: string;
 };
 type KeychainSelection =
   | { status: "present"; item: KeychainCandidate }
@@ -749,19 +749,15 @@ async function readCredentialStates(
   states.push(fileState);
 
   if (process.platform === "darwin") {
-    // Explicit profiles retain their exact path-derived service. The default
-    // profile discovers current Claude Code's opaque suffixes, never guesses them.
-    if (locations.keychainService === DEFAULT_KEYCHAIN_SERVICE) {
-      const selection = await discoverKeychainItem(locations.keychainAccount);
-      if (selection.status === "missing") {
-        states.push(keychainPresenceState("missing"));
-        return states;
-      }
-      // A keychain that could not be listed is not evidence about the item, so
-      // fall back to the exact default-service read.
-      if (selection.status === "present")
-        locations = withDiscoveredKeychainItem(locations, selection.item);
+    const selection = await listKeychainItem(locations);
+    if (selection.status === "missing") {
+      states.push(keychainPresenceState("missing"));
+      return states;
     }
+    // Inconclusive metadata never establishes sign-out. The exact vendor
+    // service/account lookup still searches the whole Keychain search list.
+    if (selection.status === "present")
+      locations = withDiscoveredKeychainItem(locations, selection.item);
     if (options.allowKeychainPrompt || hasKeychainAccessMarker(locations)) {
       states.push(await readKeychainCredentialState(locations));
     } else {
@@ -838,57 +834,46 @@ async function readKeychainItemPresence(
   }
 }
 
-// One located item per account per process: a long-lived --tui refresh loop
-// must not re-dump the keychain on every tick once it has one. A listing that
-// located nothing is repeated, so a later sign-in is picked up by the next read.
-let keychainDiscovery: { account: string; item: KeychainCandidate } | undefined;
-
-async function discoverKeychainItem(
-  account: string,
+// Re-resolve metadata on each credential pass: a TUI must notice replaced
+// items and changed search lists without retaining a stale service/path pin.
+async function listKeychainItem(
+  locations: ClaudeProfileLocations,
 ): Promise<KeychainSelection> {
-  if (keychainDiscovery?.account === account)
-    return { status: "present", item: keychainDiscovery.item };
-  const selection = await listKeychainItem(account);
-  if (selection.status === "present")
-    keychainDiscovery = { account, item: selection.item };
-  return selection;
-}
-
-async function listKeychainItem(account: string): Promise<KeychainSelection> {
   try {
-    const keychain = await defaultKeychainPath();
-    if (!keychain) return { status: "unknown" };
-    // Bounded to the default (login) keychain Claude Code writes to, and to
-    // metadata: no -d (values), -r (raw data), -a (ACLs), or -i (ACL editing).
-    // execFileText bounds this listing to 5s and 16 MiB. Keep only the newest
-    // candidate and read at most one value, even when Claude Code has
-    // accumulated thousands of superseded items. Never retain the dump.
-    const metadata = await execFileText(
+    const output = await execFileText(
       "security",
-      ["dump-keychain", keychain],
+      ["list-keychains"],
       KEYCHAIN_PRESENCE_TIMEOUT_MS,
     );
-    return selectKeychainItem(metadata, account);
+    const paths: string[] = [];
+    for (const line of output.split(/\r?\n/)) {
+      if (!line.trim()) continue;
+      const path = /^\s*"(\/[^"\n]+)"\s*$/.exec(line)?.[1];
+      if (!path) return { status: "unknown" };
+      if (!paths.includes(path)) paths.push(path);
+    }
+    if (!paths.length) return { status: "unknown" };
+    // Search the same keychains as an unqualified exact read. Metadata only:
+    // no -d (values), -r (raw data), -a (ACLs), or -i (ACL editing). One bounded
+    // dump (5s / 16 MiB) covers the list; failure withholds any absence verdict.
+    const metadata = await execFileText(
+      "security",
+      ["dump-keychain", ...paths],
+      KEYCHAIN_PRESENCE_TIMEOUT_MS,
+    );
+    return selectKeychainItem(metadata, locations, paths);
   } catch {
     return { status: "unknown" };
   }
 }
 
-async function defaultKeychainPath(): Promise<string | undefined> {
-  const output = await execFileText(
-    "security",
-    ["default-keychain"],
-    KEYCHAIN_PRESENCE_TIMEOUT_MS,
-  );
-  return /^\s*"(\/[^"\n]+)"\s*$/m.exec(output)?.[1];
-}
-
 function selectKeychainItem(
   metadata: string,
-  account: string,
+  locations: ClaudeProfileLocations,
+  paths: string[],
 ): KeychainSelection {
-  let newest: KeychainCandidate | undefined;
-  let sawRecord = false;
+  let selected: KeychainCandidate | undefined;
+  const seenKeychains = new Set<string>();
   let inconclusive = false;
   for (const record of metadata.split(/(?=^keychain: )/m)) {
     if (!record.trim()) continue;
@@ -896,11 +881,11 @@ function selectKeychainItem(
       /^keychain: (.+)$/m.exec(record)?.[1],
     );
     const kind = /^class: (.+)$/m.exec(record)?.[1];
-    if (!keychain?.startsWith("/") || !kind) {
+    if (!keychain || !paths.includes(keychain) || !kind) {
       inconclusive = true;
       continue;
     }
-    sawRecord = true;
+    seenKeychains.add(keychain);
     if (kind !== '"genp"') continue;
     const service = keychainMetadataValue(
       /^\s+"svce"<blob>=(.+)$/m.exec(record)?.[1],
@@ -912,39 +897,22 @@ function selectKeychainItem(
       inconclusive = true;
       continue;
     }
-    if (itemAccount !== account) continue;
-    if (!KEYCHAIN_SERVICE_PATTERN.test(service)) {
-      // This account holds a Claude Code item under a name quota-axi does not
-      // recognize, so the listing is not evidence that it is signed out.
-      if (service.startsWith(DEFAULT_KEYCHAIN_SERVICE)) inconclusive = true;
+    if (itemAccount !== locations.keychainAccount) continue;
+    if (service !== locations.keychainService) {
+      // Other eight-hex suffixes can belong to explicit profiles or MCP OAuth.
+      // Their timestamps say nothing about ownership. Never open them or use
+      // them to assert that the selected profile has signed out.
+      if (service.startsWith(CLAUDE_KEYCHAIN_SERVICE)) inconclusive = true;
       continue;
     }
-    const date = keychainMetadataValue(
-      /^\s+"mdat"<timedate>=(.+)$/m.exec(record)?.[1],
-    );
-    // Security prints UTC generalized times, sometimes NUL-terminated. Their
-    // fixed-width representation sorts chronologically; unknown dates sort last.
-    const modified = date?.replace(/\0$/, "");
-    const candidate = {
-      service,
-      keychain,
-      modified: modified && /^\d{14}Z$/.test(modified) ? modified : "",
-    };
-    // Stable service ordering breaks ties independently of dump order.
-    if (
-      !newest ||
-      candidate.modified > newest.modified ||
-      (candidate.modified === newest.modified &&
-        candidate.service < newest.service)
-    ) {
-      newest = candidate;
-    }
+    // Match the vendor's exact lookup ordering, independent of dump order.
+    if (!selected || paths.indexOf(keychain) < paths.indexOf(selected.keychain))
+      selected = { service, keychain };
   }
-  // An unreadable unrelated record never discards a located Claude item; it
-  // only withholds the absence verdict.
-  if (newest) return { status: "present", item: newest };
-  // Absence is only what a listing that actually walked records can show.
-  if (inconclusive || !sawRecord) return { status: "unknown" };
+  if (selected) return { status: "present", item: selected };
+  // A silent/partial listing is not evidence about unobserved keychains.
+  if (inconclusive || paths.some((path) => !seenKeychains.has(path)))
+    return { status: "unknown" };
   return { status: "missing" };
 }
 
@@ -1055,15 +1023,10 @@ export function claudeKeychainAccount(): string {
 }
 
 function resolveClaudeProfileLocations(): ClaudeProfileLocations {
-  const configuredDir = process.env.CLAUDE_CONFIG_DIR;
-  const configDir = (configuredDir ?? join(homedir(), ".claude")).normalize(
-    "NFC",
-  );
-  const keychainConfigDir = configuredDir ? configDir : undefined;
+  const { credentialDir, keychainService } = claudeProfileLocations();
   const keychainAccount = claudeKeychainAccount();
-  const keychainService = keychainServiceForConfigDir(keychainConfigDir);
   return {
-    credentialFile: join(configDir, ".credentials.json"),
+    credentialFile: join(credentialDir, ".credentials.json"),
     keychainAccount,
     keychainService,
     keychainAccessMarker: claudeKeychainAccessMarkerPath(
@@ -1071,15 +1034,6 @@ function resolveClaudeProfileLocations(): ClaudeProfileLocations {
       keychainService,
     ),
   };
-}
-
-function keychainServiceForConfigDir(configDir?: string): string {
-  if (!configDir) return DEFAULT_KEYCHAIN_SERVICE;
-  const suffix = createHash("sha256")
-    .update(configDir)
-    .digest("hex")
-    .slice(0, 8);
-  return `${DEFAULT_KEYCHAIN_SERVICE}-${suffix}`;
 }
 
 function isKeychainItemUnreachable(error: unknown): boolean {

@@ -3,7 +3,9 @@ import {
   mkdirSync,
   mkdtempSync,
   rmSync,
+  readFileSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { createHash } from "node:crypto";
@@ -18,6 +20,7 @@ const originalUser = process.env.USER;
 const originalUserProfile = process.env.USERPROFILE;
 const originalXdgCacheHome = process.env.XDG_CACHE_HOME;
 const originalClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
+const originalClaudeStorageDir = process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR;
 const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
 let tempDir: string | undefined;
 
@@ -26,6 +29,18 @@ beforeEach(() => {
   usePlatform("linux");
   process.env.USER = "fixture-user";
   delete process.env.CLAUDE_CONFIG_DIR;
+  delete process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR;
+  vi.doMock("../../src/lib/process.js", () => ({
+    execFileText: vi.fn(async () => {
+      throw new Error("unexpected process call");
+    }),
+  }));
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => {
+      throw new Error("unexpected HTTP call");
+    }),
+  );
 });
 
 afterEach(() => {
@@ -46,6 +61,9 @@ afterEach(() => {
   if (originalClaudeConfigDir === undefined)
     delete process.env.CLAUDE_CONFIG_DIR;
   else process.env.CLAUDE_CONFIG_DIR = originalClaudeConfigDir;
+  if (originalClaudeStorageDir === undefined)
+    delete process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR;
+  else process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR = originalClaudeStorageDir;
   process.exitCode = undefined;
   if (tempDir) rmSync(tempDir, { recursive: true, force: true });
   tempDir = undefined;
@@ -70,9 +88,10 @@ const fixtureKeychain = "/fixture/login.keychain-db";
 
 function mockKeychainRead(
   read: (command: string, args: string[]) => Promise<string>,
+  service = "Claude Code-credentials",
 ) {
   return vi.fn(async (command: string, args: string[]) => {
-    if (command === "security" && args[0] === "default-keychain") {
+    if (command === "security" && args[0] === "list-keychains") {
       return `    "${fixtureKeychain}"\n`;
     }
     if (command === "security" && args[0] === "dump-keychain") {
@@ -81,7 +100,7 @@ version: 512
 class: "genp"
 attributes:
     "acct"<blob>="fixture-user"
-    "svce"<blob>="Claude Code-credentials"
+    "svce"<blob>="${service}"
     "mdat"<timedate>="20260701000000Z"
 `;
     }
@@ -115,7 +134,7 @@ describe("Claude credential-state reporting", () => {
       const actual = await importOriginal<typeof import("node:os")>();
       return {
         ...actual,
-        userInfo: () => ({ ...actual.userInfo(), username: "system-user" }),
+        userInfo: () => ({ username: "system-user" }),
       };
     });
 
@@ -195,6 +214,150 @@ describe("Claude credential-state reporting", () => {
     expect(result.state.status).toBe("fresh");
   });
 
+  it.each(["configured", "default", "empty override"])(
+    "uses the secure-storage credential file for a %s config selection",
+    async (selection) => {
+      const home = useTempHome();
+      const configDir = join(home, "configured-profile");
+      if (selection !== "default") process.env.CLAUDE_CONFIG_DIR = configDir;
+      const storageDir =
+        selection === "empty override"
+          ? join(home, ".claude")
+          : join(home, "separate-storage");
+      process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR =
+        selection === "empty override" ? "" : storageDir;
+      writeClaudeConfigCredential(configDir, {
+        accessToken: "unselected-file-token",
+        expiresAt: "2035-01-01T00:00:00.000Z",
+      });
+      writeClaudeConfigCredential(storageDir, {
+        accessToken: "selected-storage-token",
+        expiresAt: "2035-01-01T00:00:00.000Z",
+      });
+      const fetchMock = vi.fn(
+        async () =>
+          new Response(JSON.stringify({ five_hour: { utilization: 12 } }), {
+            status: 200,
+          }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      const { claudeCredentialFile, inspectAuth, fetchQuota } =
+        await import("../../src/providers/claude.js");
+      const auth = await inspectAuth({
+        allowKeychainPrompt: false,
+        refreshCredentials: false,
+      });
+      const result = await fetchQuota({
+        allowKeychainPrompt: false,
+        refreshCredentials: false,
+      });
+
+      expect(claudeCredentialFile()).toBe(
+        join(storageDir, ".credentials.json"),
+      );
+      expect(auth.sources[0]).toMatchObject({
+        path: join(storageDir, ".credentials.json"),
+        status: "available",
+      });
+      expect(result.state.status).toBe("fresh");
+      expect(fetchMock.mock.calls.length).toBeGreaterThan(0);
+      for (const call of vi.mocked(fetch).mock.calls) {
+        expect(call[1]?.headers).toMatchObject({
+          authorization: "Bearer selected-storage-token",
+        });
+      }
+    },
+  );
+
+  it.each(["CLAUDE_CONFIG_DIR", "CLAUDE_SECURESTORAGE_CONFIG_DIR"])(
+    "hashes the raw NFC %s selector without expanding relative paths or tilde",
+    async (selector) => {
+      useTempHome();
+      const { claudeKeychainService } =
+        await import("../../src/providers/claude.js");
+      for (const raw of [
+        "./profile",
+        "~/profile",
+        "/fixture/alias/../profile",
+        "/fixture/cafe\u0301",
+      ]) {
+        process.env[selector] = raw;
+        const suffix = createHash("sha256")
+          .update(raw.normalize("NFC"))
+          .digest("hex")
+          .slice(0, 8);
+        expect(claudeKeychainService()).toBe(
+          `Claude Code-credentials-${suffix}`,
+        );
+      }
+    },
+  );
+
+  it("keeps a symlink profile's literal Keychain service distinct from its target", async () => {
+    const home = useTempHome();
+    const target = join(home, "target-profile");
+    const alias = join(home, "alias-profile");
+    mkdirSync(target);
+    symlinkSync(target, alias, "dir");
+    process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR = alias;
+    const { claudeKeychainService } =
+      await import("../../src/providers/claude.js");
+    const aliasService = claudeKeychainService();
+    process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR = target;
+
+    expect(claudeKeychainService()).not.toBe(aliasService);
+  });
+
+  it.each([false, true])(
+    "uses the secure-storage service with an empty override of %s",
+    async (empty) => {
+      usePlatform("darwin");
+      const home = useTempHome();
+      process.env.CLAUDE_CONFIG_DIR = join(home, "configured-profile");
+      const storage = empty ? "" : join(home, "selected-storage");
+      process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR = storage;
+      const service =
+        "Claude Code-credentials" +
+        (empty
+          ? ""
+          : `-${createHash("sha256").update(storage).digest("hex").slice(0, 8)}`);
+      const execFileText = mockKeychainRead(
+        async () =>
+          JSON.stringify({
+            claudeAiOauth: {
+              accessToken: "synthetic-keychain-token",
+              expiresAt: "2035-01-01T00:00:00.000Z",
+            },
+          }),
+        service,
+      );
+      vi.doMock("../../src/lib/process.js", () => ({ execFileText }));
+      const { inspectAuth } = await import("../../src/providers/claude.js");
+      const auth = await inspectAuth({
+        allowKeychainPrompt: true,
+        refreshCredentials: false,
+      });
+
+      expect(auth.sources).toContainEqual({
+        source: "keychain",
+        status: "available",
+      });
+      expect(execFileText).toHaveBeenCalledWith(
+        "security",
+        [
+          "find-generic-password",
+          "-a",
+          "fixture-user",
+          "-w",
+          "-s",
+          service,
+          fixtureKeychain,
+        ],
+        expect.any(Number),
+      );
+    },
+  );
+
   it("derives the custom-config Keychain service from the literal config path", async () => {
     usePlatform("darwin");
     const home = useTempHome();
@@ -204,7 +367,10 @@ describe("Claude credential-state reporting", () => {
       .update(configDir)
       .digest("hex")
       .slice(0, 8);
-    const execFileText = mockKeychainRead(async () => "");
+    const execFileText = mockKeychainRead(
+      async () => "",
+      `Claude Code-credentials-${suffix}`,
+    );
     vi.doMock("../../src/lib/process.js", () => ({ execFileText }));
 
     const { inspectAuth } = await import("../../src/providers/claude.js");
@@ -215,15 +381,15 @@ describe("Claude credential-state reporting", () => {
 
     expect(execFileText).toHaveBeenCalledWith(
       "security",
-      [
-        "find-generic-password",
-        "-a",
-        "fixture-user",
-        "-s",
-        `Claude Code-credentials-${suffix}`,
-      ],
+      ["dump-keychain", fixtureKeychain],
       expect.any(Number),
     );
+    expect(
+      execFileText.mock.calls.some(([, args]) => args.includes("-w")),
+    ).toBe(false);
+    const { claudeKeychainService } =
+      await import("../../src/providers/claude.js");
+    expect(claudeKeychainService()).toBe(`Claude Code-credentials-${suffix}`);
   });
 
   it("preserves an empty-present CLAUDE_CONFIG_DIR across profile derivations", async () => {
@@ -308,13 +474,15 @@ describe("Claude credential-state reporting", () => {
     );
     mkdirSync(dirname(marker), { recursive: true, mode: 0o700 });
     writeFileSync(marker, "granted\n", { mode: 0o600 });
-    const execFileText = mockKeychainRead(async () =>
-      JSON.stringify({
-        claudeAiOauth: {
-          accessToken: "fresh-keychain-token",
-          expiresAt: "2035-01-01T00:00:00.000Z",
-        },
-      }),
+    const execFileText = mockKeychainRead(
+      async () =>
+        JSON.stringify({
+          claudeAiOauth: {
+            accessToken: "fresh-keychain-token",
+            expiresAt: "2035-01-01T00:00:00.000Z",
+          },
+        }),
+      `Claude Code-credentials-${suffix}`,
     );
     vi.doMock("../../src/lib/process.js", () => ({ execFileText }));
 
@@ -338,6 +506,7 @@ describe("Claude credential-state reporting", () => {
         "-w",
         "-s",
         `Claude Code-credentials-${suffix}`,
+        fixtureKeychain,
       ],
       expect.any(Number),
     );
@@ -426,7 +595,7 @@ describe("Claude credential-state reporting", () => {
     });
   });
 
-  it("verifies advisory expiry and retires stale cache after a definitive 401 through the real CLI", async () => {
+  it("verifies advisory expiry and retires stale cache after a definitive 401 through the in-process CLI", async () => {
     const home = useTempHome();
     mkdirSync(join(home, ".claude"), { recursive: true });
     writeFileSync(
@@ -448,7 +617,13 @@ describe("Claude credential-state reporting", () => {
     const { main } = await import("../../src/cli.js");
 
     await main({
-      argv: ["--provider", "claude", "--json", "--full"],
+      argv: [
+        "--provider",
+        "claude",
+        "--json",
+        "--full",
+        "--no-credential-refresh",
+      ],
       binPath: "quota-axi",
       stdout: {
         write(chunk) {
@@ -840,6 +1015,80 @@ describe("Claude credential-state reporting", () => {
     });
   });
 
+  it("withholds a prior storage selector's snapshot without deleting it", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-06T20:00:00.000Z"));
+    const home = useTempHome();
+    const storageA = join(home, "storage-a");
+    const storageB = join(home, "storage-b");
+    process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR = storageA;
+    const { readCachedProvider, writeCachedProviders } =
+      await import("../../src/cache.js");
+    writeCachedProviders([cachedClaudeQuota(42)]);
+    process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR = storageB;
+    writeClaudeConfigCredential(storageB, {
+      accessToken: "synthetic-storage-b-token",
+      expiresAt: "2035-01-01T00:00:00.000Z",
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new TypeError("network unavailable");
+      }),
+    );
+    const { fetchQuota } = await import("../../src/providers/claude.js");
+    const result = await fetchQuota({
+      allowKeychainPrompt: false,
+      refreshCredentials: false,
+    });
+
+    expect(result).toMatchObject({
+      source: "unavailable",
+      windows: [],
+      state: { stale: false, error: "network unavailable" },
+    });
+    expect(readCachedProvider("claude")?.windows[0]?.percentUsed).toBe(42);
+  });
+
+  it("withholds legacy profile-only provenance without deleting its snapshot", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-06T20:00:00.000Z"));
+    const home = useTempHome();
+    const config = join(home, "synthetic-profile");
+    process.env.CLAUDE_CONFIG_DIR = config;
+    writeClaudeConfigCredential(config, {
+      accessToken: "synthetic-token",
+      expiresAt: "2035-01-01T00:00:00.000Z",
+    });
+    const { cacheFilePath } = await import("../../src/lib/fs.js");
+    const { readCachedProvider, writeCachedProviders } =
+      await import("../../src/cache.js");
+    writeCachedProviders([cachedClaudeQuota(42)]);
+    const cache = JSON.parse(readFileSync(cacheFilePath(), "utf8"));
+    cache.providers[0].credentialContext = createHash("sha256")
+      .update(`claude-config-dir:${config}`)
+      .digest("hex");
+    writeFileSync(cacheFilePath(), JSON.stringify(cache));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new TypeError("network unavailable");
+      }),
+    );
+    const { fetchQuota } = await import("../../src/providers/claude.js");
+    const result = await fetchQuota({
+      allowKeychainPrompt: false,
+      refreshCredentials: false,
+    });
+
+    expect(result).toMatchObject({
+      source: "unavailable",
+      windows: [],
+      state: { stale: false, error: "network unavailable" },
+    });
+    expect(readCachedProvider("claude")?.windows[0]?.percentUsed).toBe(42);
+  });
+
   it("fails closed for a legacy context-less Claude snapshot", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-06T20:00:00.000Z"));
@@ -1149,7 +1398,7 @@ describe("Claude credential-state reporting", () => {
       execFileText.mock.calls.every(
         ([, args]) =>
           args[0] === "dump-keychain" ||
-          args[0] === "default-keychain" ||
+          args[0] === "list-keychains" ||
           (args.includes("-a") && args.includes("fixture-user")),
       ),
     ).toBe(true);
@@ -1236,6 +1485,14 @@ describe("Claude credential-state reporting", () => {
       refreshCredentials: false,
     });
 
+    expect(
+      execFileText.mock.calls.filter(
+        ([, args]) => args[0] === "list-keychains",
+      ),
+    ).toHaveLength(2);
+    expect(
+      execFileText.mock.calls.filter(([, args]) => args[0] === "dump-keychain"),
+    ).toHaveLength(2);
     expect(marker).toContain("claude-keychain-access-granted");
     expect(execFileText).toHaveBeenCalledWith(
       "security",
@@ -1254,7 +1511,7 @@ describe("Claude credential-state reporting", () => {
       execFileText.mock.calls.every(
         ([, args]) =>
           args[0] === "dump-keychain" ||
-          args[0] === "default-keychain" ||
+          args[0] === "list-keychains" ||
           args.includes("-w"),
       ),
     ).toBe(true);
@@ -1411,7 +1668,7 @@ describe("Claude credential-state reporting", () => {
     ]);
   });
 
-  it("selects the current-user item from duplicate services through the real CLI", async () => {
+  it("selects the current-user item from duplicate services through the in-process CLI", async () => {
     usePlatform("darwin");
     useTempHome();
     await writeKeychainAccessMarker();
@@ -1455,7 +1712,13 @@ describe("Claude credential-state reporting", () => {
 
     const { main } = await import("../../src/cli.js");
     await main({
-      argv: ["--provider", "claude", "--json", "--full"],
+      argv: [
+        "--provider",
+        "claude",
+        "--json",
+        "--full",
+        "--no-credential-refresh",
+      ],
       binPath: "quota-axi",
       stdout: {
         write(chunk) {
@@ -1539,7 +1802,13 @@ describe("Claude credential-state reporting", () => {
 
       const { main } = await import("../../src/cli.js");
       await main({
-        argv: ["--provider", "claude", "--json", "--full"],
+        argv: [
+          "--provider",
+          "claude",
+          "--json",
+          "--full",
+          "--no-credential-refresh",
+        ],
         binPath: "quota-axi",
         stdout: {
           write(chunk) {
@@ -1607,7 +1876,7 @@ attributes:
     "mdat"<timedate>="20260701000000Z"
 `;
     const execFileText = vi.fn(async (_command: string, args: string[]) =>
-      args[0] === "default-keychain"
+      args[0] === "list-keychains"
         ? `    "${fixtureKeychain}"\n`
         : args[0] === "dump-keychain"
           ? unrelatedItem
@@ -1638,7 +1907,7 @@ attributes:
       execFileText.mock.calls.every(
         ([, args]) =>
           args[0] === "dump-keychain" ||
-          args[0] === "default-keychain" ||
+          args[0] === "list-keychains" ||
           (args.includes("-a") && args.includes("fixture-user")),
       ),
     ).toBe(true);
@@ -1677,7 +1946,7 @@ attributes:
     const chunks: string[] = [];
     const { main } = await import("../../src/cli.js");
     await main({
-      argv: ["--provider", "claude"],
+      argv: ["--provider", "claude", "--no-credential-refresh"],
       binPath: "quota-axi",
       stdout: {
         write(chunk) {
