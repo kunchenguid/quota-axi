@@ -211,10 +211,6 @@ async function readBoundedFile(
   }
 }
 
-function nonempty(value: string | undefined): string | undefined {
-  return value && value.length > 0 ? value : undefined;
-}
-
 function stringValue(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
