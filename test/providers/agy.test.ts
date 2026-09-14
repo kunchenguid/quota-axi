@@ -116,6 +116,19 @@ describe("Antigravity quota parsing", () => {
     ]);
   });
 
+  it("normalizes the Antigravity CLI 1.2.2 quota summary shape", () => {
+    const result = normalizeAgyQuotaSummary(
+      fixture("quota-summary-v1.2.2.json"),
+    );
+
+    expect(result?.windows).toMatchObject([
+      { id: "gemini_5h", kind: "session", percentRemaining: 88 },
+      { id: "gemini_weekly", kind: "weekly", percentRemaining: 76 },
+      { id: "claude_gpt_5h", kind: "session", percentRemaining: 64 },
+      { id: "claude_gpt_weekly", kind: "weekly", percentRemaining: 52 },
+    ]);
+  });
+
   it("normalizes oneof remaining values", () => {
     const result = normalizeAgyQuotaSummary({
       groups: [
