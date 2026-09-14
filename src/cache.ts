@@ -6,6 +6,7 @@ import {
   readJsonFile,
 } from "./lib/fs.js";
 import { kimiReadingContextId } from "./providers/kimi-cache-context.js";
+import { commandCodeReadingContextId } from "./providers/commandcode-cache-context.js";
 import type {
   ProviderId,
   ProviderQuota,
@@ -46,8 +47,9 @@ const CREDENTIAL_CONTEXT_ID = /^[a-f0-9]{64}$/;
 
 /**
  * Providers whose local configuration decides which account a reading belongs
- * to: a Claude profile selects the credential store, and a Kimi Code
- * `config.toml` selects the deployment. A snapshot from one such context says
+ * to: a Claude profile selects the credential store, a Kimi Code
+ * `config.toml` selects the deployment, and Command Code's `whoami` identifies
+ * the source-plus-account pair. A snapshot from one such context says
  * nothing about another, so each is stamped on write and required to match on
  * stale reuse.
  *
@@ -66,6 +68,7 @@ const CONTEXT_SCOPED_PROVIDERS: Partial<
 > = {
   claude: claudeCredentialContextId,
   kimi: kimiReadingContextId,
+  commandcode: commandCodeReadingContextId,
 };
 
 type CachedProvider = {
@@ -101,6 +104,16 @@ export function readCachedKimiProvider(
   contextId: string,
 ): ProviderQuota | undefined {
   return readCachedProviderInContext("kimi", contextId);
+}
+
+/**
+ * Command Code stale quota may only be reused when the cache record proves it
+ * was captured for the same source and account the current `whoami` identified.
+ */
+export function readCachedCommandCodeProvider(
+  contextId: string,
+): ProviderQuota | undefined {
+  return readCachedProviderInContext("commandcode", contextId);
 }
 
 function readCachedProviderInContext(

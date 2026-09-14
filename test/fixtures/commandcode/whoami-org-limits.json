@@ -1,0 +1,14 @@
+{
+  "org": {
+    "id": "org_fixture",
+    "login": "fixture-org"
+  },
+  "orgLimits": [
+    {
+      "name": "org spend",
+      "spent": 80,
+      "limit": 100,
+      "resetAt": "2026-09-20T00:00:00.000Z"
+    }
+  ]
+}

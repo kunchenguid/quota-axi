@@ -455,5 +455,7 @@ function providerLabel(provider: ProviderId): string {
   if (provider === "grok") return "Grok";
   if (provider === "zai") return "Z.AI";
   if (provider === "agy") return "Antigravity";
+  if (provider === "commandcode") return "Command Code";
+  if (provider === "opencode-go") return "OpenCode Go";
   return "Kimi";
 }
