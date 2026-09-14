@@ -193,7 +193,7 @@ $ quota-axi --provider claude --json
 $ quota-axi auth
 bin: ~/.npm/_npx/.../quota-axi
 description: Inspect local quota auth sources without printing secret values
-auth[15]{provider,source,path,status,error}:
+auth[16]{provider,source,path,status,error}:
   claude,oauth-file,~/.claude/.credentials.json,available,none
   claude,keychain,none,skipped,keychain_prompt_required
   codex,auth-json,~/.codex/auth.json,available,none
@@ -205,6 +205,7 @@ auth[15]{provider,source,path,status,error}:
   grok,auth-json,~/.grok/auth.json,available,none
   kimi,pi:kimi-coding,none,available,none
   kimi,kimi-code-cli,none,available,none
+  zai,pi:zai,~/.pi/agent/auth.json,missing,none
   zai,opencode:auth.json,~/.local/share/opencode/auth.json,available,none
   agy,loopback,none,available,none
   alibaba,bl-cli,none,available,none
