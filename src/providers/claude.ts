@@ -900,13 +900,17 @@ function selectKeychainItem(
       inconclusive = true;
       continue;
     }
-    if (itemAccount !== locations.keychainAccount) continue;
+    // Other eight-hex suffixes can belong to explicit profiles or MCP OAuth,
+    // and another account name can own the live session's item. Never open
+    // them or use them to assert that the selected profile has signed out.
+    const claudeOwned = service.startsWith(CLAUDE_KEYCHAIN_SERVICE);
+    if (itemAccount !== locations.keychainAccount) {
+      if (claudeOwned) inconclusive = true;
+      continue;
+    }
     const exact = service === locations.keychainService;
     if (!exact && service !== locations.keychainServiceAlias) {
-      // Other eight-hex suffixes can belong to explicit profiles or MCP OAuth.
-      // Their timestamps say nothing about ownership. Never open them or use
-      // them to assert that the selected profile has signed out.
-      if (service.startsWith(CLAUDE_KEYCHAIN_SERVICE)) inconclusive = true;
+      if (claudeOwned) inconclusive = true;
       continue;
     }
     // Prefer the exact selector over the default directory's other spelling,

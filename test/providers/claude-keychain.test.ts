@@ -690,6 +690,29 @@ describe("Claude macOS Keychain discovery", () => {
     });
   });
 
+  it("does not infer missing from a Claude item owned by another account", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-13T01:00:00Z"));
+    mockItems(
+      item(service, undefined, "other-fixture-user"),
+      "unavailable-service",
+    );
+    const { readCachedProvider, writeCachedProviders } =
+      await import("../../src/cache.js");
+    writeCachedProviders([cachedClaude()]);
+    const { fetchQuota } = await import("../../src/providers/claude.js");
+    const report = await fetchQuota(options);
+
+    expect(report.state).toMatchObject({
+      status: "stale",
+      error: "keychain_unreachable",
+    });
+    expect(readCachedProvider("claude")).toBeDefined();
+    expect(valueReadArgs()).toContain("fixture-user");
+    expect(valueReadArgs()).not.toContain("other-fixture-user");
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it("withholds a snapshot from the former opaque-discovery context without deleting it", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-09-13T01:00:00Z"));
