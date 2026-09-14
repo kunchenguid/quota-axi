@@ -678,6 +678,12 @@ function createResponseBodyLifetime(response: Response): ResponseBodyLifetime {
 
 export function normalizeZaiPayload(payload: unknown): NormalizedZaiPayload {
   const root = objectValue(payload);
+  if (isVendorAuthRejection(root)) {
+    throw new ZaiFailure("provider_auth_rejected", {
+      status: "auth_required",
+      definitiveAuth: true,
+    });
+  }
   const data = objectValue(root?.data) ?? root;
   const limitsValue = data?.limits;
   if (!Array.isArray(limitsValue)) {
@@ -911,6 +917,14 @@ function localTransportCode(
   return code && /(?:TLS|SSL|CERT|UNABLE_TO_VERIFY)/i.test(code)
     ? "tls_failed"
     : "network_unavailable";
+}
+
+const VENDOR_AUTH_FAILED_CODE = 1000;
+
+function isVendorAuthRejection(
+  root: Record<string, unknown> | undefined,
+): boolean {
+  return root?.success === false && root.code === VENDOR_AUTH_FAILED_CODE;
 }
 
 function objectValue(value: unknown): Record<string, unknown> | undefined {

@@ -1174,6 +1174,63 @@ describe("Z.AI multi-source credentials", () => {
     ]);
   });
 
+  it("falls through from a Pi key the vendor rejects in a 200 body to a working opencode key", async () => {
+    const request = vi.fn(
+      async (_input: RequestInfo | URL, init?: RequestInit) => {
+        const headers = new Headers(init?.headers);
+        if (headers.get("authorization") === "revoked-pi-key") {
+          return jsonResponse({
+            code: 1000,
+            msg: "Authentication Failed",
+            success: false,
+          });
+        }
+        return jsonResponse(QUOTA_PAYLOAD);
+      },
+    );
+    const adapter = createZaiAdapter({
+      credentialSources: [
+        {
+          name: "pi:zai",
+          source: credentialSource({
+            status: "available",
+            apiKey: "revoked-pi-key",
+            host: "api.z.ai",
+            path: "/home/user/.pi/agent/auth.json",
+          }),
+        },
+        {
+          name: "opencode:auth.json",
+          source: credentialSource({
+            status: "available",
+            apiKey: SYNTHETIC_KEY,
+            host: "api.z.ai",
+            path: "/home/user/.local/share/opencode/auth.json",
+          }),
+        },
+      ],
+      fetch: request,
+      readCachedProvider: () => undefined,
+      deleteCachedProvider: () => undefined,
+      now: () => NOW,
+    });
+
+    const report = await adapter.fetchQuota(OPTIONS);
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(report.state).toMatchObject({
+      status: "fresh",
+      sourcesTried: ["pi:zai", "opencode:auth.json"],
+    });
+    expect(report.attempts).toEqual([
+      {
+        source: "pi:zai",
+        status: "failed",
+        error: "provider_auth_rejected",
+      },
+      { source: "opencode:auth.json", status: "success" },
+    ]);
+  });
+
   it("skips a missing Pi store and uses opencode", async () => {
     const request = vi.fn(async () => jsonResponse(QUOTA_PAYLOAD));
     const adapter = createZaiAdapter({
