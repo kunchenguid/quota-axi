@@ -655,6 +655,35 @@ describe("Antigravity provider", () => {
     });
   });
 
+  it("does not serve stale quota when protected loopback and print usage fail", async () => {
+    writeCachedProviders([cachedAgyQuota()]);
+    const port = await startServer((response) => {
+      response.writeHead(401, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          code: "unauthenticated",
+          message: "missing CSRF token",
+        }),
+      );
+    });
+
+    const result = await fetchQuotaWithRuntime(
+      runtimeWith({
+        ps: "123 /Users/test/.local/bin/agy\n",
+        lsof: lsofFor(123, port),
+        requestJson: requestLoopbackJson,
+      }),
+    );
+
+    expect(result.state).toMatchObject({
+      status: "unavailable",
+      error:
+        "Antigravity CLI quota unavailable because its runtime CSRF token is not exposed; use Antigravity /usage",
+    });
+    expect(result.windows).toEqual([]);
+    expect(readCachedProvider("agy")).toBeDefined();
+  });
+
   it("sanitizes failures from structured print usage", async () => {
     const result = await fetchQuotaWithRuntime(
       runtimeWith({
