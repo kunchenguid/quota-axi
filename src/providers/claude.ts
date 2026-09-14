@@ -890,7 +890,7 @@ function selectKeychainItem(
 ): KeychainSelection {
   let newest: KeychainCandidate | undefined;
   let sawRecord = false;
-  let malformed = false;
+  let inconclusive = false;
   for (const record of metadata.split(/(?=^keychain: )/m)) {
     if (!record.trim()) continue;
     const keychain = keychainMetadataValue(
@@ -898,7 +898,7 @@ function selectKeychainItem(
     );
     const kind = /^class: (.+)$/m.exec(record)?.[1];
     if (!keychain?.startsWith("/") || !kind) {
-      malformed = true;
+      inconclusive = true;
       continue;
     }
     sawRecord = true;
@@ -910,11 +910,16 @@ function selectKeychainItem(
       /^\s+"acct"<blob>=(.+)$/m.exec(record)?.[1],
     );
     if (service === undefined || itemAccount === undefined) {
-      malformed = true;
+      inconclusive = true;
       continue;
     }
-    if (!KEYCHAIN_SERVICE_PATTERN.test(service) || itemAccount !== account)
+    if (itemAccount !== account) continue;
+    if (!KEYCHAIN_SERVICE_PATTERN.test(service)) {
+      // This account holds a Claude Code item under a name quota-axi does not
+      // recognize, so the listing is not evidence that it is signed out.
+      if (service.startsWith(DEFAULT_KEYCHAIN_SERVICE)) inconclusive = true;
       continue;
+    }
     const date = keychainMetadataValue(
       /^\s+"mdat"<timedate>=(.+)$/m.exec(record)?.[1],
     );
@@ -941,7 +946,7 @@ function selectKeychainItem(
   // An unreadable unrelated record never discards a located Claude item; it
   // only withholds the absence verdict.
   if (newest) return { status: "present", item: newest };
-  if (malformed || (metadata.trim() && !sawRecord))
+  if (inconclusive || (metadata.trim() && !sawRecord))
     return { status: "unknown" };
   return { status: "missing" };
 }

@@ -57,6 +57,28 @@ afterEach(() => {
   rmSync(home, { recursive: true, force: true });
 });
 
+function cachedClaude() {
+  return {
+    provider: "claude" as const,
+    label: "Claude",
+    source: "oauth",
+    windows: [
+      {
+        id: "five_hour",
+        label: "session",
+        kind: "session" as const,
+        percentUsed: 12,
+      },
+    ],
+    state: {
+      status: "fresh" as const,
+      stale: false,
+      refreshedAt: "2026-09-13T00:30:00Z",
+      sourcesTried: ["oauth"],
+    },
+  };
+}
+
 function valueReadArgs(): string[] {
   const call = execFileText.mock.calls.find(([, args]: [string, string[]]) =>
     args.includes("-w"),
@@ -194,12 +216,11 @@ describe("Claude macOS Keychain discovery", () => {
     ]);
   });
 
-  it("ignores other accounts, unrelated services, invalid suffixes and non-password items", async () => {
+  it("ignores other accounts, unrelated services and non-password items", async () => {
     mockItems(
       item(service, undefined, "other-user") +
+        item("Claude Code-credentials-ABCDEF12", undefined, "other-user") +
         item("other-service") +
-        item("Claude Code-credentials-ABCDEF12") +
-        item("Claude Code-credentials-deadbeef-extra") +
         item(service, undefined, undefined, undefined, "inet"),
     );
     const { inspectAuth } = await import("../../src/providers/claude.js");
@@ -212,6 +233,40 @@ describe("Claude macOS Keychain discovery", () => {
       ["security", ["default-keychain"], 5000],
       ["security", ["dump-keychain", keychain], 5000],
     ]);
+  });
+
+  it.each([
+    ["an unfamiliar suffix length", "Claude Code-credentials-0123456789abcdef"],
+    ["an uppercase suffix", "Claude Code-credentials-ABCDEF12"],
+    ["a trailing segment", "Claude Code-credentials-deadbeef-extra"],
+  ])(
+    "never reports sign-out when this account holds a Claude item with %s",
+    async (_label, unfamiliar) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-09-13T01:00:00Z"));
+      mockItems(item(unfamiliar), "unavailable-service");
+      const { readCachedProvider, writeCachedProviders } =
+        await import("../../src/cache.js");
+      writeCachedProviders([cachedClaude()]);
+      const { fetchQuota } = await import("../../src/providers/claude.js");
+      const report = await fetchQuota(options);
+
+      expect(report.state.status).toBe("stale");
+      expect(report.source).toBe("cache");
+      expect(readCachedProvider("claude")).toBeDefined();
+      expect(valueReadArgs()).toContain("Claude Code-credentials");
+      expect(valueReadArgs()).not.toContain(unfamiliar);
+    },
+  );
+
+  it("still prefers a recognized item over an unfamiliar one for the same account", async () => {
+    mockItems(
+      item("Claude Code-credentials-0123456789abcdef", "20260913020000Z") +
+        item(),
+    );
+    const { fetchQuota } = await import("../../src/providers/claude.js");
+    expect((await fetchQuota(options)).state.status).toBe("fresh");
+    expect(valueReadArgs()).toContain(service);
   });
 
   it.each([false, true])(
