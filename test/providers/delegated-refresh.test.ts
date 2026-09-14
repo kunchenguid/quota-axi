@@ -57,6 +57,7 @@ function withUnlistableProcesses(): void {
 
 const USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
 const PROFILE_URL = "https://api.anthropic.com/api/oauth/profile";
+const CLAUDE_LOGIN_KEYCHAIN = `    "/fixture/login.keychain-db"\n`;
 const CLAUDE_KEYCHAIN_METADATA = `keychain: "/fixture/login.keychain-db"
 version: 512
 class: "genp"
@@ -538,16 +539,18 @@ describe.skipIf(process.platform === "win32")(
         return {
           ...actual,
           execFileText: vi.fn(async (_command: string, args: string[]) =>
-            args[0] === "dump-keychain"
-              ? CLAUDE_KEYCHAIN_METADATA
-              : JSON.stringify({
-                  claudeAiOauth: {
-                    accessToken: "keychain-valid-token",
-                    refreshToken: true,
-                    expiresAt: Date.parse("2035-01-01T00:00:00.000Z"),
-                    subscriptionType: "max",
-                  },
-                }),
+            args[0] === "default-keychain"
+              ? CLAUDE_LOGIN_KEYCHAIN
+              : args[0] === "dump-keychain"
+                ? CLAUDE_KEYCHAIN_METADATA
+                : JSON.stringify({
+                    claudeAiOauth: {
+                      accessToken: "keychain-valid-token",
+                      refreshToken: true,
+                      expiresAt: Date.parse("2035-01-01T00:00:00.000Z"),
+                      subscriptionType: "max",
+                    },
+                  }),
           ),
         };
       });
@@ -606,7 +609,11 @@ describe.skipIf(process.platform === "win32")(
           await importOriginal<typeof import("../../src/lib/process.js")>();
         return {
           ...actual,
-          execFileText: vi.fn(async () => CLAUDE_KEYCHAIN_METADATA),
+          execFileText: vi.fn(async (_command: string, args: string[]) =>
+            args[0] === "default-keychain"
+              ? CLAUDE_LOGIN_KEYCHAIN
+              : CLAUDE_KEYCHAIN_METADATA,
+          ),
         };
       });
 

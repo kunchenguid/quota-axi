@@ -63,20 +63,23 @@ export function claudeCredentialContextId(): string {
     .digest("hex");
 }
 
+// The grant is per Keychain item, so the marker is keyed by the service the
+// value read will name, which already encodes any explicit profile directory.
 export function claudeKeychainAccessMarkerPath(
   account: string,
-  configDir?: string,
+  service: string,
 ): string {
-  const profileSuffix = configDir
-    ? `-${createHash("sha256").update(configDir).digest("hex").slice(0, 8)}`
-    : "";
+  const serviceSuffix = createHash("sha256")
+    .update(service)
+    .digest("hex")
+    .slice(0, 8);
   const accountSuffix = createHash("sha256")
     .update(account)
     .digest("hex")
     .slice(0, 16);
   return join(
     cacheDirPath(),
-    `claude-keychain-access-granted${profileSuffix}-account-${accountSuffix}`,
+    `claude-keychain-access-granted-${serviceSuffix}-account-${accountSuffix}`,
   );
 }
 

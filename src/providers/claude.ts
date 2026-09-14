@@ -97,6 +97,9 @@ type KeychainCandidate = {
   keychain: string;
   modified: string;
 };
+type KeychainSelection =
+  | { status: "present"; item: KeychainCandidate }
+  | { status: "missing" | "unknown" | "unreachable" };
 type ClaudeAccount = NonNullable<ProviderQuota["account"]>;
 type ClaudeIdentityResult = {
   account: ClaudeAccount;
@@ -441,6 +444,7 @@ async function attemptClaudeQuota(
       state.source.source === "keychain" &&
       [
         "keychain_access_denied",
+        "keychain_prompt_timeout",
         "keychain_presence_check_failed",
         KEYCHAIN_UNREACHABLE_ERROR,
       ].includes(state.source.error ?? ""),
@@ -740,23 +744,28 @@ async function readCredentialStates(
   if (process.platform === "darwin") {
     // Explicit profiles retain their exact path-derived service. The default
     // profile discovers current Claude Code's opaque suffixes, never guesses them.
+    let unlistable: "unknown" | "unreachable" | undefined;
     if (locations.keychainService === DEFAULT_KEYCHAIN_SERVICE) {
       const selection = await discoverKeychainItem(locations.keychainAccount);
-      if (selection.status !== "present") {
-        states.push(keychainPresenceState(selection.status));
+      if (selection.status === "missing") {
+        states.push(keychainPresenceState("missing"));
         return states;
       }
-      locations = {
-        ...locations,
-        keychainService: selection.item.service,
-        keychainPath: selection.item.keychain,
-      };
+      // A keychain that could not be listed is not evidence about the item, so
+      // fall back to the exact default-service read and never call it absent.
+      if (selection.status === "present") {
+        locations = withDiscoveredKeychainItem(locations, selection.item);
+      } else {
+        unlistable = selection.status;
+      }
     }
-    if (options.allowKeychainPrompt || hasKeychainAccessMarker(locations)) {
-      states.push(await readKeychainCredentialState(locations));
-    } else {
-      states.push(await readSkippedKeychainCredentialState(locations));
-    }
+    let state =
+      options.allowKeychainPrompt || hasKeychainAccessMarker(locations)
+        ? await readKeychainCredentialState(locations)
+        : await readSkippedKeychainCredentialState(locations);
+    if (unlistable && state.status === "missing")
+      state = keychainPresenceState(unlistable);
+    states.push(state);
   }
 
   return states;
@@ -826,20 +835,36 @@ async function readKeychainItemPresence(
   }
 }
 
+// One conclusive listing per account per process: a long-lived --tui refresh
+// loop must not re-dump the keychain on every tick. A suffix rotated after a
+// conclusive listing is picked up by the next run.
+let keychainDiscovery:
+  | { account: string; selection: KeychainSelection }
+  | undefined;
+
 async function discoverKeychainItem(
   account: string,
-): Promise<
-  | { status: "present"; item: KeychainCandidate }
-  | { status: "missing" | "unknown" | "unreachable" }
-> {
+): Promise<KeychainSelection> {
+  if (keychainDiscovery?.account === account)
+    return keychainDiscovery.selection;
+  const selection = await listKeychainItem(account);
+  if (selection.status === "present" || selection.status === "missing")
+    keychainDiscovery = { account, selection };
+  return selection;
+}
+
+async function listKeychainItem(account: string): Promise<KeychainSelection> {
   try {
-    // No -d (values), -r (raw data), -a (ACLs), or -i (ACL editing).
-    // execFileText bounds this metadata-only listing to 5s and 16 MiB. Keep
-    // only the newest candidate and read at most one value, even when Claude
-    // Code has accumulated thousands of superseded items. Never retain the dump.
+    const keychain = await defaultKeychainPath();
+    if (!keychain) return { status: "unknown" };
+    // Bounded to the default (login) keychain Claude Code writes to, and to
+    // metadata: no -d (values), -r (raw data), -a (ACLs), or -i (ACL editing).
+    // execFileText bounds this listing to 5s and 16 MiB. Keep only the newest
+    // candidate and read at most one value, even when Claude Code has
+    // accumulated thousands of superseded items. Never retain the dump.
     const metadata = await execFileText(
       "security",
-      ["dump-keychain"],
+      ["dump-keychain", keychain],
       KEYCHAIN_PRESENCE_TIMEOUT_MS,
     );
     return selectKeychainItem(metadata, account);
@@ -850,12 +875,19 @@ async function discoverKeychainItem(
   }
 }
 
+async function defaultKeychainPath(): Promise<string | undefined> {
+  const output = await execFileText(
+    "security",
+    ["default-keychain"],
+    KEYCHAIN_PRESENCE_TIMEOUT_MS,
+  );
+  return /^\s*"(\/[^"\n]+)"\s*$/m.exec(output)?.[1];
+}
+
 function selectKeychainItem(
   metadata: string,
   account: string,
-):
-  | { status: "present"; item: KeychainCandidate }
-  | { status: "missing" | "unknown" } {
+): KeychainSelection {
   let newest: KeychainCandidate | undefined;
   let sawRecord = false;
   let malformed = false;
@@ -906,9 +938,12 @@ function selectKeychainItem(
       newest = candidate;
     }
   }
+  // An unreadable unrelated record never discards a located Claude item; it
+  // only withholds the absence verdict.
+  if (newest) return { status: "present", item: newest };
   if (malformed || (metadata.trim() && !sawRecord))
     return { status: "unknown" };
-  return newest ? { status: "present", item: newest } : { status: "missing" };
+  return { status: "missing" };
 }
 
 // security's print_buffer emits printable bytes in quotes, or hex followed by
@@ -960,6 +995,21 @@ async function readKeychainCredentialState(
   }
 }
 
+function withDiscoveredKeychainItem(
+  locations: ClaudeProfileLocations,
+  item: KeychainCandidate,
+): ClaudeProfileLocations {
+  return {
+    ...locations,
+    keychainService: item.service,
+    keychainPath: item.keychain,
+    keychainAccessMarker: claudeKeychainAccessMarkerPath(
+      locations.keychainAccount,
+      item.service,
+    ),
+  };
+}
+
 function hasKeychainAccessMarker(locations: ClaudeProfileLocations): boolean {
   return existsSync(locations.keychainAccessMarker);
 }
@@ -1009,13 +1059,14 @@ function resolveClaudeProfileLocations(): ClaudeProfileLocations {
   );
   const keychainConfigDir = configuredDir ? configDir : undefined;
   const keychainAccount = claudeKeychainAccount();
+  const keychainService = keychainServiceForConfigDir(keychainConfigDir);
   return {
     credentialFile: join(configDir, ".credentials.json"),
     keychainAccount,
-    keychainService: keychainServiceForConfigDir(keychainConfigDir),
+    keychainService,
     keychainAccessMarker: claudeKeychainAccessMarkerPath(
       keychainAccount,
-      keychainConfigDir,
+      keychainService,
     ),
   };
 }

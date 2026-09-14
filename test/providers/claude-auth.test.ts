@@ -72,6 +72,9 @@ function mockKeychainRead(
   read: (command: string, args: string[]) => Promise<string>,
 ) {
   return vi.fn(async (command: string, args: string[]) => {
+    if (command === "security" && args[0] === "default-keychain") {
+      return `    "${fixtureKeychain}"\n`;
+    }
     if (command === "security" && args[0] === "dump-keychain") {
       return `keychain: "${fixtureKeychain}"
 version: 512
@@ -229,7 +232,10 @@ describe("Claude credential-state reporting", () => {
     process.env.CLAUDE_CONFIG_DIR = "";
     const { claudeKeychainAccessMarkerPath } =
       await import("../../src/lib/fs.js");
-    const marker = claudeKeychainAccessMarkerPath("fixture-user", "");
+    const marker = claudeKeychainAccessMarkerPath(
+      "fixture-user",
+      "Claude Code-credentials",
+    );
     mkdirSync(dirname(marker), { recursive: true, mode: 0o700 });
     writeFileSync(marker, "granted\n", { mode: 0o600 });
     const execFileText = mockKeychainRead(async () =>
@@ -252,7 +258,7 @@ describe("Claude credential-state reporting", () => {
     expect(claudeCredentialFile()).toBe(".credentials.json");
     expect(marker).toMatch(
       new RegExp(
-        `^${join(home, "cache", "quota-axi", "claude-keychain-access-granted-account-")}[0-9a-f]{16}$`,
+        `^${join(home, "cache", "quota-axi", "claude-keychain-access-granted-")}[0-9a-f]{8}-account-[0-9a-f]{16}$`,
       ),
     );
     expect(execFileText).toHaveBeenCalledWith(
@@ -290,18 +296,18 @@ describe("Claude credential-state reporting", () => {
         },
       }),
     );
-    const { claudeKeychainAccessMarkerPath } =
-      await import("../../src/lib/fs.js");
-    const marker = claudeKeychainAccessMarkerPath(
-      "fixture-user",
-      normalizedConfigDir,
-    );
-    mkdirSync(dirname(marker), { recursive: true, mode: 0o700 });
-    writeFileSync(marker, "granted\n", { mode: 0o600 });
     const suffix = createHash("sha256")
       .update(normalizedConfigDir)
       .digest("hex")
       .slice(0, 8);
+    const { claudeKeychainAccessMarkerPath } =
+      await import("../../src/lib/fs.js");
+    const marker = claudeKeychainAccessMarkerPath(
+      "fixture-user",
+      `Claude Code-credentials-${suffix}`,
+    );
+    mkdirSync(dirname(marker), { recursive: true, mode: 0o700 });
+    writeFileSync(marker, "granted\n", { mode: 0o600 });
     const execFileText = mockKeychainRead(async () =>
       JSON.stringify({
         claudeAiOauth: {
@@ -1131,7 +1137,7 @@ describe("Claude credential-state reporting", () => {
 
     expect(execFileText).toHaveBeenCalledWith(
       "security",
-      ["dump-keychain"],
+      ["dump-keychain", fixtureKeychain],
       expect.any(Number),
     );
     expect(execFileText).not.toHaveBeenCalledWith(
@@ -1143,6 +1149,7 @@ describe("Claude credential-state reporting", () => {
       execFileText.mock.calls.every(
         ([, args]) =>
           args[0] === "dump-keychain" ||
+          args[0] === "default-keychain" ||
           (args.includes("-a") && args.includes("fixture-user")),
       ),
     ).toBe(true);
@@ -1175,7 +1182,7 @@ describe("Claude credential-state reporting", () => {
       refreshCredentials: false,
     });
 
-    expect(execFileText).toHaveBeenCalledTimes(2);
+    expect(execFileText).toHaveBeenCalledTimes(3);
     expect(execFileText).toHaveBeenCalledWith(
       "security",
       [
@@ -1245,7 +1252,10 @@ describe("Claude credential-state reporting", () => {
     );
     expect(
       execFileText.mock.calls.every(
-        ([, args]) => args[0] === "dump-keychain" || args.includes("-w"),
+        ([, args]) =>
+          args[0] === "dump-keychain" ||
+          args[0] === "default-keychain" ||
+          args.includes("-w"),
       ),
     ).toBe(true);
     expect(auth.sources).toContainEqual({
@@ -1352,7 +1362,10 @@ describe("Claude credential-state reporting", () => {
       ],
       expect.any(Number),
     );
-    const marker = claudeKeychainAccessMarkerPath("fixture-user");
+    const marker = claudeKeychainAccessMarkerPath(
+      "fixture-user",
+      "Claude Code-credentials",
+    );
     expect(existsSync(marker)).toBe(true);
     expect(statSync(marker).mode & 0o777).toBe(0o600);
   });
@@ -1460,7 +1473,7 @@ describe("Claude credential-state reporting", () => {
         attempts: Array<{ source: string; status: string }>;
       }>;
     };
-    expect(execFileText).toHaveBeenCalledTimes(2);
+    expect(execFileText).toHaveBeenCalledTimes(3);
     expect(execFileText).toHaveBeenCalledWith(
       "security",
       [
@@ -1585,7 +1598,9 @@ describe("Claude credential-state reporting", () => {
   it("does not mark keychain prompt required when the keychain item is missing", async () => {
     usePlatform("darwin");
     useTempHome();
-    const execFileText = vi.fn(async () => "");
+    const execFileText = vi.fn(async (_command: string, args: string[]) =>
+      args[0] === "default-keychain" ? `    "${fixtureKeychain}"\n` : "",
+    );
     vi.doMock("../../src/lib/process.js", () => ({ execFileText }));
 
     const { fetchQuota, inspectAuth } =
@@ -1601,7 +1616,7 @@ describe("Claude credential-state reporting", () => {
 
     expect(execFileText).toHaveBeenCalledWith(
       "security",
-      ["dump-keychain"],
+      ["dump-keychain", fixtureKeychain],
       expect.any(Number),
     );
     expect(
@@ -1611,6 +1626,7 @@ describe("Claude credential-state reporting", () => {
       execFileText.mock.calls.every(
         ([, args]) =>
           args[0] === "dump-keychain" ||
+          args[0] === "default-keychain" ||
           (args.includes("-a") && args.includes("fixture-user")),
       ),
     ).toBe(true);
@@ -1786,7 +1802,10 @@ describe("Claude credential-state reporting", () => {
 async function writeKeychainAccessMarker(): Promise<string> {
   const { claudeKeychainAccessMarkerPath } =
     await import("../../src/lib/fs.js");
-  const marker = claudeKeychainAccessMarkerPath("fixture-user");
+  const marker = claudeKeychainAccessMarkerPath(
+    "fixture-user",
+    "Claude Code-credentials",
+  );
   mkdirSync(dirname(marker), { recursive: true, mode: 0o700 });
   writeFileSync(marker, "granted\n", { mode: 0o600 });
   return marker;
