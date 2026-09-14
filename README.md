@@ -718,7 +718,7 @@ Auth source entries can include `credentialPresent` when a source is not genuine
 
 - It never launches, restarts, signs in to, or mutates Antigravity or `agy`. It reads no credential store, so it has no delegated refresh either.
 - On macOS and Linux, it discovers only the current user's processes and their owned listening ports, then sends read-only POST requests with operation-specific bodies to local endpoints on `127.0.0.1`. An app-advertised extension port is eligible only when the same process owns its listener.
-- It prefers `RetrieveUserQuotaSummary` with `forceRefresh: false`, uses `GetUserStatus` for plan identity and account identity exposed only behind `--full`, and can fall back to model quota data from `GetUserStatus` / `GetCommandModelConfigs` when grouped quota summary is unavailable.
+- It prefers `RetrieveUserQuotaSummary` with the vendor's read-only `request: {}` / `forceRefresh: false` envelope, forwards a runtime CSRF token only when an app process advertises one, uses `GetUserStatus` for plan identity and account identity exposed only behind `--full`, and can fall back to model quota data from `GetUserStatus` / `GetCommandModelConfigs` when grouped quota summary is unavailable. Antigravity CLI 1.2.2 does not expose its runtime CSRF token, so that loopback rejection is reported as unavailable with a pointer to `/usage`, not as an account sign-out.
 - Percent remaining and reset times come only from vendor `remainingFraction`/`resetTime` fields. It does not invent windows, resets, or percentages.
 - Burn rate is not reported for Antigravity v1 because the local payload exposes point-in-time quota snapshots, not enough history to compute a rate honestly.
 

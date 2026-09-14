@@ -1,6 +1,10 @@
 import { readFileSync } from "node:fs";
 import { mkdtempSync, rmSync } from "node:fs";
-import { createServer, type ServerResponse } from "node:http";
+import {
+  createServer,
+  type IncomingMessage,
+  type ServerResponse,
+} from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -82,6 +86,19 @@ describe("Antigravity quota parsing", () => {
       },
     ]);
     expect(result?.windows.every((window) => !window.windowSeconds)).toBe(true);
+  });
+
+  it("normalizes the Antigravity CLI 1.2.2 quota summary shape", () => {
+    const result = normalizeAgyQuotaSummary(
+      fixture("quota-summary-v1.2.2.json"),
+    );
+
+    expect(result?.windows).toMatchObject([
+      { id: "gemini_5h", kind: "session", percentRemaining: 88 },
+      { id: "gemini_weekly", kind: "weekly", percentRemaining: 76 },
+      { id: "claude_gpt_5h", kind: "session", percentRemaining: 64 },
+      { id: "claude_gpt_weekly", kind: "weekly", percentRemaining: 52 },
+    ]);
   });
 
   it("normalizes oneof remaining values", () => {
@@ -466,6 +483,65 @@ describe("Antigravity provider", () => {
     expect(readCachedProvider("agy")).toBeUndefined();
   });
 
+  it("does not treat the CLI 1.2.2 CSRF guard as a sign-out", async () => {
+    writeCachedProviders([cachedAgyQuota()]);
+    const port = await startServer((response) => {
+      response.writeHead(401, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          code: "unauthenticated",
+          message: "missing CSRF token",
+        }),
+      );
+    });
+
+    const result = await fetchQuotaWithRuntime(
+      runtimeWith({
+        ps: "123 /Users/test/.local/bin/agy\n",
+        lsof: lsofFor(123, port),
+        requestJson: requestLoopbackJson,
+      }),
+    );
+
+    expect(result.state).toMatchObject({
+      status: "stale",
+      error:
+        "Antigravity CLI quota unavailable because its runtime CSRF token is not exposed; use Antigravity /usage",
+    });
+    expect(readCachedProvider("agy")).toBeDefined();
+  });
+
+  it("sends the CLI 1.2.2 read-only request envelope without a token", async () => {
+    let receivedBody: unknown;
+    let receivedCsrfToken: string | undefined;
+    const port = await startServer((response, request) => {
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk: Buffer) => chunks.push(chunk));
+      request.on("end", () => {
+        if (request.url?.endsWith("RetrieveUserQuotaSummary")) {
+          receivedBody = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+          receivedCsrfToken = request.headers["x-codeium-csrf-token"] as
+            | string
+            | undefined;
+        }
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify(fixture("quota-summary-v1.2.2.json")));
+      });
+    });
+
+    const result = await fetchQuotaWithRuntime(
+      runtimeWith({
+        ps: "123 /Users/test/.local/bin/agy\n",
+        lsof: lsofFor(123, port),
+        requestJson: requestLoopbackJson,
+      }),
+    );
+
+    expect(result.state.status).toBe("fresh");
+    expect(receivedBody).toEqual({ request: {}, forceRefresh: false });
+    expect(receivedCsrfToken).toBeUndefined();
+  });
+
   it("preserves rate limits over protocol failures", async () => {
     const port = await startServer((response) => {
       response.writeHead(429, { "content-type": "application/json" });
@@ -599,9 +675,11 @@ agy ${pid} test 8u IPv4 0x1 0t0 TCP 127.0.0.1:${port} (LISTEN)
 }
 
 async function startServer(
-  handler: (response: ServerResponse) => void,
+  handler: (response: ServerResponse, request: IncomingMessage) => void,
 ): Promise<number> {
-  const server = createServer((_request, response) => handler(response));
+  const server = createServer((request, response) =>
+    handler(response, request),
+  );
   servers.push(server);
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   return (server.address() as AddressInfo).port;

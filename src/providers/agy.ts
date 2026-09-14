@@ -138,7 +138,7 @@ export async function fetchQuotaWithRuntime(
   return failedProvider({
     provider: "agy",
     label: "Antigravity",
-    status: statusForError(finalError),
+    status: statusForFailure(finalFailure),
     error: finalError,
     sourcesTried: sourceNames(attempts),
     attempts,
@@ -793,12 +793,17 @@ function schemeSortRank(scheme: AgyConnectionEndpoint["scheme"]): number {
 
 function statusForError(error: string): ProviderStatus {
   if (
-    /not running|no local|loopback unavailable|(?:loopback|probe) timed out|ECONNREFUSED|ECONNRESET|ECONNABORTED|ENOTFOUND|EHOSTUNREACH|ETIMEDOUT|EPIPE|EPROTO|socket hang up/i.test(
+    /not running|no local|loopback (?:access )?unavailable|(?:loopback|probe) timed out|ECONNREFUSED|ECONNRESET|ECONNABORTED|ENOTFOUND|EHOSTUNREACH|ETIMEDOUT|EPIPE|EPROTO|socket hang up/i.test(
       error,
     )
   )
     return "unavailable";
   return statusFromError(error);
+}
+
+function statusForFailure(error: unknown): ProviderStatus {
+  if (error instanceof AgyUnavailableError) return "unavailable";
+  return statusForError(errorMessage(error));
 }
 
 export function requestLoopbackJson(
@@ -842,14 +847,6 @@ export function requestLoopbackJson(
     };
     const request = client.request(options, (incoming) => {
       response = incoming;
-      if (
-        !incoming.statusCode ||
-        incoming.statusCode < 200 ||
-        incoming.statusCode >= 300
-      ) {
-        finish(new AgyHttpError(incoming.statusCode ?? 0));
-        return;
-      }
       const chunks: Uint8Array[] = [];
       let receivedBytes = 0;
       incoming.on("data", (chunk: Buffer | string) => {
@@ -869,6 +866,14 @@ export function requestLoopbackJson(
       incoming.on("end", () => {
         if (settled) return;
         const text = Buffer.concat(chunks).toString("utf8");
+        if (
+          !incoming.statusCode ||
+          incoming.statusCode < 200 ||
+          incoming.statusCode >= 300
+        ) {
+          finish(httpResponseError(incoming.statusCode ?? 0, text));
+          return;
+        }
         try {
           finish(undefined, JSON.parse(text) as unknown);
         } catch {
@@ -891,7 +896,7 @@ export function requestLoopbackJson(
 }
 
 function requestBodyForPath(path: string): Record<string, unknown> {
-  if (path === QUOTA_SUMMARY_PATH) return { forceRefresh: false };
+  if (path === QUOTA_SUMMARY_PATH) return { request: {}, forceRefresh: false };
   return {
     metadata: {
       ideName: "antigravity",
@@ -963,6 +968,7 @@ function strongerFailure(current: unknown, candidate: unknown): unknown {
 }
 
 function failureRank(error: unknown): number {
+  if (error instanceof AgyCsrfError) return 2;
   const status = statusForError(errorMessage(error));
   if (status === "auth_required") return 4;
   if (status === "rate_limited") return 3;
@@ -974,7 +980,7 @@ function failureRank(error: unknown): number {
 function staleEligibleFailure(error: unknown): boolean {
   if (error instanceof AgyHttpError)
     return error.status === 429 || error.status >= 500;
-  return statusForError(errorMessage(error)) === "unavailable";
+  return statusForFailure(error) === "unavailable";
 }
 
 function isDefinitiveAuthFailure(error: unknown): boolean {
@@ -1016,6 +1022,8 @@ function withinProbeBudget<T>(
 
 class AgyUnavailableError extends Error {}
 
+class AgyCsrfError extends AgyUnavailableError {}
+
 class AgyProbeBudgetError extends AgyUnavailableError {}
 
 class AgyMalformedResponseError extends Error {}
@@ -1025,6 +1033,25 @@ class AgyDiscoveryError extends Error {}
 class AgyHttpError extends Error {
   constructor(readonly status: number) {
     super(httpErrorMessage(status));
+  }
+}
+
+function httpResponseError(status: number, body: string): Error {
+  if ((status === 401 || status === 403) && isCsrfRejection(body)) {
+    return new AgyCsrfError(
+      "Antigravity CLI quota unavailable because its runtime CSRF token is not exposed; use Antigravity /usage",
+    );
+  }
+  return new AgyHttpError(status);
+}
+
+function isCsrfRejection(body: string): boolean {
+  try {
+    const payload = objectValue(JSON.parse(body) as unknown);
+    const message = stringValue(payload?.message);
+    return /^(?:missing|invalid) CSRF token$/i.test(message ?? "");
+  } catch {
+    return false;
   }
 }
 
