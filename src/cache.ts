@@ -6,6 +6,7 @@ import {
   readJsonFile,
 } from "./lib/fs.js";
 import { kimiReadingContextId } from "./providers/kimi-cache-context.js";
+import { metaReadingContextId } from "./providers/meta-cache-context.js";
 import type {
   ProviderId,
   ProviderQuota,
@@ -47,26 +48,25 @@ const CREDENTIAL_CONTEXT_ID = /^[a-f0-9]{64}$/;
 
 /**
  * Providers whose local configuration decides which account a reading belongs
- * to: a Claude profile selects the credential store, and a Kimi Code
- * `config.toml` selects the deployment. A snapshot from one such context says
- * nothing about another, so each is stamped on write and required to match on
- * stale reuse.
+ * to: a Claude profile and Meta's Pi directory select credential stores, while
+ * a Kimi Code `config.toml` selects the deployment. A snapshot from one such
+ * context says nothing about another, so each is stamped on write and required
+ * to match on stale reuse.
  *
- * How that stamp is obtained is not the same question for both. A Claude
- * profile is fixed by this process's own environment, so deriving it here reads
- * the same selection the reading used. Kimi's is not derivable here at all.
- * Kimi Code rewrites `config.toml` on login, so a read taken after the quota
- * request has returned can describe a deployment the numbers never came from;
- * and a Kimi reading need not come from that configuration in the first place,
- * because Pi brokers a credential for the default endpoint while naming no
- * deployment. Kimi therefore reports the identity of whatever actually produced
- * its reading.
+ * How that stamp is obtained differs by provider. A Claude profile is fixed by
+ * this process's environment, while Meta and Kimi publish the context that
+ * actually produced their reading. Kimi Code rewrites `config.toml` on login,
+ * so a read taken after the quota request has returned can describe a deployment
+ * the numbers never came from; and a Kimi reading need not come from that
+ * configuration in the first place, because Pi brokers a credential for the
+ * default endpoint while naming no deployment.
  */
 const CONTEXT_SCOPED_PROVIDERS: Partial<
   Record<ProviderId, () => string | undefined>
 > = {
   claude: claudeCredentialContextId,
   kimi: kimiReadingContextId,
+  meta: metaReadingContextId,
 };
 
 type CachedProvider = {
@@ -102,6 +102,13 @@ export function readCachedKimiProvider(
   contextId: string,
 ): ProviderQuota | undefined {
   return readCachedProviderInContext("kimi", contextId);
+}
+
+/** Meta stale quota is scoped to the selected Pi credential-store path. */
+export function readCachedMetaProvider(
+  contextId: string,
+): ProviderQuota | undefined {
+  return readCachedProviderInContext("meta", contextId);
 }
 
 function readCachedProviderInContext(

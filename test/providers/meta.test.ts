@@ -35,6 +35,13 @@ const credential = (
   ...overrides,
 });
 
+const testAdapter = (overrides: Parameters<typeof createMetaAdapter>[0] = {}) =>
+  createMetaAdapter({
+    readCachedProvider: () => undefined,
+    deleteCachedProvider: vi.fn(),
+    ...overrides,
+  });
+
 describe("Meta Muse provider", () => {
   it("resolves only Pi meta OAuth identity bearers", async () => {
     const directory = mkdtempSync(join(tmpdir(), "quota-axi-meta-auth-"));
@@ -95,7 +102,7 @@ describe("Meta Muse provider", () => {
           }),
         ),
     );
-    const report = await createMetaAdapter({
+    const report = await testAdapter({
       credential: async () => credential(),
       fetch: request,
       now: () => NOW,
@@ -282,7 +289,7 @@ describe("Meta Muse provider", () => {
   });
 
   it("reports a successful response with no usage snapshot as fresh and usable", async () => {
-    const report = await createMetaAdapter({
+    const report = await testAdapter({
       credential: async () => credential(),
       fetch: vi.fn(async () => new Response(JSON.stringify({ api_key: "x" }))),
       now: () => NOW,
@@ -296,7 +303,7 @@ describe("Meta Muse provider", () => {
   });
 
   it("rejects malformed usage snapshots without retaining the raw payload", async () => {
-    const report = await createMetaAdapter({
+    const report = await testAdapter({
       credential: async () => credential(),
       fetch: vi.fn(
         async () =>
@@ -318,7 +325,7 @@ describe("Meta Muse provider", () => {
   });
 
   it("bounds the complete request deadline even when fetch ignores abort", async () => {
-    const report = await createMetaAdapter({
+    const report = await testAdapter({
       credential: async () => credential(),
       fetch: vi.fn(() => new Promise<Response>(() => undefined)),
       deadlineMs: 5,
@@ -331,7 +338,7 @@ describe("Meta Muse provider", () => {
   });
 
   it("rejects oversized responses before reading their contents", async () => {
-    const report = await createMetaAdapter({
+    const report = await testAdapter({
       credential: async () => credential(),
       fetch: vi.fn(
         async () =>
@@ -352,7 +359,7 @@ describe("Meta Muse provider", () => {
     "treats first-party %s as definitive rejection",
     async (status) => {
       const deleteCachedProvider = vi.fn();
-      const report = await createMetaAdapter({
+      const report = await testAdapter({
         credential: async () => credential(),
         fetch: vi.fn(async () => new Response("secret body", { status })),
         deleteCachedProvider,
@@ -381,7 +388,7 @@ describe("Meta Muse provider", () => {
         sourcesTried: ["pi:meta"],
       },
     };
-    const report = await createMetaAdapter({
+    const report = await testAdapter({
       credential: async () => credential(),
       fetch: vi.fn(async () => {
         throw new Error("offline includes sensitive network detail");
@@ -397,6 +404,101 @@ describe("Meta Muse provider", () => {
     expect(JSON.stringify(report)).not.toContain("sensitive network detail");
   });
 
+  it("drops reset-expired windows before applying duration age limits", async () => {
+    const cached: ProviderQuota = {
+      provider: "meta",
+      label: "Meta Muse",
+      source: "pi:meta",
+      windows: [
+        {
+          id: "expired-reset",
+          label: "expired reset",
+          kind: "weekly",
+          percentUsed: 80,
+          percentRemaining: 20,
+          windowSeconds: 604_800,
+          resetsAt: new Date(NOW).toISOString(),
+        },
+        {
+          id: "live-reset",
+          label: "live reset",
+          kind: "session",
+          percentUsed: 40,
+          percentRemaining: 60,
+          windowSeconds: 18_000,
+          resetsAt: new Date(NOW + 1).toISOString(),
+        },
+        {
+          id: "expired-duration",
+          label: "expired duration",
+          kind: "session",
+          percentUsed: 70,
+          percentRemaining: 30,
+          windowSeconds: 18_000,
+        },
+        {
+          id: "live-duration",
+          label: "live duration",
+          kind: "weekly",
+          percentUsed: 20,
+          percentRemaining: 80,
+          windowSeconds: 604_800,
+        },
+      ],
+      state: {
+        status: "fresh",
+        stale: false,
+        refreshedAt: new Date(NOW - 18_000_000).toISOString(),
+        sourcesTried: ["pi:meta"],
+      },
+    };
+    const report = await testAdapter({
+      credential: async () => credential(),
+      fetch: vi.fn(async () => {
+        throw new Error("offline");
+      }),
+      readCachedProvider: () => cached,
+      now: () => NOW,
+    }).fetchQuota(OPTIONS);
+
+    expect(report.windows.map(({ id }) => id)).toEqual([
+      "live-reset",
+      "live-duration",
+    ]);
+  });
+
+  it("returns the current request failure when every cached window expired", async () => {
+    const cached: ProviderQuota = {
+      provider: "meta",
+      label: "Meta Muse",
+      source: "pi:meta",
+      windows: normalizeMetaMusePayload(LIVE_FIXTURE).windows.map((window) => ({
+        ...window,
+        resetsAt: new Date(NOW).toISOString(),
+      })),
+      state: {
+        status: "fresh",
+        stale: false,
+        refreshedAt: new Date(NOW - 1).toISOString(),
+        sourcesTried: ["pi:meta"],
+      },
+    };
+    const report = await testAdapter({
+      credential: async () => credential(),
+      fetch: vi.fn(async () => {
+        throw new Error("offline");
+      }),
+      readCachedProvider: () => cached,
+      now: () => NOW,
+    }).fetchQuota(OPTIONS);
+
+    expect(report).toMatchObject({
+      source: "pi:meta",
+      windows: [],
+      state: { status: "error", error: "network_unavailable" },
+    });
+  });
+
   it("keeps cache eligible when the Pi auth file cannot be read", async () => {
     const cached: ProviderQuota = {
       provider: "meta",
@@ -409,7 +511,7 @@ describe("Meta Muse provider", () => {
         refreshedAt: "2026-09-14T17:00:00.000Z",
       },
     };
-    const report = await createMetaAdapter({
+    const report = await testAdapter({
       credential: async () => ({ status: "error", path: PATH }),
       readCachedProvider: () => cached,
     }).fetchQuota(OPTIONS);
@@ -424,6 +526,37 @@ describe("Meta Muse provider", () => {
     });
   });
 
+  it("returns the credential-store failure when resetless cache aged out", async () => {
+    const cached: ProviderQuota = {
+      provider: "meta",
+      label: "Meta Muse",
+      source: "pi:meta",
+      windows: normalizeMetaMusePayload(LIVE_FIXTURE).windows.map(
+        ({ resetsAt: _resetsAt, ...window }) => window,
+      ),
+      state: {
+        status: "fresh",
+        stale: false,
+        refreshedAt: new Date(NOW - 604_800_000).toISOString(),
+        sourcesTried: ["pi:meta"],
+      },
+    };
+    const report = await testAdapter({
+      credential: async () => ({ status: "error", path: PATH }),
+      readCachedProvider: () => cached,
+      now: () => NOW,
+    }).fetchQuota(OPTIONS);
+
+    expect(report).toMatchObject({
+      source: "pi:meta",
+      windows: [],
+      state: {
+        status: "error",
+        error: "credential_resolution_failed",
+      },
+    });
+  });
+
   it.each([
     ["missing", false],
     ["invalid", true],
@@ -432,7 +565,7 @@ describe("Meta Muse provider", () => {
     "reports a %s Pi source without making a request",
     async (status, present) => {
       const request = vi.fn();
-      const report = await createMetaAdapter({
+      const report = await testAdapter({
         credential: async () => ({
           status,
           path: PATH,
@@ -453,7 +586,7 @@ describe("Meta Muse provider", () => {
     const request = vi.fn(
       async () => new Response(JSON.stringify({ subs_usage: {} })),
     );
-    const report = await createMetaAdapter({
+    const report = await testAdapter({
       credential: async () => credential({ storedExpired: true }),
       fetch: request,
     }).fetchQuota(OPTIONS);
@@ -464,7 +597,7 @@ describe("Meta Muse provider", () => {
 
   it("does not use a standalone Muse credential when Pi is absent", async () => {
     const request = vi.fn();
-    const report = await createMetaAdapter({
+    const report = await testAdapter({
       credential: async () => ({ status: "missing", path: PATH }),
       fetch: request,
     }).fetchQuota(OPTIONS);

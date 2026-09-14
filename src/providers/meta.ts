@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import {
   deleteCachedProvider as deleteCachedProviderFromDisk,
-  readCachedProvider as readCachedProviderFromDisk,
+  readCachedMetaProvider as readCachedMetaProviderFromDisk,
 } from "../cache.js";
 import { providerFetch } from "../lib/http.js";
 import { classifyPiAuthEntry } from "../lib/pi-auth-store.js";
@@ -22,6 +22,10 @@ import {
   staleFromCache,
   successProvider,
 } from "./common.js";
+import {
+  metaCredentialContextId,
+  publishMetaReadingContextId,
+} from "./meta-cache-context.js";
 
 export const META_MUSE_MINT_URL = "https://api.meta.ai/muse-code/key";
 export const META_PI_SOURCE = "pi:meta";
@@ -51,7 +55,7 @@ export type MetaCredentialResolution =
 type Dependencies = {
   credential: () => Promise<MetaCredentialResolution>;
   fetch: typeof globalThis.fetch;
-  readCachedProvider: typeof readCachedProviderFromDisk;
+  readCachedProvider: typeof readCachedMetaProviderFromDisk;
   deleteCachedProvider: typeof deleteCachedProviderFromDisk;
   now: () => number;
   deadlineMs: number;
@@ -68,7 +72,7 @@ export function createMetaAdapter(
   const dependencies: Dependencies = {
     credential: resolveMetaCredential,
     fetch: providerFetch,
-    readCachedProvider: readCachedProviderFromDisk,
+    readCachedProvider: readCachedMetaProviderFromDisk,
     deleteCachedProvider: deleteCachedProviderFromDisk,
     now: Date.now,
     deadlineMs: DEADLINE_MS,
@@ -162,16 +166,18 @@ async function fetchMetaQuota(
     ...(resolution.credentialPresent ? { credentialPresent: true } : {}),
   };
   const attempts = [attempt];
+  const credentialContextId = metaCredentialContextId(resolution.path);
   if (resolution.status !== "available") {
     if (resolution.status === "error") {
-      const cached = dependencies.readCachedProvider("meta");
+      const cached = dependencies.readCachedProvider(credentialContextId);
       if (cached) {
-        return staleFromCache(
+        const stale = staleMetaReport(
           cached,
           credentialError(resolution),
-          sourceNames(attempts),
           attempts,
+          dependencies.now(),
         );
+        if (stale) return stale;
       }
     } else {
       clearCache(dependencies);
@@ -204,6 +210,7 @@ async function fetchMetaQuota(
     if (normalized.untrustedWindowIds.length > 0) {
       result.state.untrustedWindowIds = normalized.untrustedWindowIds;
     }
+    publishMetaReadingContextId(credentialContextId);
     return result;
   } catch (error) {
     const code = errorCode(error) ?? "provider_request_failed";
@@ -217,9 +224,10 @@ async function fetchMetaQuota(
       clearCache(dependencies);
       return unavailableReport(code, "auth_required", attempts);
     }
-    const cached = dependencies.readCachedProvider("meta");
+    const cached = dependencies.readCachedProvider(credentialContextId);
     if (cached) {
-      return staleFromCache(cached, code, sourceNames(attempts), attempts);
+      const stale = staleMetaReport(cached, code, attempts, dependencies.now());
+      if (stale) return stale;
     }
     return unavailableReport(
       code,
@@ -227,6 +235,44 @@ async function fetchMetaQuota(
       attempts,
     );
   }
+}
+
+function staleMetaReport(
+  cached: ProviderQuota,
+  error: string,
+  attempts: SourceAttempt[],
+  now: number,
+): ProviderQuota | undefined {
+  if (
+    cached.provider !== "meta" ||
+    cached.source !== META_PI_SOURCE ||
+    cached.state.status !== "fresh" ||
+    !cached.state.refreshedAt
+  ) {
+    return undefined;
+  }
+  const refreshedAt = Date.parse(cached.state.refreshedAt);
+  if (!Number.isFinite(refreshedAt) || refreshedAt > now) return undefined;
+  const ageMilliseconds = now - refreshedAt;
+  const windows = cached.windows.filter((window) => {
+    if (window.resetsAt !== undefined) {
+      const resetsAt = Date.parse(window.resetsAt);
+      return Number.isFinite(resetsAt) && resetsAt > now;
+    }
+    return (
+      window.windowSeconds !== undefined &&
+      Number.isFinite(window.windowSeconds) &&
+      window.windowSeconds > 0 &&
+      ageMilliseconds < window.windowSeconds * 1_000
+    );
+  });
+  if (windows.length === 0) return undefined;
+  return staleFromCache(
+    { ...cached, windows },
+    error,
+    sourceNames(attempts),
+    attempts,
+  );
 }
 
 async function inspectMetaAuth(
