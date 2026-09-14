@@ -53,6 +53,7 @@ const KEYCHAIN_PRESENCE_TIMEOUT_MS = 5_000;
 /** `security` exit 44 is cannot-reach (locked, TCC, daemon), not item-absent. */
 const KEYCHAIN_ITEM_UNREACHABLE_EXIT_CODE = 44;
 const KEYCHAIN_UNREACHABLE_ERROR = "keychain_unreachable";
+const SECURE_STORAGE_SELECTED_ERROR = "secure_storage_profile_selected";
 const DEFAULT_KEYCHAIN_ACCOUNT = "claude-code-user";
 const SAFE_KEYCHAIN_ACCOUNT = /^[a-zA-Z0-9._-]+$/;
 const FIVE_HOURS_MS = 5 * 60 * 60 * 1_000;
@@ -111,7 +112,7 @@ type ClaudeIdentityResult = {
   error?: string;
 };
 type ClaudeProfileLocations = {
-  credentialFile: string;
+  credentialFile?: string;
   keychainAccount: string;
   keychainService: string;
   keychainServiceAlias?: string;
@@ -742,12 +743,14 @@ async function readCredentialStates(
 ): Promise<CredentialState[]> {
   const states: CredentialState[] = [];
 
-  const fileState = extractCredentialState(
-    readJsonFileResult(locations.credentialFile),
-    "oauth-file",
-    locations.credentialFile,
-  );
-  states.push(fileState);
+  if (locations.credentialFile !== undefined)
+    states.push(
+      extractCredentialState(
+        readJsonFileResult(locations.credentialFile),
+        "oauth-file",
+        locations.credentialFile,
+      ),
+    );
 
   if (process.platform === "darwin") {
     const selection = await listKeychainItem(locations);
@@ -766,6 +769,16 @@ async function readCredentialStates(
     }
   }
 
+  if (locations.credentialFile === undefined)
+    states.push({
+      status: "skipped",
+      degraded: false,
+      source: {
+        source: "oauth-file",
+        status: "skipped",
+        error: SECURE_STORAGE_SELECTED_ERROR,
+      },
+    });
   return states;
 }
 
@@ -1012,7 +1025,7 @@ function writeKeychainAccessMarkerBestEffort(
   }
 }
 
-export function claudeCredentialFile(): string {
+export function claudeCredentialFile(): string | undefined {
   return resolveClaudeProfileLocations().credentialFile;
 }
 
@@ -1035,11 +1048,14 @@ export function claudeKeychainAccount(): string {
 }
 
 function resolveClaudeProfileLocations(): ClaudeProfileLocations {
-  const { configDir, keychainService, keychainServiceAlias } =
+  const { credentialDir, keychainService, keychainServiceAlias } =
     claudeProfileLocations();
   const keychainAccount = claudeKeychainAccount();
   return {
-    credentialFile: join(configDir, ".credentials.json"),
+    credentialFile:
+      credentialDir === undefined
+        ? undefined
+        : join(credentialDir, ".credentials.json"),
     keychainAccount,
     keychainService,
     keychainServiceAlias,

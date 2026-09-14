@@ -5,13 +5,14 @@ import { join } from "node:path";
 export const CLAUDE_KEYCHAIN_SERVICE = "Claude Code-credentials";
 
 /**
- * Mirrors Claude Code's configuration and secure-storage selectors. The
- * plaintext credential file stays under `CLAUDE_CONFIG_DIR` or `~/.claude`; the
- * secure-storage selector only names the Keychain service, and an empty one
- * falls through to `CLAUDE_CONFIG_DIR`.
+ * Mirrors Claude Code's configuration and secure-storage selectors. A nonempty
+ * secure-storage selector names its own credential store, so it selects the
+ * Keychain service and leaves no plaintext credential directory; otherwise the
+ * credential directory is `CLAUDE_CONFIG_DIR` or `~/.claude`.
  */
 export function claudeProfileLocations(): {
   configDir: string;
+  credentialDir?: string;
   keychainService: string;
   keychainServiceAlias?: string;
 } {
@@ -21,16 +22,20 @@ export function claudeProfileLocations(): {
   const configDir = (configured ?? defaultDir).normalize("NFC");
   // Hash the raw NFC path, just as the vendor does: resolving a relative path
   // or expanding ~ would select another item.
-  const selector = (storage || configured)?.normalize("NFC");
-  if (selector)
-    return { configDir, keychainService: suffixedKeychainService(selector) };
-  // A default selection names `~/.claude`, and so does the suffixed spelling of
-  // that same directory, so that one item is this profile's too. Any other
-  // suffix names a directory this process did not select.
+  const storageSelector = storage ? storage.normalize("NFC") : undefined;
+  const selector = storageSelector ?? (configured ? configDir : undefined);
   return {
     configDir,
-    keychainService: CLAUDE_KEYCHAIN_SERVICE,
-    keychainServiceAlias: suffixedKeychainService(defaultDir),
+    credentialDir: storageSelector ? undefined : configDir,
+    keychainService: selector
+      ? suffixedKeychainService(selector)
+      : CLAUDE_KEYCHAIN_SERVICE,
+    // A default selection names `~/.claude`, and so does the suffixed spelling
+    // of that same directory, so that one item is this profile's too. Any other
+    // suffix names a directory this process did not select.
+    keychainServiceAlias: selector
+      ? undefined
+      : suffixedKeychainService(defaultDir),
   };
 }
 

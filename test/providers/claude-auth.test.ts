@@ -224,8 +224,8 @@ describe("Claude credential-state reporting", () => {
           : join(home, "configured-profile");
       if (selection !== "default") process.env.CLAUDE_CONFIG_DIR = configDir;
       const storageDir = join(home, "separate-storage");
-      process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR =
-        selection === "empty override" ? "" : storageDir;
+      if (selection === "empty override")
+        process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR = "";
       writeClaudeConfigCredential(configDir, {
         accessToken: "selected-config-token",
         expiresAt: "2035-01-01T00:00:00.000Z",
@@ -266,6 +266,65 @@ describe("Claude credential-state reporting", () => {
       }
     },
   );
+
+  it("ignores the config-directory credential file when a secure-storage profile is selected", async () => {
+    const home = useTempHome();
+    const configDir = join(home, "configured-profile");
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR = join(
+      home,
+      "selected-storage",
+    );
+    writeClaudeConfigCredential(configDir, {
+      accessToken: "unselected-config-token",
+      expiresAt: "2035-01-01T00:00:00.000Z",
+    });
+    const { claudeCredentialFile, inspectAuth, fetchQuota } =
+      await import("../../src/providers/claude.js");
+    const auth = await inspectAuth({
+      allowKeychainPrompt: false,
+      refreshCredentials: false,
+    });
+    const result = await fetchQuota({
+      allowKeychainPrompt: false,
+      refreshCredentials: false,
+    });
+
+    expect(claudeCredentialFile()).toBeUndefined();
+    expect(auth.sources).toEqual([
+      {
+        source: "oauth-file",
+        status: "skipped",
+        error: "secure_storage_profile_selected",
+      },
+    ]);
+    expect(fetch).not.toHaveBeenCalled();
+    expect(result.windows).toEqual([]);
+    expect(result.state.status).not.toBe("auth_required");
+  });
+
+  it("keeps a cached snapshot when a secure-storage profile has no readable source", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-06T20:00:00.000Z"));
+    const home = useTempHome();
+    process.env.CLAUDE_CONFIG_DIR = join(home, "configured-profile");
+    process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR = join(
+      home,
+      "selected-storage",
+    );
+    const { readCachedProvider, writeCachedProviders } =
+      await import("../../src/cache.js");
+    writeCachedProviders([cachedClaudeQuota(42)]);
+    const { fetchQuota } = await import("../../src/providers/claude.js");
+    const result = await fetchQuota({
+      allowKeychainPrompt: false,
+      refreshCredentials: false,
+    });
+
+    expect(result.state).toMatchObject({ stale: true });
+    expect(result.windows).toMatchObject([{ percentUsed: 42 }]);
+    expect(readCachedProvider("claude")).toBeTruthy();
+  });
 
   it.each(["CLAUDE_CONFIG_DIR", "CLAUDE_SECURESTORAGE_CONFIG_DIR"])(
     "hashes the raw NFC %s selector without expanding relative paths or tilde",
@@ -1025,16 +1084,6 @@ describe("Claude credential-state reporting", () => {
       await import("../../src/cache.js");
     writeCachedProviders([cachedClaudeQuota(42)]);
     process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR = storageB;
-    writeClaudeConfigCredential(join(home, ".claude"), {
-      accessToken: "synthetic-storage-b-token",
-      expiresAt: "2035-01-01T00:00:00.000Z",
-    });
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => {
-        throw new TypeError("network unavailable");
-      }),
-    );
     const { fetchQuota } = await import("../../src/providers/claude.js");
     const result = await fetchQuota({
       allowKeychainPrompt: false,
@@ -1044,7 +1093,7 @@ describe("Claude credential-state reporting", () => {
     expect(result).toMatchObject({
       source: "unavailable",
       windows: [],
-      state: { stale: false, error: "network unavailable" },
+      state: { stale: false, error: "secure_storage_profile_selected" },
     });
     expect(readCachedProvider("claude")?.windows[0]?.percentUsed).toBe(42);
   });
