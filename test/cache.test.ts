@@ -14,6 +14,7 @@ import {
   readCachedClaudeProvider,
   readCachedCommandCodeProvider,
   readCachedKimiProvider,
+  readCachedMetaProvider,
   readCachedProvider,
   writeCachedProviders,
 } from "../src/cache.js";
@@ -26,6 +27,10 @@ import {
 } from "../src/providers/commandcode-cache-context.js";
 import { staleFromCache } from "../src/providers/common.js";
 import { createKimiCodeCliCredentialSource } from "../src/providers/kimi-code-cli-credential.js";
+import {
+  metaCredentialContextId,
+  publishMetaReadingContextId,
+} from "../src/providers/meta-cache-context.js";
 import type { ProviderId, ProviderQuota } from "../src/types.js";
 
 const originalXdgCacheHome = process.env.XDG_CACHE_HOME;
@@ -174,6 +179,23 @@ describe("quota cache", () => {
     });
     expect(later.schemaVersion).toBe(5);
     expect(later.providers[0]?.accountKey).toBeUndefined();
+  });
+
+  it("scopes Meta cache to an opaque Pi credential-store path", () => {
+    useTempCache();
+    const firstPath = join(tempDir!, "account-a", "auth.json");
+    const secondPath = join(tempDir!, "account-b", "auth.json");
+    const firstContext = metaCredentialContextId(firstPath);
+    const secondContext = metaCredentialContextId(secondPath);
+    publishMetaReadingContextId(firstContext);
+
+    writeCachedProviders([{ ...quota("meta", 42), source: "pi:meta" }]);
+
+    const serialized = readFileSync(cacheFilePath(), "utf8");
+    expect(serialized).not.toContain(firstPath);
+    expect(serialized).not.toContain(secondPath);
+    expect(readCachedMetaProvider(firstContext)).toBeDefined();
+    expect(readCachedMetaProvider(secondContext)).toBeUndefined();
   });
 
   it("retains exact known and unfamiliar Codex cache identities", () => {

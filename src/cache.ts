@@ -9,6 +9,7 @@ import {
 import { kimiReadingContextId } from "./providers/kimi-cache-context.js";
 import { commandCodeReadingContextId } from "./providers/commandcode-cache-context.js";
 import { isPiCodexSource } from "./providers/pi-codex-credential.js";
+import { metaReadingContextId } from "./providers/meta-cache-context.js";
 import type {
   ProviderId,
   ProviderQuota,
@@ -87,6 +88,7 @@ const CONTEXT_SCOPED_PROVIDERS: Partial<
   kimi: kimiReadingContextId,
   commandcode: commandCodeReadingContextId,
   codex: codexStampContextId,
+  meta: metaReadingContextId,
 };
 
 /**
@@ -203,6 +205,13 @@ export function readCachedCommandCodeProvider(
   contextId: string,
 ): ProviderQuota | undefined {
   return readCachedProviderInContext("commandcode", contextId);
+}
+
+/** Meta stale quota is scoped to the selected Pi credential-store path. */
+export function readCachedMetaProvider(
+  contextId: string,
+): ProviderQuota | undefined {
+  return readCachedProviderInContext("meta", contextId);
 }
 
 function readCachedProviderInContext(
