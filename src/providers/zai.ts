@@ -32,6 +32,7 @@ const MONTH_SECONDS = 30 * 24 * 60 * 60;
 const ZAI_HOST = "api.z.ai";
 const ZHIPU_HOST = "open.bigmodel.cn";
 const OPENCODE_AUTH_SOURCE = "opencode:auth.json";
+const PI_ZAI_SOURCE = "pi:zai";
 const USER_AGENT = `quota-axi/${VERSION}`;
 
 const ZAI_PROVIDER_IDS = ["zai-coding-plan", "zai", "z-ai", "z.ai"];
@@ -72,8 +73,13 @@ export type ZaiCredentialSource = {
   inspect(): ZaiCredentialInspection;
 };
 
+export type NamedZaiCredentialSource = {
+  name: string;
+  source: ZaiCredentialSource;
+};
+
 type ZaiDependencies = {
-  credentialSource: ZaiCredentialSource;
+  credentialSources: NamedZaiCredentialSource[];
   fetch: typeof globalThis.fetch;
   readCachedProvider: typeof readCachedProviderFromDisk;
   deleteCachedProvider: typeof deleteCachedProviderFromDisk;
@@ -103,6 +109,30 @@ export function opencodeAuthFilePath(): string {
   return join(homedir(), ".local", "share", "opencode", "auth.json");
 }
 
+export function piAuthFilePath(
+  environment: NodeJS.ProcessEnv = process.env,
+  homeDirectory: () => string = homedir,
+): string {
+  return join(piAgentDirectory(environment, homeDirectory), "auth.json");
+}
+
+function piAgentDirectory(
+  environment: NodeJS.ProcessEnv,
+  homeDirectory: () => string,
+): string {
+  const home = () => stringValue(environment.HOME) ?? homeDirectory();
+  const configured = stringValue(environment.PI_CODING_AGENT_DIR);
+  if (configured === undefined) return join(home(), ".pi", "agent");
+  if (configured === "~") return home();
+  if (
+    configured.startsWith("~/") ||
+    (process.platform === "win32" && configured.startsWith("~\\"))
+  ) {
+    return join(home(), configured.slice(2));
+  }
+  return configured;
+}
+
 export function extractZaiCredential(
   value: unknown,
   path: string,
@@ -121,6 +151,18 @@ export function extractZaiCredential(
 
 export function createOpencodeAuthCredentialSource(
   filePath: () => string = opencodeAuthFilePath,
+): ZaiCredentialSource {
+  return createJsonAuthCredentialSource(filePath);
+}
+
+export function createPiAuthCredentialSource(
+  filePath: () => string = piAuthFilePath,
+): ZaiCredentialSource {
+  return createJsonAuthCredentialSource(filePath);
+}
+
+function createJsonAuthCredentialSource(
+  filePath: () => string,
 ): ZaiCredentialSource {
   function resolve(): ZaiCredentialResolution {
     const path = filePath();
@@ -143,17 +185,43 @@ export function createOpencodeAuthCredentialSource(
   };
 }
 
+export function defaultZaiCredentialSources(): NamedZaiCredentialSource[] {
+  return [
+    { name: PI_ZAI_SOURCE, source: createPiAuthCredentialSource() },
+    {
+      name: OPENCODE_AUTH_SOURCE,
+      source: createOpencodeAuthCredentialSource(),
+    },
+  ];
+}
+
+export type ZaiAdapterOverrides = Partial<
+  Omit<ZaiDependencies, "credentialSources">
+> & {
+  credentialSources?: NamedZaiCredentialSource[];
+  /**
+   * Test/single-source override. When set, it is the only source tried and is
+   * reported as `opencode:auth.json` for backward-compatible fixtures.
+   */
+  credentialSource?: ZaiCredentialSource;
+};
+
 export function createZaiAdapter(
-  overrides: Partial<ZaiDependencies> = {},
+  overrides: ZaiAdapterOverrides = {},
 ): ProviderAdapter {
+  const { credentialSource, credentialSources, ...rest } = overrides;
   const dependencies: ZaiDependencies = {
-    credentialSource: createOpencodeAuthCredentialSource(),
+    credentialSources:
+      credentialSources ??
+      (credentialSource
+        ? [{ name: OPENCODE_AUTH_SOURCE, source: credentialSource }]
+        : defaultZaiCredentialSources()),
     fetch: globalThis.fetch,
     readCachedProvider: readCachedProviderFromDisk,
     deleteCachedProvider: deleteCachedProviderFromDisk,
     now: Date.now,
     deadlineMs: OPERATION_DEADLINE_MS,
-    ...overrides,
+    ...rest,
   };
   let inFlight: Promise<ProviderQuota> | undefined;
 
@@ -169,16 +237,20 @@ export function createZaiAdapter(
       return acquisition;
     },
     async inspectAuth(_options: ProviderOptions): Promise<AuthProviderReport> {
-      const inspection = dependencies.credentialSource.inspect();
-      const source: AuthSourceReport = {
-        source: OPENCODE_AUTH_SOURCE,
-        path: inspection.path,
-        status: inspection.status,
-        ...(inspection.status === "invalid" || inspection.status === "error"
-          ? { error: inspection.error }
-          : {}),
-      };
-      return { provider: "zai", sources: [source] };
+      const sources: AuthSourceReport[] = dependencies.credentialSources.map(
+        ({ name, source }) => {
+          const inspection = source.inspect();
+          return {
+            source: name,
+            path: inspection.path,
+            status: inspection.status,
+            ...(inspection.status === "invalid" || inspection.status === "error"
+              ? { error: inspection.error }
+              : {}),
+          };
+        },
+      );
+      return { provider: "zai", sources };
     },
   };
 }
@@ -193,53 +265,91 @@ async function acquireZaiQuota(
     () => controller.abort(),
     dependencies.deadlineMs,
   );
-  let attempts: SourceAttempt[] = [];
+  const attempts: SourceAttempt[] = [];
+  let lastFailure: ZaiFailure | undefined;
 
   try {
-    const resolution = dependencies.credentialSource.resolve();
-    attempts = [{ source: OPENCODE_AUTH_SOURCE, status: "failed" }];
+    for (const { name, source } of dependencies.credentialSources) {
+      const resolution = source.resolve();
+      if (resolution.status !== "available") {
+        const failure = credentialFailureFor(resolution);
+        attempts.push({
+          source: name,
+          status: resolution.status === "missing" ? "skipped" : "failed",
+          error: failure.code,
+        });
+        lastFailure = failure;
+        continue;
+      }
 
-    if (resolution.status !== "available") {
-      const failure = credentialFailureFor(resolution);
-      attempts[attempts.length - 1] = {
-        source: OPENCODE_AUTH_SOURCE,
-        status: resolution.status === "missing" ? "skipped" : "failed",
-        error: failure.code,
-      };
-      return failureReport(failure, attempts, dependencies);
+      attempts.push({ source: name, status: "failed" });
+      try {
+        const payload = await requestZaiQuota(
+          resolution.apiKey,
+          resolution.host,
+          controller.signal,
+          dependencies.fetch,
+          dependencies.now,
+        );
+        const normalized = normalizeZaiPayload(payload);
+        const untrustedWindowIds = normalized.diagnostics.map(
+          (diagnostic) => `limit:${diagnostic.index}`,
+        );
+        const refreshedAt = new Date(dependencies.now()).toISOString();
+        attempts[attempts.length - 1] = {
+          source: name,
+          status: "success",
+        };
+        return {
+          provider: "zai",
+          label: "Z.AI",
+          source: "api",
+          ...(normalized.plan ? { plan: normalized.plan } : {}),
+          windows: normalized.windows,
+          state: {
+            status: "fresh",
+            stale: false,
+            refreshedAt,
+            ...(untrustedWindowIds.length > 0 ? { untrustedWindowIds } : {}),
+            sourcesTried: attempts.map(({ source: tried }) => tried),
+          },
+          attempts,
+        };
+      } catch (error) {
+        const failure =
+          error instanceof ZaiFailure
+            ? error
+            : new ZaiFailure("credential_resolution_failed", {
+                staleEligible: true,
+              });
+        attempts[attempts.length - 1] = {
+          source: name,
+          status: "failed",
+          error: failure.code,
+        };
+        lastFailure = failure;
+        if (failure.definitiveAuth) {
+          continue;
+        }
+        return failureReport(failure, attempts, dependencies);
+      }
     }
 
-    const payload = await requestZaiQuota(
-      resolution.apiKey,
-      resolution.host,
-      controller.signal,
-      dependencies.fetch,
-      dependencies.now,
-    );
-    const normalized = normalizeZaiPayload(payload);
-    const untrustedWindowIds = normalized.diagnostics.map(
-      (diagnostic) => `limit:${diagnostic.index}`,
-    );
-    const refreshedAt = new Date(dependencies.now()).toISOString();
-    attempts[attempts.length - 1] = {
-      source: OPENCODE_AUTH_SOURCE,
-      status: "success",
-    };
-    return {
-      provider: "zai",
-      label: "Z.AI",
-      source: "api",
-      ...(normalized.plan ? { plan: normalized.plan } : {}),
-      windows: normalized.windows,
-      state: {
-        status: "fresh",
-        stale: false,
-        refreshedAt,
-        ...(untrustedWindowIds.length > 0 ? { untrustedWindowIds } : {}),
-        sourcesTried: attempts.map(({ source }) => source),
-      },
-      attempts,
-    };
+    if (attempts.length === 0) {
+      attempts.push({
+        source: PI_ZAI_SOURCE,
+        status: "failed",
+        error: "zai_credential_unavailable",
+      });
+    }
+
+    const failure =
+      lastFailure ??
+      new ZaiFailure("zai_credential_unavailable", {
+        status: "auth_required",
+        definitiveAuth: true,
+      });
+    return failureReport(failure, attempts, dependencies);
   } catch (error) {
     const failure =
       error instanceof ZaiFailure
@@ -248,19 +358,11 @@ async function acquireZaiQuota(
             staleEligible: true,
           });
     if (attempts.length === 0) {
-      attempts = [
-        {
-          source: OPENCODE_AUTH_SOURCE,
-          status: "failed",
-          error: failure.code,
-        },
-      ];
-    } else {
-      attempts[attempts.length - 1] = {
-        source: attempts[attempts.length - 1].source,
+      attempts.push({
+        source: PI_ZAI_SOURCE,
         status: "failed",
         error: failure.code,
-      };
+      });
     }
     return failureReport(failure, attempts, dependencies);
   } finally {
