@@ -25,6 +25,7 @@ beforeEach(() => {
   vi.resetModules();
   usePlatform("linux");
   process.env.USER = "fixture-user";
+  delete process.env.CLAUDE_CONFIG_DIR;
 });
 
 afterEach(() => {
@@ -62,6 +63,26 @@ function usePlatform(platform: NodeJS.Platform): void {
   Object.defineProperty(process, "platform", {
     configurable: true,
     value: platform,
+  });
+}
+
+const fixtureKeychain = "/fixture/login.keychain-db";
+
+function mockKeychainRead(
+  read: (command: string, args: string[]) => Promise<string>,
+) {
+  return vi.fn(async (command: string, args: string[]) => {
+    if (command === "security" && args[0] === "dump-keychain") {
+      return `keychain: "${fixtureKeychain}"
+version: 512
+class: "genp"
+attributes:
+    "acct"<blob>="fixture-user"
+    "svce"<blob>="Claude Code-credentials"
+    "mdat"<timedate>="20260701000000Z"
+`;
+    }
+    return read(command, args);
   });
 }
 
@@ -180,7 +201,7 @@ describe("Claude credential-state reporting", () => {
       .update(configDir)
       .digest("hex")
       .slice(0, 8);
-    const execFileText = vi.fn(async () => "");
+    const execFileText = mockKeychainRead(async () => "");
     vi.doMock("../../src/lib/process.js", () => ({ execFileText }));
 
     const { inspectAuth } = await import("../../src/providers/claude.js");
@@ -211,7 +232,7 @@ describe("Claude credential-state reporting", () => {
     const marker = claudeKeychainAccessMarkerPath("fixture-user", "");
     mkdirSync(dirname(marker), { recursive: true, mode: 0o700 });
     writeFileSync(marker, "granted\n", { mode: 0o600 });
-    const execFileText = vi.fn(async () =>
+    const execFileText = mockKeychainRead(async () =>
       JSON.stringify({
         claudeAiOauth: {
           accessToken: "fresh-keychain-token",
@@ -243,6 +264,7 @@ describe("Claude credential-state reporting", () => {
         "-w",
         "-s",
         "Claude Code-credentials",
+        fixtureKeychain,
       ],
       expect.any(Number),
     );
@@ -280,7 +302,7 @@ describe("Claude credential-state reporting", () => {
       .update(normalizedConfigDir)
       .digest("hex")
       .slice(0, 8);
-    const execFileText = vi.fn(async () =>
+    const execFileText = mockKeychainRead(async () =>
       JSON.stringify({
         claudeAiOauth: {
           accessToken: "fresh-keychain-token",
@@ -648,7 +670,9 @@ describe("Claude credential-state reporting", () => {
         accessToken: fakeToken,
         expiresAt: "2035-01-01T00:00:00.000Z",
       });
-      const execFileText = vi.fn(async () => "keychain item metadata\n");
+      const execFileText = mockKeychainRead(
+        async () => "keychain item metadata\n",
+      );
       vi.doMock("../../src/lib/process.js", () => ({ execFileText }));
       vi.stubGlobal(
         "fetch",
@@ -696,7 +720,7 @@ describe("Claude credential-state reporting", () => {
       accessToken: "working-oauth-file-token",
       expiresAt: "2035-01-01T00:00:00.000Z",
     });
-    const execFileText = vi.fn(async () =>
+    const execFileText = mockKeychainRead(async () =>
       JSON.stringify({
         claudeAiOauth: {
           accessToken: "transient-keychain-token",
@@ -1091,7 +1115,7 @@ describe("Claude credential-state reporting", () => {
     );
     mkdirSync(dirname(legacyMarker), { recursive: true, mode: 0o700 });
     writeFileSync(legacyMarker, "granted\n", { mode: 0o600 });
-    const execFileText = vi.fn(async () => "");
+    const execFileText = mockKeychainRead(async () => "");
     vi.doMock("../../src/lib/process.js", () => ({ execFileText }));
 
     const { fetchQuota, inspectAuth } =
@@ -1107,13 +1131,7 @@ describe("Claude credential-state reporting", () => {
 
     expect(execFileText).toHaveBeenCalledWith(
       "security",
-      [
-        "find-generic-password",
-        "-a",
-        "fixture-user",
-        "-s",
-        "Claude Code-credentials",
-      ],
+      ["dump-keychain"],
       expect.any(Number),
     );
     expect(execFileText).not.toHaveBeenCalledWith(
@@ -1123,7 +1141,9 @@ describe("Claude credential-state reporting", () => {
     );
     expect(
       execFileText.mock.calls.every(
-        ([, args]) => args.includes("-a") && args.includes("fixture-user"),
+        ([, args]) =>
+          args[0] === "dump-keychain" ||
+          (args.includes("-a") && args.includes("fixture-user")),
       ),
     ).toBe(true);
     expect(auth.sources).toContainEqual({
@@ -1140,11 +1160,11 @@ describe("Claude credential-state reporting", () => {
     });
   });
 
-  it("does not fall back to a service-only value read when the pinned item is missing", async () => {
+  it("does not fall back to a service-only value read when the pinned item is unreachable", async () => {
     usePlatform("darwin");
     useTempHome();
     const missing = Object.assign(new Error("not found"), { code: 44 });
-    const execFileText = vi.fn(async () => {
+    const execFileText = mockKeychainRead(async () => {
       throw missing;
     });
     vi.doMock("../../src/lib/process.js", () => ({ execFileText }));
@@ -1155,7 +1175,7 @@ describe("Claude credential-state reporting", () => {
       refreshCredentials: false,
     });
 
-    expect(execFileText).toHaveBeenCalledTimes(1);
+    expect(execFileText).toHaveBeenCalledTimes(2);
     expect(execFileText).toHaveBeenCalledWith(
       "security",
       [
@@ -1165,6 +1185,7 @@ describe("Claude credential-state reporting", () => {
         "-w",
         "-s",
         "Claude Code-credentials",
+        fixtureKeychain,
       ],
       expect.any(Number),
     );
@@ -1180,7 +1201,7 @@ describe("Claude credential-state reporting", () => {
     usePlatform("darwin");
     useTempHome();
     const marker = await writeKeychainAccessMarker();
-    const execFileText = vi.fn(async () =>
+    const execFileText = mockKeychainRead(async () =>
       JSON.stringify({
         claudeAiOauth: {
           accessToken: "fresh-keychain-token",
@@ -1218,11 +1239,14 @@ describe("Claude credential-state reporting", () => {
         "-w",
         "-s",
         "Claude Code-credentials",
+        fixtureKeychain,
       ],
       expect.any(Number),
     );
     expect(
-      execFileText.mock.calls.every(([, args]) => args.includes("-w")),
+      execFileText.mock.calls.every(
+        ([, args]) => args[0] === "dump-keychain" || args.includes("-w"),
+      ),
     ).toBe(true);
     expect(auth.sources).toContainEqual({
       source: "keychain",
@@ -1244,7 +1268,7 @@ describe("Claude credential-state reporting", () => {
     usePlatform("darwin");
     useTempHome();
     await writeKeychainAccessMarker();
-    const execFileText = vi.fn(async () =>
+    const execFileText = mockKeychainRead(async () =>
       JSON.stringify({
         claudeAiOauth: {
           accessToken: "expired-keychain-token",
@@ -1289,7 +1313,7 @@ describe("Claude credential-state reporting", () => {
     useTempHome();
     const { claudeKeychainAccessMarkerPath } =
       await import("../../src/lib/fs.js");
-    const execFileText = vi.fn(async () =>
+    const execFileText = mockKeychainRead(async () =>
       JSON.stringify({
         claudeAiOauth: {
           accessToken: "fresh-keychain-token",
@@ -1324,6 +1348,7 @@ describe("Claude credential-state reporting", () => {
         "-w",
         "-s",
         "Claude Code-credentials",
+        fixtureKeychain,
       ],
       expect.any(Number),
     );
@@ -1338,7 +1363,7 @@ describe("Claude credential-state reporting", () => {
     await writeKeychainAccessMarker();
     mkdirSync(join(home, ".claude"), { recursive: true });
     writeFileSync(join(home, ".claude", ".credentials.json"), "{invalid");
-    const execFileText = vi.fn(async () =>
+    const execFileText = mockKeychainRead(async () =>
       JSON.stringify({
         claudeAiOauth: {
           accessToken: "working-keychain-token",
@@ -1381,19 +1406,21 @@ describe("Claude credential-state reporting", () => {
       ["fixture-user", "current-user-keychain-token"],
       ["unknown", "stale-unknown-keychain-token"],
     ]);
-    const execFileText = vi.fn(async (_file: string, args: string[]) => {
-      const accountFlag = args.indexOf("-a");
-      const account = accountFlag >= 0 ? args[accountFlag + 1] : undefined;
-      const accessToken = account ? keychainFixtures.get(account) : undefined;
-      if (!accessToken)
-        throw Object.assign(new Error("not found"), { code: 44 });
-      return JSON.stringify({
-        claudeAiOauth: {
-          accessToken,
-          expiresAt: "2035-01-01T00:00:00.000Z",
-        },
-      });
-    });
+    const execFileText = mockKeychainRead(
+      async (_file: string, args: string[]) => {
+        const accountFlag = args.indexOf("-a");
+        const account = accountFlag >= 0 ? args[accountFlag + 1] : undefined;
+        const accessToken = account ? keychainFixtures.get(account) : undefined;
+        if (!accessToken)
+          throw Object.assign(new Error("not found"), { code: 44 });
+        return JSON.stringify({
+          claudeAiOauth: {
+            accessToken,
+            expiresAt: "2035-01-01T00:00:00.000Z",
+          },
+        });
+      },
+    );
     vi.doMock("../../src/lib/process.js", () => ({ execFileText }));
     const fetchMock = vi.fn(async (input: string | URL | Request) =>
       String(input).endsWith("/api/oauth/profile")
@@ -1433,7 +1460,7 @@ describe("Claude credential-state reporting", () => {
         attempts: Array<{ source: string; status: string }>;
       }>;
     };
-    expect(execFileText).toHaveBeenCalledTimes(1);
+    expect(execFileText).toHaveBeenCalledTimes(2);
     expect(execFileText).toHaveBeenCalledWith(
       "security",
       [
@@ -1443,6 +1470,7 @@ describe("Claude credential-state reporting", () => {
         "-w",
         "-s",
         "Claude Code-credentials",
+        fixtureKeychain,
       ],
       expect.any(Number),
     );
@@ -1480,7 +1508,7 @@ describe("Claude credential-state reporting", () => {
       usePlatform("darwin");
       useTempHome();
       await writeKeychainAccessMarker();
-      const execFileText = vi.fn(async () =>
+      const execFileText = mockKeychainRead(async () =>
         JSON.stringify({
           claudeAiOauth: {
             accessToken: "current-user-keychain-token",
@@ -1528,6 +1556,7 @@ describe("Claude credential-state reporting", () => {
           "-w",
           "-s",
           "Claude Code-credentials",
+          fixtureKeychain,
         ],
         expect.any(Number),
       );
@@ -1556,10 +1585,7 @@ describe("Claude credential-state reporting", () => {
   it("does not mark keychain prompt required when the keychain item is missing", async () => {
     usePlatform("darwin");
     useTempHome();
-    const missing = Object.assign(new Error("not found"), { code: 44 });
-    const execFileText = vi.fn(async () => {
-      throw missing;
-    });
+    const execFileText = vi.fn(async () => "");
     vi.doMock("../../src/lib/process.js", () => ({ execFileText }));
 
     const { fetchQuota, inspectAuth } =
@@ -1575,13 +1601,7 @@ describe("Claude credential-state reporting", () => {
 
     expect(execFileText).toHaveBeenCalledWith(
       "security",
-      [
-        "find-generic-password",
-        "-a",
-        "fixture-user",
-        "-s",
-        "Claude Code-credentials",
-      ],
+      ["dump-keychain"],
       expect.any(Number),
     );
     expect(
@@ -1589,21 +1609,20 @@ describe("Claude credential-state reporting", () => {
     ).toBe(false);
     expect(
       execFileText.mock.calls.every(
-        ([, args]) => args.includes("-a") && args.includes("fixture-user"),
+        ([, args]) =>
+          args[0] === "dump-keychain" ||
+          (args.includes("-a") && args.includes("fixture-user")),
       ),
     ).toBe(true);
 
     expect(auth.sources).toContainEqual({
       source: "keychain",
-      status: "skipped",
-      error: "keychain_presence_check_failed",
-      credentialPresent: true,
+      status: "missing",
     });
     expect(result.attempts).toContainEqual({
       source: "keychain",
       status: "skipped",
-      error: "keychain_presence_check_failed",
-      credentialPresent: true,
+      error: "credentials_missing",
     });
     expect(result.attempts).not.toContainEqual(
       expect.objectContaining({
@@ -1653,7 +1672,7 @@ describe("Claude credential-state reporting", () => {
     const { readCachedProvider, writeCachedProviders } =
       await import("../../src/cache.js");
     writeCachedProviders([cachedClaudeQuota(34)]);
-    const execFileText = vi.fn(async () => {
+    const execFileText = mockKeychainRead(async () => {
       throw Object.assign(new Error("not found"), { code: 44 });
     });
     vi.doMock("../../src/lib/process.js", () => ({ execFileText }));
@@ -1683,7 +1702,7 @@ describe("Claude credential-state reporting", () => {
     const { readCachedProvider, writeCachedProviders } =
       await import("../../src/cache.js");
     writeCachedProviders([cachedClaudeQuota(34)]);
-    const execFileText = vi.fn(async () => {
+    const execFileText = mockKeychainRead(async () => {
       throw Object.assign(new Error("auth failed"), { code: 51 });
     });
     vi.doMock("../../src/lib/process.js", () => ({ execFileText }));
@@ -1722,7 +1741,7 @@ describe("Claude credential-state reporting", () => {
   it("says so when Keychain is denied and does not offer a prompt that cannot help", async () => {
     usePlatform("darwin");
     useTempHome();
-    const execFileText = vi.fn(async () => {
+    const execFileText = mockKeychainRead(async () => {
       throw Object.assign(new Error("auth failed"), { code: 51 });
     });
     vi.doMock("../../src/lib/process.js", () => ({ execFileText }));

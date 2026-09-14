@@ -47,10 +47,11 @@ const CLAUDE_CODE_USER_AGENT = "claude-code/2.1.202";
 const API_TIMEOUT_MS = 15_000;
 const KEYCHAIN_PROMPT_TIMEOUT_MS = 60_000;
 const KEYCHAIN_PRESENCE_TIMEOUT_MS = 5_000;
-/** `security` exit 44 is cannot-reach (locked, TCC, daemon), not item-absent. */
+/** Exit 44 alone is ambiguous; only the exact item-not-found diagnostic is absence. */
 const KEYCHAIN_ITEM_UNREACHABLE_EXIT_CODE = 44;
 const KEYCHAIN_UNREACHABLE_ERROR = "keychain_unreachable";
 const DEFAULT_KEYCHAIN_SERVICE = "Claude Code-credentials";
+const KEYCHAIN_SERVICE_PATTERN = /^Claude Code-credentials(?:-[0-9a-f]{8})?$/;
 const DEFAULT_KEYCHAIN_ACCOUNT = "claude-code-user";
 const SAFE_KEYCHAIN_ACCOUNT = /^[a-zA-Z0-9._-]+$/;
 const FIVE_HOURS_MS = 5 * 60 * 60 * 1_000;
@@ -90,7 +91,12 @@ type CredentialState =
   | AdvisoryExpiredCredentialState
   | UnavailableCredentialState
   | SkippedCredentialState;
-type KeychainItemPresence = "present" | "missing" | "unknown";
+type KeychainItemPresence = "present" | "missing" | "unknown" | "unreachable";
+type KeychainCandidate = {
+  service: string;
+  keychain: string;
+  modified: string;
+};
 type ClaudeAccount = NonNullable<ProviderQuota["account"]>;
 type ClaudeIdentityResult = {
   account: ClaudeAccount;
@@ -100,6 +106,7 @@ type ClaudeProfileLocations = {
   credentialFile: string;
   keychainAccount: string;
   keychainService: string;
+  keychainPath?: string;
   keychainAccessMarker: string;
 };
 
@@ -428,20 +435,24 @@ async function attemptClaudeQuota(
     }
   }
 
-  const keychainDenied = credentialStates.some(
-    (state) =>
+  const keychainFailure = credentialStates.find(
+    (state): state is SkippedCredentialState =>
       state.status === "skipped" &&
       state.source.source === "keychain" &&
-      state.source.error === "keychain_access_denied",
+      [
+        "keychain_access_denied",
+        "keychain_presence_check_failed",
+        KEYCHAIN_UNREACHABLE_ERROR,
+      ].includes(state.source.error ?? ""),
   );
   let failure =
     transientFailure ??
     definitiveFailure ??
     new ClaudeFailure("Claude quota unavailable", { staleEligible: true });
-  // A denied Keychain read never saw the live session. A 401 from a leftover
+  // A failed Keychain discovery/read never saw the live session. A 401 from a leftover
   // oauth-file sidecar is not evidence the user is signed out of Claude.
-  if (keychainDenied && failure.definitiveAuth) {
-    failure = new ClaudeFailure("keychain_access_denied", {
+  if (keychainFailure && failure.definitiveAuth) {
+    failure = new ClaudeFailure(keychainFailure.source.error!, {
       staleEligible: true,
     });
   }
@@ -727,6 +738,20 @@ async function readCredentialStates(
   states.push(fileState);
 
   if (process.platform === "darwin") {
+    // Explicit profiles retain their exact path-derived service. The default
+    // profile discovers current Claude Code's opaque suffixes, never guesses them.
+    if (locations.keychainService === DEFAULT_KEYCHAIN_SERVICE) {
+      const selection = await discoverKeychainItem(locations.keychainAccount);
+      if (selection.status !== "present") {
+        states.push(keychainPresenceState(selection.status));
+        return states;
+      }
+      locations = {
+        ...locations,
+        keychainService: selection.item.service,
+        keychainPath: selection.item.keychain,
+      };
+    }
     if (options.allowKeychainPrompt || hasKeychainAccessMarker(locations)) {
       states.push(await readKeychainCredentialState(locations));
     } else {
@@ -740,7 +765,15 @@ async function readCredentialStates(
 async function readSkippedKeychainCredentialState(
   locations: ClaudeProfileLocations,
 ): Promise<CredentialState> {
-  const presence = await readKeychainItemPresence(locations);
+  const presence = locations.keychainPath
+    ? "present"
+    : await readKeychainItemPresence(locations);
+  return keychainPresenceState(presence);
+}
+
+function keychainPresenceState(
+  presence: KeychainItemPresence,
+): CredentialState {
   if (presence === "present") {
     return {
       status: "skipped",
@@ -763,8 +796,10 @@ async function readSkippedKeychainCredentialState(
     source: {
       source: "keychain",
       status: "skipped",
-      error: "keychain_presence_check_failed",
-      credentialPresent: true,
+      error:
+        presence === "unreachable"
+          ? KEYCHAIN_UNREACHABLE_ERROR
+          : "keychain_presence_check_failed",
     },
   };
 }
@@ -785,9 +820,105 @@ async function readKeychainItemPresence(
       KEYCHAIN_PRESENCE_TIMEOUT_MS,
     );
     return "present";
-  } catch {
-    return "unknown";
+  } catch (error) {
+    if (isKeychainItemMissing(error)) return "missing";
+    return isKeychainItemUnreachable(error) ? "unreachable" : "unknown";
   }
+}
+
+async function discoverKeychainItem(
+  account: string,
+): Promise<
+  | { status: "present"; item: KeychainCandidate }
+  | { status: "missing" | "unknown" | "unreachable" }
+> {
+  try {
+    // No -d (values), -r (raw data), -a (ACLs), or -i (ACL editing).
+    // execFileText bounds this metadata-only listing to 5s and 16 MiB. Keep
+    // only the newest candidate and read at most one value, even when Claude
+    // Code has accumulated thousands of superseded items. Never retain the dump.
+    const metadata = await execFileText(
+      "security",
+      ["dump-keychain"],
+      KEYCHAIN_PRESENCE_TIMEOUT_MS,
+    );
+    return selectKeychainItem(metadata, account);
+  } catch (error) {
+    return {
+      status: isKeychainItemUnreachable(error) ? "unreachable" : "unknown",
+    };
+  }
+}
+
+function selectKeychainItem(
+  metadata: string,
+  account: string,
+):
+  | { status: "present"; item: KeychainCandidate }
+  | { status: "missing" | "unknown" } {
+  let newest: KeychainCandidate | undefined;
+  let sawRecord = false;
+  let malformed = false;
+  for (const record of metadata.split(/(?=^keychain: )/m)) {
+    if (!record.trim()) continue;
+    const keychain = keychainMetadataValue(
+      /^keychain: (.+)$/m.exec(record)?.[1],
+    );
+    const kind = /^class: (.+)$/m.exec(record)?.[1];
+    if (!keychain?.startsWith("/") || !kind) {
+      malformed = true;
+      continue;
+    }
+    sawRecord = true;
+    if (kind !== '"genp"') continue;
+    const service = keychainMetadataValue(
+      /^\s+"svce"<blob>=(.+)$/m.exec(record)?.[1],
+    );
+    const itemAccount = keychainMetadataValue(
+      /^\s+"acct"<blob>=(.+)$/m.exec(record)?.[1],
+    );
+    if (service === undefined || itemAccount === undefined) {
+      malformed = true;
+      continue;
+    }
+    if (!KEYCHAIN_SERVICE_PATTERN.test(service) || itemAccount !== account)
+      continue;
+    const date = keychainMetadataValue(
+      /^\s+"mdat"<timedate>=(.+)$/m.exec(record)?.[1],
+    );
+    // Security prints UTC generalized times, sometimes NUL-terminated. Their
+    // fixed-width representation sorts chronologically; unknown dates sort last.
+    const modified = date?.replace(/\0$/, "");
+    const candidate = {
+      service,
+      keychain,
+      modified: modified && /^\d{14}Z$/.test(modified) ? modified : "",
+    };
+    // Stable service/path ordering breaks ties independently of dump order.
+    if (
+      !newest ||
+      candidate.modified > newest.modified ||
+      (candidate.modified === newest.modified &&
+        (candidate.service < newest.service ||
+          (candidate.service === newest.service &&
+            candidate.keychain < newest.keychain)))
+    ) {
+      newest = candidate;
+    }
+  }
+  if (malformed || (metadata.trim() && !sawRecord))
+    return { status: "unknown" };
+  return newest ? { status: "present", item: newest } : { status: "missing" };
+}
+
+// security's print_buffer emits printable bytes in quotes, or hex followed by
+// an optional ASCII annotation. Decode only the small metadata fields we use.
+function keychainMetadataValue(raw?: string): string | undefined {
+  if (!raw || raw.length > 8192) return undefined;
+  if (raw === "<NULL>") return "";
+  const hex = /^0x((?:[0-9a-fA-F]{2})+)(?:\s|$)/.exec(raw)?.[1];
+  if (hex) return Buffer.from(hex, "hex").toString("utf8");
+  return /^"(.*)"$/.exec(raw)?.[1];
 }
 
 async function readKeychainCredentialState(
@@ -804,6 +935,7 @@ async function readKeychainCredentialState(
         "-w",
         "-s",
         locations.keychainService,
+        ...(locations.keychainPath ? [locations.keychainPath] : []),
       ],
       KEYCHAIN_PROMPT_TIMEOUT_MS,
     );
@@ -904,7 +1036,38 @@ function isKeychainItemUnreachable(error: unknown): boolean {
   );
 }
 
+function isKeychainItemMissing(error: unknown): boolean {
+  const failure = error as {
+    code?: number | string | null;
+    stderr?: unknown;
+    message?: unknown;
+    killed?: boolean;
+    signal?: unknown;
+  };
+  // errSecItemNotFound (-25300) is truncated to 44 by the shell. A search
+  // setup failure can also finish with that diagnostic, so require it to be
+  // the sole stderr line; never infer absence from the exit code or message alone.
+  // execFileText rejects Node's callback error, which embeds stderr after the
+  // command line in message; promisified callers may attach stderr separately.
+  const diagnostic =
+    typeof failure.stderr === "string"
+      ? failure.stderr
+      : typeof failure.message === "string" &&
+          failure.message.startsWith("Command failed: ")
+        ? failure.message.slice(failure.message.indexOf("\n") + 1)
+        : "";
+  return (
+    !failure.killed &&
+    !failure.signal &&
+    failure.code === KEYCHAIN_ITEM_UNREACHABLE_EXIT_CODE &&
+    /^security: SecKeychainSearchCopyNext: The specified item could not be found in the keychain\.$/.test(
+      diagnostic.trim(),
+    )
+  );
+}
+
 function keychainFailureState(error: unknown): CredentialState {
+  if (isKeychainItemMissing(error)) return keychainPresenceState("missing");
   const failure = error as {
     killed?: boolean;
     signal?: string | null;
