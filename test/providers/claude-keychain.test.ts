@@ -356,6 +356,28 @@ describe("Claude macOS Keychain discovery", () => {
     expect(execFileText).toHaveBeenCalledTimes(3);
   });
 
+  it("keeps a conclusive absence for the process, so a later sign-in needs a restart", async () => {
+    let signedIn = false;
+    execFileText.mockImplementation(async (_command: string, args) => {
+      if (args[0] === "default-keychain") return `    "${keychain}"\n`;
+      if (args[0] === "dump-keychain") return signedIn ? item() : "";
+      return JSON.stringify({
+        claudeAiOauth: { accessToken: "synthetic-token" },
+      });
+    });
+    const { fetchQuota } = await import("../../src/providers/claude.js");
+
+    expect((await fetchQuota(options)).state.status).toBe("auth_required");
+    signedIn = true;
+    expect((await fetchQuota(options)).state.status).toBe("auth_required");
+    expect(
+      execFileText.mock.calls.filter(([, args]) => args[0] === "dump-keychain"),
+    ).toHaveLength(1);
+
+    const fresh = await import("../../src/providers/claude.js?restarted");
+    expect((await fresh.fetchQuota(options)).state.status).toBe("fresh");
+  });
+
   it("keeps an unchecked Keychain visible behind the file credential that answered", async () => {
     mkdirSync(join(home, ".claude"));
     writeFileSync(

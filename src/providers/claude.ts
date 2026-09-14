@@ -104,7 +104,7 @@ type KeychainCandidate = {
 };
 type KeychainSelection =
   | { status: "present"; item: KeychainCandidate }
-  | { status: "missing" | "unknown" | "unreachable" };
+  | { status: "missing" | "unknown" };
 type ClaudeAccount = NonNullable<ProviderQuota["account"]>;
 type ClaudeIdentityResult = {
   account: ClaudeAccount;
@@ -870,10 +870,8 @@ async function listKeychainItem(account: string): Promise<KeychainSelection> {
       KEYCHAIN_PRESENCE_TIMEOUT_MS,
     );
     return selectKeychainItem(metadata, account);
-  } catch (error) {
-    return {
-      status: isKeychainItemUnreachable(error) ? "unreachable" : "unknown",
-    };
+  } catch {
+    return { status: "unknown" };
   }
 }
 
