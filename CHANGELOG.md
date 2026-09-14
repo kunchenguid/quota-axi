@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.43](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.42...quota-axi-v0.1.43) (2026-09-14)
+
+
+### Bug Fixes
+
+* **providers:** report refreshable Kimi expiry without sign-out ([#174](https://github.com/kunchenguid/quota-axi/issues/174)) ([e1c67e0](https://github.com/kunchenguid/quota-axi/commit/e1c67e0c15b9ace936afc5339a62031da2e5dc6a))
+* recognize provably unopened future model windows ([#162](https://github.com/kunchenguid/quota-axi/issues/162)) ([9e693a2](https://github.com/kunchenguid/quota-axi/commit/9e693a2cac97d64729e6953a65c90c8dde81a07c))
+
 ## [0.1.42](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.41...quota-axi-v0.1.42) (2026-09-12)
 
 
