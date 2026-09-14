@@ -318,6 +318,62 @@ describe("Claude macOS Keychain discovery", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
+  it.each([
+    {
+      label: "another searchable keychain is omitted",
+      metadata: "",
+      paths: [keychain, otherKeychain],
+    },
+    {
+      label: "a competing record cannot be parsed",
+      metadata: item("Claude Code-credentials-1234abcd").replace(
+        '    "acct"<blob>="fixture-user"\n',
+        "",
+      ),
+      paths: [keychain],
+    },
+    {
+      label: "an unfamiliar Claude service remains",
+      metadata: item("Claude Code-credentials-unfamiliar"),
+      paths: [keychain],
+    },
+    {
+      label: "a Claude item belongs to another account",
+      metadata: item(service, undefined, "other-fixture-user"),
+      paths: [keychain],
+    },
+  ])(
+    "withholds a lone opaque item when $label",
+    async ({ metadata, paths }) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-09-13T01:00:00Z"));
+      const opaqueService = "Claude Code-credentials-abcdef12";
+      // The opaque value is readable, so accepting it would produce a fresh
+      // reading instead of exercising the exact-selector fallback below.
+      mockItems(item(opaqueService) + metadata, opaqueService, paths);
+      const { readCachedProvider, writeCachedProviders } =
+        await import("../../src/cache.js");
+      writeCachedProviders([cachedClaude()]);
+      const { fetchQuota } = await import("../../src/providers/claude.js");
+      const report = await fetchQuota(options);
+
+      expect(report.state).toMatchObject({
+        status: "stale",
+        error: "keychain_unreachable",
+      });
+      expect(readCachedProvider("claude")).toBeDefined();
+      expect(valueReadArgs()).toEqual([
+        "find-generic-password",
+        "-a",
+        "fixture-user",
+        "-w",
+        "-s",
+        service,
+      ]);
+      expect(fetch).not.toHaveBeenCalled();
+    },
+  );
+
   it("reports missing for unrelated services and non-password items", async () => {
     mockItems(
       item("other-service", undefined, "other-user") +

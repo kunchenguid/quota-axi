@@ -930,12 +930,13 @@ function selectKeychainItem(
   // re-derive its own opaque suffix, so it accepts one only when a single
   // eligible item exists; several are indistinguishable and none is opened.
   if (exactItem) return { status: "present", item: exactItem };
+  // Uniqueness, like absence, requires the whole search list: incomplete or
+  // inconclusive metadata can hide the selected item or a competing profile.
+  if (inconclusive || paths.some((path) => !seenKeychains.has(path)))
+    return { status: "unknown" };
   if (opaqueItems.size === 1)
     return { status: "present", item: [...opaqueItems.values()][0]! };
   if (opaqueItems.size > 1) return { status: "unknown" };
-  // A silent/partial listing is not evidence about unobserved keychains.
-  if (inconclusive || paths.some((path) => !seenKeychains.has(path)))
-    return { status: "unknown" };
   return { status: "missing" };
 }
 
