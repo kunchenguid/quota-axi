@@ -18,6 +18,7 @@ import { PROVIDER_IDS } from "./types.js";
 const PROVIDER_SOURCES = [
   "oauth",
   "pi:openai-codex",
+  "pi:meta",
   "cli-rpc",
   "cli",
   "api",

@@ -20,6 +20,7 @@ const originalCursorProvider = PROVIDERS.cursor;
 const originalCopilotProvider = PROVIDERS.copilot;
 const originalGrokProvider = PROVIDERS.grok;
 const originalKimiProvider = PROVIDERS.kimi;
+const originalMetaProvider = PROVIDERS.meta;
 const originalZaiProvider = PROVIDERS.zai;
 const originalAgyProvider = PROVIDERS.agy;
 const originalAlibabaProvider = PROVIDERS.alibaba;
@@ -34,6 +35,7 @@ afterEach(() => {
   PROVIDERS.copilot = originalCopilotProvider;
   PROVIDERS.grok = originalGrokProvider;
   PROVIDERS.kimi = originalKimiProvider;
+  PROVIDERS.meta = originalMetaProvider;
   PROVIDERS.zai = originalZaiProvider;
   PROVIDERS.agy = originalAgyProvider;
   PROVIDERS.alibaba = originalAlibabaProvider;
@@ -55,6 +57,7 @@ describe("CLI flag parsing", () => {
       "copilot",
       "grok",
       "kimi",
+      "meta",
       "zai",
       "agy",
       "alibaba",
@@ -92,6 +95,7 @@ describe("CLI flag parsing", () => {
           "copilot",
           "grok",
           "kimi",
+          "meta",
           "zai",
           "agy",
           "alibaba",
@@ -740,6 +744,48 @@ describe("CLI quota rendering", () => {
     );
   });
 
+  it("renders Meta weekly and rolling usage without claiming a combined bound", async () => {
+    useTempCache();
+    PROVIDERS.meta = providerWithQuota(freshMetaQuota());
+
+    const toon = await capture(["--provider", "meta"]);
+    expect(toon).toContain(
+      "meta,all,no_quota,no measurable scope (auth usable)",
+    );
+    expect(toon).toContain(
+      'meta,all,unresolved_windows,"weekly + window:300m",none',
+    );
+
+    const fullToon = await capture(["--provider", "meta", "--full"]);
+    expect(toonRows(fullToon, "windows").map((row) => row.slice(0, 4))).toEqual(
+      [
+        ["meta", "weekly", "week", "80"],
+        ["meta", "window:300m", "5h", "90"],
+      ],
+    );
+
+    const json = JSON.parse(
+      await capture(["--provider", "meta", "--json"]),
+    ) as QuotaAxiResponse;
+    expect(json.providers).toEqual([
+      expect.objectContaining({
+        provider: "meta",
+        windows: [
+          expect.objectContaining({ id: "weekly", percentRemaining: 80 }),
+          expect.objectContaining({
+            id: "window:300m",
+            percentRemaining: 90,
+          }),
+        ],
+        quotaSemantics: expect.objectContaining({
+          status: "unknown",
+          effectiveAvailability: [],
+          unresolvedWindowIds: ["weekly", "window:300m"],
+        }),
+      }),
+    ]);
+  });
+
   it("renders the card-grid report for --tui and composes with --provider", async () => {
     useTempCache();
     PROVIDERS.codex = providerWithQuota(freshCodexQuota());
@@ -789,6 +835,7 @@ describe("default TOON decision blocks", () => {
     PROVIDERS.copilot = providerWithQuota(signedOutCopilotQuota());
     PROVIDERS.grok = providerWithQuota(grokModelAuthOnlyQuota());
     PROVIDERS.kimi = providerWithQuota(rateLimitedKimiQuota());
+    PROVIDERS.meta = providerWithQuota(freshMetaQuota());
     PROVIDERS.zai = providerWithQuota(freshZaiQuota());
     PROVIDERS.agy = providerWithQuota(unavailableAgyQuota());
     PROVIDERS.alibaba = providerWithQuota(freshAlibabaQuota());
@@ -809,6 +856,7 @@ describe("default TOON decision blocks", () => {
       "cursor",
       "grok",
       "kimi",
+      "meta",
       "opencode-go",
       "zai",
     ]);
@@ -1163,6 +1211,7 @@ describe("CLI plumbing via the axi SDK", () => {
     PROVIDERS.copilot = providerWithAuth("copilot", "GitHub Copilot");
     PROVIDERS.grok = providerWithAuth("grok", "Grok");
     PROVIDERS.kimi = providerWithAuth("kimi", "Kimi");
+    PROVIDERS.meta = providerWithAuth("meta", "Meta Muse");
     PROVIDERS.zai = providerWithAuth("zai", "Z.AI");
     PROVIDERS.agy = providerWithAuth("agy", "Antigravity");
     PROVIDERS.alibaba = providerWithAuth("alibaba", "Alibaba Coding Plan");
@@ -1676,6 +1725,40 @@ function freshZaiQuota(): ProviderQuota {
       sourcesTried: ["opencode:auth.json"],
     },
     attempts: [{ source: "opencode:auth.json", status: "success" }],
+  };
+}
+
+function freshMetaQuota(): ProviderQuota {
+  return {
+    provider: "meta",
+    label: "Meta Muse",
+    source: "pi:meta",
+    windows: [
+      {
+        id: "weekly",
+        label: "week",
+        kind: "weekly",
+        percentUsed: 20,
+        percentRemaining: 80,
+        windowSeconds: 604_800,
+      },
+      {
+        id: "window:300m",
+        label: "5h",
+        kind: "session",
+        percentUsed: 10,
+        percentRemaining: 90,
+        windowSeconds: 18_000,
+      },
+    ],
+    state: {
+      status: "fresh",
+      stale: false,
+      authStatus: "usable",
+      refreshedAt: "2026-07-06T18:10:00Z",
+      sourcesTried: ["pi:meta"],
+    },
+    attempts: [{ source: "pi:meta", status: "success" }],
   };
 }
 

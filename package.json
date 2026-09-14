@@ -2,7 +2,7 @@
   "name": "quota-axi",
   "version": "0.1.43",
   "packageManager": "pnpm@11.1.1",
-  "description": "AXI CLI that reports local agent-provider quota windows without routing or credential minting",
+  "description": "AXI CLI that reports local agent-provider quota windows without routing or credential persistence",
   "type": "module",
   "repository": {
     "type": "git",

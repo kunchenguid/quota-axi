@@ -110,6 +110,11 @@ function semanticsFor(
         provider.state.untrustedWindowIds ?? [],
         generatedAt,
       );
+    case "meta":
+      return unknownSemantics(
+        provider.windows,
+        "Meta Muse reports weekly and rolling subscription windows, but quota-axi has no vendor evidence that they jointly bound every model, so it does not claim an effective combined percentage.",
+      );
     case "zai":
       return zaiSemantics(
         provider.windows,

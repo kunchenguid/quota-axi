@@ -6,6 +6,7 @@ import { copilotAdapter } from "./copilot.js";
 import { cursorAdapter } from "./cursor.js";
 import { grokAdapter } from "./grok.js";
 import { kimiAdapter } from "./kimi.js";
+import { metaAdapter } from "./meta.js";
 import { opencodeGoAdapter } from "./opencode-go.js";
 import { zaiAdapter } from "./zai.js";
 import {
@@ -21,6 +22,7 @@ export const PROVIDERS: Record<ProviderId, ProviderAdapter> = {
   copilot: copilotAdapter,
   grok: grokAdapter,
   kimi: kimiAdapter,
+  meta: metaAdapter,
   zai: zaiAdapter,
   agy: agyAdapter,
   alibaba: alibabaAdapter,

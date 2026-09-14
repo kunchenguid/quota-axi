@@ -113,6 +113,26 @@ describe("quota cache", () => {
     });
   });
 
+  it("retains the Pi Meta source without account or attempt data", () => {
+    useTempCache();
+    const meta = quota("meta", 20);
+    meta.source = "pi:meta";
+    meta.state.sourcesTried = ["pi:meta"];
+    meta.attempts = [{ source: "pi:meta", status: "success" }];
+
+    writeCachedProviders([meta]);
+
+    expect(readCachedProvider("meta")).toMatchObject({
+      provider: "meta",
+      source: "pi:meta",
+      state: { sourcesTried: ["pi:meta"] },
+    });
+    const serialized = readFileSync(cacheFilePath(), "utf8");
+    expect(serialized).not.toContain("person@example.invalid");
+    expect(serialized).not.toContain("fixture-account");
+    expect(serialized).not.toContain('"attempts"');
+  });
+
   it("retains exact known and unfamiliar Codex cache identities", () => {
     useTempCache();
     const codex = quota("codex", 20);
@@ -453,6 +473,7 @@ function providerLabel(provider: ProviderId): string {
   if (provider === "cursor") return "Cursor";
   if (provider === "copilot") return "GitHub Copilot";
   if (provider === "grok") return "Grok";
+  if (provider === "meta") return "Meta Muse";
   if (provider === "zai") return "Z.AI";
   if (provider === "agy") return "Antigravity";
   return "Kimi";

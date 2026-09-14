@@ -1,0 +1,13 @@
+{
+  "subs_usage": {
+    "weekly": {
+      "used_percent": 0,
+      "resets_at": 1789948800
+    },
+    "window": {
+      "used_percent": 1,
+      "window_duration_mins": 300,
+      "resets_at": 1789424972
+    }
+  }
+}
