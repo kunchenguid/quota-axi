@@ -5,14 +5,13 @@ import { join } from "node:path";
 export const CLAUDE_KEYCHAIN_SERVICE = "Claude Code-credentials";
 
 /**
- * Mirrors Claude Code's configuration and secure-storage selectors. A nonempty
- * secure-storage selector names its own credential store, so it selects the
- * Keychain service and leaves no plaintext credential directory; otherwise the
- * credential directory is `CLAUDE_CONFIG_DIR` or `~/.claude`.
+ * Mirrors Claude Code's configuration and secure-storage selectors. The
+ * credential directory is `CLAUDE_CONFIG_DIR` or `~/.claude`; a nonempty
+ * secure-storage selector names the Keychain service instead.
  */
 export function claudeProfileLocations(): {
   configDir: string;
-  credentialDir?: string;
+  secureStorageSelected: boolean;
   keychainService: string;
   keychainServiceAlias?: string;
 } {
@@ -26,7 +25,7 @@ export function claudeProfileLocations(): {
   const selector = storageSelector ?? (configured ? configDir : undefined);
   return {
     configDir,
-    credentialDir: storageSelector ? undefined : configDir,
+    secureStorageSelected: storageSelector !== undefined,
     keychainService: selector
       ? suffixedKeychainService(selector)
       : CLAUDE_KEYCHAIN_SERVICE,

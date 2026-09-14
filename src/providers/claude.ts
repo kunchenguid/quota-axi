@@ -53,7 +53,6 @@ const KEYCHAIN_PRESENCE_TIMEOUT_MS = 5_000;
 /** `security` exit 44 is cannot-reach (locked, TCC, daemon), not item-absent. */
 const KEYCHAIN_ITEM_UNREACHABLE_EXIT_CODE = 44;
 const KEYCHAIN_UNREACHABLE_ERROR = "keychain_unreachable";
-const SECURE_STORAGE_SELECTED_ERROR = "secure_storage_profile_selected";
 const DEFAULT_KEYCHAIN_ACCOUNT = "claude-code-user";
 const SAFE_KEYCHAIN_ACCOUNT = /^[a-zA-Z0-9._-]+$/;
 const FIVE_HOURS_MS = 5 * 60 * 60 * 1_000;
@@ -769,16 +768,6 @@ async function readCredentialStates(
     }
   }
 
-  if (locations.credentialFile === undefined)
-    states.push({
-      status: "skipped",
-      degraded: false,
-      source: {
-        source: "oauth-file",
-        status: "skipped",
-        error: SECURE_STORAGE_SELECTED_ERROR,
-      },
-    });
   return states;
 }
 
@@ -1048,14 +1037,18 @@ export function claudeKeychainAccount(): string {
 }
 
 function resolveClaudeProfileLocations(): ClaudeProfileLocations {
-  const { credentialDir, keychainService, keychainServiceAlias } =
-    claudeProfileLocations();
+  const {
+    configDir,
+    secureStorageSelected,
+    keychainService,
+    keychainServiceAlias,
+  } = claudeProfileLocations();
   const keychainAccount = claudeKeychainAccount();
   return {
     credentialFile:
-      credentialDir === undefined
+      secureStorageSelected && process.platform === "darwin"
         ? undefined
-        : join(credentialDir, ".credentials.json"),
+        : join(configDir, ".credentials.json"),
     keychainAccount,
     keychainService,
     keychainServiceAlias,

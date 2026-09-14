@@ -267,7 +267,62 @@ describe("Claude credential-state reporting", () => {
     },
   );
 
-  it("ignores the config-directory credential file when a secure-storage profile is selected", async () => {
+  it("reads only the Keychain profile when a secure-storage profile is selected", async () => {
+    usePlatform("darwin");
+    const home = useTempHome();
+    const configDir = join(home, "configured-profile");
+    const storage = join(home, "selected-storage");
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR = storage;
+    writeClaudeConfigCredential(configDir, {
+      accessToken: "unselected-config-token",
+      expiresAt: "2035-01-01T00:00:00.000Z",
+    });
+    const service = `Claude Code-credentials-${createHash("sha256")
+      .update(storage)
+      .digest("hex")
+      .slice(0, 8)}`;
+    const execFileText = mockKeychainRead(
+      async () =>
+        JSON.stringify({
+          claudeAiOauth: {
+            accessToken: "selected-keychain-token",
+            expiresAt: "2035-01-01T00:00:00.000Z",
+          },
+        }),
+      service,
+    );
+    vi.doMock("../../src/lib/process.js", () => ({ execFileText }));
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ five_hour: { utilization: 12 } }), {
+          status: 200,
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const { claudeCredentialFile, inspectAuth, fetchQuota } =
+      await import("../../src/providers/claude.js");
+    const auth = await inspectAuth({
+      allowKeychainPrompt: true,
+      refreshCredentials: false,
+    });
+    const result = await fetchQuota({
+      allowKeychainPrompt: true,
+      refreshCredentials: false,
+    });
+
+    expect(claudeCredentialFile()).toBeUndefined();
+    expect(auth.sources).toEqual([{ source: "keychain", status: "available" }]);
+    expect(result.state.status).toBe("fresh");
+    expect(fetchMock.mock.calls.length).toBeGreaterThan(0);
+    for (const call of fetchMock.mock.calls) {
+      expect(
+        (call as unknown as [string, RequestInit])[1]?.headers,
+      ).toMatchObject({ authorization: "Bearer selected-keychain-token" });
+    }
+  });
+
+  it("still reads the config-directory credential file off macOS when a secure-storage profile is selected", async () => {
     const home = useTempHome();
     const configDir = join(home, "configured-profile");
     process.env.CLAUDE_CONFIG_DIR = configDir;
@@ -276,54 +331,31 @@ describe("Claude credential-state reporting", () => {
       "selected-storage",
     );
     writeClaudeConfigCredential(configDir, {
-      accessToken: "unselected-config-token",
+      accessToken: "selected-config-token",
       expiresAt: "2035-01-01T00:00:00.000Z",
     });
-    const { claudeCredentialFile, inspectAuth, fetchQuota } =
-      await import("../../src/providers/claude.js");
-    const auth = await inspectAuth({
-      allowKeychainPrompt: false,
-      refreshCredentials: false,
-    });
-    const result = await fetchQuota({
-      allowKeychainPrompt: false,
-      refreshCredentials: false,
-    });
-
-    expect(claudeCredentialFile()).toBeUndefined();
-    expect(auth.sources).toEqual([
-      {
-        source: "oauth-file",
-        status: "skipped",
-        error: "secure_storage_profile_selected",
-      },
-    ]);
-    expect(fetch).not.toHaveBeenCalled();
-    expect(result.windows).toEqual([]);
-    expect(result.state.status).not.toBe("auth_required");
-  });
-
-  it("keeps a cached snapshot when a secure-storage profile has no readable source", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-07-06T20:00:00.000Z"));
-    const home = useTempHome();
-    process.env.CLAUDE_CONFIG_DIR = join(home, "configured-profile");
-    process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR = join(
-      home,
-      "selected-storage",
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ five_hour: { utilization: 12 } }), {
+          status: 200,
+        }),
     );
-    const { readCachedProvider, writeCachedProviders } =
-      await import("../../src/cache.js");
-    writeCachedProviders([cachedClaudeQuota(42)]);
-    const { fetchQuota } = await import("../../src/providers/claude.js");
+    vi.stubGlobal("fetch", fetchMock);
+    const { claudeCredentialFile, fetchQuota } =
+      await import("../../src/providers/claude.js");
     const result = await fetchQuota({
       allowKeychainPrompt: false,
       refreshCredentials: false,
     });
 
-    expect(result.state).toMatchObject({ stale: true });
-    expect(result.windows).toMatchObject([{ percentUsed: 42 }]);
-    expect(readCachedProvider("claude")).toBeTruthy();
+    expect(claudeCredentialFile()).toBe(join(configDir, ".credentials.json"));
+    expect(result.state.status).toBe("fresh");
+    expect(fetchMock.mock.calls.length).toBeGreaterThan(0);
+    for (const call of fetchMock.mock.calls) {
+      expect(
+        (call as unknown as [string, RequestInit])[1]?.headers,
+      ).toMatchObject({ authorization: "Bearer selected-config-token" });
+    }
   });
 
   it.each(["CLAUDE_CONFIG_DIR", "CLAUDE_SECURESTORAGE_CONFIG_DIR"])(
@@ -1084,6 +1116,16 @@ describe("Claude credential-state reporting", () => {
       await import("../../src/cache.js");
     writeCachedProviders([cachedClaudeQuota(42)]);
     process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR = storageB;
+    writeClaudeConfigCredential(join(home, ".claude"), {
+      accessToken: "synthetic-storage-b-token",
+      expiresAt: "2035-01-01T00:00:00.000Z",
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new TypeError("network unavailable");
+      }),
+    );
     const { fetchQuota } = await import("../../src/providers/claude.js");
     const result = await fetchQuota({
       allowKeychainPrompt: false,
@@ -1093,7 +1135,7 @@ describe("Claude credential-state reporting", () => {
     expect(result).toMatchObject({
       source: "unavailable",
       windows: [],
-      state: { stale: false, error: "secure_storage_profile_selected" },
+      state: { stale: false, error: "network unavailable" },
     });
     expect(readCachedProvider("claude")?.windows[0]?.percentUsed).toBe(42);
   });
