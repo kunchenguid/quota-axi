@@ -35,6 +35,7 @@ const ZAI_HOST = "api.z.ai";
 const ZHIPU_HOST = "open.bigmodel.cn";
 const OPENCODE_AUTH_SOURCE = "opencode:auth.json";
 const PI_ZAI_SOURCE = "pi:zai";
+const PI_ZAI_PROVIDER_ID = "zai";
 const USER_AGENT = `quota-axi/${VERSION}`;
 
 const ZAI_PROVIDER_IDS = ["zai-coding-plan", "zai", "z-ai", "z.ai"];
@@ -131,21 +132,15 @@ function extractPiZaiCredential(
   value: unknown,
   path: string,
 ): ZaiCredentialResolution {
-  for (const providerId of [...ZAI_PROVIDER_IDS, ...ZHIPU_PROVIDER_IDS]) {
-    const classified = classifyPiAuthEntry(value, providerId);
-    if (classified.status === "missing") continue;
-    if (classified.status === "invalid")
-      return { status: "invalid", path, error: "invalid_credential" };
-    const host = ZAI_PROVIDER_IDS.includes(providerId) ? ZAI_HOST : ZHIPU_HOST;
-    const key =
-      classified.entry.type === "api_key"
-        ? usableLiteralSecret(classified.entry.key)
-        : undefined;
-    return key
-      ? { status: "available", apiKey: key, host, path }
-      : { status: "invalid", path, error: "invalid_credential" };
-  }
-  return { status: "missing", path };
+  const classified = classifyPiAuthEntry(value, PI_ZAI_PROVIDER_ID);
+  if (classified.status === "missing") return { status: "missing", path };
+  const key =
+    classified.status === "present" && classified.entry.type === "api_key"
+      ? usableLiteralSecret(classified.entry.key)
+      : undefined;
+  return key
+    ? { status: "available", apiKey: key, host: ZAI_HOST, path }
+    : { status: "invalid", path, error: "invalid_credential" };
 }
 
 export function createOpencodeAuthCredentialSource(

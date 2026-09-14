@@ -1328,6 +1328,30 @@ describe("Z.AI multi-source credentials", () => {
     },
   );
 
+  it("reads only Pi's zai entry, ignoring other Z.AI spellings", () => {
+    const directory = mkdtempSync(join(tmpdir(), "quota-axi-zai-pi-"));
+    try {
+      const authFile = join(directory, "auth.json");
+      writeFileSync(
+        authFile,
+        JSON.stringify({
+          "zai-coding-plan": "not-an-entry",
+          zhipu: { type: "api_key", key: "cn-key" },
+          zai: { type: "api_key", key: SYNTHETIC_KEY },
+        }),
+      );
+
+      expect(createPiAuthCredentialSource(() => authFile).resolve()).toEqual({
+        status: "available",
+        apiKey: SYNTHETIC_KEY,
+        host: "api.z.ai",
+        path: authFile,
+      });
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it("reports a Pi auth file without a Z.AI entry as missing", () => {
     const directory = mkdtempSync(join(tmpdir(), "quota-axi-zai-pi-"));
     try {
