@@ -1071,6 +1071,7 @@ function failureRank(error: unknown): number {
 }
 
 function staleEligibleFailure(error: unknown): boolean {
+  if (error instanceof AgyCsrfError) return false;
   if (error instanceof AgyHttpError)
     return error.status === 429 || error.status >= 500;
   return statusForFailure(error) === "unavailable";
