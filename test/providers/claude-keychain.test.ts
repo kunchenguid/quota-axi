@@ -270,15 +270,19 @@ describe("Claude macOS Keychain discovery", () => {
   });
 
   it.each([false, true])(
-    "reports a successfully listed empty Keychain as missing (prompt=%s)",
+    "does not read absence from a listing that printed nothing (prompt=%s)",
     async (allowKeychainPrompt) => {
-      mockItems("");
+      mockItems("", "unavailable-service");
       const { inspectAuth } = await import("../../src/providers/claude.js");
       const auth = await inspectAuth({ ...options, allowKeychainPrompt });
-      expect(auth.sources).toContainEqual({
-        source: "keychain",
-        status: "missing",
-      });
+      expect(auth.sources).not.toContainEqual(
+        expect.objectContaining({ source: "keychain", status: "missing" }),
+      );
+      expect(
+        execFileText.mock.calls.some(([, args]) =>
+          args.includes("Claude Code-credentials"),
+        ),
+      ).toBe(true);
     },
   );
 
@@ -411,11 +415,12 @@ describe("Claude macOS Keychain discovery", () => {
     expect(execFileText).toHaveBeenCalledTimes(3);
   });
 
-  it("keeps a conclusive absence for the process, so a later sign-in needs a restart", async () => {
+  it("detects a sign-in on a later read in the same process", async () => {
     let signedIn = false;
     execFileText.mockImplementation(async (_command: string, args) => {
       if (args[0] === "default-keychain") return `    "${keychain}"\n`;
-      if (args[0] === "dump-keychain") return signedIn ? item() : "";
+      if (args[0] === "dump-keychain")
+        return signedIn ? item() : item("other-service");
       return JSON.stringify({
         claudeAiOauth: { accessToken: "synthetic-token" },
       });
@@ -424,13 +429,50 @@ describe("Claude macOS Keychain discovery", () => {
 
     expect((await fetchQuota(options)).state.status).toBe("auth_required");
     signedIn = true;
-    expect((await fetchQuota(options)).state.status).toBe("auth_required");
+    expect((await fetchQuota(options)).state.status).toBe("fresh");
+  });
+
+  it("lists once per process after it locates an item", async () => {
+    mockItems(item());
+    const { fetchQuota } = await import("../../src/providers/claude.js");
+    await fetchQuota(options);
+    await fetchQuota(options);
     expect(
       execFileText.mock.calls.filter(([, args]) => args[0] === "dump-keychain"),
     ).toHaveLength(1);
+  });
 
-    const fresh = await import("../../src/providers/claude.js?restarted");
-    expect((await fresh.fetchQuota(options)).state.status).toBe("fresh");
+  it("keeps cached quota when a located item is unread and a leftover file is rejected", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-13T01:00:00Z"));
+    mkdirSync(join(home, ".claude"));
+    writeFileSync(
+      join(home, ".claude", ".credentials.json"),
+      JSON.stringify({
+        claudeAiOauth: {
+          accessToken: "synthetic-rejected-token",
+          expiresAt: 0,
+        },
+      }),
+    );
+    mockItems(item());
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(null, { status: 401 })),
+    );
+    const { readCachedProvider, writeCachedProviders } =
+      await import("../../src/cache.js");
+    writeCachedProviders([cachedClaude()]);
+    const { fetchQuota } = await import("../../src/providers/claude.js");
+    const report = await fetchQuota({ ...options, allowKeychainPrompt: false });
+
+    expect(report.state).toMatchObject({
+      status: "stale",
+      error: "keychain_prompt_required",
+    });
+    expect(report.source).toBe("cache");
+    expect(readCachedProvider("claude")).toBeDefined();
+    expect(valueReadArgs()).toEqual([]);
   });
 
   it("keeps an unchecked Keychain visible behind the file credential that answered", async () => {

@@ -450,6 +450,7 @@ async function attemptClaudeQuota(
       state.source.source === "keychain" &&
       [
         "keychain_access_denied",
+        "keychain_prompt_required",
         "keychain_prompt_timeout",
         "keychain_presence_check_failed",
         KEYCHAIN_UNREACHABLE_ERROR,
@@ -837,21 +838,19 @@ async function readKeychainItemPresence(
   }
 }
 
-// One conclusive listing per account per process: a long-lived --tui refresh
-// loop must not re-dump the keychain on every tick. A suffix rotated after a
-// conclusive listing is picked up by the next run.
-let keychainDiscovery:
-  | { account: string; selection: KeychainSelection }
-  | undefined;
+// One located item per account per process: a long-lived --tui refresh loop
+// must not re-dump the keychain on every tick once it has one. A listing that
+// located nothing is repeated, so a later sign-in is picked up by the next read.
+let keychainDiscovery: { account: string; item: KeychainCandidate } | undefined;
 
 async function discoverKeychainItem(
   account: string,
 ): Promise<KeychainSelection> {
   if (keychainDiscovery?.account === account)
-    return keychainDiscovery.selection;
+    return { status: "present", item: keychainDiscovery.item };
   const selection = await listKeychainItem(account);
-  if (selection.status === "present" || selection.status === "missing")
-    keychainDiscovery = { account, selection };
+  if (selection.status === "present")
+    keychainDiscovery = { account, item: selection.item };
   return selection;
 }
 
@@ -946,8 +945,8 @@ function selectKeychainItem(
   // An unreadable unrelated record never discards a located Claude item; it
   // only withholds the absence verdict.
   if (newest) return { status: "present", item: newest };
-  if (inconclusive || (metadata.trim() && !sawRecord))
-    return { status: "unknown" };
+  // Absence is only what a listing that actually walked records can show.
+  if (inconclusive || !sawRecord) return { status: "unknown" };
   return { status: "missing" };
 }
 

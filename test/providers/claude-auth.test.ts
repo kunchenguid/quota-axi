@@ -1598,8 +1598,20 @@ describe("Claude credential-state reporting", () => {
   it("does not mark keychain prompt required when the keychain item is missing", async () => {
     usePlatform("darwin");
     useTempHome();
+    const unrelatedItem = `keychain: "${fixtureKeychain}"
+version: 512
+class: "genp"
+attributes:
+    "acct"<blob>="fixture-user"
+    "svce"<blob>="other-service"
+    "mdat"<timedate>="20260701000000Z"
+`;
     const execFileText = vi.fn(async (_command: string, args: string[]) =>
-      args[0] === "default-keychain" ? `    "${fixtureKeychain}"\n` : "",
+      args[0] === "default-keychain"
+        ? `    "${fixtureKeychain}"\n`
+        : args[0] === "dump-keychain"
+          ? unrelatedItem
+          : "",
     );
     vi.doMock("../../src/lib/process.js", () => ({ execFileText }));
 
