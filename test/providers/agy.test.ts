@@ -14,6 +14,7 @@ import { readCachedProvider, writeCachedProviders } from "../../src/cache.js";
 import {
   fetchQuotaWithRuntime,
   inspectAuthWithRuntime,
+  normalizeAgyPrintUsage,
   normalizeAgyQuotaSummary,
   normalizeAgyUserStatus,
   portsFromLsof,
@@ -92,6 +93,17 @@ describe("Antigravity quota parsing", () => {
     const result = normalizeAgyQuotaSummary(
       fixture("quota-summary-v1.2.2.json"),
     );
+
+    expect(result?.windows).toMatchObject([
+      { id: "gemini_5h", kind: "session", percentRemaining: 88 },
+      { id: "gemini_weekly", kind: "weekly", percentRemaining: 76 },
+      { id: "claude_gpt_5h", kind: "session", percentRemaining: 64 },
+      { id: "claude_gpt_weekly", kind: "weekly", percentRemaining: 52 },
+    ]);
+  });
+
+  it("normalizes the exact Antigravity CLI 1.2.2 print envelope", () => {
+    const result = normalizeAgyPrintUsage(fixture("usage-print-v1.2.2.json"));
 
     expect(result?.windows).toMatchObject([
       { id: "gemini_5h", kind: "session", percentRemaining: 88 },
@@ -483,8 +495,13 @@ describe("Antigravity provider", () => {
     expect(readCachedProvider("agy")).toBeUndefined();
   });
 
-  it("does not treat the CLI 1.2.2 CSRF guard as a sign-out", async () => {
+  it("falls back from the CLI 1.2.2 CSRF guard to structured print usage", async () => {
     writeCachedProviders([cachedAgyQuota()]);
+    const commands: Array<{
+      command: string;
+      args: string[];
+      timeoutMs: number;
+    }> = [];
     const port = await startServer((response) => {
       response.writeHead(401, { "content-type": "application/json" });
       response.end(
@@ -499,16 +516,47 @@ describe("Antigravity provider", () => {
       runtimeWith({
         ps: "123 /Users/test/.local/bin/agy\n",
         lsof: lsofFor(123, port),
+        agyPath: "/Users/test/.local/bin/agy",
+        agyOutput: JSON.stringify(fixture("usage-print-v1.2.2.json")),
         requestJson: requestLoopbackJson,
+        onExec(command, args, timeoutMs) {
+          commands.push({ command, args, timeoutMs });
+        },
+      }),
+    );
+
+    expect(result.state.status).toBe("fresh");
+    expect(result.source).toBe("cli");
+    expect(result.account).toBeUndefined();
+    expect(result.windows.map((window) => window.id)).toEqual([
+      "gemini_5h",
+      "gemini_weekly",
+      "claude_gpt_5h",
+      "claude_gpt_weekly",
+    ]);
+    expect(commands.at(-1)).toEqual({
+      command: "/Users/test/.local/bin/agy",
+      args: ["--print", "/usage", "--output-format", "json"],
+      timeoutMs: 15_000,
+    });
+  });
+
+  it("sanitizes failures from structured print usage", async () => {
+    const result = await fetchQuotaWithRuntime(
+      runtimeWith({
+        ps: "",
+        agyPath: "/Users/test/.local/bin/agy",
+        agyError: Object.assign(new Error("private-account@example.test"), {
+          code: "EFAIL",
+        }),
       }),
     );
 
     expect(result.state).toMatchObject({
-      status: "stale",
-      error:
-        "Antigravity CLI quota unavailable because its runtime CSRF token is not exposed; use Antigravity /usage",
+      status: "error",
+      error: "Antigravity CLI /usage failed",
     });
-    expect(readCachedProvider("agy")).toBeDefined();
+    expect(JSON.stringify(result)).not.toContain("private-account");
   });
 
   it("sends the CLI 1.2.2 read-only request envelope without a token", async () => {
@@ -588,7 +636,7 @@ describe("Antigravity provider", () => {
     ).rejects.toThrow("Antigravity loopback response too large");
   });
 
-  it("does not launch agy or any provider process", async () => {
+  it("does not launch agy when loopback quota succeeds", async () => {
     const commands: Array<{ command: string; args: string[] }> = [];
     const runtime = runtimeWith({
       ps: "123 /Users/test/.local/bin/agy\n",
@@ -620,6 +668,9 @@ describe("Antigravity provider", () => {
 });
 
 function runtimeWith(options: {
+  agyPath?: string;
+  agyOutput?: string;
+  agyError?: Error;
   ps?: string;
   lsof?: string;
   psError?: Error;
@@ -627,12 +678,16 @@ function runtimeWith(options: {
   lsofByPid?: Record<number, string | Error>;
   requestJson?: AgyProbeRuntime["requestJson"];
   responses?: Record<string, unknown>;
-  onExec?: (command: string, args: string[]) => void;
+  onExec?: (command: string, args: string[], timeoutMs: number) => void;
   onRequest?: (endpoint: AgyConnectionEndpoint, path: string) => void;
 }): AgyProbeRuntime {
   return {
-    async execFileText(command, args) {
-      options.onExec?.(command, args);
+    async findCommandPath(command) {
+      if (command !== "agy") throw new Error(`unexpected command: ${command}`);
+      return options.agyPath;
+    },
+    async execFileText(command, args, timeoutMs) {
+      options.onExec?.(command, args, timeoutMs);
       if (command === "ps") {
         if (options.psError) throw options.psError;
         return options.ps ?? "";
@@ -643,6 +698,10 @@ function runtimeWith(options: {
         const output = options.lsofByPid?.[pid];
         if (output instanceof Error) throw output;
         return output ?? options.lsof ?? "";
+      }
+      if (command === options.agyPath) {
+        if (options.agyError) throw options.agyError;
+        return options.agyOutput ?? "";
       }
       throw new Error(`unexpected command: ${command}`);
     },

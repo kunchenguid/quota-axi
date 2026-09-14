@@ -37,7 +37,9 @@ const PROCESS_TIMEOUT_MS = 5_000;
 const PORT_TIMEOUT_MS = 2_000;
 const REQUEST_TIMEOUT_MS = 3_000;
 const PROBE_BUDGET_MS = 10_000;
+const PRINT_TIMEOUT_MS = 15_000;
 const MAX_RESPONSE_BYTES = 1024 * 1024;
+const AGY_PRINT_ARGS = ["--print", "/usage", "--output-format", "json"];
 
 type AgyProcessSource = "agy" | "app";
 
@@ -61,6 +63,7 @@ export type AgyConnectionEndpoint = {
 };
 
 export type AgyProbeRuntime = {
+  findCommandPath(command: string): Promise<string | undefined>;
   execFileText(
     command: string,
     args: string[],
@@ -113,6 +116,30 @@ export async function fetchQuotaWithRuntime(
       source: "loopback",
       status: error instanceof AgyUnavailableError ? "skipped" : "failed",
       error: finalError,
+      degraded: false,
+    };
+  }
+
+  attempts.push({ source: "agy-print", status: "failed", degraded: false });
+  try {
+    const quota = await fetchPrintQuota(runtime);
+    attempts[1] = { source: "agy-print", status: "success" };
+    return successProvider({
+      provider: "agy",
+      label: "Antigravity",
+      source: "cli",
+      windows: quota.windows,
+      refreshedAt: quota.refreshedAt,
+      sourcesTried: sourceNames(attempts),
+      attempts,
+    });
+  } catch (error) {
+    finalFailure = strongerFailure(finalFailure, error);
+    attempts[1] = {
+      source: "agy-print",
+      status: error instanceof AgyUnavailableError ? "skipped" : "failed",
+      error: errorMessage(error),
+      degraded: false,
     };
   }
 
@@ -195,6 +222,54 @@ export function normalizeAgyQuotaSummary(raw: unknown):
     .sort(compareAgyWindows);
   if (windows.length === 0) return undefined;
   return { windows, refreshedAt: nowIso() };
+}
+
+export function normalizeAgyPrintUsage(raw: unknown):
+  | {
+      windows: QuotaWindow[];
+      refreshedAt: string;
+    }
+  | undefined {
+  const root = objectValue(raw);
+  const command = objectValue(root?.command);
+  const name = stringValue(command?.name);
+  if (name !== "usage" && name !== "/usage") return undefined;
+  return normalizeAgyQuotaSummary(objectValue(command?.data));
+}
+
+async function fetchPrintQuota(runtime: AgyProbeRuntime): Promise<{
+  windows: QuotaWindow[];
+  refreshedAt: string;
+}> {
+  let commandPath: string | undefined;
+  try {
+    commandPath = await runtime.findCommandPath("agy");
+  } catch {
+    throw new AgyUnavailableError("Antigravity CLI discovery failed");
+  }
+  if (!commandPath)
+    throw new AgyUnavailableError("Antigravity CLI unavailable");
+
+  let output: string;
+  try {
+    output = await runtime.execFileText(
+      commandPath,
+      AGY_PRINT_ARGS,
+      PRINT_TIMEOUT_MS,
+    );
+  } catch (error) {
+    throw sanitizePrintError(error);
+  }
+
+  try {
+    const quota = normalizeAgyPrintUsage(JSON.parse(output) as unknown);
+    if (quota) return quota;
+  } catch {
+    // The CLI output is untrusted input; expose no part of it in diagnostics.
+  }
+  throw new AgyMalformedResponseError(
+    "Antigravity CLI /usage response malformed",
+  );
 }
 
 export function normalizeAgyUserStatus(raw: unknown):
@@ -516,7 +591,8 @@ async function readListeningPorts(
 function normalizeQuotaSummaryGroup(raw: unknown): QuotaWindow[] {
   const group = objectValue(raw);
   if (!group) return [];
-  const groupName = stringValue(group.displayName) ?? "Quota";
+  const groupName =
+    stringValue(group.displayName) ?? stringValue(group.name) ?? "Quota";
   return arrayValue(group.buckets)
     .map((bucket) => normalizeQuotaSummaryBucket(groupName, bucket))
     .filter((window): window is QuotaWindow => Boolean(window));
@@ -531,7 +607,9 @@ function normalizeQuotaSummaryBucket(
   const disabled = booleanValue(bucket.disabled) ?? false;
   if (disabled) return undefined;
   const bucketId =
-    stringValue(bucket.bucketId) ?? stringValue(bucket.bucket_id);
+    stringValue(bucket.bucketId) ??
+    stringValue(bucket.bucket_id) ??
+    stringValue(bucket.id);
   if (!bucketId) return undefined;
   const windowKind = agyWindowKind(bucket);
   const group = agyWindowGroup(groupName, bucketId);
@@ -635,6 +713,7 @@ function agyWindowKind(bucket: Record<string, unknown>): {
     stringValue(bucket.bucketId),
     stringValue(bucket.bucket_id),
     stringValue(bucket.displayName),
+    stringValue(bucket.name),
   ]
     .filter((value): value is string => Boolean(value))
     .join(" ")
@@ -962,6 +1041,20 @@ function sanitizeTransportError(error: Error): Error {
   return new AgyUnavailableError("Antigravity loopback unavailable");
 }
 
+function sanitizePrintError(error: unknown): Error {
+  const details = objectValue(error);
+  const code = stringValue(details?.code);
+  if (details?.killed === true || code === "ETIMEDOUT")
+    return new AgyUnavailableError("Antigravity CLI /usage timed out");
+  if (code === "ENOENT")
+    return new AgyUnavailableError("Antigravity CLI unavailable");
+  if (code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER")
+    return new AgyMalformedResponseError(
+      "Antigravity CLI /usage response too large",
+    );
+  return new Error("Antigravity CLI /usage failed");
+}
+
 function strongerFailure(current: unknown, candidate: unknown): unknown {
   if (current === undefined) return candidate;
   return failureRank(candidate) > failureRank(current) ? candidate : current;
@@ -969,7 +1062,7 @@ function strongerFailure(current: unknown, candidate: unknown): unknown {
 
 function failureRank(error: unknown): number {
   if (error instanceof AgyCsrfError) return 2;
-  const status = statusForError(errorMessage(error));
+  const status = statusForFailure(error);
   if (status === "auth_required") return 4;
   if (status === "rate_limited") return 3;
   if (status === "error") return 2;
@@ -1062,6 +1155,10 @@ function httpErrorMessage(status: number): string {
 }
 
 const defaultRuntime: AgyProbeRuntime = {
+  findCommandPath: async (command) => {
+    const { findCommandPath } = await import("../lib/process.js");
+    return findCommandPath(command);
+  },
   execFileText,
   requestJson: requestLoopbackJson,
 };
