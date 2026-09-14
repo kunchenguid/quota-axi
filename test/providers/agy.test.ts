@@ -129,6 +129,17 @@ describe("Antigravity quota parsing", () => {
     ]);
   });
 
+  it("normalizes the exact Antigravity CLI 1.2.2 print envelope", () => {
+    const result = normalizeAgyPrintUsage(fixture("usage-print-v1.2.2.json"));
+
+    expect(result?.windows).toMatchObject([
+      { id: "gemini_5h", kind: "session", percentRemaining: 88 },
+      { id: "gemini_weekly", kind: "weekly", percentRemaining: 76 },
+      { id: "claude_gpt_5h", kind: "session", percentRemaining: 64 },
+      { id: "claude_gpt_weekly", kind: "weekly", percentRemaining: 52 },
+    ]);
+  });
+
   it("normalizes oneof remaining values", () => {
     const result = normalizeAgyQuotaSummary({
       groups: [
@@ -600,6 +611,11 @@ describe("Antigravity provider", () => {
 
   it("does not serve stale quota when protected loopback and print usage fail", async () => {
     writeCachedProviders([cachedAgyQuota()]);
+    const commands: Array<{
+      command: string;
+      args: string[];
+      timeoutMs: number;
+    }> = [];
     const port = await startServer((response) => {
       response.writeHead(401, { "content-type": "application/json" });
       response.end(
@@ -614,7 +630,39 @@ describe("Antigravity provider", () => {
       runtimeWith({
         ps: "123 /Users/test/.local/bin/agy\n",
         lsof: lsofFor(123, port),
+        agyPath: "/Users/test/.local/bin/agy",
+        agyOutput: JSON.stringify(fixture("usage-print-v1.2.2.json")),
         requestJson: requestLoopbackJson,
+        onExec(command, args, timeoutMs) {
+          commands.push({ command, args, timeoutMs });
+        },
+      }),
+    );
+
+    expect(result.state.status).toBe("fresh");
+    expect(result.source).toBe("cli");
+    expect(result.account).toBeUndefined();
+    expect(result.windows.map((window) => window.id)).toEqual([
+      "gemini_5h",
+      "gemini_weekly",
+      "claude_gpt_5h",
+      "claude_gpt_weekly",
+    ]);
+    expect(commands.at(-1)).toEqual({
+      command: "/Users/test/.local/bin/agy",
+      args: ["--print", "/usage", "--output-format", "json"],
+      timeoutMs: 15_000,
+    });
+  });
+
+  it("sanitizes failures from structured print usage", async () => {
+    const result = await fetchQuotaWithRuntime(
+      runtimeWith({
+        ps: "",
+        agyPath: "/Users/test/.local/bin/agy",
+        agyError: Object.assign(new Error("private-account@example.test"), {
+          code: "EFAIL",
+        }),
       }),
     );
 
