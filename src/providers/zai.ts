@@ -11,6 +11,7 @@ import {
 } from "../cache.js";
 import { readJsonFileResult, type JsonFileReadResult } from "../lib/fs.js";
 import { resolvePiAuthFilePath } from "../lib/pi-agent-dir.js";
+import { classifyPiAuthEntry } from "../lib/pi-auth-store.js";
 import { usableLiteralSecret } from "../lib/secret.js";
 import type {
   AuthProviderReport,
@@ -110,13 +111,6 @@ export function opencodeAuthFilePath(): string {
   return join(homedir(), ".local", "share", "opencode", "auth.json");
 }
 
-export function piAuthFilePath(
-  environment: NodeJS.ProcessEnv = process.env,
-  homeDirectory: () => string = homedir,
-): string {
-  return resolvePiAuthFilePath(environment, homeDirectory);
-}
-
 export function extractZaiCredential(
   value: unknown,
   path: string,
@@ -133,20 +127,42 @@ export function extractZaiCredential(
   return { status: "missing", path };
 }
 
+function extractPiZaiCredential(
+  value: unknown,
+  path: string,
+): ZaiCredentialResolution {
+  for (const providerId of [...ZAI_PROVIDER_IDS, ...ZHIPU_PROVIDER_IDS]) {
+    const classified = classifyPiAuthEntry(value, providerId);
+    if (classified.status === "missing") continue;
+    if (classified.status === "invalid")
+      return { status: "invalid", path, error: "invalid_credential" };
+    const host = ZAI_PROVIDER_IDS.includes(providerId) ? ZAI_HOST : ZHIPU_HOST;
+    const key =
+      classified.entry.type === "api_key"
+        ? usableLiteralSecret(classified.entry.key)
+        : undefined;
+    return key
+      ? { status: "available", apiKey: key, host, path }
+      : { status: "invalid", path, error: "invalid_credential" };
+  }
+  return { status: "missing", path };
+}
+
 export function createOpencodeAuthCredentialSource(
   filePath: () => string = opencodeAuthFilePath,
 ): ZaiCredentialSource {
-  return createJsonAuthCredentialSource(filePath);
+  return createJsonAuthCredentialSource(filePath, extractZaiCredential);
 }
 
 export function createPiAuthCredentialSource(
-  filePath: () => string = piAuthFilePath,
+  filePath: () => string = resolvePiAuthFilePath,
 ): ZaiCredentialSource {
-  return createJsonAuthCredentialSource(filePath);
+  return createJsonAuthCredentialSource(filePath, extractPiZaiCredential);
 }
 
 function createJsonAuthCredentialSource(
   filePath: () => string,
+  extract: (value: unknown, path: string) => ZaiCredentialResolution,
 ): ZaiCredentialSource {
   function resolve(): ZaiCredentialResolution {
     const path = filePath();
@@ -156,7 +172,7 @@ function createJsonAuthCredentialSource(
       return result.error === "file_read_error"
         ? { status: "error", path, error: result.error }
         : { status: "invalid", path, error: result.error };
-    return extractZaiCredential(result.value, path);
+    return extract(result.value, path);
   }
   return {
     resolve,
@@ -179,33 +195,17 @@ export function defaultZaiCredentialSources(): NamedZaiCredentialSource[] {
   ];
 }
 
-export type ZaiAdapterOverrides = Partial<
-  Omit<ZaiDependencies, "credentialSources">
-> & {
-  credentialSources?: NamedZaiCredentialSource[];
-  /**
-   * Test/single-source override. When set, it is the only source tried and is
-   * reported as `opencode:auth.json` for backward-compatible fixtures.
-   */
-  credentialSource?: ZaiCredentialSource;
-};
-
 export function createZaiAdapter(
-  overrides: ZaiAdapterOverrides = {},
+  overrides: Partial<ZaiDependencies> = {},
 ): ProviderAdapter {
-  const { credentialSource, credentialSources, ...rest } = overrides;
   const dependencies: ZaiDependencies = {
-    credentialSources:
-      credentialSources ??
-      (credentialSource
-        ? [{ name: OPENCODE_AUTH_SOURCE, source: credentialSource }]
-        : defaultZaiCredentialSources()),
+    credentialSources: defaultZaiCredentialSources(),
     fetch: globalThis.fetch,
     readCachedProvider: readCachedProviderFromDisk,
     deleteCachedProvider: deleteCachedProviderFromDisk,
     now: Date.now,
     deadlineMs: OPERATION_DEADLINE_MS,
-    ...rest,
+    ...overrides,
   };
   let inFlight: Promise<ProviderQuota> | undefined;
 
@@ -378,10 +378,9 @@ function preferCredentialFailure(
   current: ZaiFailure | undefined,
   next: ZaiFailure,
 ): ZaiFailure {
-  if (!current) return next;
-  if (!current.definitiveAuth && next.definitiveAuth) return current;
+  if (!current || current.code === "zai_credential_unavailable") return next;
   if (current.definitiveAuth && !next.definitiveAuth) return next;
-  return next;
+  return current;
 }
 
 function failureReport(
