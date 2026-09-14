@@ -138,6 +138,40 @@ describe("Claude macOS Keychain discovery", () => {
     expect((await fetchQuota(options)).state.status).toBe("fresh");
   });
 
+  it("reads the default profile's own suffixed item", async () => {
+    const defaultService = profileService(join(home, ".claude"));
+    mockItems(item(defaultService), defaultService);
+    const { fetchQuota } = await import("../../src/providers/claude.js");
+    const report = await fetchQuota(options);
+
+    expect(report.state.status).toBe("fresh");
+    expect(valueReadArgs()).toContain(defaultService);
+    expect(
+      execFileText.mock.calls.filter(([, args]) => args.includes("-w")),
+    ).toHaveLength(1);
+  });
+
+  it("reads the unsuffixed item for an explicit default config directory", async () => {
+    vi.stubEnv("CLAUDE_CONFIG_DIR", join(home, ".claude"));
+    mockItems(item(service), service);
+    const { fetchQuota } = await import("../../src/providers/claude.js");
+    const report = await fetchQuota(options);
+
+    expect(report.state.status).toBe("fresh");
+    expect(valueReadArgs()).toContain(service);
+  });
+
+  it("prefers the exact selector over the equivalent spelling", async () => {
+    const defaultService = profileService(join(home, ".claude"));
+    mockItems(item(defaultService) + item(service), service);
+    const { fetchQuota } = await import("../../src/providers/claude.js");
+    const report = await fetchQuota(options);
+
+    expect(report.state.status).toBe("fresh");
+    expect(valueReadArgs()).toContain(service);
+    expect(valueReadArgs()).not.toContain(defaultService);
+  });
+
   it("reads the suffix selected by Claude secure storage", async () => {
     const configDir = "/fixture/secure-profile";
     const selectedService = profileService(configDir);
