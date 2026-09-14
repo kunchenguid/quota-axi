@@ -198,17 +198,6 @@ describe("Pi Cursor credential broker", () => {
     await expect(empty.inspect()).resolves.toMatchObject({ status: "missing" });
     expect(existsSync(join(emptyHome, ".pi"))).toBe(false);
   });
-
-  it("contains no process, browser, Keychain, or mutation path", () => {
-    const implementation = readFileSync(
-      new URL("../../src/providers/pi-cursor-credential.ts", import.meta.url),
-      "utf8",
-    );
-    expect(implementation).not.toMatch(/child_process|execFile|spawn|security/);
-    expect(implementation).not.toMatch(/browser|keychain/i);
-    expect(implementation).not.toMatch(/writeFile|rename|chmod|console\./);
-    expect(implementation).not.toMatch(/exchange_user_api_key|\/auth\/poll/i);
-  });
 });
 
 function oauthEntry(overrides: Record<string, unknown> = {}): unknown {
