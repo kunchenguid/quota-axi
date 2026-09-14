@@ -21,13 +21,15 @@ import type { ProviderQuota, SourceAttempt } from "../src/types.js";
  */
 
 type PiProviderCase = {
-  provider: "codex" | "kimi" | "grok";
+  provider: "codex" | "kimi" | "grok" | "meta";
   /** Property name Pi stores this provider's credential under. */
   piKey: string;
   /** Attempt source name the adapter reports for its Pi store. */
   piSource: string;
   /** A structurally complete, unexpired entry for this provider. */
   liveEntry: Record<string, unknown>;
+  /** Pi field whose bearer this provider empirically tests. */
+  probeField: "access" | "refresh";
 };
 
 const CASES: PiProviderCase[] = [
@@ -42,6 +44,7 @@ const CASES: PiProviderCase[] = [
       expires: Date.now() + 3_600_000,
       accountId: "acct-contract-fixture",
     },
+    probeField: "access",
   },
   {
     provider: "kimi",
@@ -53,6 +56,7 @@ const CASES: PiProviderCase[] = [
       refresh: "must-not-be-read",
       expires: Date.now() + 3_600_000,
     },
+    probeField: "access",
   },
   {
     provider: "grok",
@@ -64,6 +68,19 @@ const CASES: PiProviderCase[] = [
       refresh: "must-not-be-read",
       expires: Date.now() + 3_600_000,
     },
+    probeField: "access",
+  },
+  {
+    provider: "meta",
+    piKey: "meta",
+    piSource: "pi:meta",
+    liveEntry: {
+      type: "oauth",
+      access: "minted-model-key-must-not-be-used",
+      refresh: "pi-meta-identity-probe-token",
+      expires: Date.now() + 3_600_000,
+    },
+    probeField: "refresh",
   },
 ];
 
@@ -208,7 +225,7 @@ describe("credential source contract", { timeout: 30_000 }, () => {
 
       await readQuota(testCase.provider);
 
-      const token = testCase.liveEntry.access as string;
+      const token = testCase.liveEntry[testCase.probeField] as string;
       expect(api.bearers).toContain(`Bearer ${token}`);
     });
   });

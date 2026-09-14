@@ -71,6 +71,7 @@ const ACCENTS: Record<ProviderId, StyleSpec> = {
   copilot: { rgb: [116, 199, 236], ansi16: "94", bold: true },
   grok: { rgb: [180, 190, 254], ansi16: "95", bold: true },
   kimi: { rgb: [245, 194, 231], ansi16: "95", bold: true },
+  meta: { rgb: [8, 102, 255], ansi16: "94", bold: true },
   zai: { rgb: [129, 216, 209], ansi16: "96", bold: true },
   agy: { rgb: [232, 184, 109], ansi16: "93", bold: true },
   alibaba: { rgb: [255, 155, 120], ansi16: "91", bold: true },

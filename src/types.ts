@@ -5,6 +5,7 @@ export type ProviderId =
   | "copilot"
   | "grok"
   | "kimi"
+  | "meta"
   | "zai"
   | "agy"
   | "alibaba"
@@ -18,6 +19,7 @@ export const PROVIDER_IDS = [
   "copilot",
   "grok",
   "kimi",
+  "meta",
   "zai",
   "agy",
   "alibaba",
@@ -29,6 +31,7 @@ export type ProviderSource =
   | "oauth"
   | "pi:openai-codex"
   | `pi:openai-codex-${string}`
+  | "pi:meta"
   | "cli-rpc"
   | "cli"
   | "api"
