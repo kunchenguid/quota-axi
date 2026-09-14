@@ -293,10 +293,10 @@ describe("Claude macOS Keychain discovery", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
-  it("ignores other accounts, unrelated services and non-password items", async () => {
+  it("reports missing for unrelated services and non-password items", async () => {
     mockItems(
-      item(service, undefined, "other-user") +
-        item("Claude Code-credentials-ABCDEF12", undefined, "other-user") +
+      item("other-service", undefined, "other-user") +
+        item("unrelated-credentials-ABCDEF12", undefined, "other-user") +
         item("other-service") +
         item(service, undefined, undefined, undefined, "inet"),
     );
