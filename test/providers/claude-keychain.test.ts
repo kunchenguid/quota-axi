@@ -151,14 +151,18 @@ describe("Claude macOS Keychain discovery", () => {
     ).toHaveLength(1);
   });
 
-  it("reads the unsuffixed item for an explicit default config directory", async () => {
-    vi.stubEnv("CLAUDE_CONFIG_DIR", join(home, ".claude"));
-    mockItems(item(service), service);
+  it("never opens the default directory's suffixed item for an explicit profile", async () => {
+    const explicitDir = join(home, "explicit-profile");
+    vi.stubEnv("CLAUDE_CONFIG_DIR", explicitDir);
+    const defaultService = profileService(join(home, ".claude"));
+    mockItems(item(defaultService) + item(service), "unavailable-service");
     const { fetchQuota } = await import("../../src/providers/claude.js");
     const report = await fetchQuota(options);
 
-    expect(report.state.status).toBe("fresh");
-    expect(valueReadArgs()).toContain(service);
+    expect(report.state.status).not.toBe("auth_required");
+    expect(valueReadArgs()).toContain(profileService(explicitDir));
+    expect(valueReadArgs()).not.toContain(defaultService);
+    expect(valueReadArgs()).not.toContain(service);
   });
 
   it("prefers the exact selector over the equivalent spelling", async () => {

@@ -54,17 +54,15 @@ export function cacheFilePath(): string {
  * selected by the current process. The selected path never leaves this helper.
  */
 export function claudeCredentialContextId(): string {
-  const { configDir, credentialDir, keychainService } =
-    claudeProfileLocations();
-  // Include the secure-storage selector and exact service: a default config
-  // can use a separate credential store, including a relative raw path hash.
+  const { configDir, keychainService } = claudeProfileLocations();
+  // Include the exact service: it already encodes the secure-storage selector,
+  // including a relative raw path hash.
   // Version the identity to withhold snapshots from earlier opaque discovery.
   return createHash("sha256")
     .update(
       JSON.stringify([
         "claude-profile-v2",
         resolve(configDir),
-        resolve(credentialDir),
         keychainService,
       ]),
     )

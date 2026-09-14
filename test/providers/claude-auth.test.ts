@@ -215,23 +215,23 @@ describe("Claude credential-state reporting", () => {
   });
 
   it.each(["configured", "default", "empty override"])(
-    "uses the secure-storage credential file for a %s config selection",
+    "keeps the credential file under the config directory for a %s selection",
     async (selection) => {
       const home = useTempHome();
-      const configDir = join(home, "configured-profile");
-      if (selection !== "default") process.env.CLAUDE_CONFIG_DIR = configDir;
-      const storageDir =
-        selection === "empty override"
+      const configDir =
+        selection === "default"
           ? join(home, ".claude")
-          : join(home, "separate-storage");
+          : join(home, "configured-profile");
+      if (selection !== "default") process.env.CLAUDE_CONFIG_DIR = configDir;
+      const storageDir = join(home, "separate-storage");
       process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR =
         selection === "empty override" ? "" : storageDir;
       writeClaudeConfigCredential(configDir, {
-        accessToken: "unselected-file-token",
+        accessToken: "selected-config-token",
         expiresAt: "2035-01-01T00:00:00.000Z",
       });
       writeClaudeConfigCredential(storageDir, {
-        accessToken: "selected-storage-token",
+        accessToken: "unselected-storage-token",
         expiresAt: "2035-01-01T00:00:00.000Z",
       });
       const fetchMock = vi.fn(
@@ -252,18 +252,16 @@ describe("Claude credential-state reporting", () => {
         refreshCredentials: false,
       });
 
-      expect(claudeCredentialFile()).toBe(
-        join(storageDir, ".credentials.json"),
-      );
+      expect(claudeCredentialFile()).toBe(join(configDir, ".credentials.json"));
       expect(auth.sources[0]).toMatchObject({
-        path: join(storageDir, ".credentials.json"),
+        path: join(configDir, ".credentials.json"),
         status: "available",
       });
       expect(result.state.status).toBe("fresh");
       expect(fetchMock.mock.calls.length).toBeGreaterThan(0);
       for (const call of vi.mocked(fetch).mock.calls) {
         expect(call[1]?.headers).toMatchObject({
-          authorization: "Bearer selected-storage-token",
+          authorization: "Bearer selected-config-token",
         });
       }
     },
@@ -309,18 +307,19 @@ describe("Claude credential-state reporting", () => {
   });
 
   it.each([false, true])(
-    "uses the secure-storage service with an empty override of %s",
+    "falls back to the config directory's service with an empty override of %s",
     async (empty) => {
       usePlatform("darwin");
       const home = useTempHome();
-      process.env.CLAUDE_CONFIG_DIR = join(home, "configured-profile");
+      const configDir = join(home, "configured-profile");
+      process.env.CLAUDE_CONFIG_DIR = configDir;
       const storage = empty ? "" : join(home, "selected-storage");
       process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR = storage;
-      const service =
-        "Claude Code-credentials" +
-        (empty
-          ? ""
-          : `-${createHash("sha256").update(storage).digest("hex").slice(0, 8)}`);
+      const selector = empty ? configDir : storage;
+      const service = `Claude Code-credentials-${createHash("sha256")
+        .update(selector)
+        .digest("hex")
+        .slice(0, 8)}`;
       const execFileText = mockKeychainRead(
         async () =>
           JSON.stringify({
@@ -1026,7 +1025,7 @@ describe("Claude credential-state reporting", () => {
       await import("../../src/cache.js");
     writeCachedProviders([cachedClaudeQuota(42)]);
     process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR = storageB;
-    writeClaudeConfigCredential(storageB, {
+    writeClaudeConfigCredential(join(home, ".claude"), {
       accessToken: "synthetic-storage-b-token",
       expiresAt: "2035-01-01T00:00:00.000Z",
     });

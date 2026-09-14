@@ -114,7 +114,7 @@ type ClaudeProfileLocations = {
   credentialFile: string;
   keychainAccount: string;
   keychainService: string;
-  keychainServiceAliases: string[];
+  keychainServiceAlias?: string;
   keychainPath?: string;
   keychainAccessMarker: string;
 };
@@ -873,7 +873,7 @@ function selectKeychainItem(
   locations: ClaudeProfileLocations,
   paths: string[],
 ): KeychainSelection {
-  let selected: (KeychainCandidate & { rank: number }) | undefined;
+  let selected: (KeychainCandidate & { exact: boolean }) | undefined;
   const seenKeychains = new Set<string>();
   let inconclusive = false;
   for (const record of metadata.split(/(?=^keychain: )/m)) {
@@ -899,24 +899,23 @@ function selectKeychainItem(
       continue;
     }
     if (itemAccount !== locations.keychainAccount) continue;
-    const rank = keychainServiceRank(service, locations);
-    if (rank === undefined) {
+    const exact = service === locations.keychainService;
+    if (!exact && service !== locations.keychainServiceAlias) {
       // Other eight-hex suffixes can belong to explicit profiles or MCP OAuth.
       // Their timestamps say nothing about ownership. Never open them or use
       // them to assert that the selected profile has signed out.
       if (service.startsWith(CLAUDE_KEYCHAIN_SERVICE)) inconclusive = true;
       continue;
     }
-    // Prefer the exact selector over another spelling of the same credential
-    // directory, then match the vendor's lookup ordering, independent of dump
-    // order.
+    // Prefer the exact selector over the default directory's other spelling,
+    // then match the vendor's lookup ordering, independent of dump order.
     if (
       !selected ||
-      rank < selected.rank ||
-      (rank === selected.rank &&
+      (exact && !selected.exact) ||
+      (exact === selected.exact &&
         paths.indexOf(keychain) < paths.indexOf(selected.keychain))
     )
-      selected = { service, keychain, rank };
+      selected = { service, keychain, exact };
   }
   if (selected)
     return {
@@ -927,18 +926,6 @@ function selectKeychainItem(
   if (inconclusive || paths.some((path) => !seenKeychains.has(path)))
     return { status: "unknown" };
   return { status: "missing" };
-}
-
-// Ownership rank of a Claude item's service name: 0 is the service this
-// process's selectors compute, higher ranks are other spellings that name the
-// same credential directory. Anything else belongs to another profile.
-function keychainServiceRank(
-  service: string,
-  locations: ClaudeProfileLocations,
-): number | undefined {
-  if (service === locations.keychainService) return 0;
-  const alias = locations.keychainServiceAliases.indexOf(service);
-  return alias === -1 ? undefined : alias + 1;
 }
 
 // security's print_buffer emits printable bytes in quotes, or hex followed by
@@ -1048,14 +1035,14 @@ export function claudeKeychainAccount(): string {
 }
 
 function resolveClaudeProfileLocations(): ClaudeProfileLocations {
-  const { credentialDir, keychainService, keychainServiceAliases } =
+  const { configDir, keychainService, keychainServiceAlias } =
     claudeProfileLocations();
   const keychainAccount = claudeKeychainAccount();
   return {
-    credentialFile: join(credentialDir, ".credentials.json"),
+    credentialFile: join(configDir, ".credentials.json"),
     keychainAccount,
     keychainService,
-    keychainServiceAliases,
+    keychainServiceAlias,
     keychainAccessMarker: claudeKeychainAccessMarkerPath(
       keychainAccount,
       keychainService,

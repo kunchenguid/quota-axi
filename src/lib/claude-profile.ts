@@ -5,56 +5,38 @@ import { join } from "node:path";
 export const CLAUDE_KEYCHAIN_SERVICE = "Claude Code-credentials";
 
 /**
- * Mirrors Claude Code's configuration and secure-storage selectors. The vendor
- * derives one storage directory from `CLAUDE_SECURESTORAGE_CONFIG_DIR`, falling
- * back to `CLAUDE_CONFIG_DIR` and then `~/.claude`, and builds both its
- * plaintext `.credentials.json` path and its Keychain service name from it, so
- * the storage override moves the file as well as the service.
+ * Mirrors Claude Code's configuration and secure-storage selectors. The
+ * plaintext credential file stays under `CLAUDE_CONFIG_DIR` or `~/.claude`; the
+ * secure-storage selector only names the Keychain service, and an empty one
+ * falls through to `CLAUDE_CONFIG_DIR`.
  */
 export function claudeProfileLocations(): {
   configDir: string;
-  credentialDir: string;
   keychainService: string;
-  keychainServiceAliases: string[];
+  keychainServiceAlias?: string;
 } {
   const configured = process.env.CLAUDE_CONFIG_DIR;
   const storage = process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR;
   const defaultDir = join(homedir(), ".claude").normalize("NFC");
   const configDir = (configured ?? defaultDir).normalize("NFC");
-  const credentialDir =
-    storage === undefined
-      ? configDir
-      : (storage || defaultDir).normalize("NFC");
-  // An explicitly empty storage override selects the unsuffixed service even
-  // when CLAUDE_CONFIG_DIR is set. Hash the raw NFC path, just as the vendor
-  // does: resolving a relative path or expanding ~ would select another item.
-  const suffixed =
-    storage === undefined ? Boolean(configured) : Boolean(storage);
-  const keychainService = suffixed
-    ? suffixedKeychainService(credentialDir)
-    : CLAUDE_KEYCHAIN_SERVICE;
-  // The unsuffixed service is exactly what the vendor writes for `~/.claude`,
-  // so when that is the selected credential directory both spellings name this
-  // same profile: a session that set CLAUDE_CONFIG_DIR to the default path
-  // stores the suffixed item for it. Any other suffix names a directory this
-  // process did not select and stays another profile's item.
-  const alias =
-    credentialDir !== defaultDir
-      ? undefined
-      : suffixed
-        ? CLAUDE_KEYCHAIN_SERVICE
-        : suffixedKeychainService(credentialDir);
+  // Hash the raw NFC path, just as the vendor does: resolving a relative path
+  // or expanding ~ would select another item.
+  const selector = (storage || configured)?.normalize("NFC");
+  if (selector)
+    return { configDir, keychainService: suffixedKeychainService(selector) };
+  // A default selection names `~/.claude`, and so does the suffixed spelling of
+  // that same directory, so that one item is this profile's too. Any other
+  // suffix names a directory this process did not select.
   return {
     configDir,
-    credentialDir,
-    keychainService,
-    keychainServiceAliases: alias ? [alias] : [],
+    keychainService: CLAUDE_KEYCHAIN_SERVICE,
+    keychainServiceAlias: suffixedKeychainService(defaultDir),
   };
 }
 
-function suffixedKeychainService(credentialDir: string): string {
+function suffixedKeychainService(selector: string): string {
   const suffix = createHash("sha256")
-    .update(credentialDir)
+    .update(selector)
     .digest("hex")
     .slice(0, 8);
   return `${CLAUDE_KEYCHAIN_SERVICE}-${suffix}`;

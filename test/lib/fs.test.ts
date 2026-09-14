@@ -114,17 +114,17 @@ describe("claudeCredentialContextId", () => {
     process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR = "/fixture/storage-b";
     const secondStorageId = claudeCredentialContextId();
     process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR = "";
-    const defaultStorageId = claudeCredentialContextId();
+    const emptyStorageId = claudeCredentialContextId();
 
-    expect(
-      new Set([configuredId, firstStorageId, secondStorageId, defaultStorageId])
-        .size,
-    ).toBe(4);
+    expect(new Set([configuredId, firstStorageId, secondStorageId]).size).toBe(
+      3,
+    );
+    expect(emptyStorageId).toBe(configuredId);
     for (const context of [
       configuredId,
       firstStorageId,
       secondStorageId,
-      defaultStorageId,
+      emptyStorageId,
     ]) {
       expect(context).toMatch(/^[a-f0-9]{64}$/);
       expect(context).not.toContain("fixture");
