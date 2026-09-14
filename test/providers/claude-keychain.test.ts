@@ -185,15 +185,7 @@ describe("Claude macOS Keychain discovery", () => {
       ),
     ).join("");
     mockItems(
-      old +
-        item("Claude Code-credentials", "20260102010000Z") +
-        item() +
-        item(
-          service,
-          "20260101010000Z",
-          "fixture-user",
-          "/fixture/old.keychain-db",
-        ),
+      old + item("Claude Code-credentials", "20260102010000Z") + item(),
     );
     const { fetchQuota } = await import("../../src/providers/claude.js");
     expect((await fetchQuota(options)).state.status).toBe("fresh");

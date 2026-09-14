@@ -930,14 +930,12 @@ function selectKeychainItem(
       keychain,
       modified: modified && /^\d{14}Z$/.test(modified) ? modified : "",
     };
-    // Stable service/path ordering breaks ties independently of dump order.
+    // Stable service ordering breaks ties independently of dump order.
     if (
       !newest ||
       candidate.modified > newest.modified ||
       (candidate.modified === newest.modified &&
-        (candidate.service < newest.service ||
-          (candidate.service === newest.service &&
-            candidate.keychain < newest.keychain)))
+        candidate.service < newest.service)
     ) {
       newest = candidate;
     }
