@@ -8,6 +8,7 @@ const originalCursorCliConfig = process.env.CURSOR_CLI_CONFIG;
 const originalXdgCacheHome = process.env.XDG_CACHE_HOME;
 const originalXdgConfigHome = process.env.XDG_CONFIG_HOME;
 const originalHome = process.env.HOME;
+const originalPiAgentDir = process.env.PI_CODING_AGENT_DIR;
 let tempDir: string | undefined;
 
 beforeEach(() => {
@@ -17,6 +18,8 @@ beforeEach(() => {
   // Keeps these editor-source cases independent of any local Cursor CLI sign-in.
   process.env.CURSOR_CLI_CONFIG = join(tempDir, "cli-config.json");
   process.env.XDG_CACHE_HOME = join(tempDir, "cache");
+  // Never let the machine's real Pi cursor credential decide these cases.
+  process.env.PI_CODING_AGENT_DIR = join(tempDir, "pi-agent");
 });
 
 afterEach(() => {
@@ -34,6 +37,8 @@ afterEach(() => {
   else process.env.XDG_CONFIG_HOME = originalXdgConfigHome;
   if (originalHome === undefined) delete process.env.HOME;
   else process.env.HOME = originalHome;
+  if (originalPiAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+  else process.env.PI_CODING_AGENT_DIR = originalPiAgentDir;
   if (tempDir) rmSync(tempDir, { recursive: true, force: true });
   tempDir = undefined;
 });
@@ -237,6 +242,7 @@ describe("Cursor credential-state reporting", () => {
       "GetCurrentPeriodUsage",
       "GetPlanInfo",
       "GetSandUsageStatus",
+      "full_stripe_profile",
     ]);
     expect(result.state.status).toBe("fresh");
     expect(result.windows.map((window) => window.id)).toEqual([

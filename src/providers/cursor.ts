@@ -1,6 +1,6 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { readCachedProvider } from "../cache.js";
+import { readCachedCursorProvider } from "../cache.js";
 import { providerFetch } from "../lib/http.js";
 import { execFileText, commandExists } from "../lib/process.js";
 import { clampPercent, nowIso, retryAfterToIso } from "../lib/time.js";
@@ -8,6 +8,7 @@ import type {
   AuthProviderReport,
   AuthSourceReport,
   ProviderAdapter,
+  ProviderAuthStatus,
   ProviderOptions,
   ProviderQuota,
   QuotaWindow,
@@ -22,11 +23,20 @@ import {
   withRemaining,
 } from "./common.js";
 import {
-  CURSOR_CLI_AUTHFILE_SOURCE,
-  CURSOR_CLI_SOURCE,
+  cursorAccountContextId,
+  withCursorCacheContext,
+} from "./cursor-cache-context.js";
+import {
   isCursorCliSourceSupported,
   readCursorCliCredentialState,
 } from "./cursor-cli-credential.js";
+import { selectCredential } from "./credential-selection.js";
+import {
+  createPiCursorCredentialBroker,
+  type PiCursorCredentialBroker,
+  type PiCursorCredentialInspection,
+  type PiCursorCredentialResolution,
+} from "./pi-cursor-credential.js";
 
 const API_URL = "https://api2.cursor.sh";
 const API_TIMEOUT_MS = 15_000;
@@ -39,137 +49,196 @@ type CursorCredentials = {
   membershipType?: string;
 };
 
-type UnavailableCredentialState = {
-  status: "missing" | "invalid" | "skipped";
-  source: AuthSourceReport;
-};
-
-type CredentialState =
+type AvailableCredentialState =
   | {
       status: "available";
+      localState: "valid";
       credentials: CursorCredentials;
       source: AuthSourceReport;
     }
-  | UnavailableCredentialState;
+  | {
+      status: "expired";
+      localState: "expired";
+      credentials: CursorCredentials;
+      source: AuthSourceReport;
+      refreshable: boolean;
+    };
 
-export const cursorAdapter: ProviderAdapter = {
-  id: "cursor",
-  label: "Cursor",
-  fetchQuota,
-  inspectAuth,
+type UnavailableCredentialState = {
+  status: "missing" | "invalid" | "skipped" | "error";
+  source: AuthSourceReport;
 };
+
+type CredentialState = AvailableCredentialState | UnavailableCredentialState;
+
+type CursorDependencies = {
+  piCursorBroker: PiCursorCredentialBroker;
+};
+
+const PI_CURSOR_CREDENTIAL_SOURCE = "pi:cursor";
+/** Existing non-prompting/editor and CLI precedence remains authoritative. */
+export const CURSOR_CREDENTIAL_SOURCE_ORDER = [
+  "state-vscdb",
+  "cursor-cli",
+  PI_CURSOR_CREDENTIAL_SOURCE,
+] as const;
+
+const defaultCursorDependencies: CursorDependencies = {
+  piCursorBroker: createPiCursorCredentialBroker(),
+};
+
+export function createCursorAdapter(
+  overrides: Partial<CursorDependencies> = {},
+): ProviderAdapter {
+  const dependencies = { ...defaultCursorDependencies, ...overrides };
+  return {
+    id: "cursor",
+    label: "Cursor",
+    fetchQuota: (options) => fetchQuotaWithDependencies(dependencies, options),
+    inspectAuth: (options) =>
+      inspectAuthWithDependencies(dependencies, options),
+  };
+}
+
+export const cursorAdapter = createCursorAdapter();
 
 export async function fetchQuota(
   options: ProviderOptions,
 ): Promise<ProviderQuota> {
+  return fetchQuotaWithDependencies(defaultCursorDependencies, options);
+}
+
+/**
+ * Cursor's editor, platform CLI, and Pi stores are independent. They stay in a
+ * fixed ownership/stability order; stored expiry only describes one source and
+ * never moves Pi ahead of an existing source. A 401/403 hands over, while a
+ * transport, policy, decoding, rate-limit, or server failure stops the run so
+ * it cannot turn into a false sign-out against a sibling credential.
+ */
+async function fetchQuotaWithDependencies(
+  dependencies: CursorDependencies,
+  options: ProviderOptions,
+): Promise<ProviderQuota> {
   const attempts: SourceAttempt[] = [];
-  let finalError: string;
+  const unavailable: UnavailableCredentialState[] = [];
+  let finalError = "Cursor quota unavailable";
   let retryAfter: string | undefined;
+  let remoteAccountId: string | undefined;
+  let rejected = false;
+  let rejectedExpiredRefreshable = false;
 
-  const resolution = await resolveCredentials(options);
-  for (const state of resolution.unavailable) {
-    attempts.push({
-      source: state.source.source,
-      status: "skipped",
-      error: cursorCredentialError(state),
-      ...(state.source.credentialPresent === undefined
-        ? {}
-        : { credentialPresent: state.source.credentialPresent }),
-    });
-  }
-
-  if (resolution.credentials) {
-    // The editor-credential fetch keeps its established `api` attempt name; a
-    // CLI-resolved fetch is named for its credential store so `sourcesTried`
-    // shows which CLI store, not the absent editor store, answered.
-    const quotaSource =
-      resolution.source === undefined || resolution.source === "state-vscdb"
-        ? "api"
-        : resolution.source;
-    attempts.push({ source: quotaSource, status: "failed" });
-    try {
-      const quota = await fetchCursorUsage(resolution.credentials);
-      attempts[attempts.length - 1] = {
-        source: quotaSource,
-        status: "success",
-      };
-      return cursorSuccess(quota, attempts);
-    } catch (error) {
-      finalError = errorMessage(error);
-      attempts[attempts.length - 1] = {
-        source: quotaSource,
-        status: "failed",
-        error: finalError,
-      };
-      if (
-        error instanceof CursorAuthError &&
-        resolution.source === "state-vscdb" &&
-        isCursorCliSourceSupported()
-      ) {
-        attempts[attempts.length - 1] = {
-          source: "state-vscdb",
-          status: "failed",
-          error: finalError,
-        };
-        const cliState = await readCliCredentialState(options);
-        if (cliState.status === "available") {
-          attempts.push({
-            source: cliState.source.source,
-            status: "failed",
-          });
-          try {
-            const quota = await fetchCursorUsage(cliState.credentials);
-            attempts[attempts.length - 1] = {
-              source: cliState.source.source,
-              status: "success",
-            };
-            return cursorSuccess(quota, attempts);
-          } catch (cliError) {
-            finalError = errorMessage(cliError);
-            attempts[attempts.length - 1] = {
-              source: cliState.source.source,
-              status: "failed",
-              error: finalError,
-            };
-            if (cliError instanceof RateLimitError)
-              retryAfter = cliError.retryAfter;
-          }
-        } else {
-          attempts.push({
-            source: cliState.source.source,
-            status: "skipped",
-            error: cursorCredentialError(cliState),
-            ...(cliState.source.credentialPresent === undefined
-              ? {}
-              : { credentialPresent: cliState.source.credentialPresent }),
-          });
-        }
-      } else if (error instanceof RateLimitError) {
-        retryAfter = error.retryAfter;
-      }
+  for (const source of CURSOR_CREDENTIAL_SOURCE_ORDER) {
+    if (source === "cursor-cli" && !isCursorCliSourceSupported()) continue;
+    const state = await resolveCredentialSource(source, dependencies, options);
+    if (state.status !== "available" && state.status !== "expired") {
+      unavailable.push(state);
+      attempts.push(unavailableAttempt(state));
+      continue;
     }
+
+    // One candidate per shared-selection call preserves source order even for
+    // a stored-expired Pi OAuth token; the endpoint remains the verdict.
+    const selection = await selectCredential(
+      [
+        {
+          source: state.source.source,
+          localState: state.localState,
+          credential: state.credentials,
+          ...(state.status === "expired" && state.refreshable
+            ? { refreshable: true }
+            : {}),
+        },
+      ],
+      async (candidate) => {
+        attempts.push({ source: state.source.source, status: "failed" });
+        try {
+          const quota = await fetchCursorUsage(candidate.credential);
+          attempts[attempts.length - 1] = {
+            source: source === "state-vscdb" ? "api" : state.source.source,
+            status: "success",
+          };
+          return { kind: "quota" as const, result: quota };
+        } catch (error) {
+          const message = credentialSafeErrorMessage(
+            error,
+            candidate.credential.accessToken,
+          );
+          // Identity evidence belongs to this credential attempt only. Never
+          // carry an earlier source's account across a later source switch.
+          remoteAccountId = remoteIdentityFromError(error);
+          const definitiveAuth = error instanceof CursorAuthError;
+          attempts[attempts.length - 1] = {
+            source:
+              source === "state-vscdb" && !definitiveAuth
+                ? "api"
+                : state.source.source,
+            status: "failed",
+            error: message,
+          };
+          if (error instanceof RateLimitError) {
+            return {
+              kind: "transient" as const,
+              error: message,
+              retryAfter: error.retryAfter,
+            };
+          }
+          return definitiveAuth
+            ? { kind: "rejected" as const, error: message }
+            : { kind: "transient" as const, error: message };
+        }
+      },
+    );
+
+    if (selection.outcome === "quota" && selection.result) {
+      return cursorSuccess(selection.result, attempts);
+    }
+    if (selection.outcome === "transient") {
+      finalError = selection.transientError ?? finalError;
+      retryAfter = selection.retryAfter;
+      return cursorFailureReport(
+        finalError,
+        retryAfter,
+        attempts,
+        remoteAccountId,
+      );
+    }
+    if (selection.outcome === "all_rejected") {
+      rejected = true;
+      rejectedExpiredRefreshable ||=
+        state.status === "expired" && state.refreshable;
+    }
+  }
+
+  let authStatus: ProviderAuthStatus | undefined;
+  if (rejectedExpiredRefreshable) {
+    finalError = "Cursor Pi access token expired";
+    authStatus = "expired_refreshable";
+  } else if (rejected) {
+    finalError = "Cursor sign-in required";
+    authStatus = "unusable";
   } else {
-    const primary = primaryUnavailable(resolution.unavailable);
+    const primary = primaryUnavailable(unavailable);
     finalError = cursorFinalError(primary, cursorCredentialError(primary));
+    if (finalError === "Cursor sign-in required") authStatus = "unusable";
   }
 
-  const cached = readCachedProvider("cursor");
-  if (cached) {
-    return staleFromCache(cached, finalError, sourceNames(attempts), attempts);
-  }
-
-  return failedProvider({
-    provider: "cursor",
-    label: "Cursor",
-    status: retryAfter ? "rate_limited" : statusFromError(finalError),
-    error: finalError,
+  return cursorFailureReport(
+    finalError,
     retryAfter,
-    sourcesTried: sourceNames(attempts),
     attempts,
-  });
+    remoteAccountId,
+    authStatus,
+  );
 }
 
 export async function inspectAuth(
+  options: ProviderOptions,
+): Promise<AuthProviderReport> {
+  return inspectAuthWithDependencies(defaultCursorDependencies, options);
+}
+
+async function inspectAuthWithDependencies(
+  dependencies: CursorDependencies,
   options: ProviderOptions,
 ): Promise<AuthProviderReport> {
   const editorState = await readCredentialState();
@@ -187,63 +256,88 @@ export async function inspectAuth(
       ).source,
     );
   }
+  let piInspection: PiCursorCredentialInspection;
+  try {
+    piInspection = await dependencies.piCursorBroker.inspect();
+  } catch {
+    piInspection = {
+      path: "",
+      status: "error",
+      error: "credential_resolution_failed",
+    };
+  }
+  sources.push(piInspectionSource(piInspection));
   return { provider: "cursor", sources };
 }
 
-/**
- * The Cursor editor and CLI keep credentials in different stores, and either
- * source is enough, so a CLI-only machine with no editor `state.vscdb` can
- * still refresh quota after the CLI credential is available. Quota fetching
- * tries the non-prompting editor store first; it reads the platform CLI
- * credential source when the editor token is absent, unreadable, or rejected
- * by Cursor.
- */
-async function resolveCredentials(options: ProviderOptions): Promise<{
-  credentials?: CursorCredentials;
-  source?:
-    | "state-vscdb"
-    | typeof CURSOR_CLI_SOURCE
-    | typeof CURSOR_CLI_AUTHFILE_SOURCE;
-  unavailable: UnavailableCredentialState[];
-}> {
-  const unavailable: UnavailableCredentialState[] = [];
-  const editorState = await readCredentialState();
-  if (editorState.status === "available") {
+async function resolveCredentialSource(
+  source: (typeof CURSOR_CREDENTIAL_SOURCE_ORDER)[number],
+  dependencies: CursorDependencies,
+  options: ProviderOptions,
+): Promise<CredentialState> {
+  if (source === "state-vscdb") return readCredentialState();
+  if (source === "cursor-cli") return readCliCredentialState(options);
+  let resolution: PiCursorCredentialResolution;
+  try {
+    resolution = await dependencies.piCursorBroker.resolve();
+  } catch {
+    resolution = { status: "error" };
+  }
+  if (resolution.status === "available") {
     return {
-      credentials: editorState.credentials,
-      source: "state-vscdb",
-      unavailable,
+      status: "available",
+      localState: "valid",
+      credentials: { accessToken: resolution.credential },
+      source: {
+        source: PI_CURSOR_CREDENTIAL_SOURCE,
+        status: "available",
+        credentialPresent: true,
+      },
     };
   }
-  unavailable.push(editorState);
-
-  if (!isCursorCliSourceSupported()) return { unavailable };
-  const cliState = await readCliCredentialState(options);
-  if (cliState.status === "available") {
+  if (resolution.status === "expired") {
     return {
-      credentials: cliState.credentials,
-      source: cliState.source.source as
-        | typeof CURSOR_CLI_SOURCE
-        | typeof CURSOR_CLI_AUTHFILE_SOURCE,
-      unavailable,
+      status: "expired",
+      localState: "expired",
+      credentials: { accessToken: resolution.credential },
+      refreshable: resolution.refreshable,
+      source: {
+        source: PI_CURSOR_CREDENTIAL_SOURCE,
+        status: "expired",
+        credentialPresent: true,
+      },
     };
   }
-  unavailable.push(cliState);
-  return { unavailable };
+  return {
+    status: resolution.status === "unsupported" ? "invalid" : resolution.status,
+    source: {
+      source: PI_CURSOR_CREDENTIAL_SOURCE,
+      status:
+        resolution.status === "unsupported" ? "invalid" : resolution.status,
+      error: piResolutionError(resolution),
+      ...(resolution.status === "missing" ? {} : { credentialPresent: true }),
+    },
+  };
 }
 
-/**
- * A CLI-only machine has no editor store at all, so reporting the editor's
- * `credentials_missing` would tell a signed-in `cursor-agent` user to sign in
- * again. Prefer a source that still holds a credential - a Keychain value read
- * waiting on the one-time prompt - so the error carries its actual remedy.
- */
+/** Prefer a known-present source's actionable failure over an absent store. */
 function primaryUnavailable(
   states: UnavailableCredentialState[],
 ): UnavailableCredentialState {
   return (
     states.find((state) => state.source.credentialPresent === true) ?? states[0]
   );
+}
+
+function unavailableAttempt(state: UnavailableCredentialState): SourceAttempt {
+  return {
+    source: state.source.source,
+    status: state.status === "error" ? "failed" : "skipped",
+    error: cursorCredentialError(state),
+    ...(state.source.credentialPresent === undefined
+      ? {}
+      : { credentialPresent: state.source.credentialPresent }),
+  };
 }
 
 async function readCliCredentialState(
@@ -254,6 +348,7 @@ async function readCliCredentialState(
   if (state.status !== "available") return state;
   return {
     status: "available",
+    localState: "valid",
     credentials: {
       accessToken: state.accessToken,
       email: state.identity.email,
@@ -262,11 +357,38 @@ async function readCliCredentialState(
   };
 }
 
+function piInspectionSource(
+  inspection: PiCursorCredentialInspection,
+): AuthSourceReport {
+  const status: AuthSourceReport["status"] =
+    inspection.status === "unsupported" ? "invalid" : inspection.status;
+  return {
+    source: PI_CURSOR_CREDENTIAL_SOURCE,
+    ...(inspection.path ? { path: inspection.path } : {}),
+    status,
+    ...(inspection.error ? { error: inspection.error } : {}),
+    ...(inspection.status === "missing" ? {} : { credentialPresent: true }),
+  };
+}
+
+function piResolutionError(
+  resolution: Exclude<
+    PiCursorCredentialResolution,
+    { status: "available" | "expired" }
+  >,
+): string {
+  if (resolution.status === "missing") return "credentials_missing";
+  if (resolution.status === "invalid") return "invalid_credential";
+  if (resolution.status === "unsupported") return "unsupported_credential_type";
+  return "credential_resolution_failed";
+}
+
 export function normalizeCursorUsage(
   usage: unknown,
   planInfo?: unknown,
   credentials?: Pick<CursorCredentials, "email" | "membershipType">,
   sandUsage?: unknown,
+  accountProfile?: unknown,
 ):
   | {
       plan?: string;
@@ -360,9 +482,20 @@ export function normalizeCursorUsage(
   if (grokBot !== undefined) windows.push(grokBot);
 
   if (windows.length === 0) return undefined;
+  const remoteAccountId = cursorRemoteAccountId(
+    accountProfile,
+    usage,
+    planInfo,
+    sandUsage,
+  );
   return {
     plan: planName,
-    account: { email: credentials?.email },
+    account: {
+      email: credentials?.email,
+      ...(remoteAccountId
+        ? { accountId: remoteAccountId, identityStatus: "verified" as const }
+        : { identityStatus: "unverified" as const }),
+    },
     windows,
     refreshedAt: nowIso(),
   };
@@ -375,24 +508,57 @@ async function fetchCursorUsage(credentials: CursorCredentials): Promise<{
   credits?: ProviderQuota["credits"];
   refreshedAt: string;
 }> {
-  const [usageResult, planResult, sandResult] = await Promise.allSettled([
-    postDashboardRpc(credentials.accessToken, "GetCurrentPeriodUsage"),
-    postDashboardRpc(credentials.accessToken, "GetPlanInfo"),
-    postDashboardRpc(credentials.accessToken, "GetSandUsageStatus"),
-  ]);
+  const [usageResult, planResult, sandResult, profileResult] =
+    await Promise.allSettled([
+      postDashboardRpc(credentials.accessToken, "GetCurrentPeriodUsage"),
+      postDashboardRpc(credentials.accessToken, "GetPlanInfo"),
+      postDashboardRpc(credentials.accessToken, "GetSandUsageStatus"),
+      getCursorAccountProfile(credentials.accessToken),
+    ]);
+  const remoteAccountId = cursorRemoteAccountId(
+    profileResult.status === "fulfilled" ? profileResult.value : undefined,
+    usageResult.status === "fulfilled" ? usageResult.value : undefined,
+    planResult.status === "fulfilled" ? planResult.value : undefined,
+    sandResult.status === "fulfilled" ? sandResult.value : undefined,
+  );
   if (usageResult.status === "rejected") {
-    throw usageResult.reason;
+    throw withRemoteIdentity(usageResult.reason, remoteAccountId);
   }
   const quota = normalizeCursorUsage(
     usageResult.value,
     planResult.status === "fulfilled" ? planResult.value : undefined,
     credentials,
     sandResult.status === "fulfilled" ? sandResult.value : undefined,
+    profileResult.status === "fulfilled" ? profileResult.value : undefined,
   );
   if (!quota) {
-    throw new Error("Cursor quota unavailable");
+    throw new CursorRequestError("Cursor quota unavailable", remoteAccountId);
   }
   return quota;
+}
+
+/** Optional identity evidence; quota remains usable if the profile is absent. */
+async function getCursorAccountProfile(accessToken: string): Promise<unknown> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
+  try {
+    const response = await providerFetch(
+      `${API_URL}/auth/full_stripe_profile`,
+      {
+        method: "GET",
+        headers: {
+          authorization: `Bearer ${accessToken}`,
+          accept: "application/json",
+        },
+        redirect: "error",
+        signal: controller.signal,
+      },
+    );
+    rejectUnusableUsageResponse(response);
+    return response.json();
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function postDashboardRpc(
@@ -463,6 +629,7 @@ async function readCredentialState(): Promise<CredentialState> {
     );
     return {
       status: "available",
+      localState: "valid",
       credentials: { accessToken, email, membershipType },
       source: { source: "state-vscdb", path: STATE_DB, status: "available" },
     };
@@ -668,14 +835,12 @@ function sqliteErrorMessage(error: unknown): string {
     : "sqlite_read_error";
 }
 
-function cursorCredentialError(
-  state: Exclude<CredentialState, { status: "available" }>,
-): string {
+function cursorCredentialError(state: UnavailableCredentialState): string {
   return state.source.error ?? `credentials_${state.status}`;
 }
 
 function cursorFinalError(
-  state: Exclude<CredentialState, { status: "available" }>,
+  state: UnavailableCredentialState,
   error: string,
 ): string {
   return state.status === "missing" || error === "credentials_missing"
@@ -693,7 +858,7 @@ function cursorSuccess(
   quota: Awaited<ReturnType<typeof fetchCursorUsage>>,
   attempts: SourceAttempt[],
 ): ProviderQuota {
-  return successProvider({
+  const report = successProvider({
     provider: "cursor",
     label: "Cursor",
     source: "api",
@@ -705,16 +870,139 @@ function cursorSuccess(
     sourcesTried: sourceNames(attempts),
     attempts,
   });
+  const remoteAccountId =
+    quota.account?.identityStatus === "verified"
+      ? quota.account.accountId
+      : undefined;
+  return withCursorCacheContext(report, remoteAccountId);
+}
+
+function cursorFailureReport(
+  error: string,
+  retryAfter: string | undefined,
+  attempts: SourceAttempt[],
+  remoteAccountId: string | undefined,
+  authStatus?: ProviderAuthStatus,
+): ProviderQuota {
+  const cached = remoteAccountId
+    ? readCachedCursorProvider(cursorAccountContextId(remoteAccountId))
+    : undefined;
+  const report = cached
+    ? staleFromCache(cached, error, sourceNames(attempts), attempts)
+    : failedProvider({
+        provider: "cursor",
+        label: "Cursor",
+        status: retryAfter ? "rate_limited" : statusFromError(error),
+        error,
+        retryAfter,
+        sourcesTried: sourceNames(attempts),
+        attempts,
+      });
+  if (!authStatus) return report;
+  return {
+    ...report,
+    state: {
+      ...report.state,
+      authStatus,
+      ...(authStatus === "expired_refreshable"
+        ? { reason: "credentials_expired" as const }
+        : {}),
+    },
+  };
+}
+
+function cursorRemoteAccountId(...payloads: unknown[]): string | undefined {
+  for (const payload of payloads) {
+    const data = objectValue(payload);
+    if (!data) continue;
+    const records = [
+      data,
+      objectValue(data.account),
+      objectValue(data.user),
+      objectValue(data.profile),
+      objectValue(data.planInfo),
+    ];
+    for (const record of records) {
+      if (!record) continue;
+      for (const key of [
+        "accountId",
+        "account_id",
+        "userId",
+        "user_id",
+        "customerId",
+        "customer_id",
+        "stripeCustomerId",
+        "stripe_customer_id",
+      ]) {
+        const value = remoteIdentityString(record[key]);
+        if (value) return value;
+      }
+    }
+  }
+  return undefined;
+}
+
+function remoteIdentityString(value: unknown): string | undefined {
+  if (typeof value !== "string" || value.length === 0 || value.length > 512) {
+    return undefined;
+  }
+  return [...value].some((character) => {
+    const code = character.charCodeAt(0);
+    return code <= 0x1f || code === 0x7f;
+  })
+    ? undefined
+    : value;
+}
+
+function withRemoteIdentity(
+  error: unknown,
+  remoteAccountId: string | undefined,
+): unknown {
+  if (!remoteAccountId) return error;
+  if (error instanceof CursorAuthError) {
+    return new CursorAuthError(remoteAccountId);
+  }
+  if (error instanceof RateLimitError) {
+    return new RateLimitError(error.retryAfter, remoteAccountId);
+  }
+  return new CursorRequestError(errorMessage(error), remoteAccountId);
+}
+
+function remoteIdentityFromError(error: unknown): string | undefined {
+  return error instanceof CursorRequestError ||
+    error instanceof CursorAuthError ||
+    error instanceof RateLimitError
+    ? error.remoteAccountId
+    : undefined;
+}
+
+function credentialSafeErrorMessage(
+  error: unknown,
+  credential: string,
+): string {
+  return errorMessage(error).replaceAll(credential, "[redacted]");
+}
+
+class CursorRequestError extends Error {
+  constructor(
+    message: string,
+    readonly remoteAccountId?: string,
+  ) {
+    super(message);
+  }
 }
 
 class CursorAuthError extends Error {
-  constructor() {
+  constructor(readonly remoteAccountId?: string) {
     super("Cursor sign-in required");
   }
 }
 
 class RateLimitError extends Error {
-  constructor(readonly retryAfter: string | undefined) {
+  constructor(
+    readonly retryAfter: string | undefined,
+    readonly remoteAccountId?: string,
+  ) {
     super("Cursor quota endpoint rate limited");
   }
 }

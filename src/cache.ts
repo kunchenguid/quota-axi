@@ -5,6 +5,7 @@ import {
   ensurePrivateParent,
   readJsonFile,
 } from "./lib/fs.js";
+import { cursorCacheContextId } from "./providers/cursor-cache-context.js";
 import { kimiReadingContextId } from "./providers/kimi-cache-context.js";
 import type {
   ProviderId,
@@ -41,19 +42,21 @@ const WINDOW_KINDS = [
   "credits",
   "unknown",
 ] as const satisfies readonly QuotaWindow["kind"][];
-const CACHE_SCHEMA_VERSION = 2;
+const CACHE_SCHEMA_VERSION = 3;
 const CREDENTIAL_CONTEXT_ID = /^[a-f0-9]{64}$/;
 
 /**
- * Providers whose local configuration decides which account a reading belongs
- * to: a Claude profile selects the credential store, and a Kimi Code
- * `config.toml` selects the deployment. A snapshot from one such context says
- * nothing about another, so each is stamped on write and required to match on
- * stale reuse.
+ * Providers whose local configuration or remote identity decides which
+ * account a reading belongs to. A Claude profile selects the credential store,
+ * a Kimi Code `config.toml` selects the deployment, and Cursor returns a stable
+ * account identity from a first-party response. A snapshot from one
+ * context says nothing about another, so each is stamped on write and required
+ * to match on stale reuse.
  *
- * How that stamp is obtained is not the same question for both. A Claude
- * profile is fixed by this process's own environment, so deriving it here reads
- * the same selection the reading used. Kimi's is not derivable here at all.
+ * How that stamp is obtained differs by provider. A Claude profile is fixed by
+ * this process's own environment, so deriving it here reads the same selection
+ * the reading used. Cursor carries identity from the response that answered.
+ * Kimi's is not derivable here at all.
  * Kimi Code rewrites `config.toml` on login, so a read taken after the quota
  * request has returned can describe a deployment the numbers never came from;
  * and a Kimi reading need not come from that configuration in the first place,
@@ -61,12 +64,17 @@ const CREDENTIAL_CONTEXT_ID = /^[a-f0-9]{64}$/;
  * deployment. Kimi therefore reports the identity of whatever actually produced
  * its reading.
  */
-const CONTEXT_SCOPED_PROVIDERS: Partial<
+const STATIC_CONTEXT_SCOPED_PROVIDERS: Partial<
   Record<ProviderId, () => string | undefined>
 > = {
   claude: claudeCredentialContextId,
   kimi: kimiReadingContextId,
 };
+const CONTEXT_SCOPED_PROVIDERS = new Set<ProviderId>([
+  "claude",
+  "cursor",
+  "kimi",
+]);
 
 type CachedProvider = {
   snapshot: ProviderQuota;
@@ -101,6 +109,17 @@ export function readCachedKimiProvider(
   contextId: string,
 ): ProviderQuota | undefined {
   return readCachedProviderInContext("kimi", contextId);
+}
+
+/**
+ * Cursor snapshots are account-scoped by identity returned from Cursor itself.
+ * A local source or token is never used as identity evidence, so a source
+ * change cannot serve another account's stale quota.
+ */
+export function readCachedCursorProvider(
+  contextId: string,
+): ProviderQuota | undefined {
+  return readCachedProviderInContext("cursor", contextId);
 }
 
 function readCachedProviderInContext(
@@ -184,7 +203,8 @@ function readCacheProviders(): CachedProvider[] {
   const schemaVersion = numberValue(payload?.schemaVersion);
   if (
     !payload ||
-    (schemaVersion !== 1 && schemaVersion !== CACHE_SCHEMA_VERSION) ||
+    schemaVersion === undefined ||
+    ![1, 2, CACHE_SCHEMA_VERSION].includes(schemaVersion) ||
     !Array.isArray(payload.providers)
   )
     return [];
@@ -215,7 +235,16 @@ function toCacheProvider(provider: ProviderQuota): CachedProvider | undefined {
     CACHE_SCHEMA_VERSION,
   )?.snapshot;
   if (!snapshot) return undefined;
-  const contextId = CONTEXT_SCOPED_PROVIDERS[provider.provider]?.();
+  const contextId =
+    provider.provider === "cursor"
+      ? cursorCacheContextId(provider)
+      : STATIC_CONTEXT_SCOPED_PROVIDERS[provider.provider]?.();
+  // A context-scoped snapshot with no proven context is unsafe to reuse. In
+  // particular, Cursor identity must come from the remote profile response;
+  // neither a token nor local email is accepted as an account key.
+  if (CONTEXT_SCOPED_PROVIDERS.has(provider.provider) && !contextId) {
+    return undefined;
+  }
   return {
     snapshot,
     ...(contextId ? { credentialContextId: contextId } : {}),
@@ -283,14 +312,19 @@ function normalizeCachedProvider(
     snapshot.state.untrustedWindowIds = untrustedWindowIds;
   if (credits) snapshot.credits = credits;
   const credentialContext = stringValue(data.credentialContext);
-  return {
-    snapshot,
-    ...(schemaVersion === CACHE_SCHEMA_VERSION &&
-    snapshot.provider in CONTEXT_SCOPED_PROVIDERS &&
+  const contextSchemaSupported =
+    (schemaVersion >= 2 && snapshot.provider !== "cursor") ||
+    (schemaVersion === CACHE_SCHEMA_VERSION && snapshot.provider === "cursor");
+  const credentialContextId =
+    contextSchemaSupported &&
+    CONTEXT_SCOPED_PROVIDERS.has(snapshot.provider) &&
     credentialContext &&
     CREDENTIAL_CONTEXT_ID.test(credentialContext)
-      ? { credentialContextId: credentialContext }
-      : {}),
+      ? credentialContext
+      : undefined;
+  return {
+    snapshot,
+    ...(credentialContextId ? { credentialContextId } : {}),
   };
 }
 
