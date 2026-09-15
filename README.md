@@ -350,15 +350,41 @@ CODEX_HOME=/path/to/codex-profile quota-axi --provider codex --profile-only --fu
 - Width comes from the terminal, clamped to 80-120 columns; below the two-up width the grid reflows to one column. Color honors `NO_COLOR`, `TERM=dumb`, and non-TTY stdout (the glyph skeleton is kept), re-enables with `FORCE_COLOR`, and uses truecolor when `COLORTERM` advertises it, falling back to 256-color then ANSI-16.
 - `--tui` composes with `--provider` scoping and `--full` (account identity and source-attempt footers). It is mutually exclusive with `--json` and only supported by the `quota` command.
 
+## Multiple accounts
+
+A normal invocation reports every Claude profile it can discover from local credential evidence. It keeps each profile's quota windows, resets, plan, effective availability, runway, and `spendPriority` separate. Each account gets its own TUI card, including accounts whose quota cannot be read.
+
+```sh
+quota-axi --provider claude --json
+quota-axi --provider claude --tui --no-credential-refresh
+quota-axi --provider claude --full --json  # includes the local selector for each key
+```
+
+Discovery order is the process-selected profile, the default `~/.claude` profile, then `~/.claude-*` directories in lexical order. A candidate is enrolled only when its native `.credentials.json` exists (including an unreadable or malformed file), or metadata identifies its exact current-user macOS Keychain item. An explicitly selected profile remains visible even if its credentials are missing. Unrelated directories with neither credential evidence nor an explicit selector are omitted. Discovery reads no credential values; each enrolled profile then uses the existing bounded provider reader and Keychain consent gate.
+
+This is a bounded local discovery convention, not a search of the filesystem: arbitrary directories outside those locations require the vendor's existing `CLAUDE_CONFIG_DIR` selector. Unknown opaque Keychain suffixes are not inverted or guessed into profile paths. With multiple profiles, every Keychain read names its exact profile service; the legacy single-profile opaque-default selection remains available only for a single-profile reading. Native file aliases are deduplicated off macOS; on macOS the vendor's literal path hash can identify a different Keychain item, so it is preserved. Discovery never changes `process.env` or the active vendor account. Additional discovered profiles stay read-only; only the process-selected profile retains its existing delegated-refresh eligibility.
+
+### Account keys and compatibility
+
+When a provider expands to multiple accounts, the report uses quota `schemaVersion: 6` (auth and models use version 2). Every provider record then has an `accountKey`; providers still using one selected account use the literal `default`. Every flat TOON block adds `accountKey` immediately after `provider`, and the quota/exhaustion/attention join becomes **`provider` + `accountKey` + `scope`**. Models and model sort ties use **`provider` + `accountKey` + `id`**. Declaration order remains non-preferential; quotas are never combined across accounts.
+
+Claude's `profile:<24 hex digits>` key hashes the local credential selector. It is stable across refreshes, token changes, and discovery order. It contains no path, email, or credential. On macOS it includes the exact vendor Keychain selector; elsewhere it identifies the canonical native profile directory. A renamed profile or a different macOS secure-storage selector is a different local lane.
+
+An account key identifies a **local credential lane**, not a verified person or a guaranteed independent paid allowance. Two profiles can be signed into the same vendor account. `--full` retains the vendor's verified/unverified account evidence and adds `accountLocator` (`kind`, `path`, and optional `entry` / `keychainService`) so a consumer can associate the reading with the exact local selector. Paths and vendor identity stay out of ordinary quota output. Failed or identity-unverified accounts still have their local key; the key never asserts that authentication succeeded. The TUI displays the opaque key under each expanded card's provider name.
+
+If no provider expands, output stays byte-compatible in shape and field order: quota schema 5, auth/models schema 1, and no account column. A sole discovered profile uses that legacy representation even if another profile was removed. Consumers must honor the schema version; a legacy keyless row means the single selected lane, and keys must never be inferred from row position. `--profile-only` preserves its existing exact native-file, no-discovery, no-Keychain, no-refresh, no-cache behavior.
+
+Account collection is shared in `src/providers/accounts.ts`. Adapters can implement `ProviderAdapter.discoverAccounts` with stable keys and bound quota/auth readers; collection preserves each account's success or failure. Claude is the first discovery implementation. Other adapters retain their existing source-selection behavior; additional Pi Codex entries and other providers' multi-account discovery remain future adapter work.
+
 ## Output Model
 
-The `quota` command's `--json` emits `schemaVersion: 5`.
+The `quota` command's `--json` emits `schemaVersion: 5` for a single lane per provider, or `6` for an [account-expanded report](#multiple-accounts).
 
 ### Normalized schema contract
 
 The package publishes TypeScript declarations from its package root, so consumers can use `import type { QuotaAxiResponse, ModelsResponse } from "quota-axi"`. The adapter contract is `ProviderAdapter` in and normalized `ProviderQuota` out: adapters report observed quota data, never rank, mint credentials, or retain raw responses. The narrowly bounded vendor-owned renewal path is documented under [Delegated credential refresh](#delegated-credential-refresh).
 
-`schemaVersion` is command-specific. Additive optional fields do not bump it. A semantic or incompatible shape change does. The `quota` report is version 5, `auth` is version 1, and `models` is version 1.
+`schemaVersion` is command-specific. Additive optional fields do not bump it. A semantic or incompatible shape change does. The legacy single-account `quota` report is version 5, `auth` is version 1, and `models` is version 1. When account discovery expands a provider, those versions are 6, 2, and 2 respectively.
 
 ### Default report blocks
 
@@ -370,7 +396,7 @@ Default TOON is organized by the reading agent's decision rather than by quota-a
 | `exhaustion[]` | **Sparse.** One row per scope with a finite exhaustion point: `usableRunwaySeconds`, `projectedExhaustedAt`, `limitingWindowId`. `exhaustion[0]:` means nothing is projected to run out.                                                                                                         |
 | `attention[]`  | **Sparse.** Every non-nominal fact: `provider`, `scope`, `kind`, `detail`, `remedy`.                                                                                                                                                                                                             |
 
-A `quota[]` row whose `runway` is `projected_exhaustion` or `exhausted_now` has exactly one matching `exhaustion[]` row, joined on `provider` + `scope`. A row with `through_reset` or `unknown` has none, by definition: `through_reset` deliberately has no deadline and `unknown` has none to state.
+A `quota[]` row whose `runway` is `projected_exhaustion` or `exhausted_now` has exactly one matching `exhaustion[]` row, joined on `provider` + `scope` (plus `accountKey` in an account-expanded report). A row with `through_reset` or `unknown` has none, by definition: `through_reset` deliberately has no deadline and `unknown` has none to state.
 
 `attention[]` kinds:
 
@@ -813,6 +839,8 @@ Providers with no established non-interactive rotation command stay read-only on
 - It never routes, ranks a winner, or orders providers preferentially. Derived comparative signals, including `effectiveAvailability[].selection`, are published as data for the consumer to act on.
 
 ### Cache
+
+Cache schema 3 stores independent records per provider and credential context/account key. Schema 1 and 2 records are still read through their existing validation rules; matching Claude context records can migrate on write. Claude captures its context before the request and carries it through report transformations, so a changed ambient selector cannot relabel a reading. An empty successful read or definitive rejection clears only that lane's matching snapshot. Keyed records for other lanes remain intact. Old quota-axi versions reject schema 3 and take fresh readings; they do not reinterpret the expanded cache as one provider record. The cache never stores `accountLocator` or vendor account identity.
 
 | Item                                   | Behavior                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

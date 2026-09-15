@@ -5,6 +5,7 @@ import {
   ensurePrivateParent,
   readJsonFile,
 } from "./lib/fs.js";
+import { readingCacheContext } from "./cache-context.js";
 import { kimiReadingContextId } from "./providers/kimi-cache-context.js";
 import type {
   ProviderId,
@@ -41,7 +42,7 @@ const WINDOW_KINDS = [
   "credits",
   "unknown",
 ] as const satisfies readonly QuotaWindow["kind"][];
-const CACHE_SCHEMA_VERSION = 2;
+const CACHE_SCHEMA_VERSION = 3;
 const CREDENTIAL_CONTEXT_ID = /^[a-f0-9]{64}$/;
 
 /**
@@ -51,9 +52,10 @@ const CREDENTIAL_CONTEXT_ID = /^[a-f0-9]{64}$/;
  * nothing about another, so each is stamped on write and required to match on
  * stale reuse.
  *
- * How that stamp is obtained is not the same question for both. A Claude
- * profile is fixed by this process's own environment, so deriving it here reads
- * the same selection the reading used. Kimi's is not derivable here at all.
+ * Claude attaches the selected context to each report before reading, so the
+ * writer never stamps multiple profiles with the ambient process selector.
+ * The ambient fallback remains for legacy adapter callers. Kimi's context is
+ * not derivable here at all.
  * Kimi Code rewrites `config.toml` on login, so a read taken after the quota
  * request has returned can describe a deployment the numbers never came from;
  * and a Kimi reading need not come from that configuration in the first place,
@@ -75,9 +77,12 @@ type CachedProvider = {
 
 export function readCachedProvider(
   provider: ProviderId,
+  accountKey?: string,
 ): ProviderQuota | undefined {
   return readCacheProviders().find(
-    (item) => item.snapshot.provider === provider,
+    (item) =>
+      item.snapshot.provider === provider &&
+      (item.snapshot.accountKey ?? "default") === (accountKey ?? "default"),
   )?.snapshot;
 }
 
@@ -122,38 +127,96 @@ export function writeCachedProviders(providers: ProviderQuota[]): void {
         (provider) =>
           provider.state.status === "fresh" && provider.windows.length === 0,
       )
-      .map((provider) => provider.provider),
+      .map((provider) => cacheIdentity(provider, providerContextId(provider))),
   );
   const cacheable = providers
     .map(toCacheProvider)
     .filter((provider): provider is CachedProvider => Boolean(provider));
 
   const file = cacheFilePath();
-  const byProvider = new Map<ProviderId, CachedProvider>();
+  const byProvider = new Map<string, CachedProvider>();
   let clearedExisting = false;
   for (const provider of readCacheProviders()) {
-    if (clearProviders.has(provider.snapshot.provider)) {
+    if (
+      clearProviders.has(
+        cacheIdentity(provider.snapshot, provider.credentialContextId),
+      )
+    ) {
       clearedExisting = true;
       continue;
     }
-    byProvider.set(provider.snapshot.provider, provider);
+    byProvider.set(
+      cacheIdentity(provider.snapshot, provider.credentialContextId),
+      provider,
+    );
   }
   if (cacheable.length === 0 && !clearedExisting) return;
   for (const provider of cacheable)
-    byProvider.set(provider.snapshot.provider, provider);
-  const merged = PROVIDER_IDS.map((provider) =>
-    byProvider.get(provider),
-  ).filter((provider): provider is CachedProvider => Boolean(provider));
+    byProvider.set(
+      cacheIdentity(provider.snapshot, provider.credentialContextId),
+      provider,
+    );
+  const merged = [...byProvider.values()].sort(
+    (a, b) =>
+      PROVIDER_IDS.indexOf(a.snapshot.provider) -
+      PROVIDER_IDS.indexOf(b.snapshot.provider),
+  );
 
   writeCacheFile(file, merged);
 }
 
-export function deleteCachedProvider(provider: ProviderId): void {
+function providerContextId(provider: ProviderQuota): string | undefined {
+  return (
+    readingCacheContext(provider) ??
+    CONTEXT_SCOPED_PROVIDERS[provider.provider]?.()
+  );
+}
+
+function cacheIdentity(provider: ProviderQuota, contextId?: string): string {
+  return `${provider.provider}/${contextId ?? provider.accountKey ?? "default"}`;
+}
+
+/** Retire only the selected account's snapshot, never its siblings. */
+export function deleteCachedProviderInContext(
+  provider: ProviderId,
+  contextId: string,
+): void {
+  if (!CREDENTIAL_CONTEXT_ID.test(contextId)) return;
   const existing = readCacheProviders();
-  if (!existing.some((item) => item.snapshot.provider === provider)) return;
+  const remaining = existing.filter(
+    (item) =>
+      item.snapshot.provider !== provider ||
+      item.credentialContextId !== contextId,
+  );
+  if (remaining.length !== existing.length)
+    writeCacheFile(cacheFilePath(), remaining);
+}
+
+export function deleteCachedProvider(
+  provider: ProviderId,
+  accountKey?: string,
+): void {
+  const contextId = CONTEXT_SCOPED_PROVIDERS[provider]?.();
+  if (accountKey === undefined && contextId) {
+    deleteCachedProviderInContext(provider, contextId);
+    return;
+  }
+  const existing = readCacheProviders();
+  if (
+    !existing.some(
+      (item) =>
+        item.snapshot.provider === provider &&
+        (item.snapshot.accountKey ?? "default") === (accountKey ?? "default"),
+    )
+  )
+    return;
   writeCacheFile(
     cacheFilePath(),
-    existing.filter((item) => item.snapshot.provider !== provider),
+    existing.filter(
+      (item) =>
+        item.snapshot.provider !== provider ||
+        (item.snapshot.accountKey ?? "default") !== (accountKey ?? "default"),
+    ),
   );
 }
 
@@ -184,7 +247,9 @@ function readCacheProviders(): CachedProvider[] {
   const schemaVersion = numberValue(payload?.schemaVersion);
   if (
     !payload ||
-    (schemaVersion !== 1 && schemaVersion !== CACHE_SCHEMA_VERSION) ||
+    (schemaVersion !== 1 &&
+      schemaVersion !== 2 &&
+      schemaVersion !== CACHE_SCHEMA_VERSION) ||
     !Array.isArray(payload.providers)
   )
     return [];
@@ -199,6 +264,7 @@ function toCacheProvider(provider: ProviderQuota): CachedProvider | undefined {
   const snapshot = normalizeCachedProvider(
     {
       provider: provider.provider,
+      accountKey: provider.accountKey,
       label: provider.label,
       source: provider.source,
       plan: provider.plan,
@@ -215,7 +281,7 @@ function toCacheProvider(provider: ProviderQuota): CachedProvider | undefined {
     CACHE_SCHEMA_VERSION,
   )?.snapshot;
   if (!snapshot) return undefined;
-  const contextId = CONTEXT_SCOPED_PROVIDERS[provider.provider]?.();
+  const contextId = providerContextId(provider);
   return {
     snapshot,
     ...(contextId ? { credentialContextId: contextId } : {}),
@@ -262,8 +328,17 @@ function normalizeCachedProvider(
   )
     return undefined;
 
+  const accountKey = stringValue(data.accountKey);
+  if (
+    data.accountKey !== undefined &&
+    (schemaVersion < 3 ||
+      !accountKey ||
+      !/^[a-z0-9][a-z0-9:_-]{0,95}$/.test(accountKey))
+  )
+    return undefined;
   const snapshot: ProviderQuota = {
     provider,
+    ...(accountKey ? { accountKey } : {}),
     label,
     source,
     windows,
@@ -285,7 +360,7 @@ function normalizeCachedProvider(
   const credentialContext = stringValue(data.credentialContext);
   return {
     snapshot,
-    ...(schemaVersion === CACHE_SCHEMA_VERSION &&
+    ...(schemaVersion >= 2 &&
     snapshot.provider in CONTEXT_SCOPED_PROVIDERS &&
     credentialContext &&
     CREDENTIAL_CONTEXT_ID.test(credentialContext)
