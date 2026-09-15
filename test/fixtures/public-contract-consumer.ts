@@ -1,5 +1,8 @@
 import {
+  AUTH_RESPONSE_SCHEMA_VERSION,
   compareModelsByRunway,
+  MODELS_RESPONSE_SCHEMA_VERSION,
+  QUOTA_RESPONSE_SCHEMA_VERSION,
   SELECTION_SCALAR_KEY,
   type AuthResponse,
   type EffectiveAvailability,
@@ -17,7 +20,7 @@ const profileOnlyOptions: ProviderOptions = {
 
 const quota: QuotaAxiResponse = {
   generatedAt: "2026-08-05T12:00:00.000Z",
-  schemaVersion: 6,
+  schemaVersion: QUOTA_RESPONSE_SCHEMA_VERSION,
   providers: [],
 };
 
@@ -32,14 +35,14 @@ const model: ModelQuotaRecord = {
 
 const models: ModelsResponse = {
   generatedAt: quota.generatedAt,
-  schemaVersion: 2,
+  schemaVersion: MODELS_RESPONSE_SCHEMA_VERSION,
   catalog: { version: "2026-08-05", provenance: "consumer fixture" },
   models: [model],
 };
 
 const auth: AuthResponse = {
   generatedAt: quota.generatedAt,
-  schemaVersion: 2,
+  schemaVersion: AUTH_RESPONSE_SCHEMA_VERSION,
   auth: [],
 };
 
@@ -51,6 +54,9 @@ const scope: EffectiveAvailability = {
 };
 const spendPriority: number | undefined =
   scope.selection?.[SELECTION_SCALAR_KEY];
+const quotaSchemaVersion: 6 = quota.schemaVersion;
+const modelsSchemaVersion: 2 = models.schemaVersion;
+const authSchemaVersion: 2 = auth.schemaVersion;
 
 // Demoted fields are optional in the published contract: default `--json`
 // omits them and `--full` supplies them.
@@ -66,4 +72,7 @@ void models;
 void profileOnlyOptions;
 void spendPriority;
 void demoted;
+void quotaSchemaVersion;
+void modelsSchemaVersion;
+void authSchemaVersion;
 void compareModelsByRunway(model, model);

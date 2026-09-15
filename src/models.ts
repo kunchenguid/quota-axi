@@ -1,4 +1,5 @@
 import { MODEL_CATALOG } from "./model-kb.js";
+import { MODELS_RESPONSE_SCHEMA_VERSION } from "./types.js";
 import type {
   EffectiveAvailability,
   IntelligenceBucket,
@@ -77,7 +78,7 @@ export function createModelsResponse(
   if (!options.sort) {
     return {
       generatedAt: quota.generatedAt,
-      schemaVersion: 2,
+      schemaVersion: MODELS_RESPONSE_SCHEMA_VERSION,
       catalog: catalogSummary(catalog),
       models,
       ...(unmatchedWindowIds.length > 0 ? { unmatchedWindowIds } : {}),
@@ -91,7 +92,7 @@ export function createModelsResponse(
   );
   return {
     generatedAt: quota.generatedAt,
-    schemaVersion: 2,
+    schemaVersion: MODELS_RESPONSE_SCHEMA_VERSION,
     catalog: catalogSummary(catalog),
     models: sorted,
     ...(unmatchedWindowIds.length > 0 ? { unmatchedWindowIds } : {}),

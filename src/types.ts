@@ -294,9 +294,13 @@ export type ProviderQuota = {
   attempts?: SourceAttempt[];
 };
 
+export const QUOTA_RESPONSE_SCHEMA_VERSION = 6;
+export const AUTH_RESPONSE_SCHEMA_VERSION = 2;
+export const MODELS_RESPONSE_SCHEMA_VERSION = 2;
+
 export type QuotaAxiResponse = {
   generatedAt: string;
-  schemaVersion: 6;
+  schemaVersion: typeof QUOTA_RESPONSE_SCHEMA_VERSION;
   providers: ProviderQuota[];
   help?: string[];
 };
@@ -338,7 +342,7 @@ export type AuthProviderReport = {
 
 export type AuthResponse = {
   generatedAt: string;
-  schemaVersion: 2;
+  schemaVersion: typeof AUTH_RESPONSE_SCHEMA_VERSION;
   auth: AuthProviderReport[];
 };
 
@@ -395,7 +399,7 @@ export type ModelSortResult = {
 
 export type ModelsResponse = {
   generatedAt: string;
-  schemaVersion: 2;
+  schemaVersion: typeof MODELS_RESPONSE_SCHEMA_VERSION;
   catalog: Pick<ModelCatalog, "version" | "provenance">;
   models: ModelQuotaRecord[];
   /** Provider/model window scopes with no corresponding catalog entry. */

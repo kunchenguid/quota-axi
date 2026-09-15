@@ -2,6 +2,7 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo, Socket } from "node:net";
 import { describe, expect, it, vi } from "vitest";
 import { withQuotaSemantics } from "../../src/interpretation.js";
+import { jsonResponse } from "./json-response.js";
 import {
   createKimiAdapter,
   normalizeKimiPayload,
@@ -1704,13 +1705,6 @@ function renderKimiQuota(report: ProviderQuota): string {
     "quota-axi",
     false,
   );
-}
-
-function jsonResponse(payload: unknown): Response {
-  return new Response(JSON.stringify(payload), {
-    status: 200,
-    headers: { "content-type": "application/json; charset=utf-8" },
-  });
 }
 
 function cachedQuota(

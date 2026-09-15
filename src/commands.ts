@@ -21,6 +21,7 @@ import {
   type TuiColorDepth,
 } from "./tui.js";
 import { scrollHint } from "./tui-viewport.js";
+import { AUTH_RESPONSE_SCHEMA_VERSION } from "./types.js";
 import type {
   AuthProviderReport,
   AuthResponse,
@@ -206,7 +207,7 @@ export async function authCommand(
   const reports = await inspectAuth(flags.providers, options);
   const response: AuthResponse = {
     generatedAt: nowIso(),
-    schemaVersion: 2,
+    schemaVersion: AUTH_RESPONSE_SCHEMA_VERSION,
     auth: reports,
   };
   return flags.json
