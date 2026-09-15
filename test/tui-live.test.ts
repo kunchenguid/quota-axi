@@ -219,6 +219,28 @@ describe("live terminal report loop", () => {
     await run;
   });
 
+  it("refreshes immediately after a pending scroll repaint", async () => {
+    const io = harness();
+    const source = counting();
+
+    const run = runLiveTui<number>({
+      load: source.load,
+      render: (value) => `frame ${value}`,
+      intervalMillis: 300_000,
+      io: io.io,
+    });
+    await flush();
+
+    io.press("j");
+    io.press("r");
+    await flush();
+    expect(source.calls()).toBe(2);
+    expect(io.frame()).toBe("frame 2");
+
+    io.press("q");
+    await run;
+  });
+
   it("repaints on resize without refetching or resetting the interval", async () => {
     const io = harness();
     const source = counting();

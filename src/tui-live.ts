@@ -217,12 +217,16 @@ export async function runLiveTui<T>({
           const reason = await new Promise<WakeReason>((resolve) => {
             wake = resolve;
           });
-          if (reason === "refresh") {
+          if (reason === "refresh" || refreshRequested) {
             refreshRequested = false;
             break;
           }
           if (reason !== "resize" && reason !== "scroll") break;
           paint();
+          if (refreshRequested) {
+            refreshRequested = false;
+            break;
+          }
         }
       } finally {
         wake = undefined;
