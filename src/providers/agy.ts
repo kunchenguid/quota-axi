@@ -251,41 +251,11 @@ async function fetchCliQuota(runtime: AgyProbeRuntime): Promise<{
   } catch {
     throw new AgyMalformedResponseError("agy /quota returned invalid JSON");
   }
-  const summary =
-    normalizeAgyPrintUsage(parsed) ??
-    normalizeAgyQuotaSummary(reshapeAgyCliQuota(parsed));
+  const summary = normalizeAgyPrintUsage(parsed);
   if (!summary || summary.windows.length === 0) {
     throw new AgyMalformedResponseError("agy /quota quota summary malformed");
   }
   return summary;
-}
-
-export function reshapeAgyCliQuota(raw: unknown): { groups: unknown[] } {
-  const root = objectValue(raw);
-  const command = objectValue(root?.command);
-  const data = objectValue(command?.data) ?? root;
-  const groups = arrayValue(data?.groups).map((groupRaw) => {
-    const group = objectValue(groupRaw) ?? {};
-    return {
-      displayName: stringValue(group.name) ?? stringValue(group.displayName),
-      buckets: arrayValue(group.buckets).map((bucketRaw) => {
-        const bucket = objectValue(bucketRaw) ?? {};
-        return {
-          bucketId:
-            stringValue(bucket.id) ??
-            stringValue(bucket.bucketId) ??
-            stringValue(bucket.bucket_id),
-          remaining_fraction:
-            bucket.remaining_fraction ?? bucket.remainingFraction,
-          reset_time: bucket.reset_time ?? bucket.resetTime,
-          window: bucket.window,
-          description: bucket.description,
-          disabled: bucket.disabled,
-        };
-      }),
-    };
-  });
-  return { groups };
 }
 
 function isMissingCommandError(error: unknown): boolean {

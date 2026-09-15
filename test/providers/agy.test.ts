@@ -20,7 +20,6 @@ import {
   portsFromLsof,
   processInfosFromPs,
   requestLoopbackJson,
-  reshapeAgyCliQuota,
   type AgyConnectionEndpoint,
   type AgyProbeRuntime,
 } from "../../src/providers/agy.js";
@@ -141,10 +140,8 @@ describe("Antigravity quota parsing", () => {
     expect(result?.windows[0]?.windowSeconds).toBeUndefined();
   });
 
-  it("reshapes agy CLI /quota JSON into quota-summary groups", () => {
-    const result = normalizeAgyQuotaSummary(
-      reshapeAgyCliQuota(fixture("cli-quota.json")),
-    );
+  it("normalizes the agy CLI /quota print envelope", () => {
+    const result = normalizeAgyPrintUsage(fixture("cli-quota.json"));
 
     expect(result?.windows.map(({ id }) => id)).toEqual([
       "gemini_weekly",
