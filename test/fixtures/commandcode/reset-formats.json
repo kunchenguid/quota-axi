@@ -1,0 +1,17 @@
+{
+  "monthlyCredits": 8,
+  "purchasedCredits": 1,
+  "freeCredits": 1,
+  "windowLimits": {
+    "fiveHour": {
+      "used": 0,
+      "cap": 50,
+      "resetAt": 1789400000000
+    },
+    "weekly": {
+      "used": 5,
+      "cap": 50,
+      "resetAt": "1789400000"
+    }
+  }
+}

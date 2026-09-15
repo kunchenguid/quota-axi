@@ -6,6 +6,7 @@ import {
   readJsonFile,
 } from "./lib/fs.js";
 import { kimiReadingContextId } from "./providers/kimi-cache-context.js";
+import { commandCodeReadingContextId } from "./providers/commandcode-cache-context.js";
 import type {
   ProviderId,
   ProviderQuota,
@@ -46,8 +47,9 @@ const CREDENTIAL_CONTEXT_ID = /^[a-f0-9]{64}$/;
 
 /**
  * Providers whose local configuration decides which account a reading belongs
- * to: a Claude profile selects the credential store, and a Kimi Code
- * `config.toml` selects the deployment. A snapshot from one such context says
+ * to: a Claude profile selects the credential store, a Kimi Code
+ * `config.toml` selects the deployment, and Command Code's `whoami` identifies
+ * the source-plus-account pair. A snapshot from one such context says
  * nothing about another, so each is stamped on write and required to match on
  * stale reuse.
  *
@@ -66,6 +68,7 @@ const CONTEXT_SCOPED_PROVIDERS: Partial<
 > = {
   claude: claudeCredentialContextId,
   kimi: kimiReadingContextId,
+  commandcode: commandCodeReadingContextId,
 };
 
 type CachedProvider = {
@@ -103,6 +106,16 @@ export function readCachedKimiProvider(
   return readCachedProviderInContext("kimi", contextId);
 }
 
+/**
+ * Command Code stale quota may only be reused when the cache record proves it
+ * was captured for the same source and account the current `whoami` identified.
+ */
+export function readCachedCommandCodeProvider(
+  contextId: string,
+): ProviderQuota | undefined {
+  return readCachedProviderInContext("commandcode", contextId);
+}
+
 function readCachedProviderInContext(
   provider: ProviderId,
   contextId: string,
@@ -120,7 +133,9 @@ export function writeCachedProviders(providers: ProviderQuota[]): void {
     providers
       .filter(
         (provider) =>
-          provider.state.status === "fresh" && provider.windows.length === 0,
+          provider.state.status === "fresh" &&
+          provider.windows.length === 0 &&
+          !missingRequiredContext(provider.provider),
       )
       .map((provider) => provider.provider),
   );
@@ -215,11 +230,18 @@ function toCacheProvider(provider: ProviderQuota): CachedProvider | undefined {
     CACHE_SCHEMA_VERSION,
   )?.snapshot;
   if (!snapshot) return undefined;
-  const contextId = CONTEXT_SCOPED_PROVIDERS[provider.provider]?.();
+  const scope = CONTEXT_SCOPED_PROVIDERS[provider.provider];
+  const contextId = scope?.();
+  if (scope && !contextId) return undefined;
   return {
     snapshot,
     ...(contextId ? { credentialContextId: contextId } : {}),
   };
+}
+
+function missingRequiredContext(provider: ProviderId): boolean {
+  const scope = CONTEXT_SCOPED_PROVIDERS[provider];
+  return scope !== undefined && !scope();
 }
 
 function serializeCachedProvider(

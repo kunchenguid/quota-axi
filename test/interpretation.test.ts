@@ -86,6 +86,7 @@ describe("quota semantics", () => {
       ["agy", [window("gemini_weekly", "weekly", 98)]],
       ["cursor", [window("included_usage", "monthly", 72)]],
       ["copilot", [window("premium_interactions", "monthly", 81)]],
+      ["commandcode", [window("five_hour", "session", 55)]],
     ];
 
     for (const [providerId, windows] of cases) {
