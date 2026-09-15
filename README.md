@@ -35,7 +35,7 @@ $ npx -y quota-axi
 bin: ~/.npm/_npx/.../quota-axi
 description: Report local agent-provider quota windows for routing-aware agents
 generatedAt: "2026-03-15T16:42:00.000Z"
-quota[10]{provider,scope,effectivePercentRemaining,spendPriority,runway,confidence,limitedBy,resetsAt}:
+quota[12]{provider,scope,effectivePercentRemaining,spendPriority,runway,confidence,limitedBy,resetsAt}:
   claude,all_models,64,-0.3798,projected_exhaustion,established,seven_day,"2026-03-20T17:59:45.600Z"
   claude,seven_day_opus,64,0.3218,projected_exhaustion,established,seven_day,"2026-03-20T17:59:45.600Z"
   claude,"model:fable",64,-0.0932,projected_exhaustion,established,seven_day,"2026-03-20T17:59:45.600Z"
@@ -46,6 +46,8 @@ quota[10]{provider,scope,effectivePercentRemaining,spendPriority,runway,confiden
   kimi,all_models,74,0.2484,through_reset,established,weekly,"2026-03-20T12:17:02.400Z"
   zai,all_models,50,-1.0046,projected_exhaustion,established,weekly,"2026-03-20T16:42:00.000Z"
   zai,tools,100,unknown,unknown,unknown,mcp_month,"2026-04-01T00:00:00.000Z"
+  agy,gemini,88,unknown,unknown,unknown,gemini_weekly,"2026-03-20T00:00:00.000Z"
+  agy,claude_gpt,90,unknown,unknown,unknown,claude_gpt_weekly,"2026-03-21T00:00:00.000Z"
 exhaustion[6]{provider,scope,usableRunwaySeconds,projectedExhaustedAt,limitingWindowId}:
   claude,all_models,298906,"2026-03-19T03:43:45.600Z",seven_day
   claude,seven_day_opus,298906,"2026-03-19T03:43:45.600Z",seven_day
@@ -53,10 +55,11 @@ exhaustion[6]{provider,scope,usableRunwaySeconds,projectedExhaustedAt,limitingWi
   codex,all_models,10365,"2026-03-15T19:34:45.428Z",five_hour
   codex,"model:gpt-5.1-codex",10365,"2026-03-15T19:34:45.428Z",five_hour
   zai,all_models,172800,"2026-03-17T16:42:00.000Z",weekly
-attention[3]{provider,scope,kind,detail,remedy}:
+attention[4]{provider,scope,kind,detail,remedy}:
   copilot,all,unresolved_windows,chat + premium_interactions,none
   zai,tools,unmeasurable,"mcp_month blocks runway + spendPriority",none
-  agy,all,unresolved_windows,gemini_5h + gemini_weekly + claude_gpt_5h + claude_gpt_weekly,none
+  agy,gemini,unmeasurable,"gemini_5h + gemini_weekly blocks runway + spendPriority",none
+  agy,claude_gpt,unmeasurable,"claude_gpt_5h + claude_gpt_weekly blocks runway + spendPriority",none
 help[1]:
   Run `quota-axi --full` for windows, pace, reserve, and account evidence
 ```
@@ -469,6 +472,8 @@ Z.AI's `five_hour` and `weekly` usage windows jointly bound model usage and are 
 
 Alibaba's account `weekly` window is reported at `all_models` scope, while each `model:*` limit is kept only at its named model scope; a model limit never becomes an account-wide bound. OpenCode Go's rolling, weekly, and monthly windows are stacked plan caps ($12 per rolling 5 hours, $30 per week, $60 per month) that jointly bound Go-plan usage at `all_models` scope, so effective remaining is the minimum across them. A zeroed plan window blocks Go-plan requests, but the vendor's free-model fallback or an opted-in Zen balance may still serve past it, which the usage endpoint does not report.
 
+Antigravity groups its Gemini windows (`gemini_5h`, `gemini_weekly`) and its Claude/GPT windows (`claude_gpt_5h`, `claude_gpt_weekly`) into two independent scopes, `gemini` and `claude_gpt`. Within each group the 5-hour and weekly windows jointly bound that group, so its effective remaining is the minimum across its named windows, and neither group's usage lowers the other's headroom. An unfamiliar Antigravity window - including a recognized group's unrecognized bucket such as `gemini_unknown` - is not folded into either bound: it stays named in `unresolvedWindowIds` and turns the provider's semantics `partial`, while a reading that exposes only model-config `model:*` windows resolves no group and stays `unknown`. Antigravity v1 snapshots carry no cycle history, so each group reports headroom while its pace, `runway`, and `selection` stay unmeasurable.
+
 For every stale provider report, raw windows remain available for diagnostics but effective availability is always `unknown` and omits `effectivePercentRemaining` and `limitingWindowIds`. Window pace is `unknown` with reason `stale`, and each effective pace summary, effective `runway`, and `selection` is also `unknown` with its unmeasurable bounds named. Routing agents must not treat a stale raw percentage as current headroom.
 
 ### Pace signals
@@ -790,7 +795,7 @@ Providers with no established non-interactive rotation command stay read-only on
 - It never prints, logs, or caches credential values.
 - It never mints, rotates, or writes a credential, and never performs a refresh-token exchange. Credential renewal is always delegated to the vendor CLI that owns the store (see [Delegated credential refresh](#delegated-credential-refresh)).
 - It never retains, prints, logs, renders, caches, sends, or exchanges a refresh token's value. The Pi credential brokers read a stored refresh value only to derive a usability boolean - whether it is a usable literal secret rather than absent or an environment, template, or command reference - and discard it immediately; elsewhere only its presence is checked, as evidence that the vendor can still recover.
-- It never launches the Cursor, Pi, Kimi, or OpenCode CLIs. It runs the read-only Alibaba `bl` usage command, the declared read-only Codex app-server probe, Antigravity's noninteractive structured `/usage` print command when loopback access cannot answer, and the two declared refresh delegates (`claude doctor`, `grok models`); none starts an agent session or spends the quota being measured.
+- It never launches the Cursor, Pi, Kimi, or OpenCode CLIs. It runs the read-only Alibaba `bl` usage command, the declared read-only Codex app-server probe, Antigravity's noninteractive structured `/quota` read (`agy -p "/quota"`), preferred ahead of its loopback access, and the two declared refresh delegates (`claude doctor`, `grok models`); none starts an agent session or spends the quota being measured.
 - It never signals or kills a delegated refresh. A vendor that outruns quota-axi's wait is left to finish its own token exchange, and quota-axi reports an unconfirmed refresh instead of a credential verdict.
 - It never routes, ranks a winner, or orders providers preferentially. Derived comparative signals, including `effectiveAvailability[].selection`, are published as data for the consumer to act on.
 
