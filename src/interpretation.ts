@@ -394,33 +394,47 @@ function kimiSemantics(
 }
 
 /**
- * Cursor IDE recognized windows all draw on the same plan billing cycle, so
- * quota-axi treats them as jointly bounding rather than independent. That is
- * the conservative reading: the effective remaining is the minimum across them,
- * which never overstates headroom even if a window later turns out to be
- * independent. Grok Bot weekly usage is a separate Cursor-account resource.
+ * Cursor's included IDE usage windows jointly bound the subscription model
+ * pool. The optional spend limit applies only to paid on-demand usage after
+ * included usage runs out, so it is a separate resource rather than an
+ * inherited bound on included model availability. Grok Bot weekly usage is a
+ * third, independent Cursor-account resource.
  */
-const CURSOR_IDE_WINDOW_IDS = [
+const CURSOR_INCLUDED_WINDOW_IDS = [
   "included_usage",
   "auto_usage",
   "api_usage",
-  "spend_limit",
 ];
+const CURSOR_ON_DEMAND_WINDOW_ID = "spend_limit";
 const CURSOR_GROK_BOT_WINDOW_ID = "grok_bot";
 
 function cursorSemantics(
   windows: QuotaWindow[],
   generatedAt: string,
 ): QuotaSemantics {
-  const ide = windows.filter(({ id }) => CURSOR_IDE_WINDOW_IDS.includes(id));
+  const included = windows.filter(({ id }) =>
+    CURSOR_INCLUDED_WINDOW_IDS.includes(id),
+  );
+  const onDemand = windows.filter(
+    ({ id }) => id === CURSOR_ON_DEMAND_WINDOW_ID,
+  );
   const grokBot = windows.filter(({ id }) => id === CURSOR_GROK_BOT_WINDOW_ID);
   const unresolved = windows.filter(
     ({ id }) =>
-      !CURSOR_IDE_WINDOW_IDS.includes(id) && id !== CURSOR_GROK_BOT_WINDOW_ID,
+      !CURSOR_INCLUDED_WINDOW_IDS.includes(id) &&
+      id !== CURSOR_ON_DEMAND_WINDOW_ID &&
+      id !== CURSOR_GROK_BOT_WINDOW_ID,
   );
   const effectiveAvailability: EffectiveAvailability[] = [];
-  if (ide.length > 0) {
-    effectiveAvailability.push(availability("all_models", ide, generatedAt));
+  if (included.length > 0) {
+    effectiveAvailability.push(
+      availability("all_models", included, generatedAt),
+    );
+  }
+  if (onDemand.length > 0) {
+    effectiveAvailability.push(
+      availability("on_demand", onDemand, generatedAt),
+    );
   }
   if (grokBot.length > 0) {
     effectiveAvailability.push(availability("grok_bot", grokBot, generatedAt));
@@ -429,14 +443,14 @@ function cursorSemantics(
     return {
       status: "partial",
       description:
-        "Cursor's included, auto, API usage, and spend-limit windows jointly bound every model, so effective remaining is the minimum across those named windows. The Grok Bot weekly window is an independent resource. Unfamiliar windows are not folded into either bound, so they stay unresolved.",
+        "Cursor's included, auto, and API usage windows jointly bound the included model pool. The optional on-demand spend limit and Grok Bot weekly window are independent resources. Unfamiliar windows are not folded into any known bound, so they stay unresolved.",
       effectiveAvailability,
       unresolvedWindowIds: unresolved.map(({ id }) => id),
     };
   }
   return knownSemantics(
     effectiveAvailability,
-    "Cursor's included, auto, API usage, and spend-limit windows jointly bound every model, so effective remaining is the minimum across those named windows. The Grok Bot weekly window is an independent resource.",
+    "Cursor's included, auto, and API usage windows jointly bound the included model pool. The optional on-demand spend limit and Grok Bot weekly window are independent resources.",
   );
 }
 
