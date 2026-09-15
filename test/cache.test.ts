@@ -12,11 +12,16 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   deleteCachedProvider,
   readCachedClaudeProvider,
+  readCachedCursorProvider,
   readCachedKimiProvider,
   readCachedProvider,
   writeCachedProviders,
 } from "../src/cache.js";
 import { cacheFilePath, claudeCredentialContextId } from "../src/lib/fs.js";
+import {
+  cursorAccountContextId,
+  withCursorCacheContext,
+} from "../src/providers/cursor-cache-context.js";
 import { createKimiCodeCliCredentialSource } from "../src/providers/kimi-code-cli-credential.js";
 import type { ProviderId, ProviderQuota } from "../src/types.js";
 
@@ -204,10 +209,39 @@ describe("quota cache", () => {
       providers: Array<{ credentialContext?: string }>;
     };
     const contextId = payload.providers[0]?.credentialContext;
-    expect(payload.schemaVersion).toBe(2);
+    expect(payload.schemaVersion).toBe(3);
     expect(contextId).toMatch(/^[a-f0-9]{64}$/);
     expect(JSON.stringify(payload)).not.toContain(contextDir);
     expect(readCachedClaudeProvider(claudeCredentialContextId())).toBeDefined();
+  });
+
+  it("stores Cursor cache only under its remote account identity", () => {
+    useTempCache();
+    const remoteAccountId = "remote-cursor-account-fixture";
+    const cursor = withCursorCacheContext(
+      { ...quota("cursor", 42), source: "api" },
+      remoteAccountId,
+    );
+
+    writeCachedProviders([cursor]);
+
+    const bytes = readFileSync(cacheFilePath(), "utf8");
+    expect(bytes).not.toContain(remoteAccountId);
+    expect(bytes).not.toContain("person@example.invalid");
+    expect(
+      readCachedCursorProvider(cursorAccountContextId(remoteAccountId)),
+    ).toMatchObject({ provider: "cursor", windows: [{ percentUsed: 42 }] });
+    expect(
+      readCachedCursorProvider(cursorAccountContextId("another-account")),
+    ).toBeUndefined();
+  });
+
+  it("does not cache Cursor quota without remote account evidence", () => {
+    useTempCache();
+
+    writeCachedProviders([{ ...quota("cursor", 42), source: "api" }]);
+
+    expect(readCachedProvider("cursor")).toBeUndefined();
   });
 
   it("refuses Kimi cache captured under another Kimi Code environment", async () => {

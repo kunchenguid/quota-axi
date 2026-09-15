@@ -22,6 +22,7 @@ const originalEnv = {
   CURSOR_CLI_CONFIG: process.env.CURSOR_CLI_CONFIG,
   XDG_CACHE_HOME: process.env.XDG_CACHE_HOME,
   XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
+  PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR,
 };
 let tempDir: string | undefined;
 let cliConfigPath: string;
@@ -33,6 +34,7 @@ beforeEach(() => {
   process.env.CURSOR_STATE_DB = join(tempDir, "state.vscdb");
   process.env.CURSOR_CLI_CONFIG = cliConfigPath;
   process.env.XDG_CACHE_HOME = join(tempDir, "cache");
+  process.env.PI_CODING_AGENT_DIR = join(tempDir, "pi-agent");
 });
 
 afterEach(() => {
@@ -507,6 +509,7 @@ describe("Cursor CLI keychain credential source", () => {
     expect(result.sources.map((source) => source.source)).toEqual([
       "state-vscdb",
       "cli-authfile",
+      "pi:cursor",
     ]);
     expect(result.sources[1]).toEqual({
       source: "cli-authfile",
@@ -550,6 +553,11 @@ describe("Cursor editor state.vscdb source (regression)", () => {
         status: "skipped",
         error: "keychain_prompt_required",
         credentialPresent: true,
+      },
+      {
+        source: "pi:cursor",
+        path: join(tempDir!, "pi-agent", "auth.json"),
+        status: "missing",
       },
     ]);
     expect(securityCalls(calls)).toEqual([
@@ -634,6 +642,11 @@ describe("Cursor editor state.vscdb source (regression)", () => {
           status: "skipped",
           error: "keychain_prompt_required",
           credentialPresent: true,
+        },
+        {
+          source: "pi:cursor",
+          status: "skipped",
+          error: "credentials_missing",
         },
       ]);
       expect(annotated.providers[0]?.state.reason).toBe(

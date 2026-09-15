@@ -17,6 +17,7 @@ const originalEnv = {
   CURSOR_STATE_DB: process.env.CURSOR_STATE_DB,
   CURSOR_CLI_CONFIG: process.env.CURSOR_CLI_CONFIG,
   XDG_CACHE_HOME: process.env.XDG_CACHE_HOME,
+  PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR,
 };
 let tempDir: string;
 
@@ -27,6 +28,7 @@ beforeEach(() => {
   process.env.CURSOR_STATE_DB = join(tempDir, "state.vscdb");
   process.env.CURSOR_CLI_CONFIG = join(tempDir, "cli-config.json");
   process.env.XDG_CACHE_HOME = join(tempDir, "cache");
+  process.env.PI_CODING_AGENT_DIR = join(tempDir, "pi-agent");
 });
 
 afterEach(() => {
@@ -207,6 +209,7 @@ describe("Cursor CLI-only quota refresh", () => {
         `Bearer ${CLI_TOKEN}`,
         `Bearer ${CLI_TOKEN}`,
         `Bearer ${CLI_TOKEN}`,
+        `Bearer ${CLI_TOKEN}`,
       ]);
       expect(JSON.stringify(result)).not.toContain(
         "refresh-token-must-not-be-used",
@@ -237,7 +240,7 @@ describe("Cursor CLI-only quota refresh", () => {
     });
   });
 
-  it("falls back to stale quota when the Linux auth-file token is rejected", async () => {
+  it("does not reuse a contextless cache when the Linux auth-file token is rejected", async () => {
     writeCliAuthFile();
     mockProcess({});
     vi.stubGlobal(
@@ -253,12 +256,13 @@ describe("Cursor CLI-only quota refresh", () => {
         refreshCredentials: false,
       });
 
-      expect(result.state.status).toBe("stale");
+      expect(result.state.status).toBe("auth_required");
+      expect(result.state.stale).toBe(false);
       expect(result.state.error).toBe("Cursor sign-in required");
       expect(result.state.sourcesTried).toEqual([
         "state-vscdb",
         "cli-authfile",
-        "cache",
+        "pi:cursor",
       ]);
       expect(result.attempts).toEqual([
         {
@@ -270,6 +274,11 @@ describe("Cursor CLI-only quota refresh", () => {
           source: "cli-authfile",
           status: "failed",
           error: "Cursor sign-in required",
+        },
+        {
+          source: "pi:cursor",
+          status: "skipped",
+          error: "credentials_missing",
         },
       ]);
     });
@@ -302,8 +311,9 @@ describe("Cursor CLI-only quota refresh", () => {
       expect(result.windows).toMatchObject([
         { id: "included_usage", percentUsed: 12, percentRemaining: 88 },
       ]);
-      // The Keychain token is the bearer of Cursor's read-only dashboard RPCs...
+      // The Keychain token is the bearer of Cursor's read-only dashboard/profile requests...
       expect(bearers).toEqual([
+        `Bearer ${CLI_TOKEN}`,
         `Bearer ${CLI_TOKEN}`,
         `Bearer ${CLI_TOKEN}`,
         `Bearer ${CLI_TOKEN}`,
@@ -382,6 +392,7 @@ describe("Cursor CLI-only quota refresh", () => {
       expect(result.attempts).toEqual([{ source: "api", status: "success" }]);
       expect(result.account?.email).toBe("editor@example.invalid");
       expect(bearers).toEqual([
+        `Bearer ${EDITOR_TOKEN}`,
         `Bearer ${EDITOR_TOKEN}`,
         `Bearer ${EDITOR_TOKEN}`,
         `Bearer ${EDITOR_TOKEN}`,
