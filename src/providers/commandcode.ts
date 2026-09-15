@@ -27,6 +27,7 @@ import {
   type CommandCodeFileSource,
 } from "./commandcode-api-key.js";
 import {
+  clearCommandCodeReadingContextId,
   commandCodeCacheContextId,
   publishCommandCodeReadingContextId,
 } from "./commandcode-cache-context.js";
@@ -243,6 +244,7 @@ async function acquireCommandCodeQuota(
   const attempts: SourceAttempt[] = [];
   const failures: FailureRecord[] = [];
   let cacheContextId: string | undefined;
+  clearCommandCodeReadingContextId();
 
   try {
     for (const source of COMMANDCODE_SOURCE_ORDER) {
@@ -663,7 +665,9 @@ export function normalizeCommandCodePayload(
       windows.push(measured);
       continue;
     }
-    if (limitedFlag === true) {
+    // limited:false is credit-only. Any other present windowLimits object
+    // jointly binds five-hour and weekly; a missing companion stays untrusted.
+    if (windowLimits && limitedFlag !== false) {
       windows.push(placeholderWindow(id));
       untrustedWindowIds.push(id);
       diagnostics.push({ code: "expected_window_invalid", id });
@@ -673,9 +677,10 @@ export function normalizeCommandCodePayload(
   if (windowLimits) {
     for (const [key, value] of Object.entries(windowLimits)) {
       if (KNOWN_WINDOW_LIMIT_KEYS.has(key)) continue;
-      if (!isObject(value)) continue;
       const unknownId = `window:${sanitizeId(key)}`;
-      windows.push(unknownWindow(unknownId, value, key));
+      if (isObject(value)) {
+        windows.push(unknownWindow(unknownId, value, key));
+      }
       untrustedWindowIds.push(unknownId);
       diagnostics.push({ code: "unknown_window", id: unknownId });
     }

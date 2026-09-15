@@ -19,6 +19,11 @@ export function publishCommandCodeReadingContextId(contextId: string): void {
   readingContextId = contextId;
 }
 
+/** Drop any previously published identity so a later reading cannot inherit it. */
+export function clearCommandCodeReadingContextId(): void {
+  readingContextId = undefined;
+}
+
 export function commandCodeReadingContextId(): string | undefined {
   return readingContextId;
 }

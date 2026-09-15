@@ -391,6 +391,38 @@ describe("Command Code payload normalization", () => {
     expect(semantics?.status).not.toBe("known");
   });
 
+  it("emits an untrusted placeholder when one expected window is present and limited is omitted", () => {
+    const normalized = normalizeCommandCodePayload({
+      monthlyCredits: 1,
+      purchasedCredits: 0,
+      freeCredits: 0,
+      windowLimits: {
+        fiveHour: { used: 0, cap: 10, resetAt: 1_789_400_000 },
+      },
+    });
+    expect(normalized.windows.map(({ id }) => id)).toEqual([
+      "five_hour",
+      "weekly",
+    ]);
+    expect(normalized.untrustedWindowIds).toContain("weekly");
+    expect(normalized.windows[1]?.percentRemaining).toBeUndefined();
+  });
+
+  it("names unknown scalar windowLimits keys as untrusted", () => {
+    const normalized = normalizeCommandCodePayload({
+      monthlyCredits: 1,
+      purchasedCredits: 0,
+      freeCredits: 0,
+      windowLimits: {
+        limited: true,
+        fiveHour: { used: 0, cap: 10, resetAt: 1_789_400_000 },
+        weekly: { used: 1, cap: 10, resetAt: 1_789_400_000 },
+        extraCap: 3,
+      },
+    });
+    expect(normalized.untrustedWindowIds).toContain("window:extracap");
+  });
+
   it("emits an untrusted placeholder when limited is true and a required window is missing", () => {
     const normalized = normalizeCommandCodePayload(MALFORMED_WINDOW);
     expect(normalized.windows.map(({ id }) => id)).toEqual([
@@ -513,6 +545,24 @@ describe("Command Code cache", () => {
     expect(report.state.status).toBe("error");
     expect(report.state.stale).toBe(false);
     expect(report.windows).toEqual([]);
+  });
+
+  it("does not inherit a previous account's cache context after an unidentified whoami", async () => {
+    const previous = commandCodeCacheContextId(
+      "pi:commandcode",
+      "org:org_fixture",
+    );
+    await testAdapter({
+      fetch: sequentialFetch([jsonResponse(WHOAMI), jsonResponse(CREDITS)]),
+    }).fetchQuota(OPTIONS);
+    const report = await testAdapter({
+      fetch: sequentialFetch([
+        jsonResponse({}),
+        new Response(null, { status: 503 }),
+      ]),
+      readCachedProvider: (id) => (id === previous ? cachedQuota() : undefined),
+    }).fetchQuota(OPTIONS);
+    expect(report.state.stale).toBe(false);
   });
 
   it("does not reuse a different account's snapshot", async () => {
