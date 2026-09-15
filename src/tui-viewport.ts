@@ -307,7 +307,7 @@ export function scrollHint(status: ScrollStatus, restingHint: string): string {
   const parts: string[] = [];
   if (above > 0) parts.push(`↑ ${above} more`);
   if (below > 0) parts.push(`↓ ${below} more`);
-  parts.push("j/k PgUp/PgDn g/G scroll", "q quit");
+  parts.push("j/k PgUp/PgDn g/G scroll", "r refresh", "q quit");
   return parts.join(" · ");
 }
 
