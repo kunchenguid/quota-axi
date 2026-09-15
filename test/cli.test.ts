@@ -738,7 +738,7 @@ describe("CLI quota rendering", () => {
     expect(compact).toContain(
       'codex,all_models,258720,"2026-07-18T11:52:00.000Z",weekly',
     );
-    expect(compact).toContain("attention[0]:");
+    expect(compact).toContain("attention: []");
     expect(compact).not.toContain("windows[");
     expect(compact).not.toContain("worstReserve");
 
@@ -979,7 +979,7 @@ describe("default TOON decision blocks", () => {
 
     const output = await capture(["--provider", "claude"]);
 
-    expect(output).toContain("quota[0]:");
+    expect(output).toContain("quota: []");
     expect(toonRows(output, "attention")).toEqual([
       [
         "claude",
@@ -1001,7 +1001,7 @@ describe("default TOON decision blocks", () => {
     const output = await capture(["--provider", "codex"]);
 
     expect(toonRows(output, "quota")[0]?.[4]).toBe("through_reset");
-    expect(output).toContain("exhaustion[0]:");
+    expect(output).toContain("exhaustion: []");
   });
 
   it("keeps unknown-scope exhaustion in attention without an orphan row", async () => {
@@ -1509,7 +1509,10 @@ function freshKimiQuota(): ProviderQuota {
 function toonRows(output: string, block: string): string[][] {
   const lines = output.split("\n");
   const start = lines.findIndex((line) => line.startsWith(`${block}[`));
-  if (start === -1) throw new Error(`missing TOON block: ${block}`);
+  if (start === -1) {
+    if (lines.includes(`${block}: []`)) return [];
+    throw new Error(`missing TOON block: ${block}`);
+  }
   const rows: string[][] = [];
   for (const line of lines.slice(start + 1)) {
     if (!line.startsWith("  ")) break;
