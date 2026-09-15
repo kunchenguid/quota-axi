@@ -161,6 +161,20 @@ async function seedCache(): Promise<void> {
         percentUsed: 100,
         percentRemaining: 0,
       },
+      {
+        id: "auto_usage",
+        label: "auto usage",
+        kind: "monthly",
+        percentUsed: 63,
+        percentRemaining: 37,
+      },
+      {
+        id: "api_usage",
+        label: "API usage",
+        kind: "monthly",
+        percentUsed: 58,
+        percentRemaining: 42,
+      },
     ],
     state: {
       status: "fresh",
@@ -201,7 +215,12 @@ describe("Cursor CLI-only quota refresh", () => {
         { source: "cli-authfile", status: "success" },
       ]);
       expect(result.windows).toMatchObject([
-        { id: "included_usage", percentUsed: 12, percentRemaining: 88 },
+        {
+          id: "included_usage",
+          label: "Included in Ultra",
+          percentUsed: 12,
+          percentRemaining: 88,
+        },
       ]);
       expect(bearers).toEqual([
         `Bearer ${CLI_TOKEN}`,
@@ -272,6 +291,19 @@ describe("Cursor CLI-only quota refresh", () => {
           error: "Cursor sign-in required",
         },
       ]);
+      expect(result.windows).toMatchObject([
+        {
+          id: "included_usage",
+          label: "Included in Ultra",
+          percentUsed: 100,
+        },
+        {
+          id: "auto_usage",
+          label: "Cursor Models (includes Cursor Grok and Composer)",
+          percentUsed: 63,
+        },
+        { id: "api_usage", label: "Other Models", percentUsed: 58 },
+      ]);
     });
   });
 
@@ -300,7 +332,12 @@ describe("Cursor CLI-only quota refresh", () => {
       expect(result.plan).toBe("ultra");
       expect(result.account?.email).toBe("person@example.invalid");
       expect(result.windows).toMatchObject([
-        { id: "included_usage", percentUsed: 12, percentRemaining: 88 },
+        {
+          id: "included_usage",
+          label: "Included in Ultra",
+          percentUsed: 12,
+          percentRemaining: 88,
+        },
       ]);
       // The Keychain token is the bearer of Cursor's read-only dashboard RPCs...
       expect(bearers).toEqual([
