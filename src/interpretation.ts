@@ -127,11 +127,44 @@ function semanticsFor(
     case "alibaba":
       return alibabaSemantics(provider.windows, generatedAt);
     case "opencode-go":
-      return unknownSemantics(
-        provider.windows,
-        "OpenCode Go reports rolling, weekly, and monthly windows, but quota-axi has no provider evidence that they jointly bound all models, so it does not claim an effective combined percentage.",
-      );
+      return opencodeGoSemantics(provider.windows, generatedAt);
   }
+}
+
+/**
+ * OpenCode Go's usage endpoint reports the plan's stacked caps: the vendor
+ * documents $12 per rolling 5 hours, $30 per week, and $60 per month, and
+ * reaching a cap blocks Go-plan requests (the vendor's free-model fallback or
+ * an opted-in Zen balance may still serve past a zeroed plan window, which
+ * this endpoint does not report). That is the missing joint-bound evidence,
+ * so the three windows jointly bound Go-plan usage at `all_models` scope.
+ */
+function opencodeGoSemantics(
+  windows: QuotaWindow[],
+  generatedAt: string,
+): QuotaSemantics {
+  const plan = windows.filter(({ id }) =>
+    ["rolling", "five_hour", "weekly", "monthly"].includes(id),
+  );
+  const recognized = new Set(plan);
+  const unresolved = windows.filter((window) => !recognized.has(window));
+  const unresolvedWindowIds = [...new Set(unresolved.map(({ id }) => id))];
+  if (unresolvedWindowIds.length > 0) {
+    return {
+      status: "partial",
+      description:
+        "OpenCode Go's rolling, weekly, and monthly windows are stacked plan caps that jointly bound Go-plan usage, but unfamiliar windows prevent a definitive effective percentage.",
+      effectiveAvailability:
+        plan.length > 0
+          ? [unresolvedAvailability("all_models", plan, unresolvedWindowIds)]
+          : [],
+      unresolvedWindowIds,
+    };
+  }
+  return knownSemantics(
+    plan.length > 0 ? [availability("all_models", plan, generatedAt)] : [],
+    "OpenCode Go's rolling, weekly, and monthly windows are stacked plan caps ($12 per rolling 5 hours, $30 per week, $60 per month) that jointly bound Go-plan usage, so effective remaining is the minimum across the named windows. A zeroed plan window blocks Go-plan requests; the vendor's free-model fallback or an opted-in Zen balance may still serve past it, which this endpoint does not report.",
+  );
 }
 
 function alibabaSemantics(

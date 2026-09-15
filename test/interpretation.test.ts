@@ -329,10 +329,10 @@ describe("quota semantics", () => {
     ]);
   });
 
-  it("does not claim independent OpenCode Go windows jointly bind all models", () => {
+  it("treats OpenCode Go rolling, weekly, and monthly windows as stacked plan caps", () => {
     const result = withQuotaSemantics(
       provider("opencode-go", [
-        window("five_hour", "session", 90),
+        window("rolling", "unknown", 90),
         window("weekly", "weekly", 80),
         window("monthly", "monthly", 70),
       ]),
@@ -340,13 +340,40 @@ describe("quota semantics", () => {
     );
 
     expect(result.quotaSemantics).toMatchObject({
-      status: "unknown",
-      effectiveAvailability: [],
-      unresolvedWindowIds: ["five_hour", "weekly", "monthly"],
+      status: "known",
+      effectiveAvailability: [
+        {
+          scope: "all_models",
+          status: "known",
+          effectivePercentRemaining: 70,
+          boundedBy: ["rolling", "weekly", "monthly"],
+          limitingWindowIds: ["monthly"],
+        },
+      ],
     });
-    expect(result.quotaSemantics?.description).toContain(
-      "does not claim an effective combined percentage",
+  });
+
+  it("keeps OpenCode Go effective unknown when an unfamiliar window appears", () => {
+    const result = withQuotaSemantics(
+      provider("opencode-go", [
+        window("weekly", "weekly", 80),
+        window("monthly", "monthly", 70),
+        window("credits", "unknown", 50),
+      ]),
+      GENERATED_AT,
     );
+
+    expect(result.quotaSemantics).toMatchObject({
+      status: "partial",
+      effectiveAvailability: [
+        {
+          scope: "all_models",
+          status: "unknown",
+          boundedBy: ["weekly", "monthly"],
+        },
+      ],
+      unresolvedWindowIds: ["credits"],
+    });
   });
 
   it("surfaces pace on a non-currently-limiting bounding window that is ahead", () => {
