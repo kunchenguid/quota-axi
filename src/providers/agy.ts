@@ -8,7 +8,6 @@ import {
   parseEpochOrIso,
   percentRemaining,
 } from "../lib/time.js";
-import { markAgyStaleIfExpiredReset } from "../interpretation.js";
 import type {
   AuthProviderReport,
   ProviderAdapter,
@@ -63,7 +62,6 @@ export type AgyConnectionEndpoint = {
 };
 
 export type AgyProbeRuntime = {
-  now?: () => number;
   findCommandPath(command: string): Promise<string | undefined>;
   execFileText(
     command: string,
@@ -110,9 +108,7 @@ export async function fetchQuotaWithRuntime(
       sourcesTried: sourceNames(attempts),
       attempts,
     });
-    return runtime.now
-      ? markAgyStaleIfExpiredReset(provider, runtime.now())
-      : provider;
+    return provider;
   } catch (error) {
     finalFailure = error;
     const skipped =
@@ -140,9 +136,7 @@ export async function fetchQuotaWithRuntime(
       sourcesTried: sourceNames(attempts),
       attempts,
     });
-    return runtime.now
-      ? markAgyStaleIfExpiredReset(provider, runtime.now())
-      : provider;
+    return provider;
   } catch (error) {
     const skipped =
       error instanceof AgyUnavailableError || isMissingCommandError(error);
@@ -265,8 +259,6 @@ async function fetchCliQuota(runtime: AgyProbeRuntime): Promise<{
   }
   return summary;
 }
-
-export { markAgyStaleIfExpiredReset };
 
 export function reshapeAgyCliQuota(raw: unknown): { groups: unknown[] } {
   const root = objectValue(raw);
@@ -684,11 +676,6 @@ function normalizeQuotaSummaryBucket(
     resetsAt:
       parseEpochOrIso(bucket.resetTime) ?? parseEpochOrIso(bucket.reset_time),
     resetText: stringValue(bucket.description),
-    ...(windowKind.id === "5h"
-      ? { windowSeconds: 5 * 60 * 60 }
-      : windowKind.id === "weekly"
-        ? { windowSeconds: 7 * 24 * 60 * 60 }
-        : {}),
   };
   const remaining = remainingFraction(bucket);
   if (remaining !== undefined) {
@@ -1226,7 +1213,6 @@ function httpErrorMessage(status: number): string {
 }
 
 const defaultRuntime: AgyProbeRuntime = {
-  now: () => Date.now(),
   findCommandPath: async (command) => {
     const { findCommandPath } = await import("../lib/process.js");
     return findCommandPath(command);

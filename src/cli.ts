@@ -79,7 +79,7 @@ export async function main(options: MainOptions = {}): Promise<void> {
  * the SDK own routing, help, version, and error framing.
  */
 export function normalizeArgv(raw: string[]): string[] {
-  raw = raw.filter((arg) => arg !== "--");
+  if (raw[0] === "--") raw = raw.slice(1);
   if (raw.length === 0) return ["quota"];
   if (findLegacyFlag(raw, (arg) => arg === "--help" || arg === "-h") >= 0) {
     return ["--help"];

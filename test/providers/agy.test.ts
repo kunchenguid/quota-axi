@@ -24,6 +24,7 @@ import {
   type AgyConnectionEndpoint,
   type AgyProbeRuntime,
 } from "../../src/providers/agy.js";
+import { withQuotaSemantics } from "../../src/interpretation.js";
 import type { ProviderQuota } from "../../src/types.js";
 
 const originalXdgCacheHome = process.env.XDG_CACHE_HOME;
@@ -61,7 +62,6 @@ describe("Antigravity quota parsing", () => {
         percentUsed: 9,
         percentRemaining: 91,
         resetsAt: "2026-06-15T11:39:34.000Z",
-        windowSeconds: 5 * 60 * 60,
       },
       {
         id: "gemini_weekly",
@@ -70,7 +70,6 @@ describe("Antigravity quota parsing", () => {
         percentUsed: 18,
         percentRemaining: 82,
         resetsAt: "2026-06-19T08:45:39.000Z",
-        windowSeconds: 7 * 24 * 60 * 60,
       },
       {
         id: "claude_gpt_5h",
@@ -79,7 +78,6 @@ describe("Antigravity quota parsing", () => {
         percentUsed: 27,
         percentRemaining: 73,
         resetsAt: "2026-06-15T12:52:10.000Z",
-        windowSeconds: 5 * 60 * 60,
       },
       {
         id: "claude_gpt_weekly",
@@ -88,9 +86,11 @@ describe("Antigravity quota parsing", () => {
         percentUsed: 36,
         percentRemaining: 64,
         resetsAt: "2026-06-20T00:39:54.000Z",
-        windowSeconds: 7 * 24 * 60 * 60,
       },
     ]);
+    expect(result?.windows.every((w) => w.windowSeconds === undefined)).toBe(
+      true,
+    );
   });
 
   it("normalizes the Antigravity CLI 1.2.2 quota summary shape", () => {
@@ -138,7 +138,7 @@ describe("Antigravity quota parsing", () => {
       percentUsed: 50,
       percentRemaining: 50,
     });
-    expect(result?.windows[0]?.windowSeconds).toBe(7 * 24 * 60 * 60);
+    expect(result?.windows[0]?.windowSeconds).toBeUndefined();
   });
 
   it("reshapes agy CLI /quota JSON into quota-summary groups", () => {
@@ -155,19 +155,19 @@ describe("Antigravity quota parsing", () => {
       {
         id: "gemini_weekly",
         percentRemaining: 0,
-        windowSeconds: 7 * 24 * 60 * 60,
       },
       {
         id: "claude_gpt_5h",
         percentRemaining: 100,
-        windowSeconds: 5 * 60 * 60,
       },
       {
         id: "claude_gpt_weekly",
         percentRemaining: 90,
-        windowSeconds: 7 * 24 * 60 * 60,
       },
     ]);
+    expect(result?.windows.every((w) => w.windowSeconds === undefined)).toBe(
+      true,
+    );
   });
 
   it("falls back to model windows from user status payloads", () => {
@@ -825,8 +825,8 @@ describe("Antigravity provider", () => {
   });
 
   it("marks reading stale when resetsAt is in the past", async () => {
-    const nowMs = Date.parse("2026-09-15T12:00:00.000Z");
-    const pastReset = new Date(nowMs - 60_000).toISOString();
+    const nowIso = "2026-09-15T12:00:00.000Z";
+    const pastReset = new Date(Date.parse(nowIso) - 60_000).toISOString();
     const quotaData = fixture("cli-quota.json") as {
       command: {
         data: {
@@ -837,13 +837,15 @@ describe("Antigravity provider", () => {
     const modified = JSON.parse(JSON.stringify(quotaData));
     modified.command.data.groups[0].buckets[0].reset_time = pastReset;
 
-    const result = await fetchQuotaWithRuntime(
+    const fetched = await fetchQuotaWithRuntime(
       runtimeWith({
-        now: nowMs,
         ps: "",
         cliQuota: JSON.stringify(modified),
       }),
     );
+    expect(fetched.state.status).toBe("fresh");
+
+    const result = withQuotaSemantics(fetched, nowIso);
 
     expect(result.state.status).toBe("stale");
     expect(result.state.stale).toBe(true);
@@ -851,7 +853,6 @@ describe("Antigravity provider", () => {
 });
 
 function runtimeWith(options: {
-  now?: number;
   agyPath?: string;
   agyOutput?: string;
   agyError?: Error;
@@ -867,7 +868,6 @@ function runtimeWith(options: {
   onRequest?: (endpoint: AgyConnectionEndpoint, path: string) => void;
 }): AgyProbeRuntime {
   return {
-    now: options.now !== undefined ? () => options.now! : undefined,
     async findCommandPath(command) {
       if (command !== "agy") throw new Error(`unexpected command: ${command}`);
       return (
