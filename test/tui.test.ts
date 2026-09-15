@@ -106,6 +106,45 @@ describe("renderQuotaTui structure", () => {
     expect(row[99]).toBe("│");
   });
 
+  it.each([49, 100])(
+    "keeps long account keys inside live and failed cards at %i columns",
+    (columns) => {
+      const response = fixtureResponse();
+      response.schemaVersion = 6;
+      response.providers = [response.providers[0], response.providers[2]];
+      response.providers[0].accountKey = "a".repeat(96);
+      response.providers[1].accountKey = "b".repeat(96);
+
+      const frame = stripAnsi(
+        renderQuotaTui(response, {
+          columns,
+          colorDepth: "truecolor",
+          timeZone: "UTC",
+        }),
+      );
+      const accountLines = frame
+        .split("\n")
+        .filter((line) => line.includes("account "));
+      expect(accountLines).toHaveLength(columns === 49 ? 2 : 1);
+      for (const line of accountLines) {
+        expect(displayColumns(line)).toBe(columns);
+        expect(line[0]).toBe("│");
+        expect(line[48]).toBe("│");
+        if (columns === 100) {
+          expect(line.slice(49, 51)).toBe("  ");
+          expect(line[51]).toBe("│");
+          expect(line[99]).toBe("│");
+        }
+        expect(line).toContain("…");
+      }
+      expect(frame).toContain("account a");
+      expect(frame).toContain("account b");
+      expect(response.providers.map((provider) => provider.accountKey)).toEqual(
+        ["a".repeat(96), "b".repeat(96)],
+      );
+    },
+  );
+
   it("promotes effective headroom with the runway verdict on the headline", () => {
     const lines = render();
     expect(findLine(lines, "72% week")).toContain("on pace ✓");

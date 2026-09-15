@@ -849,8 +849,11 @@ function padCardToHeight(card: Card, height: number): Card {
   const missing = height - card.length;
   if (missing <= 0) return card;
   const bottom = card.at(-1);
-  const interiorLine = card[1];
-  if (!bottom || !interiorLine) return card;
+  const border = card[1]?.[0];
+  if (!bottom || !border) return card;
+  // The first interior row can contain an account label. Padding must retain
+  // its border style without copying that content into every extra row.
+  const interiorLine = interior([], border.style ?? "border");
   return [
     ...card.slice(0, -1),
     ...Array.from({ length: missing }, () => [...interiorLine]),
@@ -1074,7 +1077,12 @@ function accountCardLines(
   if (!provider.accountKey || provider.accountKey === "default") return [];
   return [
     interior(
-      [{ text: `   account ${provider.accountKey}`, style: "dim" }],
+      [
+        {
+          text: truncate(`   account ${provider.accountKey}`, CARD_INTERIOR),
+          style: "dim",
+        },
+      ],
       border,
     ),
   ];
