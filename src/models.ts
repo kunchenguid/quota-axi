@@ -58,26 +58,39 @@ export function createModelsResponse(
 ): ModelsResponse {
   const catalog = options.catalog ?? MODEL_CATALOG;
   validateModelCatalog(catalog);
-  const providers = new Map(
-    quota.providers.map((provider) => [provider.provider, provider]),
-  );
-  const models = catalog.entries
-    .filter(
-      (entry) =>
-        providers.has(entry.provider) &&
-        (options.intelligence === undefined ||
-          entry.intelligence === options.intelligence),
+  const expanded = quota.providers.some((provider) => provider.accountKey);
+  const models = quota.providers
+    .flatMap((provider) =>
+      catalog.entries
+        .filter(
+          (entry) =>
+            entry.provider === provider.provider &&
+            (options.intelligence === undefined ||
+              entry.intelligence === options.intelligence),
+        )
+        .map((entry) =>
+          modelRecord(
+            entry,
+            expanded
+              ? { ...provider, accountKey: provider.accountKey ?? "default" }
+              : provider,
+          ),
+        ),
     )
-    .map((entry) => modelRecord(entry, providers.get(entry.provider)!))
     .sort(compareModelIdentity);
   const unmatchedWindowIds = quota.providers.flatMap((provider) =>
-    unmatchedModelWindowIds(provider, catalog.entries),
+    unmatchedModelWindowIds(
+      expanded
+        ? { ...provider, accountKey: provider.accountKey ?? "default" }
+        : provider,
+      catalog.entries,
+    ),
   );
 
   if (!options.sort) {
     return {
       generatedAt: quota.generatedAt,
-      schemaVersion: 1,
+      schemaVersion: expanded ? 2 : 1,
       catalog: catalogSummary(catalog),
       models,
       ...(unmatchedWindowIds.length > 0 ? { unmatchedWindowIds } : {}),
@@ -91,7 +104,7 @@ export function createModelsResponse(
   );
   return {
     generatedAt: quota.generatedAt,
-    schemaVersion: 1,
+    schemaVersion: expanded ? 2 : 1,
     catalog: catalogSummary(catalog),
     models: sorted,
     ...(unmatchedWindowIds.length > 0 ? { unmatchedWindowIds } : {}),
@@ -165,6 +178,7 @@ function modelRecord(
   const effective = availabilityFor(entry, provider);
   return {
     provider: entry.provider,
+    ...(provider.accountKey ? { accountKey: provider.accountKey } : {}),
     id: entry.id,
     label: entry.label,
     intelligence: entry.intelligence,
@@ -211,7 +225,10 @@ function unmatchedModelWindowIds(
       unmatchedScopes.add(scope);
       return true;
     })
-    .map((scope) => `${provider.provider}/${scope}`);
+    .map(
+      (scope) =>
+        `${provider.provider}/${provider.accountKey ? `${provider.accountKey}/` : ""}${scope}`,
+    );
 }
 
 function normalizedModelScope(windowId: string): string {
@@ -239,6 +256,7 @@ function compareModelIdentity(
 ): number {
   return (
     left.provider.localeCompare(right.provider) ||
+    (left.accountKey ?? "").localeCompare(right.accountKey ?? "") ||
     left.id.localeCompare(right.id)
   );
 }
@@ -272,7 +290,11 @@ function tieGroups(
     const group: ModelReference[] = [];
     while (index < models.length && comparator.tieKey(models[index]!) === key) {
       const model = models[index++]!;
-      group.push({ provider: model.provider, id: model.id });
+      group.push({
+        provider: model.provider,
+        ...(model.accountKey ? { accountKey: model.accountKey } : {}),
+        id: model.id,
+      });
     }
     if (group.length > 1) groups.push(group);
   }

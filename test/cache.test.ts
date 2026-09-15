@@ -16,6 +16,7 @@ import {
   readCachedProvider,
   writeCachedProviders,
 } from "../src/cache.js";
+import { withCacheContext } from "../src/cache-context.js";
 import { cacheFilePath, claudeCredentialContextId } from "../src/lib/fs.js";
 import { createKimiCodeCliCredentialSource } from "../src/providers/kimi-code-cli-credential.js";
 import type { ProviderId, ProviderQuota } from "../src/types.js";
@@ -204,7 +205,7 @@ describe("quota cache", () => {
       providers: Array<{ credentialContext?: string }>;
     };
     const contextId = payload.providers[0]?.credentialContext;
-    expect(payload.schemaVersion).toBe(2);
+    expect(payload.schemaVersion).toBe(3);
     expect(contextId).toMatch(/^[a-f0-9]{64}$/);
     expect(JSON.stringify(payload)).not.toContain(contextDir);
     expect(readCachedClaudeProvider(claudeCredentialContextId())).toBeDefined();
@@ -381,6 +382,61 @@ oauth_host = "https://auth.kimi.ai"
       "claude",
     ]);
     expect(readCachedProvider("copilot")).toBeUndefined();
+  });
+
+  it("migrates v2 provenance and clears only the matching account after an empty reading", () => {
+    useTempCache();
+    const firstContext = "a".repeat(64);
+    const secondContext = "b".repeat(64);
+    mkdirSync(dirname(cacheFilePath()), { recursive: true });
+    writeFileSync(
+      cacheFilePath(),
+      JSON.stringify({
+        schemaVersion: 2,
+        providers: [
+          { ...quota("claude", 10), credentialContext: firstContext },
+        ],
+      }),
+    );
+    const second = withCacheContext(
+      { ...quota("claude", 60), accountKey: "profile:work" },
+      secondContext,
+    );
+    writeCachedProviders([second]);
+    expect(readCachedClaudeProvider(firstContext)?.windows[0].percentUsed).toBe(
+      10,
+    );
+    expect(
+      readCachedClaudeProvider(secondContext)?.windows[0].percentUsed,
+    ).toBe(60);
+    writeCachedProviders([
+      withCacheContext(
+        { ...quotaWithoutWindows("claude"), accountKey: "profile:personal" },
+        firstContext,
+      ),
+    ]);
+    expect(readCachedClaudeProvider(firstContext)).toBeUndefined();
+    expect(
+      readCachedClaudeProvider(secondContext)?.windows[0].percentUsed,
+    ).toBe(60);
+    expect(
+      JSON.parse(readFileSync(cacheFilePath(), "utf8")).schemaVersion,
+    ).toBe(3);
+  });
+
+  it("isolates generic account keys and preserves the legacy default lookup", () => {
+    useTempCache();
+    writeCachedProviders([
+      { ...quota("copilot", 10), accountKey: "default" },
+      { ...quota("copilot", 80), accountKey: "work" },
+    ]);
+    expect(readCachedProvider("copilot")?.windows[0].percentUsed).toBe(10);
+    expect(readCachedProvider("copilot", "work")?.windows[0].percentUsed).toBe(
+      80,
+    );
+    deleteCachedProvider("copilot");
+    expect(readCachedProvider("copilot")).toBeUndefined();
+    expect(readCachedProvider("copilot", "work")).toBeDefined();
   });
 
   it("clears Alibaba after a fresh empty CLI report", () => {

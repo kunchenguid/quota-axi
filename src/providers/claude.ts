@@ -1,7 +1,10 @@
 import { chmodSync, existsSync, renameSync, writeFileSync } from "node:fs";
 import { userInfo } from "node:os";
 import { join } from "node:path";
-import { deleteCachedProvider, readCachedClaudeProvider } from "../cache.js";
+import {
+  deleteCachedProviderInContext,
+  readCachedClaudeProvider,
+} from "../cache.js";
 import {
   claudeCredentialContextId,
   claudeKeychainAccessMarkerPath,
@@ -9,6 +12,12 @@ import {
   readJsonFileResult,
   type JsonFileReadResult,
 } from "../lib/fs.js";
+import { withCacheContext } from "../cache-context.js";
+import {
+  claudeAccountKey,
+  discoverClaudeProfiles,
+  type ClaudeProfile,
+} from "./claude-accounts.js";
 import { providerFetch } from "../lib/http.js";
 import {
   CLAUDE_KEYCHAIN_SERVICE,
@@ -158,6 +167,50 @@ export const claudeAdapter: ProviderAdapter = {
   label: "Claude",
   fetchQuota,
   inspectAuth,
+  discoverAccounts: async () => {
+    const selected = claudeCredentialContextId();
+    let metadata: ReturnType<typeof readKeychainMetadata> | undefined;
+    const profiles = await discoverClaudeProfiles(async (profile) => {
+      // One metadata snapshot per discovery, however many directories exist.
+      const snapshot = await (metadata ??= readKeychainMetadata());
+      return (
+        snapshot !== undefined &&
+        selectKeychainItem(
+          snapshot.metadata,
+          {
+            ...resolveClaudeProfileLocations(profile),
+            acceptsOpaqueDefaultItem: false,
+          },
+          snapshot.paths,
+        ).status === "present"
+      );
+    });
+    return profiles.map((profile) => ({
+      accountKey: claudeAccountKey(profile),
+      locator: {
+        kind: "config-dir",
+        path: profile.configDir,
+        ...(process.platform === "darwin"
+          ? { keychainService: profile.keychainService }
+          : {}),
+      },
+      fetchQuota: (options) =>
+        fetchSelectedClaudeQuota(
+          {
+            ...options,
+            // Only the process-selected profile owns the existing delegate. Newly
+            // discovered profiles stay read-only; no vendor is launched for them.
+            refreshCredentials:
+              options.refreshCredentials &&
+              claudeCredentialContextId(profile) === selected,
+          },
+          profile,
+          profiles.length > 1,
+        ),
+      inspectAuth: (options) =>
+        inspectClaudeProfileAuth(options, profile, profiles.length > 1),
+    }));
+  },
 };
 
 /**
@@ -203,10 +256,33 @@ export async function fetchQuota(
 ): Promise<ProviderQuota> {
   if (isProfileOnly(options)) return fetchProfileOnlyQuota();
 
-  const attempts: SourceAttempt[] = [];
-  const credentialContextId = claudeCredentialContextId();
+  return fetchSelectedClaudeQuota(options, claudeProfileLocations());
+}
 
-  let pass = await attemptClaudeQuota(options, attempts);
+async function fetchSelectedClaudeQuota(
+  options: ProviderOptions,
+  profile: ClaudeProfile,
+  exact = false,
+): Promise<ProviderQuota> {
+  const contextId = claudeCredentialContextId(profile);
+  const locations = resolveClaudeProfileLocations(profile);
+  // With several profiles there is no safe "only opaque item" inference for
+  // the default. Each lane names its own exact service.
+  if (exact) locations.acceptsOpaqueDefaultItem = false;
+  return withCacheContext(
+    await fetchClaudeProfileQuota(options, locations, contextId),
+    contextId,
+  );
+}
+
+async function fetchClaudeProfileQuota(
+  options: ProviderOptions,
+  locations: ClaudeProfileLocations,
+  credentialContextId: string,
+): Promise<ProviderQuota> {
+  const attempts: SourceAttempt[] = [];
+
+  let pass = await attemptClaudeQuota(options, attempts, locations);
   if (pass.kind === "success") return pass.report;
 
   // Soft expiry the Claude CLI can fix: hand the rotation to the CLI that owns
@@ -223,7 +299,7 @@ export async function fetchQuota(
       const run = await runRefreshDelegate(CLAUDE_CLI_REFRESH_DELEGATE);
       attempts.push(refreshDelegateAttempt(CLAUDE_CLI_REFRESH_DELEGATE, run));
       if (run.status === "ran") {
-        const retry = await attemptClaudeQuota(options, attempts);
+        const retry = await attemptClaudeQuota(options, attempts, locations);
         if (retry.kind === "success") return retry.report;
         pass = retry;
       } else if (run.status === "unconfirmed") {
@@ -489,8 +565,9 @@ function unconfirmedRefreshFailure(): ClaudeFailure {
 async function attemptClaudeQuota(
   options: ProviderOptions,
   attempts: SourceAttempt[],
+  locations: ClaudeProfileLocations,
 ): Promise<ClaudeQuotaPass> {
-  const credentialStates = await readCredentialStates(options);
+  const credentialStates = await readCredentialStates(options, locations);
   const credentialCandidates = credentialStates
     .filter(
       (
@@ -658,7 +735,7 @@ function failureReport(
 ): ProviderQuota {
   if (failure.definitiveAuth) {
     try {
-      deleteCachedProvider("claude");
+      deleteCachedProviderInContext("claude", credentialContextId);
     } catch {
       // Current authentication remains definitive when cache I/O is blocked.
     }
@@ -757,7 +834,16 @@ function claudeFailureFor(error: unknown): ClaudeFailure {
 export async function inspectAuth(
   options: ProviderOptions,
 ): Promise<AuthProviderReport> {
-  const locations = resolveClaudeProfileLocations();
+  return inspectClaudeProfileAuth(options, claudeProfileLocations());
+}
+
+async function inspectClaudeProfileAuth(
+  options: ProviderOptions,
+  profile: ClaudeProfile,
+  exact = false,
+): Promise<AuthProviderReport> {
+  const locations = resolveClaudeProfileLocations(profile);
+  if (exact) locations.acceptsOpaqueDefaultItem = false;
   const states = await readCredentialStates(options, locations);
   const sources = states.map((state): AuthSourceReport => {
     if (state.status === "available") {
@@ -1013,6 +1099,15 @@ async function readKeychainItemPresence(
 async function listKeychainItem(
   locations: ClaudeProfileLocations,
 ): Promise<KeychainSelection> {
+  const snapshot = await readKeychainMetadata();
+  return snapshot
+    ? selectKeychainItem(snapshot.metadata, locations, snapshot.paths)
+    : { status: "unknown" };
+}
+
+async function readKeychainMetadata(): Promise<
+  { metadata: string; paths: string[] } | undefined
+> {
   try {
     const output = await execFileText(
       "security",
@@ -1023,10 +1118,10 @@ async function listKeychainItem(
     for (const line of output.split(/\r?\n/)) {
       if (!line.trim()) continue;
       const path = /^\s*"(\/[^"\n]+)"\s*$/.exec(line)?.[1];
-      if (!path) return { status: "unknown" };
+      if (!path) return undefined;
       if (!paths.includes(path)) paths.push(path);
     }
-    if (!paths.length) return { status: "unknown" };
+    if (!paths.length) return undefined;
     // Search the same keychains as an unqualified exact read. Metadata only:
     // no -d (values), -r (raw data), -a (ACLs), or -i (ACL editing). One bounded
     // dump (5s / 16 MiB) covers the list; failure withholds any absence verdict.
@@ -1035,9 +1130,9 @@ async function listKeychainItem(
       ["dump-keychain", ...paths],
       KEYCHAIN_PRESENCE_TIMEOUT_MS,
     );
-    return selectKeychainItem(metadata, locations, paths);
+    return { metadata, paths };
   } catch {
-    return { status: "unknown" };
+    return undefined;
   }
 }
 
@@ -1216,13 +1311,15 @@ export function claudeKeychainAccount(): string {
     : DEFAULT_KEYCHAIN_ACCOUNT;
 }
 
-function resolveClaudeProfileLocations(): ClaudeProfileLocations {
+function resolveClaudeProfileLocations(
+  profile = claudeProfileLocations(),
+): ClaudeProfileLocations {
   const {
     configDir,
     secureStorageSelected,
     keychainService,
     acceptsOpaqueDefaultItem,
-  } = claudeProfileLocations();
+  } = profile;
   const keychainAccount = claudeKeychainAccount();
   return {
     credentialFile:
