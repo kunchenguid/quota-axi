@@ -148,6 +148,9 @@ function commandCodeSemantics(
   const expected = windows.filter(
     ({ id }) => id === "five_hour" || id === "weekly",
   );
+  const jointBound =
+    expected.some(({ id }) => id === "five_hour") &&
+    expected.some(({ id }) => id === "weekly");
   const recognized = new Set(expected);
   const unresolved = windows.filter((window) => !recognized.has(window));
   const unresolvedWindowIds = [
@@ -159,20 +162,19 @@ function commandCodeSemantics(
     return {
       status: "partial",
       description,
-      effectiveAvailability:
-        expected.length > 0
-          ? [
-              unresolvedAvailability(
-                "included_credits",
-                expected,
-                unresolvedWindowIds,
-              ),
-            ]
-          : [],
+      effectiveAvailability: jointBound
+        ? [
+            unresolvedAvailability(
+              "included_credits",
+              expected,
+              unresolvedWindowIds,
+            ),
+          ]
+        : [],
       unresolvedWindowIds,
     };
   }
-  if (expected.length === 0) {
+  if (!jointBound) {
     return knownSemantics(
       [],
       "Command Code reported no rolling included-credit windows, so no effective remaining percentage can be computed.",

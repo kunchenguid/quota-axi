@@ -657,7 +657,11 @@ export function normalizeCommandCodePayload(
       ? limited.limited
       : undefined;
 
+  // limited:false is credit-only: leftover five-hour/weekly fields are omitted.
+  // Any other present windowLimits object jointly binds five-hour and weekly;
+  // a missing companion stays untrusted.
   for (const id of EXPECTED_WINDOW_IDS) {
+    if (limitedFlag === false) continue;
     const key = id === "five_hour" ? "fiveHour" : "weekly";
     const entry = windowLimits ? windowLimits[key] : undefined;
     const measured = measuredWindow(id, entry);
@@ -665,9 +669,7 @@ export function normalizeCommandCodePayload(
       windows.push(measured);
       continue;
     }
-    // limited:false is credit-only. Any other present windowLimits object
-    // jointly binds five-hour and weekly; a missing companion stays untrusted.
-    if (windowLimits && limitedFlag !== false) {
+    if (windowLimits) {
       windows.push(placeholderWindow(id));
       untrustedWindowIds.push(id);
       diagnostics.push({ code: "expected_window_invalid", id });

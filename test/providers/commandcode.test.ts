@@ -391,6 +391,38 @@ describe("Command Code payload normalization", () => {
     expect(semantics?.status).not.toBe("known");
   });
 
+  it("omits leftover rolling windows when limited is false", () => {
+    const normalized = normalizeCommandCodePayload({
+      monthlyCredits: 1,
+      purchasedCredits: 0,
+      freeCredits: 0,
+      windowLimits: {
+        limited: false,
+        fiveHour: { used: 0, cap: 10, resetAt: 1_789_400_000 },
+      },
+    });
+    expect(normalized.windows).toEqual([]);
+    expect(normalized.untrustedWindowIds).toEqual([]);
+    const semantics = withQuotaSemantics(
+      {
+        provider: "commandcode",
+        label: "Command Code",
+        source: "api",
+        windows: normalized.windows,
+        ...(normalized.credits ? { credits: normalized.credits } : {}),
+        state: { status: "fresh", stale: false },
+      },
+      "2026-09-14T12:00:00.000Z",
+    ).quotaSemantics;
+    expect(semantics?.effectiveAvailability).toEqual([]);
+    expect(
+      semantics?.effectiveAvailability.some(
+        (item) => item.scope === "included_credits" && item.status === "known",
+      ),
+    ).toBe(false);
+    expect(semantics?.status).not.toBe("known");
+  });
+
   it("emits an untrusted placeholder when one expected window is present and limited is omitted", () => {
     const normalized = normalizeCommandCodePayload({
       monthlyCredits: 1,
@@ -491,6 +523,36 @@ describe("Command Code effective availability", () => {
       ],
     });
     expect(JSON.stringify(semantics)).not.toContain("all_models");
+  });
+
+  it("does not publish a known included_credits scalar from one rolling window", () => {
+    const report: ProviderQuota = {
+      provider: "commandcode",
+      label: "Command Code",
+      source: "api",
+      windows: [
+        {
+          id: "five_hour",
+          label: "5-hour",
+          kind: "session",
+          percentUsed: 20,
+          percentRemaining: 80,
+          windowSeconds: 18_000,
+        },
+      ],
+      state: { status: "fresh", stale: false },
+    };
+    const semantics = withQuotaSemantics(
+      report,
+      "2026-09-14T12:00:00.000Z",
+    ).quotaSemantics;
+    expect(semantics?.effectiveAvailability).toEqual([]);
+    expect(
+      semantics?.effectiveAvailability.some(
+        (item) => item.scope === "included_credits" && item.status === "known",
+      ),
+    ).toBe(false);
+    expect(semantics?.status).not.toBe("known");
   });
 
   it("withholds the included_credits scalar when organization limits are present", async () => {

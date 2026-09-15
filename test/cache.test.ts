@@ -12,11 +12,17 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   deleteCachedProvider,
   readCachedClaudeProvider,
+  readCachedCommandCodeProvider,
   readCachedKimiProvider,
   readCachedProvider,
   writeCachedProviders,
 } from "../src/cache.js";
 import { cacheFilePath, claudeCredentialContextId } from "../src/lib/fs.js";
+import {
+  clearCommandCodeReadingContextId,
+  commandCodeCacheContextId,
+  publishCommandCodeReadingContextId,
+} from "../src/providers/commandcode-cache-context.js";
 import { createKimiCodeCliCredentialSource } from "../src/providers/kimi-code-cli-credential.js";
 import type { ProviderId, ProviderQuota } from "../src/types.js";
 
@@ -35,6 +41,7 @@ afterEach(() => {
   else process.env.KIMI_CODE_HOME = originalKimiCodeHome;
   if (tempDir) rmSync(tempDir, { recursive: true, force: true });
   tempDir = undefined;
+  clearCommandCodeReadingContextId();
 });
 
 describe("quota cache", () => {
@@ -399,6 +406,66 @@ oauth_host = "https://auth.kimi.ai"
     ]);
 
     expect(readCachedProvider("alibaba")).toBeUndefined();
+  });
+
+  it("does not replace a context-scoped snapshot when the current reading has no identity", () => {
+    useTempCache();
+    const contextId = commandCodeCacheContextId(
+      "pi:commandcode",
+      "org:fixture",
+    );
+    publishCommandCodeReadingContextId(contextId);
+    writeCachedProviders([quota("commandcode", 40)]);
+
+    clearCommandCodeReadingContextId();
+    writeCachedProviders([quota("commandcode", 5)]);
+
+    const payload = JSON.parse(readFileSync(cacheFilePath(), "utf8")) as {
+      providers: Array<{
+        provider?: string;
+        credentialContext?: string;
+        windows: Array<{ percentUsed?: number }>;
+      }>;
+    };
+    const record = payload.providers.find(
+      (provider) => provider.provider === "commandcode",
+    );
+    expect(record?.credentialContext).toBe(contextId);
+    expect(record?.windows[0]?.percentUsed).toBe(40);
+    expect(readCachedCommandCodeProvider(contextId)?.windows[0].percentUsed).toBe(
+      40,
+    );
+  });
+
+  it("does not clear a context-scoped snapshot when a no-window reading has no identity", () => {
+    useTempCache();
+    const contextId = commandCodeCacheContextId(
+      "pi:commandcode",
+      "org:fixture",
+    );
+    publishCommandCodeReadingContextId(contextId);
+    writeCachedProviders([quota("commandcode", 40)]);
+
+    clearCommandCodeReadingContextId();
+    writeCachedProviders([quotaWithoutWindows("commandcode")]);
+
+    expect(readCachedCommandCodeProvider(contextId)?.windows[0].percentUsed).toBe(
+      40,
+    );
+  });
+
+  it("clears a context-scoped snapshot after an identified no-window report", () => {
+    useTempCache();
+    const contextId = commandCodeCacheContextId(
+      "pi:commandcode",
+      "org:fixture",
+    );
+    publishCommandCodeReadingContextId(contextId);
+    writeCachedProviders([quota("commandcode", 40)]);
+    writeCachedProviders([quotaWithoutWindows("commandcode")]);
+
+    expect(readCachedCommandCodeProvider(contextId)).toBeUndefined();
+    expect(readCachedProvider("commandcode")).toBeUndefined();
   });
 });
 

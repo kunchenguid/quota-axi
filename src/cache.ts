@@ -133,7 +133,9 @@ export function writeCachedProviders(providers: ProviderQuota[]): void {
     providers
       .filter(
         (provider) =>
-          provider.state.status === "fresh" && provider.windows.length === 0,
+          provider.state.status === "fresh" &&
+          provider.windows.length === 0 &&
+          !missingRequiredContext(provider.provider),
       )
       .map((provider) => provider.provider),
   );
@@ -228,11 +230,18 @@ function toCacheProvider(provider: ProviderQuota): CachedProvider | undefined {
     CACHE_SCHEMA_VERSION,
   )?.snapshot;
   if (!snapshot) return undefined;
-  const contextId = CONTEXT_SCOPED_PROVIDERS[provider.provider]?.();
+  const scope = CONTEXT_SCOPED_PROVIDERS[provider.provider];
+  const contextId = scope?.();
+  if (scope && !contextId) return undefined;
   return {
     snapshot,
     ...(contextId ? { credentialContextId: contextId } : {}),
   };
+}
+
+function missingRequiredContext(provider: ProviderId): boolean {
+  const scope = CONTEXT_SCOPED_PROVIDERS[provider];
+  return scope !== undefined && !scope();
 }
 
 function serializeCachedProvider(
