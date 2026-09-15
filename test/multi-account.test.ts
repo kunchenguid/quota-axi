@@ -240,6 +240,82 @@ describe("independent account reporting", () => {
     expect(process.exitCode).toBeUndefined();
   });
 
+  it("preserves Z.AI and OpenCode Go bounds beside expanded Claude accounts", async () => {
+    credential(".claude", "synthetic-personal");
+    credential(".claude-work", "synthetic-work");
+    const { PROVIDERS } = await import("../src/providers/index.js");
+    const { fetchQuota } = await import("../src/commands.js");
+    const { renderQuotaToon } = await import("../src/render.js");
+    const window = (
+      id: string,
+      kind: ProviderQuota["windows"][number]["kind"],
+      percentRemaining: number,
+    ) => ({ id, label: id, kind, percentRemaining });
+    const zai = vi.spyOn(PROVIDERS.zai, "fetchQuota").mockResolvedValue({
+      provider: "zai",
+      windows: [
+        window("five_hour", "session", 80),
+        window("weekly", "weekly", 60),
+        window("mcp_month", "monthly", 10),
+      ],
+      state: { status: "fresh", stale: false },
+    });
+    const go = vi
+      .spyOn(PROVIDERS["opencode-go"], "fetchQuota")
+      .mockResolvedValue({
+        provider: "opencode-go",
+        windows: [
+          window("rolling", "unknown", 90),
+          window("weekly", "weekly", 70),
+          window("monthly", "monthly", 50),
+        ],
+        state: { status: "fresh", stale: false },
+      });
+    try {
+      const standalone = await fetchQuota(["zai", "opencode-go"], options);
+      const mixed = await fetchQuota(["claude", "zai", "opencode-go"], options);
+      expect(mixed.schemaVersion).toBe(6);
+      expect(mixed.providers.map((p) => p.provider)).toEqual([
+        "claude",
+        "claude",
+        "zai",
+        "opencode-go",
+      ]);
+      expect(mixed.providers.slice(2)).toEqual(
+        standalone.providers.map((p) => ({ ...p, accountKey: "default" })),
+      );
+      expect(mixed.providers[2].quotaSemantics?.effectiveAvailability).toEqual([
+        expect.objectContaining({
+          scope: "all_models",
+          effectivePercentRemaining: 60,
+        }),
+        expect.objectContaining({
+          scope: "tools",
+          effectivePercentRemaining: 10,
+        }),
+      ]);
+      expect(mixed.providers[3].quotaSemantics?.effectiveAvailability).toEqual([
+        expect.objectContaining({
+          scope: "all_models",
+          status: "known",
+          effectivePercentRemaining: 50,
+          boundedBy: ["rolling", "weekly", "monthly"],
+          limitingWindowIds: ["monthly"],
+          runway: expect.objectContaining({ status: "unknown" }),
+          selection: expect.objectContaining({ status: "unknown" }),
+        }),
+      ]);
+      const toon = renderQuotaToon(mixed, "quota-axi", false);
+      expect(toon).toContain("quota[5]{provider,accountKey,scope,");
+      expect(toon).toContain("zai,default,all_models,60,unknown,");
+      expect(toon).toContain("zai,default,tools,10,unknown,");
+      expect(toon).toContain("opencode-go,default,all_models,50,unknown,");
+    } finally {
+      zai.mockRestore();
+      go.mockRestore();
+    }
+  });
+
   it("preserves profile-only's exact file, no discovery and no cache contract", async () => {
     credential(".claude", "synthetic-personal");
     const work = credential(".claude-work", "synthetic-work");
