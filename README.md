@@ -348,13 +348,13 @@ CODEX_HOME=/path/to/codex-profile quota-axi --provider codex --profile-only --fu
 
 ## Output Model
 
-The `quota` command's `--json` emits `schemaVersion: 6`.
+The `quota` command's `--json` emits `schemaVersion: 6`; `auth --json` and `models --json` emit `schemaVersion: 2`.
 
 ### Normalized schema contract
 
-The package publishes TypeScript declarations from its package root, so consumers can use `import type { QuotaAxiResponse, ModelsResponse } from "quota-axi"`. The adapter contract is `ProviderAdapter` in and normalized `ProviderQuota` out: adapters report observed quota data, never rank, mint credentials, or retain raw responses. The narrowly bounded vendor-owned renewal path is documented under [Delegated credential refresh](#delegated-credential-refresh).
+The package publishes TypeScript declarations from its package root, so consumers can use `import type { QuotaAxiResponse, AuthResponse, ModelsResponse } from "quota-axi"`. The adapter contract is `ProviderAdapter` in and normalized `ProviderQuota` out: adapters report observed quota data, never rank, mint credentials, or retain raw responses. The narrowly bounded vendor-owned renewal path is documented under [Delegated credential refresh](#delegated-credential-refresh).
 
-`schemaVersion` is command-specific. Additive optional fields do not bump it. A semantic or incompatible shape change does. The `quota` report is version 6, `auth` is version 1, and `models` is version 1. Version 6 changes how the default TOON output writes an empty block: it is now `name: []`, not `name[0]:`.
+`schemaVersion` is command-specific. Additive optional fields do not bump it. A semantic or incompatible shape change does. The `quota` report is version 6; `auth` and `models` are version 2. Versions 6 and 2 record TOON 2.3.1's incompatible empty-array spelling: `name: []`, not `name[0]:`.
 
 ### Default report blocks
 
@@ -607,7 +607,7 @@ Source attempts can include `credentialPresent` when a source is not genuinely a
 
 Catalog buckets are coarse editorial classifications relative to the current frontier, not scores. They are curated from public provider material and public leaderboards, including [Artificial Analysis](https://artificialanalysis.ai/) as an informing source. quota-axi does not reproduce Artificial Analysis scores, has no runtime Artificial Analysis dependency, and never commits an Artificial Analysis key. `scripts/refresh-model-kb.ts` is a maintainer-only review aid: it may use a private `AA_API_KEY` to suggest changes, but it never writes the catalog.
 
-Every models response includes `catalog.version` and `catalog.provenance`; callers must treat catalog freshness and unmapped `unmatchedWindowIds` as explicit uncertainty. A model row exposes the applicable effective quota scope and provider state. When no model-specific scope is known, the provider account scope remains the evidence rather than an invented model limit.
+Every models response includes `schemaVersion: 2`, `catalog.version`, and `catalog.provenance`; callers must treat catalog freshness and unmapped `unmatchedWindowIds` as explicit uncertainty. A model row exposes the applicable effective quota scope and provider state. When no model-specific scope is known, the provider account scope remains the evidence rather than an invented model limit.
 
 Default model order is deterministic and non-preferential: provider, then model ID. `--sort runway` is an explicit, evidence-preserving comparator only: finite `usableRunwaySeconds` descend, then `through_reset`, then `exhausted_now`, with unknown evidence last. Equal evidence appears in `sort.tieGroups`; no hidden score or model, provider, harness, credential, or route recommendation is implied. The comparator registry is intentionally extensible for a future separately sourced `cost` comparator, which is not shipped in v1.
 
@@ -615,7 +615,7 @@ Default model order is deterministic and non-preferential: provider, then model 
 
 | Object               | Fields                                                    |
 | -------------------- | --------------------------------------------------------- |
-| Auth report          | `generatedAt`, `schemaVersion: 1`, and `auth`             |
+| Auth report          | `generatedAt`, `schemaVersion: 2`, and `auth`             |
 | Provider auth report | `provider` and `sources`                                  |
 | Auth source entry    | `source`, optional `path`, `status`, and optional `error` |
 

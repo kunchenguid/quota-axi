@@ -1221,6 +1221,24 @@ describe("--json tiering", () => {
   });
 });
 
+describe("auth response contract", () => {
+  it("versions the TOON 2.3.1 empty auth array", async () => {
+    PROVIDERS.claude = providerWithQuota(freshClaudeQuota());
+
+    const toon = await capture(["auth", "--provider", "claude"]);
+    expect(toon).toContain("auth: []");
+
+    const json = JSON.parse(
+      await capture(["auth", "--provider", "claude", "--json"]),
+    );
+    expect(json).toEqual({
+      generatedAt: expect.any(String),
+      schemaVersion: 2,
+      auth: [{ provider: "claude", sources: [] }],
+    });
+  });
+});
+
 describe("CLI plumbing via the axi SDK", () => {
   it("prints the version for -v/--version", async () => {
     for (const flag of ["-v", "--version"]) {

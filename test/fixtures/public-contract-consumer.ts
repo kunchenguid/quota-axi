@@ -1,6 +1,7 @@
 import {
   compareModelsByRunway,
   SELECTION_SCALAR_KEY,
+  type AuthResponse,
   type EffectiveAvailability,
   type ModelQuotaRecord,
   type ModelsResponse,
@@ -31,9 +32,15 @@ const model: ModelQuotaRecord = {
 
 const models: ModelsResponse = {
   generatedAt: quota.generatedAt,
-  schemaVersion: 1,
+  schemaVersion: 2,
   catalog: { version: "2026-08-05", provenance: "consumer fixture" },
   models: [model],
+};
+
+const auth: AuthResponse = {
+  generatedAt: quota.generatedAt,
+  schemaVersion: 2,
+  auth: [],
 };
 
 const scope: EffectiveAvailability = {
@@ -54,6 +61,7 @@ const demoted: Array<string | undefined> = [
   quota.providers[0]?.quotaSemantics?.description,
 ];
 
+void auth;
 void models;
 void profileOnlyOptions;
 void spendPriority;

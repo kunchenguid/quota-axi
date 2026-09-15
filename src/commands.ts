@@ -23,6 +23,7 @@ import {
 import { scrollHint } from "./tui-viewport.js";
 import type {
   AuthProviderReport,
+  AuthResponse,
   ProviderId,
   ProviderOptions,
   ProviderQuota,
@@ -203,12 +204,13 @@ export async function authCommand(
   };
 
   const reports = await inspectAuth(flags.providers, options);
+  const response: AuthResponse = {
+    generatedAt: nowIso(),
+    schemaVersion: 2,
+    auth: reports,
+  };
   return flags.json
-    ? JSON.stringify(
-        { generatedAt: nowIso(), schemaVersion: 1, auth: reports },
-        null,
-        2,
-      )
+    ? JSON.stringify(response, null, 2)
     : renderAuthToon(reports, binPath);
 }
 

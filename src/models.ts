@@ -77,7 +77,7 @@ export function createModelsResponse(
   if (!options.sort) {
     return {
       generatedAt: quota.generatedAt,
-      schemaVersion: 1,
+      schemaVersion: 2,
       catalog: catalogSummary(catalog),
       models,
       ...(unmatchedWindowIds.length > 0 ? { unmatchedWindowIds } : {}),
@@ -91,7 +91,7 @@ export function createModelsResponse(
   );
   return {
     generatedAt: quota.generatedAt,
-    schemaVersion: 1,
+    schemaVersion: 2,
     catalog: catalogSummary(catalog),
     models: sorted,
     ...(unmatchedWindowIds.length > 0 ? { unmatchedWindowIds } : {}),

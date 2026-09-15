@@ -336,6 +336,12 @@ export type AuthProviderReport = {
   sources: AuthSourceReport[];
 };
 
+export type AuthResponse = {
+  generatedAt: string;
+  schemaVersion: 2;
+  auth: AuthProviderReport[];
+};
+
 /** A coarse editorial classification relative to the current model frontier. */
 export type IntelligenceBucket = "high" | "medium" | "low";
 
@@ -389,7 +395,7 @@ export type ModelSortResult = {
 
 export type ModelsResponse = {
   generatedAt: string;
-  schemaVersion: 1;
+  schemaVersion: 2;
   catalog: Pick<ModelCatalog, "version" | "provenance">;
   models: ModelQuotaRecord[];
   /** Provider/model window scopes with no corresponding catalog entry. */

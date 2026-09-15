@@ -1234,15 +1234,7 @@ describe("Kimi credential outcomes and cache policy", () => {
       { source: "kimi-code-cli", status: "success" },
     ]);
 
-    const rendered = renderQuotaToon(
-      {
-        generatedAt: new Date(NOW).toISOString(),
-        schemaVersion: 6,
-        providers: [withQuotaSemantics(report, new Date(NOW).toISOString())],
-      },
-      "quota-axi",
-      false,
-    );
+    const rendered = renderKimiQuota(report);
     expect(rendered).toContain(
       'kimi,all,degraded_source,"pi:kimi-coding · pi_kimi_credential_expired",none',
     );
@@ -1471,15 +1463,7 @@ describe("Kimi credential outcomes and cache policy", () => {
       },
     ]);
 
-    const rendered = renderQuotaToon(
-      {
-        generatedAt: new Date(NOW).toISOString(),
-        schemaVersion: 6,
-        providers: [withQuotaSemantics(report, new Date(NOW).toISOString())],
-      },
-      "quota-axi",
-      false,
-    );
+    const rendered = renderKimiQuota(report);
     expect(rendered).toContain("(auth expired_refreshable)");
     expect(rendered).not.toContain("auth_required");
   });
@@ -1708,6 +1692,19 @@ const TEST_SELECTION: KimiCodeSelection = {
   },
   contextId: TEST_CREDENTIAL_CONTEXT_ID,
 };
+
+function renderKimiQuota(report: ProviderQuota): string {
+  const generatedAt = new Date(NOW).toISOString();
+  return renderQuotaToon(
+    {
+      generatedAt,
+      schemaVersion: 6,
+      providers: [withQuotaSemantics(report, generatedAt)],
+    },
+    "quota-axi",
+    false,
+  );
+}
 
 function jsonResponse(payload: unknown): Response {
   return new Response(JSON.stringify(payload), {
