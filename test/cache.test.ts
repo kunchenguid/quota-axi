@@ -432,9 +432,9 @@ oauth_host = "https://auth.kimi.ai"
     );
     expect(record?.credentialContext).toBe(contextId);
     expect(record?.windows[0]?.percentUsed).toBe(40);
-    expect(readCachedCommandCodeProvider(contextId)?.windows[0].percentUsed).toBe(
-      40,
-    );
+    expect(
+      readCachedCommandCodeProvider(contextId)?.windows[0].percentUsed,
+    ).toBe(40);
   });
 
   it("does not clear a context-scoped snapshot when a no-window reading has no identity", () => {
@@ -449,9 +449,9 @@ oauth_host = "https://auth.kimi.ai"
     clearCommandCodeReadingContextId();
     writeCachedProviders([quotaWithoutWindows("commandcode")]);
 
-    expect(readCachedCommandCodeProvider(contextId)?.windows[0].percentUsed).toBe(
-      40,
-    );
+    expect(
+      readCachedCommandCodeProvider(contextId)?.windows[0].percentUsed,
+    ).toBe(40);
   });
 
   it("clears a context-scoped snapshot after an identified no-window report", () => {

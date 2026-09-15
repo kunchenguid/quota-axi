@@ -150,11 +150,9 @@ export function createCommandCodeAdapter(
     label: LABEL,
     fetchQuota(_options: ProviderOptions): Promise<ProviderQuota> {
       if (inFlight) return inFlight;
-      const acquisition = acquireCommandCodeQuota(dependencies).finally(
-        () => {
-          if (inFlight === acquisition) inFlight = undefined;
-        },
-      );
+      const acquisition = acquireCommandCodeQuota(dependencies).finally(() => {
+        if (inFlight === acquisition) inFlight = undefined;
+      });
       inFlight = acquisition;
       return acquisition;
     },
@@ -360,11 +358,7 @@ async function resolveCandidate(
       resolution.status !== "absent",
     );
   } catch (error) {
-    return unavailableCandidate(
-      asCommandCodeFailure(error),
-      "failed",
-      true,
-    );
+    return unavailableCandidate(asCommandCodeFailure(error), "failed", true);
   }
 }
 
@@ -724,11 +718,7 @@ function exactCredits(
   const monthly = nonnegativeFinite(data.monthlyCredits);
   const purchased = nonnegativeFinite(data.purchasedCredits);
   const free = nonnegativeFinite(data.freeCredits);
-  if (
-    monthly === undefined ||
-    purchased === undefined ||
-    free === undefined
-  ) {
+  if (monthly === undefined || purchased === undefined || free === undefined) {
     return undefined;
   }
   return { remaining: monthly + purchased + free, unit: "credits" };
@@ -894,7 +884,10 @@ function orgLimitWindows(raw: unknown): {
     const spent = nonnegativeFinite(entrySpent(object));
     const limit = nonnegativeFinite(entryLimit(object));
     const resetsAt = parseResetAt(
-      object.resetAt ?? object.resetTime ?? object.reset_at ?? object.reset_time,
+      object.resetAt ??
+        object.resetTime ??
+        object.reset_at ??
+        object.reset_time,
     );
     const percentages =
       spent !== undefined && limit !== undefined && limit > 0
@@ -1014,12 +1007,7 @@ function failureReport(
     try {
       const cached = dependencies.readCachedProvider(cacheContextId);
       const stale = cached
-        ? staleCommandCodeReport(
-            cached,
-            failure,
-            attempts,
-            dependencies.now(),
-          )
+        ? staleCommandCodeReport(cached, failure, attempts, dependencies.now())
         : undefined;
       if (stale) return stale;
     } catch {

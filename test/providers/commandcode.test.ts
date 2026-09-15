@@ -122,10 +122,7 @@ describe("Command Code request transport", () => {
       credits: { remaining: 55, unit: "credits" },
       state: { status: "fresh", stale: false, authStatus: "usable" },
     });
-    expect(report.windows.map(({ id }) => id)).toEqual([
-      "five_hour",
-      "weekly",
-    ]);
+    expect(report.windows.map(({ id }) => id)).toEqual(["five_hour", "weekly"]);
     expect(report.windows[0]).toMatchObject({
       kind: "session",
       windowSeconds: 18_000,
@@ -147,9 +144,13 @@ describe("Command Code request transport", () => {
       jsonResponse(CREDITS),
     ]);
     await testAdapter({ fetch: request }).fetchQuota(OPTIONS);
-    const paths = request.mock.calls.map(([input]) => new URL(String(input)).pathname);
+    const paths = request.mock.calls.map(
+      ([input]) => new URL(String(input)).pathname,
+    );
     expect(paths.every((path) => path.startsWith("/alpha/"))).toBe(true);
-    expect(paths.join(" ")).not.toMatch(/provider|models|chat|messages|subscriptions|summary/);
+    expect(paths.join(" ")).not.toMatch(
+      /provider|models|chat|messages|subscriptions|summary/,
+    );
   });
 
   it("rejects every redirect without a follow-up request", async () => {
@@ -213,7 +214,9 @@ describe("Command Code request transport", () => {
       refreshCredentials: true,
     });
     expect(request).toHaveBeenCalledTimes(2);
-    const paths = request.mock.calls.map(([input]) => new URL(String(input)).pathname);
+    const paths = request.mock.calls.map(
+      ([input]) => new URL(String(input)).pathname,
+    );
     expect(paths).toEqual([COMMANDCODE_WHOAMI_PATH, COMMANDCODE_CREDITS_PATH]);
   });
 });
@@ -239,15 +242,18 @@ describe("Command Code credential selection", () => {
   });
 
   it("hands over from a whoami 401 to a healthy sibling and marks the predecessor degraded", async () => {
-    const request = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      const bearer = new Headers(init?.headers).get("authorization");
-      if (bearer === `Bearer ${SYNTHETIC_KEY}`) {
-        return new Response(null, { status: 401 });
-      }
-      const url = new URL(String(_input));
-      if (url.pathname === COMMANDCODE_WHOAMI_PATH) return jsonResponse(WHOAMI);
-      return jsonResponse(CREDITS);
-    });
+    const request = vi.fn(
+      async (_input: RequestInfo | URL, init?: RequestInit) => {
+        const bearer = new Headers(init?.headers).get("authorization");
+        if (bearer === `Bearer ${SYNTHETIC_KEY}`) {
+          return new Response(null, { status: 401 });
+        }
+        const url = new URL(String(_input));
+        if (url.pathname === COMMANDCODE_WHOAMI_PATH)
+          return jsonResponse(WHOAMI);
+        return jsonResponse(CREDITS);
+      },
+    );
     const report = await testAdapter({
       fetch: request,
       officialEnv: envSource("resolved", SIBLING_KEY),
@@ -572,7 +578,9 @@ describe("Command Code effective availability", () => {
       scope: "included_credits",
       status: "unknown",
     });
-    expect(semantics?.effectiveAvailability[0]?.effectivePercentRemaining).toBeUndefined();
+    expect(
+      semantics?.effectiveAvailability[0]?.effectivePercentRemaining,
+    ).toBeUndefined();
   });
 });
 
@@ -674,9 +682,7 @@ function testAdapter(
 }
 
 function piBroker(
-  resolution: Awaited<
-    ReturnType<PiCommandCodeCredentialBroker["resolve"]>
-  >,
+  resolution: Awaited<ReturnType<PiCommandCodeCredentialBroker["resolve"]>>,
 ): PiCommandCodeCredentialBroker {
   return {
     resolve: async () => resolution,

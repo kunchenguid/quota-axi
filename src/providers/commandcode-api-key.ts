@@ -97,7 +97,11 @@ function createFileSource(
         return { status: "error", path, error: resolution.error };
       }
       if (resolution.status === "unsupported") {
-        return { status: "invalid", path, error: "unsupported_credential_type" };
+        return {
+          status: "invalid",
+          path,
+          error: "unsupported_credential_type",
+        };
       }
       return { status: "invalid", path, error: resolution.error };
     },
@@ -199,9 +203,7 @@ function envResolution(value: string | undefined): CommandCodeLocalResolution {
       };
 }
 
-function inspectFromResolution(
-  resolution: CommandCodeLocalResolution,
-): {
+function inspectFromResolution(resolution: CommandCodeLocalResolution): {
   status: "available" | "missing" | "invalid";
   error?: string;
 } {

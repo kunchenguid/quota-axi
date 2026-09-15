@@ -60,7 +60,11 @@ export function createPiCommandCodeCredentialBroker(
         return { status: "error", path, error: resolution.error };
       }
       if (resolution.status === "unsupported") {
-        return { status: "invalid", path, error: "unsupported_credential_type" };
+        return {
+          status: "invalid",
+          path,
+          error: "unsupported_credential_type",
+        };
       }
       return { status: "invalid", path, error: resolution.error };
     },
@@ -80,14 +84,20 @@ async function resolveCredential(
       : { status: "read_error", error: "credential_resolution_failed" };
   }
   if (contents.byteLength > AUTH_FILE_LIMIT_BYTES) {
-    return { status: "structurally_invalid", error: "commandcode_credential_invalid" };
+    return {
+      status: "structurally_invalid",
+      error: "commandcode_credential_invalid",
+    };
   }
 
   let parsed: unknown;
   try {
     parsed = JSON.parse(contents.toString("utf8")) as unknown;
   } catch {
-    return { status: "structurally_invalid", error: "commandcode_credential_invalid" };
+    return {
+      status: "structurally_invalid",
+      error: "commandcode_credential_invalid",
+    };
   }
 
   const classified = classifyPiAuthEntry(parsed, PI_PROVIDER_ID);
