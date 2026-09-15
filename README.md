@@ -283,7 +283,7 @@ It is generated from `src/skill.ts`; update it with `pnpm run build:skill` and v
 └───────────────┘       └──────────────┘
 ```
 
-- **Live first** - provider HTTP calls and Antigravity's structured print command use 15 second timeouts, Codex JSON-RPC and Antigravity loopback reads use shorter per-call timeouts, and stale cache fallback is per provider.
+- **Live first** - provider HTTP calls and Antigravity's structured print command use 15 second timeouts, Codex JSON-RPC and Antigravity loopback reads use shorter per-call timeouts, and stale cache fallback is isolated per provider/account lane.
 - **Host network policy** - Claude, Codex, Copilot, Cursor, and Grok's outbound HTTP calls honor standard `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` environment variables (including lowercase forms). This only follows the user's configured egress path; quota-axi does not expose a proxy service or print proxy URLs.
 - **No first-run Keychain prompt** - macOS Claude and Cursor CLI Keychain value reads are skipped on plain calls until `--allow-keychain-prompt` succeeds once for that source, then future plain calls reuse the corresponding grant.
 - **Delegated refresh, never minted** - when the same stored access token is expired, carries a refresh token, and is definitively rejected, quota-axi may run that vendor CLI's own smallest non-interactive refresh command and re-read the store the CLI rewrote. quota-axi never performs a refresh-token exchange itself. See [Delegated credential refresh](#delegated-credential-refresh).
@@ -331,7 +331,7 @@ CODEX_HOME=/path/to/codex-profile quota-axi --provider codex --profile-only --fu
 
 ### Human terminal report (`--tui`)
 
-`quota-axi --tui` renders the same redacted report as a live human terminal view instead of TOON: a two-up provider card grid with thin headroom bars and a `┃` linear-pace marker whenever pace is known. It is presentation only and is not part of the machine-readable contract.
+`quota-axi --tui` renders the same redacted report as a live human terminal view instead of TOON: a two-up provider/account card grid with thin headroom bars and a `┃` linear-pace marker whenever pace is known. It is presentation only and is not part of the machine-readable contract.
 
 - On an interactive terminal the report stays up and refreshes every 5 minutes until you press `q` (or Ctrl+C), with a `Press q to quit` footer hint. `--refresh` sets the interval (30s-24h) and `--once` renders a single frame. A non-TTY stdout or stdin (pipes, CI, screenshots) always renders one frame and exits.
 - Every refresh re-runs the same quota read as a bare `quota-axi`, including [delegated credential refresh](#delegated-credential-refresh) when a stored session has expired in the meantime. Run `quota-axi --tui --no-credential-refresh` to keep the live report strictly read-only.
@@ -342,9 +342,9 @@ CODEX_HOME=/path/to/codex-profile quota-axi --provider codex --profile-only --fu
 - The bar fill is current headroom; the `┃` marker sits at the binding window's `pace.timeRemainingPercent`, the fill position of exactly linear burn. The headline marker therefore matches the corresponding `limitingWindowIds` sub-bar even when another window supplies the finite-runway `empty in` verdict. Fill ending left of the marker means burning faster than the reset clock. The marker is omitted when that window's pace is unknown.
 - Pace is shown by the bar and marker alone, never as a numeric burn multiple. The runway verdict on the headline reads `on pace ✓` for `through_reset` and `empty in 7h 21m` for `projected_exhaustion`. Two-up rows keep both card bottoms aligned by padding the shorter card inside its border. The TUI does not display the per-scope selection signal; that signal remains on the JSON and TOON machine surfaces. Those surfaces also keep the `through_reset` vocabulary, while `--full --json` exposes the complete `pace` object. The TUI renders from the complete in-memory model, so `--json` tiering never removes anything it draws.
 - A provider whose window relationships are wholly unknown (Copilot or Antigravity, with every window unresolved) has no combined effective percentage, pace, or runway to show, so its card replaces the headline block with a single `per-window usage · no combined bound` line and leads straight into its real per-window rows. Partially understood providers keep the effective-unknown headline. No combined headroom, pace, or runway number is invented.
-- Signed-out and failed providers stay visible as dimmed cards and are excluded from the fleet totals in the header.
+- Signed-out and failed provider/account lanes stay visible as dimmed cards and are excluded from the fleet totals in the header.
 - Width comes from the terminal, clamped to 80-120 columns; below the two-up width the grid reflows to one column. Color honors `NO_COLOR`, `TERM=dumb`, and non-TTY stdout (the glyph skeleton is kept), re-enables with `FORCE_COLOR`, and uses truecolor when `COLORTERM` advertises it, falling back to 256-color then ANSI-16.
-- `--tui` composes with `--provider` scoping and `--full` (account identity and source-attempt footers). It is mutually exclusive with `--json` and only supported by the `quota` command.
+- `--tui` composes with `--provider` scoping and `--full` (account locator, identity, and source-attempt footers). It is mutually exclusive with `--json` and only supported by the `quota` command.
 
 ## Multiple accounts
 
@@ -386,11 +386,11 @@ The package publishes TypeScript declarations from its package root, so consumer
 
 Default TOON is organized by the reading agent's decision rather than by quota-axi's data structures:
 
-| Block          | Rows                                                                                                                                                                                                                                                                                             |
-| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `quota[]`      | One row per **measurable** scope: `provider`, `scope`, `effectivePercentRemaining`, `spendPriority`, `runway`, `confidence`, `limitedBy`, `resetsAt`. Every column is populated on every row. `limitedBy` is the scope's `limitingWindowIds`, and `resetsAt` is that binding window's own reset. |
-| `exhaustion[]` | **Sparse.** One row per scope with a finite exhaustion point: `usableRunwaySeconds`, `projectedExhaustedAt`, `limitingWindowId`. `exhaustion[0]:` means nothing is projected to run out.                                                                                                         |
-| `attention[]`  | **Sparse.** Every non-nominal fact: `provider`, `scope`, `kind`, `detail`, `remedy`.                                                                                                                                                                                                             |
+| Block          | Rows                                                                                                                                                                                                                                                                                                                    |
+| -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `quota[]`      | One row per **measurable** scope: `provider`, optional `accountKey`, `scope`, `effectivePercentRemaining`, `spendPriority`, `runway`, `confidence`, `limitedBy`, `resetsAt`. Every column is populated on every row. `limitedBy` is the scope's `limitingWindowIds`, and `resetsAt` is that binding window's own reset. |
+| `exhaustion[]` | **Sparse.** One row per scope with a finite exhaustion point: `usableRunwaySeconds`, `projectedExhaustedAt`, `limitingWindowId`. `exhaustion[0]:` means nothing is projected to run out.                                                                                                                                |
+| `attention[]`  | **Sparse.** Every non-nominal fact: `provider`, optional `accountKey`, `scope`, `kind`, `detail`, `remedy`.                                                                                                                                                                                                             |
 
 A `quota[]` row whose `runway` is `projected_exhaustion` or `exhausted_now` has exactly one matching `exhaustion[]` row, joined on `provider` + `scope` (plus `accountKey` in an account-expanded report). A row with `through_reset` or `unknown` has none, by definition: `through_reset` deliberately has no deadline and `unknown` has none to state.
 
@@ -412,8 +412,8 @@ A `quota[]` row whose `runway` is `projected_exhaustion` or `exhausted_now` has 
 
 Two invariants hold for every report:
 
-- **Every requested provider appears at least once**, in `quota[]` or `attention[]` or both. A provider is never silently absent, and a provider with no `quota[]` row always states its `state.authStatus` - including a positive `usable` - as `(auth <status>)` in its `attention[]` detail.
-- **`quota[]` rows stay in provider-declaration order**, never sorted by any metric. A compact table with a `spendPriority` column must never read as a published ranking.
+- **Every requested provider/account lane appears at least once**, in `quota[]` or `attention[]` or both. A lane is never silently absent, and a lane with no `quota[]` row always states its `state.authStatus` - including a positive `usable` - as `(auth <status>)` in its `attention[]` detail.
+- **`quota[]` rows stay in provider-declaration and account-discovery order**, never sorted by any metric. A compact table with a `spendPriority` column must never read as a published ranking.
 
 An unknown or stale scope deliberately gets **no** `quota[]` row: the absence of a number is the correct encoding of "no number", and the scope is named in `attention[]` instead.
 
@@ -429,7 +429,7 @@ An unknown or stale scope deliberately gets **no** `quota[]` row: the absence of
 | `windows[].pace.timeRemainingPercent`, `elapsedPercent`, `cycleBasis`, `cycleSeconds`, `projectedExhaustedAt`, `projectionConfidence` |
 | `quotaSemantics.description`                                                                                                          |
 | `effectiveAvailability[].pace.behindWindowIds`, `onPaceWindowIds`                                                                     |
-| Account identity (`account`) and per-source `attempts`                                                                                |
+| Account locator (`accountLocator`), account identity (`account`), and per-source `attempts`                                           |
 
 Everything a consumer branches on stays in the default tier: `state.status`, `stale`, `authStatus`, `error`, `reason`, `remedyCommand`, `retryAfter`, `untrustedWindowIds`, and `degradedSources`; window `pace.status`, `reason`, `reservePercentPoints`, `burnMultiple`; `quotaSemantics.status` and `unresolvedWindowIds`; and every scope's `effectivePercentRemaining`, `boundedBy`, `limitingWindowIds`, `boundConflict`, `runway`, `selection`, and pace `aheadWindowIds` / `unknownWindowIds` / `worstReservePercentPoints`. `credits` also stays, so a consumer can avoid misreading it as exhaustion.
 
@@ -437,14 +437,14 @@ Everything a consumer branches on stays in the default tier: `state.status`, `st
 
 ### Quota report shape
 
-| Object                        | Fields                                                                                    |
-| ----------------------------- | ----------------------------------------------------------------------------------------- |
-| Quota report                  | `providers`                                                                               |
-| Provider report               | `provider`, `windows`, `quotaSemantics`, `state`, optional `plan`, and optional `credits` |
-| Provider report with `--full` | Also `label`, `source`, optional `account` identity, and per-source `attempts`            |
-| Account identity (`--full`)   | Optional `email`, `organization`, `accountId`, and `identityStatus`                       |
+| Object                        | Fields                                                                                                           |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| Quota report                  | `providers`                                                                                                      |
+| Provider report               | `provider`, optional `accountKey`, `windows`, `quotaSemantics`, `state`, optional `plan`, and optional `credits` |
+| Provider report with `--full` | Also `label`, `source`, optional `accountLocator`, optional `account` identity, and per-source `attempts`        |
+| Account identity (`--full`)   | Optional `email`, `organization`, `accountId`, and `identityStatus`                                              |
 
-Account identity and per-source `attempts` are omitted unless `--full` is passed.
+Account locator, account identity, and per-source `attempts` are omitted unless `--full` is passed.
 Claude `identityStatus` is `verified` only when Anthropic returns an authoritative account identifier; `email` and `organization` are display-only and must not be used for duplicate detection.
 
 ### Provider `state`
@@ -557,7 +557,7 @@ A bounding window with no `resetsAt` at all has not been triggered yet (e.g. a C
 
 ### Per-scope selection signal
 
-`effectiveAvailability[].selection` is an optional, per-scope object published for every scope quota-axi reports, including `unknown` and stale ones. It is the primary published selection signal: one scalar per scope, comparable across scopes, providers, and accounts. Consumers that need to distinguish accounts can request the optional account identity with `--full`.
+`effectiveAvailability[].selection` is an optional, per-scope object published for every scope quota-axi reports, including `unknown` and stale ones. It is the primary published selection signal: one scalar per scope, comparable across scopes, providers, and accounts. Account-expanded output includes `accountKey` in the default tier; `--full` adds the local selector and optional vendor identity evidence.
 
 In default TOON the scalar is the `spendPriority` column of the scope's `quota[]` row - there is no separate `selection[]` block, at any tier, because the column already carries it. An unmeasurable scalar renders the literal `unknown`, never `0`: `0` is exact utilization, a completely different claim.
 
@@ -635,15 +635,15 @@ Catalog buckets are coarse editorial classifications relative to the current fro
 
 Every models response includes `catalog.version` and `catalog.provenance`; callers must treat catalog freshness and unmapped `unmatchedWindowIds` as explicit uncertainty. A model row exposes the applicable effective quota scope and provider state. When no model-specific scope is known, the provider account scope remains the evidence rather than an invented model limit.
 
-Default model order is deterministic and non-preferential: provider, then model ID. `--sort runway` is an explicit, evidence-preserving comparator only: finite `usableRunwaySeconds` descend, then `through_reset`, then `exhausted_now`, with unknown evidence last. Equal evidence appears in `sort.tieGroups`; no hidden score or model, provider, harness, credential, or route recommendation is implied. The comparator registry is intentionally extensible for a future separately sourced `cost` comparator, which is not shipped in v1.
+Default model order is deterministic and non-preferential: provider, account key when present, then model ID. `--sort runway` is an explicit, evidence-preserving comparator only: finite `usableRunwaySeconds` descend, then `through_reset`, then `exhausted_now`, with unknown evidence last. Equal evidence appears in `sort.tieGroups`; no hidden score or model, provider, harness, credential, or route recommendation is implied. The comparator registry is intentionally extensible for a future separately sourced `cost` comparator, which is not shipped.
 
 ### `auth --json` shape
 
-| Object               | Fields                                                    |
-| -------------------- | --------------------------------------------------------- |
-| Auth report          | `generatedAt`, `schemaVersion: 1`, and `auth`             |
-| Provider auth report | `provider` and `sources`                                  |
-| Auth source entry    | `source`, optional `path`, `status`, and optional `error` |
+| Object               | Fields                                                                                  |
+| -------------------- | --------------------------------------------------------------------------------------- |
+| Auth report          | `generatedAt`, `schemaVersion` (`1`, or `2` when account-expanded), and `auth`          |
+| Provider auth report | `provider`, optional `accountKey`, and `sources`                                        |
+| Auth source entry    | `source`, optional `path`, `status`, optional `error`, and optional `credentialPresent` |
 
 Auth source entries can include `credentialPresent` when a source is not genuinely absent, including when a read failure prevents a more precise classification.
 
@@ -658,7 +658,7 @@ Auth source entries can include `credentialPresent` when a source is not genuine
 
 | Provider       | Credential sources read                                                                                                                                                                                                                                                                                                                                                                                                        |
 | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Claude         | `$CLAUDE_CONFIG_DIR/.credentials.json` or `~/.claude/.credentials.json` (on macOS, not read when a nonempty secure-storage selector is set); on macOS, the discovered Claude Code Keychain value for the selected profile, pinned to Claude Code's validated current-user account, with `--allow-keychain-prompt` or, after a service-and-account-scoped non-secret access marker exists, on plain calls                       |
+| Claude         | The native credential file for each [discovered profile](#multiple-accounts) (on macOS, not read when that profile has a nonempty secure-storage selector); on macOS, the matching Claude Code Keychain value pinned to Claude Code's validated current-user account, with `--allow-keychain-prompt` or, after a service-and-account-scoped non-secret access marker exists, on plain calls                                    |
 | Codex          | `$CODEX_HOME/auth.json` or `~/.codex/auth.json`, then Pi's `$PI_CODING_AGENT_DIR/auth.json` `openai-codex` subscription OAuth entry (default `~/.pi/agent/auth.json`), before the read-only CLI fallback; `$QUOTA_AXI_CODEX_BINARY` can pin that fallback to an absolute executable path                                                                                                                                       |
 | Cursor         | Cursor editor: `$CURSOR_STATE_DB` when set or the platform Cursor state database path. Cursor CLI (`cursor-agent`), macOS: identity from `$CURSOR_CLI_CONFIG` or `~/.cursor/cli-config.json` plus the `cursor-access-token` / `cursor-user` Keychain value with `--allow-keychain-prompt` or an account-scoped marker; Linux: only `accessToken` from `$CURSOR_CLI_CONFIG` or `${XDG_CONFIG_HOME:-~/.config}/cursor/auth.json` |
 | GitHub Copilot | `$GITHUB_COPILOT_APPS_JSON` when set or the local Copilot apps auth file                                                                                                                                                                                                                                                                                                                                                       |
@@ -832,7 +832,7 @@ Cache schema 3 stores independent records per provider and credential context/ac
 | Claude Keychain access marker          | Lives alongside the quota cache as `claude-keychain-access-granted-<service-hash>-account-<account-hash>`, where the service hash is eight hexadecimal characters and the account hash is sixteen. It uses `0600` file permissions, contains no credential material, raw account name, or raw service name, and markers written by earlier versions are ignored rather than deleted.                                                                                                                                                                                         |
 | Cursor CLI Keychain access marker      | Lives alongside the quota cache as `cursor-cli-keychain-access-granted-account-<account-hash>`, where the account hash is sixteen hexadecimal characters. It uses `0600` file permissions and contains no credential material or raw account identity.                                                                                                                                                                                                                                                                                                                       |
 | Cached reports                         | Only fresh provider snapshots with windows are cached.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| Fresh provider reports with no windows | Clear any cached snapshot for that provider, so entitlement-only reports do not leave stale quota windows behind.                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| Fresh provider reports with no windows | Clear only the matching provider/account lane's cached snapshot, so entitlement-only reports do not leave stale quota windows behind or retire a sibling lane.                                                                                                                                                                                                                                                                                                                                                                                                               |
 | Reports and details not cached         | Failed providers, stale providers, account identity, and source attempts are not cached.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | Claude cache fallback                  | Follows the [Claude provider rules](#provider-notes), including the denied-Keychain exception. Eligible fallback uses a formerly fresh snapshot from the same selected Claude configuration context, with a seven-day provider bound plus reset and resetless-window pruning. Its opaque SHA-256 context identifier includes the configuration directory and the selected Keychain service, which already encodes any secure-storage selector. Legacy context-less records and snapshots from the earlier broad suffix-discovery context are withheld without deleting them. |
 | Codex cache identities                 | Cached Codex windows are accepted only when ID, label, kind, duration, and duplicate suffix order agree; stale snapshots with mismatched identities are rejected.                                                                                                                                                                                                                                                                                                                                                                                                            |
