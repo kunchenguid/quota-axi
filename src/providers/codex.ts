@@ -961,7 +961,7 @@ async function probeCodexCli(): Promise<{
   }
   const child = spawn(
     binary.path,
-    ["-s", "read-only", "-a", "untrusted", "app-server"],
+    ["-s", "read-only", "-a", "never", "app-server"],
     {
       stdio: ["pipe", "pipe", "pipe"],
       env: { ...process.env, NO_COLOR: "1", TERM: "dumb" },

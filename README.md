@@ -683,7 +683,7 @@ The Claude and Codex rows describe default discovery; [`--profile-only`](#profil
   Pi owns refresh; quota-axi reads the current entry and sends its access token and account ID only to the existing bounded, read-only ChatGPT usage probe. Stored expiry is advisory, so the probe may test a stored-expired access token and only the endpoint's rejection marks it dead.
   Refresh token values are never logged, rendered, cached, or sent.
   Access token values are never logged, rendered, or cached.
-- It may run `codex -s read-only -a untrusted app-server` for Codex JSON-RPC fallback. That probe is also Codex's delegated refresh: the Codex CLI renews its own expired OAuth session and rewrites `auth.json` before answering, so an expired stored token still reports live quota without quota-axi touching the refresh token or spawning a second command. Codex rotates the refresh token on use, which is why the exchange stays the vendor's.
+- It may run `codex -s read-only -a never app-server` for Codex JSON-RPC fallback. That probe is also Codex's delegated refresh: the Codex CLI renews its own expired OAuth session and rewrites `auth.json` before answering, so an expired stored token still reports live quota without quota-axi touching the refresh token or spawning a second command. Codex rotates the refresh token on use, which is why the exchange stays the vendor's.
 - Set `QUOTA_AXI_CODEX_BINARY` to an absolute executable path when the fallback must use a specific Codex installation. Auth inspection and the app-server probe resolve the same path, and an invalid override fails closed instead of consulting `PATH`.
 
 **Cursor**
