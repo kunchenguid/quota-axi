@@ -29,8 +29,8 @@ export function renderHelp(lines: string[]): string {
 
 /**
  * One measurable scope. Every column is populated for every row, and rows stay
- * in provider-declaration order: a `spendPriority` column must never read as a
- * published ranking.
+ * in provider-declaration and account-discovery order: a `spendPriority`
+ * column must never read as a published ranking.
  */
 type QuotaRow = {
   provider: ProviderId;
@@ -45,7 +45,8 @@ type QuotaRow = {
 
 /**
  * Sparse: a scope appears only when it has a finite exhaustion point, so it
- * joins back to exactly one `quota[]` row on `provider` + `scope`.
+ * joins back to exactly one `quota[]` row on `provider` + `scope`, plus
+ * `accountKey` when the report is account-expanded.
  */
 type ExhaustionRow = {
   provider: ProviderId;
@@ -100,8 +101,8 @@ export function renderQuotaToon(
 }
 
 /**
- * Contract invariant: every requested provider appears at least once, in
- * `quota[]` or `attention[]` or both, and never in metric order.
+ * Contract invariant: every requested provider/account lane appears at least
+ * once, in `quota[]` or `attention[]` or both, and never in metric order.
  */
 function quotaBlocks(response: QuotaAxiResponse): ProviderBlocks {
   const blocks: ProviderBlocks = { quota: [], exhaustion: [], attention: [] };
