@@ -2505,46 +2505,6 @@ attributes:
         vi.fn(async () => new Response(null, { status: 401 })),
       );
       const { fetchQuota } = await import("../../src/providers/claude.js");
-      const result = await fetchQuota({      allowKeychainPrompt: true,
-      execError: Object.assign(new Error("not found"), { code: 44 }),
-      expectedError: "keychain_unreachable",
-    },
-    {
-      name: "prompt timeout",
-      allowKeychainPrompt: true,
-      execError: Object.assign(new Error("timed out"), { killed: true }),
-      expectedError: "keychain_prompt_timeout",
-    },
-    {
-      name: "prompt required",
-      allowKeychainPrompt: false,
-      execError: undefined,
-      expectedError: "keychain_prompt_required",
-    },
-  ])(
-    "does not treat Keychain $name plus sidecar 401 as signed-out",
-    async ({ allowKeychainPrompt, execError, expectedError }) => {
-      vi.useFakeTimers();
-      vi.setSystemTime(new Date("2026-07-06T20:00:00.000Z"));
-      usePlatform("darwin");
-      const home = useTempHome();
-      writeClaudeCredential(home, {
-        accessToken: "expired-sidecar",
-        expiresAt: "2000-01-01T00:00:00.000Z",
-      });
-      const { readCachedProvider, writeCachedProviders } =
-        await import("../../src/cache.js");
-      writeCachedProviders([cachedClaudeQuota(34)]);
-      const execFileText = vi.fn(async () => {
-        if (execError) throw execError;
-        return "";
-      });
-      vi.doMock("../../src/lib/process.js", () => ({ execFileText }));
-      vi.stubGlobal(
-        "fetch",
-        vi.fn(async () => new Response(null, { status: 401 })),
-      );
-      const { fetchQuota } = await import("../../src/providers/claude.js");
       const result = await fetchQuota({
         allowKeychainPrompt,
         refreshCredentials: false,

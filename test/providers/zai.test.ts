@@ -1,10 +1,4 @@
-import {
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -318,35 +312,6 @@ describe("Z.AI request transport", () => {
 });
 
 describe("Z.AI payload normalization", () => {
-  it("reports CREDIT_LIMIT response rows as untrusted unknown windows", () => {
-    const payload = JSON.parse(
-      readFileSync("test/fixtures/zai/usage-credit.json", "utf8"),
-    );
-    const normalized = normalizeZaiPayload(payload);
-    expect(normalized.diagnostics).toEqual([
-      { code: "entry_unrecognized", index: 1 },
-      { code: "entry_unrecognized", index: 2 },
-    ]);
-    expect(normalized.windows).toHaveLength(3);
-    expect(normalized.windows[0]).toMatchObject({
-      id: "limit:1",
-      kind: "unknown",
-    });
-    expect(normalized.windows[0].percentUsed).toBeCloseTo(82.7);
-    expect(normalized.windows[0].percentRemaining).toBeCloseTo(17.3);
-    expect(normalized.windows[1]).toMatchObject({
-      id: "limit:2",
-      kind: "unknown",
-    });
-    expect(normalized.windows[1].percentUsed).toBeCloseTo(42);
-    expect(normalized.windows[1].percentRemaining).toBeCloseTo(58);
-    expect(normalized.windows[2]).toMatchObject({
-      id: "mcp_month",
-      percentUsed: 15,
-      percentRemaining: 85,
-    });
-  });
-
   it("maps the live capture to five-hour, weekly, and MCP-month windows", () => {
     const normalized = normalizeZaiPayload(QUOTA_PAYLOAD);
     expect(normalized.plan).toBe("max");

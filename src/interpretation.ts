@@ -184,6 +184,7 @@ function opencodeGoSemantics(
           : [],
       unresolvedWindowIds,
     };
+  }
   return knownSemantics(
     plan.length > 0 ? [availability("all_models", plan, generatedAt)] : [],
     "OpenCode Go's rolling, weekly, and monthly windows are stacked plan caps ($12 per rolling 5 hours, $30 per week, $60 per month) that jointly bound Go-plan usage, so effective remaining is the minimum across the named windows. A zeroed plan window blocks Go-plan requests; the vendor's free-model fallback or an opted-in Zen balance may still serve past it, which this endpoint does not report.",
