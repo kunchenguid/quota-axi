@@ -217,6 +217,7 @@ function buildLiveCard(provider: ProviderQuota, generatedAtMs: number): Card {
       rightTitle,
       "border",
     ),
+    ...accountCardLines(provider, "border"),
     interior([], "border"),
   ];
 
@@ -367,6 +368,7 @@ function buildFailedCard(provider: ProviderQuota): Card {
       rightTitle,
       "borderDim",
     ),
+    ...accountCardLines(provider, "borderDim"),
     interior([], "borderDim"),
   ];
   const message =
@@ -697,7 +699,11 @@ function formatHeaderTime(iso: string, timeZone?: string): string {
 }
 
 function fullFooterLines(provider: ProviderQuota, width: number): string[] {
-  const accountParts: string[] = [provider.provider];
+  const accountParts: string[] = [
+    provider.provider,
+    ...(provider.accountKey ? [provider.accountKey] : []),
+  ];
+  if (provider.accountLocator) accountParts.push(provider.accountLocator.path);
   const protectedAccountParts = new Set([0]);
   if (provider.account?.email) accountParts.push(provider.account.email);
   if (provider.account?.organization) {
@@ -1059,4 +1065,17 @@ function rgbToAnsi256([r, g, b]: [number, number, number]): number {
         ? 1
         : Math.min(5, Math.round((value - 35) / 40));
   return 16 + 36 * level(r) + 6 * level(g) + level(b);
+}
+
+function accountCardLines(
+  provider: ProviderQuota,
+  border: "border" | "borderDim",
+): Line[] {
+  if (!provider.accountKey || provider.accountKey === "default") return [];
+  return [
+    interior(
+      [{ text: `   account ${provider.accountKey}`, style: "dim" }],
+      border,
+    ),
+  ];
 }

@@ -53,8 +53,10 @@ export function cacheFilePath(): string {
  * An opaque, deterministic cache-provenance identifier for the Claude profile
  * selected by the current process. The selected path never leaves this helper.
  */
-export function claudeCredentialContextId(): string {
-  const { configDir, keychainService } = claudeProfileLocations();
+export function claudeCredentialContextId(
+  profile = claudeProfileLocations(),
+): string {
+  const { configDir, keychainService } = profile;
   // Include the exact service: it already encodes the secure-storage selector,
   // including a relative raw path hash.
   // Version the identity to withhold snapshots from earlier opaque discovery.
