@@ -1,4 +1,5 @@
 import { grokCliRefreshNeeded } from "./providers/grok.js";
+import { QUOTA_RESPONSE_SCHEMA_VERSION } from "./types.js";
 import type {
   ProviderQuota,
   QuotaAxiResponse,
@@ -18,7 +19,7 @@ export function annotateQuotaAdvice(
   const help = providers.flatMap(providerHelpLines);
   return {
     generatedAt: response.generatedAt,
-    schemaVersion: 5,
+    schemaVersion: QUOTA_RESPONSE_SCHEMA_VERSION,
     providers,
     ...(help.length > 0 ? { help } : {}),
   };

@@ -2,6 +2,7 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo, Socket } from "node:net";
 import { describe, expect, it, vi } from "vitest";
 import { withQuotaSemantics } from "../../src/interpretation.js";
+import { jsonResponse } from "./json-response.js";
 import {
   createKimiAdapter,
   normalizeKimiPayload,
@@ -1234,15 +1235,7 @@ describe("Kimi credential outcomes and cache policy", () => {
       { source: "kimi-code-cli", status: "success" },
     ]);
 
-    const rendered = renderQuotaToon(
-      {
-        generatedAt: new Date(NOW).toISOString(),
-        schemaVersion: 5,
-        providers: [withQuotaSemantics(report, new Date(NOW).toISOString())],
-      },
-      "quota-axi",
-      false,
-    );
+    const rendered = renderKimiQuota(report);
     expect(rendered).toContain(
       'kimi,all,degraded_source,"pi:kimi-coding · pi_kimi_credential_expired",none',
     );
@@ -1471,15 +1464,7 @@ describe("Kimi credential outcomes and cache policy", () => {
       },
     ]);
 
-    const rendered = renderQuotaToon(
-      {
-        generatedAt: new Date(NOW).toISOString(),
-        schemaVersion: 5,
-        providers: [withQuotaSemantics(report, new Date(NOW).toISOString())],
-      },
-      "quota-axi",
-      false,
-    );
+    const rendered = renderKimiQuota(report);
     expect(rendered).toContain("(auth expired_refreshable)");
     expect(rendered).not.toContain("auth_required");
   });
@@ -1709,11 +1694,17 @@ const TEST_SELECTION: KimiCodeSelection = {
   contextId: TEST_CREDENTIAL_CONTEXT_ID,
 };
 
-function jsonResponse(payload: unknown): Response {
-  return new Response(JSON.stringify(payload), {
-    status: 200,
-    headers: { "content-type": "application/json; charset=utf-8" },
-  });
+function renderKimiQuota(report: ProviderQuota): string {
+  const generatedAt = new Date(NOW).toISOString();
+  return renderQuotaToon(
+    {
+      generatedAt,
+      schemaVersion: 6,
+      providers: [withQuotaSemantics(report, generatedAt)],
+    },
+    "quota-axi",
+    false,
+  );
 }
 
 function cachedQuota(
