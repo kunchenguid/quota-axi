@@ -1,0 +1,193 @@
+import { describe, expect, it, vi } from "vitest";
+import {
+  createDeepSeekAdapter,
+  extractDeepSeekCredential,
+  normalizeDeepSeekPayload,
+} from "../../src/providers/deepseek.js";
+
+const OPTIONS = { allowKeychainPrompt: false, refreshCredentials: false };
+const KEY = "synthetic-deepseek-key";
+
+describe("DeepSeek provider", () => {
+  it("reads USD and CNY balances from the first-party API", async () => {
+    const request = vi.fn(async () => {
+      return new Response(
+        JSON.stringify({
+          is_available: true,
+          balance_infos: [
+            {
+              currency: "USD",
+              total_balance: "12.50",
+              granted_balance: "10.00",
+              topped_up_balance: "2.50",
+            },
+            {
+              currency: "CNY",
+              total_balance: "100.00",
+              granted_balance: "80.00",
+              topped_up_balance: "20.00",
+            },
+          ],
+        }),
+        { headers: { "content-type": "application/json" } },
+      );
+    });
+
+    const report = await createDeepSeekAdapter({
+      credential: () => ({
+        status: "available",
+        key: KEY,
+        source: "env:DEEPSEEK_API_KEY",
+      }),
+      fetch: request,
+      now: () => Date.parse("2026-09-01T00:00:00.000Z"),
+    }).fetchQuota(OPTIONS);
+
+    expect(report).toMatchObject({
+      provider: "deepseek",
+      source: "api",
+      state: { status: "fresh", stale: false },
+      credits: { remaining: 12.5, unit: "usd" },
+      attempts: [{ source: "env:DEEPSEEK_API_KEY", status: "success" }],
+    });
+    expect(report.windows).toEqual([]);
+    expect(JSON.stringify(report)).not.toContain(KEY);
+    expect(request).toHaveBeenCalledOnce();
+    const init = request.mock.calls[0][1];
+    expect(new Headers(init?.headers).get("authorization")).toBe(
+      "Bearer " + KEY,
+    );
+  });
+
+  it("tries Pi auth after an environment key is rejected", async () => {
+    const request = vi.fn(async (_url: string, init?: RequestInit) => {
+      const bearer = new Headers(init?.headers).get("authorization");
+      if (bearer === "Bearer stale-env-key")
+        return new Response(null, { status: 403 });
+      return new Response(
+        JSON.stringify({
+          is_available: true,
+          balance_infos: [{ currency: "USD", total_balance: "7.50" }],
+        }),
+        { headers: { "content-type": "application/json" } },
+      );
+    });
+
+    const report = await createDeepSeekAdapter({
+      credential: () => [
+        {
+          status: "available",
+          key: "stale-env-key",
+          source: "env:DEEPSEEK_API_KEY",
+        },
+        { status: "available", key: KEY, source: "pi:deepseek" },
+      ],
+      fetch: request,
+      now: () => Date.parse("2026-09-01T00:00:00.000Z"),
+    }).fetchQuota(OPTIONS);
+
+    expect(report).toMatchObject({
+      state: {
+        status: "fresh",
+        sourcesTried: ["env:DEEPSEEK_API_KEY", "pi:deepseek"],
+      },
+      attempts: [
+        {
+          source: "env:DEEPSEEK_API_KEY",
+          status: "failed",
+          error: "provider_auth_rejected",
+        },
+        { source: "pi:deepseek", status: "success" },
+      ],
+      credits: { remaining: 7.5, unit: "usd" },
+    });
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects an invalid balance amount", () => {
+    expect(() =>
+      normalizeDeepSeekPayload({
+        is_available: true,
+        balance_infos: [
+          {
+            currency: "USD",
+            total_balance: "-1",
+            granted_balance: "0",
+            topped_up_balance: "0",
+          },
+        ],
+      }),
+    ).toThrow("invalid_amount");
+  });
+
+  it("reports unusable local credentials as auth_required", async () => {
+    const request = vi.fn();
+    const missing = await createDeepSeekAdapter({
+      credential: () => ({ status: "missing", source: "pi:deepseek" }),
+      fetch: request,
+    }).fetchQuota(OPTIONS);
+    const invalid = await createDeepSeekAdapter({
+      credential: () => ({ status: "invalid", source: "pi:deepseek" }),
+      fetch: request,
+    }).fetchQuota(OPTIONS);
+    expect(missing).toMatchObject({
+      provider: "deepseek",
+      source: "api",
+      state: {
+        status: "auth_required",
+        error: "deepseek_credential_unavailable",
+      },
+    });
+    expect(invalid).toMatchObject({
+      provider: "deepseek",
+      source: "api",
+      state: {
+        status: "auth_required",
+        error: "deepseek_credential_invalid",
+      },
+    });
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("extracts a Pi auth.json deepseek entry", () => {
+    expect(
+      extractDeepSeekCredential({ deepseek: { key: KEY } }, "/auth.json"),
+    ).toEqual({
+      status: "available",
+      key: KEY,
+      source: "pi:deepseek",
+      path: "/auth.json",
+    });
+  });
+
+  it("rejects template and scalar Pi auth entries as invalid", () => {
+    expect(
+      extractDeepSeekCredential(
+        { deepseek: { key: "${DEEPSEEK_API_KEY}" } },
+        "/auth.json",
+      ),
+    ).toEqual({ status: "invalid", source: "pi:deepseek", path: "/auth.json" });
+    expect(extractDeepSeekCredential({ deepseek: KEY }, "/auth.json")).toEqual({
+      status: "invalid",
+      source: "pi:deepseek",
+      path: "/auth.json",
+    });
+  });
+
+  it("reports 401 as auth_required", async () => {
+    const report = await createDeepSeekAdapter({
+      credential: () => ({
+        status: "available",
+        key: KEY,
+        source: "env:DEEPSEEK_API_KEY",
+      }),
+      fetch: async () =>
+        new Response(JSON.stringify({ error: "unauthorized" }), {
+          status: 401,
+        }),
+    }).fetchQuota(OPTIONS);
+    expect(report).toMatchObject({
+      state: { status: "auth_required", error: "provider_auth_rejected" },
+    });
+  });
+});
