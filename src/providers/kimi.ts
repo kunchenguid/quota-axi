@@ -6,6 +6,7 @@ import {
 import type {
   AuthProviderReport,
   ProviderAdapter,
+  ProviderAuthStatus,
   ProviderOptions,
   ProviderQuota,
   ProviderStatus,
@@ -98,6 +99,7 @@ type KimiFailureOptions = {
   staleEligible?: boolean;
   definitiveAuth?: boolean;
   retryAfter?: string;
+  authStatus?: ProviderAuthStatus;
 };
 
 type NormalizedDetail = {
@@ -263,6 +265,14 @@ type KimiCandidate =
        * doubles as the liveness probe that decides the verdict.
        */
       localState: CandidateLocalState;
+      /**
+       * True when a stored-expired candidate's record carries a refresh
+       * token: an empirically rejected probe then reads as soft expiry with
+       * a rotation path, not as sign-out. Meaningful only for `localState:
+       * "expired"` candidates; a stored-valid credential the server rejected
+       * was revoked, not soft-expired.
+       */
+      refreshable?: boolean;
     }
   | {
       status: "unavailable";
@@ -336,6 +346,9 @@ async function acquireKimiQuota(
             source,
             localState: candidate.localState,
             credential: candidate.credential,
+            ...(candidate.refreshable !== undefined
+              ? { refreshable: candidate.refreshable }
+              : {}),
           },
         ],
         async (selected) => {
@@ -358,19 +371,32 @@ async function acquireKimiQuota(
             return { kind: "quota", result: report };
           } catch (error) {
             const failure = asKimiFailure(error);
+            /**
+             * A stored-expired candidate whose record carries a refresh path
+             * was soft-expired, so even a definitive probe rejection is soft
+             * expiry (the dead access token just reached rotation time), not
+             * sign-out. The sibling source is still consulted.
+             */
+            const softRefreshable =
+              failure.definitiveAuth &&
+              selected.localState === "expired" &&
+              selected.refreshable === true;
+            const effective = softRefreshable
+              ? refreshableExpiryFailure(source)
+              : failure;
             attempts[attempts.length - 1] = {
               source,
               status: "failed",
-              error: failure.code,
+              error: effective.code,
             };
             failures.push({
-              failure,
+              failure: effective,
               credentialPresent: true,
               cacheContextId,
             });
             return failure.definitiveAuth
-              ? { kind: "rejected", error: failure.code }
-              : { kind: "transient", error: failure.code };
+              ? { kind: "rejected", error: effective.code }
+              : { kind: "transient", error: effective.code };
           }
         },
       );
@@ -463,6 +489,7 @@ async function resolveKimiCandidate(
         credential: resolution.credential,
         quotaUrl: KIMI_QUOTA_URL,
         localState: "expired",
+        refreshable: resolution.refreshable,
       };
     }
     return unavailableCandidate(
@@ -507,6 +534,7 @@ async function resolveKimiCandidate(
       credential: resolution.accessToken,
       quotaUrl: kimiUsageUrl(resolution.baseUrl),
       localState: "expired",
+      refreshable: resolution.refreshable,
     };
   }
   return unavailableCandidate(
@@ -565,15 +593,22 @@ async function readKimiQuota(
 }
 
 /**
- * Which recorded failure speaks for the provider. A sibling that only failed
- * transiently outranks a definitive rejection, so a rejected credential can
- * never be reported as a sign-out while another source's outage is unresolved;
- * among definitive verdicts a store that actually held a credential outranks
- * one that was simply absent.
+ * Which recorded failure speaks for the provider. An operational transient
+ * outranks a soft-expiry verdict, which outranks a definitive rejection, so a
+ * rejected credential can never be reported as a sign-out while another
+ * source's outage is unresolved; among definitive verdicts a store that
+ * actually held a credential outranks one that was simply absent.
  */
 function definingFailure(failures: KimiFailureRecord[]): KimiFailureRecord {
   return (
-    failures.find((record) => !record.failure.definitiveAuth) ??
+    failures.find(
+      (record) =>
+        !record.failure.definitiveAuth &&
+        record.failure.authStatus !== "expired_refreshable",
+    ) ??
+    failures.find(
+      (record) => record.failure.authStatus === "expired_refreshable",
+    ) ??
     failures.find((record) => record.credentialPresent) ??
     failures[0] ?? {
       failure: new KimiFailure("credential_resolution_failed", {
@@ -619,6 +654,28 @@ async function resolveCliCredential(
   }
 }
 
+/**
+ * Soft expiry for a stored-expired credential whose record carries a refresh
+ * path (a Kimi Code CLI `refresh_token`, a Pi `refresh` property). A
+ * definitively rejected probe means the short-lived access token died before
+ * its rotation, not that the login is gone, so the verdict is the soft
+ * `expired_refreshable` classification (status `unavailable`, never
+ * `auth_required`) and the cache survives. Rotation stays the vendor CLI's
+ * job: nothing here reads or exchanges the refresh token.
+ */
+function refreshableExpiryFailure(source: string): KimiFailure {
+  return new KimiFailure(
+    source === KIMI_CODE_CLI_CREDENTIAL_SOURCE
+      ? "kimi_code_cli_credential_expired"
+      : "pi_kimi_credential_expired",
+    {
+      status: "unavailable",
+      staleEligible: true,
+      authStatus: "expired_refreshable",
+    },
+  );
+}
+
 function credentialFailureFor(
   resolution: Exclude<KimiCredentialResolution, { status: "available" }>,
 ): KimiFailure {
@@ -641,10 +698,12 @@ function credentialFailureFor(
     });
   }
   if (resolution.status === "expired") {
-    return new KimiFailure("pi_kimi_credential_expired", {
-      status: "auth_required",
-      definitiveAuth: true,
-    });
+    return resolution.refreshable
+      ? refreshableExpiryFailure(PI_KIMI_CREDENTIAL_SOURCE)
+      : new KimiFailure("pi_kimi_credential_expired", {
+          status: "auth_required",
+          definitiveAuth: true,
+        });
   }
   if (resolution.status === "error") {
     return new KimiFailure("credential_resolution_failed", {
@@ -666,10 +725,12 @@ function cliCredentialFailureFor(
     });
   }
   if (resolution.status === "expired") {
-    return new KimiFailure("kimi_code_cli_credential_expired", {
-      status: "auth_required",
-      definitiveAuth: true,
-    });
+    return resolution.refreshable
+      ? refreshableExpiryFailure(KIMI_CODE_CLI_CREDENTIAL_SOURCE)
+      : new KimiFailure("kimi_code_cli_credential_expired", {
+          status: "auth_required",
+          definitiveAuth: true,
+        });
   }
   if (resolution.status === "error") {
     return new KimiFailure("credential_resolution_failed", {
@@ -736,6 +797,7 @@ function failureReport(
             cached,
             failure.code,
             failure.retryAfter,
+            failure.authStatus,
             attempts,
             dependencies.now(),
           )
@@ -756,6 +818,7 @@ function failureReport(
       stale: false,
       error: failure.code,
       ...(failure.retryAfter ? { retryAfter: failure.retryAfter } : {}),
+      ...(failure.authStatus ? { authStatus: failure.authStatus } : {}),
       sourcesTried: attempts.map(({ source }) => source),
     },
     attempts,
@@ -766,6 +829,7 @@ function staleKimiReport(
   cached: ProviderQuota,
   error: string,
   retryAfter: string | undefined,
+  authStatus: ProviderAuthStatus | undefined,
   attempts: SourceAttempt[],
   now: number,
 ): ProviderQuota | undefined {
@@ -802,6 +866,7 @@ function staleKimiReport(
       refreshedAt: cached.state.refreshedAt,
       error,
       ...(retryAfter ? { retryAfter } : {}),
+      ...(authStatus ? { authStatus } : {}),
       ...(cached.state.untrustedWindowIds
         ? { untrustedWindowIds: cached.state.untrustedWindowIds }
         : {}),
@@ -1362,6 +1427,7 @@ class KimiFailure extends Error {
   readonly staleEligible: boolean;
   readonly definitiveAuth: boolean;
   readonly retryAfter?: string;
+  readonly authStatus?: ProviderAuthStatus;
 
   constructor(code: string, options: KimiFailureOptions = {}) {
     super(code);
@@ -1370,5 +1436,6 @@ class KimiFailure extends Error {
     this.staleEligible = options.staleEligible ?? false;
     this.definitiveAuth = options.definitiveAuth ?? false;
     this.retryAfter = options.retryAfter;
+    this.authStatus = options.authStatus;
   }
 }

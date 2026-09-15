@@ -20,6 +20,8 @@ export type QuotaFlags = {
    * expired. Defaults to false, so the quota path recovers on its own.
    */
   noCredentialRefresh: boolean;
+  /** Restrict quota discovery to the selected provider's profile file. */
+  profileOnly: boolean;
   /** Live `--tui` refresh interval; the caller applies the default. */
   refreshSeconds?: number;
   /** Render one `--tui` frame and exit instead of staying live. */
@@ -55,6 +57,15 @@ export function parseFlags(args: string[]): QuotaFlags {
 /** Parse flags accepted by the `models` evidence-join command. */
 export function parseModelsFlags(args: string[]): ModelsFlags {
   const flags = parseCommonFlags(args, MODEL_CATALOG_PROVIDER_IDS);
+  if (flags.profileOnly) {
+    throw new AxiError(
+      "--profile-only is only supported by the quota command",
+      "VALIDATION_ERROR",
+      [
+        "Set CLAUDE_CONFIG_DIR and run `quota-axi --provider claude --profile-only --full --json`",
+      ],
+    );
+  }
   if (flags.tui) {
     throw new AxiError(
       "--tui is only supported by the quota command",
@@ -87,6 +98,7 @@ function parseCommonFlags(
   let refreshSeconds: number | undefined;
   let allowKeychainPrompt = false;
   let noCredentialRefresh = false;
+  let profileOnly = false;
   let intelligence: IntelligenceBucket | undefined;
   let sort: ModelSortKey | undefined;
 
@@ -126,6 +138,10 @@ function parseCommonFlags(
     }
     if (arg === "--no-credential-refresh") {
       noCredentialRefresh = true;
+      continue;
+    }
+    if (arg === "--profile-only") {
+      profileOnly = true;
       continue;
     }
     if (arg === "--intelligence") {
@@ -201,6 +217,7 @@ function parseCommonFlags(
     once,
     allowKeychainPrompt,
     noCredentialRefresh,
+    profileOnly,
     ...(refreshSeconds !== undefined ? { refreshSeconds } : {}),
     ...(intelligence ? { intelligence } : {}),
     ...(sort ? { sort } : {}),

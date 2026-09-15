@@ -21,6 +21,12 @@ export const PACE_EARLY_ELAPSED_PERCENT = 10;
 export const SELECTION_CLAMP_PERCENT_POINTS = 100;
 
 /**
+ * Maximum snapshot-clock skew accepted beyond one declared window duration
+ * when identifying a fully unused future cycle as not yet opened.
+ */
+export const UNOPENED_WINDOW_MAX_FUTURE_START_SKEW_SECONDS = 5 * 60;
+
+/**
  * Below this much remaining cycle time the selection ratio is dominated by the
  * four-decimal rounding of `timeRemainingPercent` rather than by real signal,
  * so the window is treated as unmeasurable instead of producing a runaway or
@@ -122,6 +128,12 @@ export function computeEffectiveRunway(
     return unknownRunway(windows);
   }
 
+  const accountWindows = windows.filter(({ kind }) => kind !== "model");
+  const accountBoundsEstablishRunway =
+    windows.some(({ kind }) => kind === "model") &&
+    accountWindows.length > 0 &&
+    computeEffectiveRunway(accountWindows, generatedAt).status !== "unknown";
+
   const unmeasurableWindowIds: string[] = [];
   const projections: Array<{
     window: QuotaWindow;
@@ -134,41 +146,38 @@ export function computeEffectiveRunway(
     const pace = window.pace;
     const resetsAt = resolveResetsAtOutcome(window.resetsAt);
 
-    if (resetsAt.kind === "malformed") {
-      unmeasurableWindowIds.push(window.id);
-      continue;
-    }
-
-    if (remaining !== undefined && isZeroUse(window, remaining)) {
-      const unknownReason =
-        pace?.status === "unknown" ? pace.reason : undefined;
-      if (
-        pace === undefined ||
-        unknownReason === "missing_cycle" ||
-        unknownReason === "future_cycle_start" ||
-        resetsAt.kind === "missing"
-      ) {
-        // Unused windows have not started their countdown, so they do not
-        // block the aggregate. That includes a missing resetsAt at 100%
-        // remaining / 0% used - e.g. a Claude five_hour window before its
-        // first request this window.
-        continue;
-      }
-      if (unknownReason !== undefined) {
-        unmeasurableWindowIds.push(window.id);
-        continue;
-      }
-      if ((pace.elapsedPercent ?? 0) < PACE_EARLY_ELAPSED_PERCENT) {
-        lowestConfidence = "early";
-      }
-      continue;
-    }
-
     if (resetsAt.kind === "missing") {
-      // A missing resetsAt paired with any other usage shape (unknown usage,
+      // A missing resetsAt is non-bounding only when it also reports no
+      // usage (100% remaining, 0% used) - e.g. a Claude five_hour window
+      // before its first request this window. That shape's countdown has
+      // simply not started yet, so it does not block the aggregate. A
+      // missing resetsAt paired with any other usage shape (unknown usage,
       // or nonzero usage without an active clock) is a real data gap, not
       // "not yet triggered", and still fails closed.
+      if (remaining !== undefined && isZeroUse(window, remaining)) {
+        continue;
+      }
       unmeasurableWindowIds.push(window.id);
+      continue;
+    }
+
+    // A provider can publish a fresh named-model window just before its cycle
+    // opens. When both usage fields prove that nothing has been consumed, the
+    // reset is valid and no more than one declared cycle plus the bounded
+    // snapshot skew ahead, and pace identifies only that skew, the unopened
+    // window has no exhaustion projection and does not block one
+    // established by the scope's other bounds. Keep every other unknown pace
+    // fail-closed.
+    if (
+      isProvablyUnopenedFutureCycle(
+        window,
+        remaining,
+        pace,
+        resetsAt,
+        generatedAtMs,
+        accountBoundsEstablishRunway,
+      )
+    ) {
       continue;
     }
 
@@ -178,12 +187,20 @@ export function computeEffectiveRunway(
       remaining > 100 ||
       pace === undefined ||
       pace.status === "unknown" ||
+      resetsAt.kind === "malformed" ||
       resetsAt.ms <= generatedAtMs
     ) {
       unmeasurableWindowIds.push(window.id);
       continue;
     }
     const resetsAtMs = resetsAt.ms;
+
+    if (isZeroUse(window, remaining)) {
+      if ((pace.elapsedPercent ?? 0) < PACE_EARLY_ELAPSED_PERCENT) {
+        lowestConfidence = "early";
+      }
+      continue;
+    }
 
     // A window pace only carries a projection pair when the cycle-average
     // projection succeeded, so the pair itself is the basis check.
@@ -414,6 +431,39 @@ function isZeroUse(window: QuotaWindow, percentRemaining: number): boolean {
   const percentUsed = finiteNumber(window.percentUsed);
   return (
     percentRemaining === 100 && (percentUsed === undefined || percentUsed === 0)
+  );
+}
+
+function isProvablyUnopenedFutureCycle(
+  window: QuotaWindow,
+  percentRemaining: number | undefined,
+  pace: QuotaPace | undefined,
+  resetsAt: ResetsAtOutcome,
+  generatedAtMs: number,
+  accountBoundsEstablishRunway: boolean,
+): boolean {
+  const windowSeconds = finiteNumber(window.windowSeconds);
+  if (
+    window.kind !== "model" ||
+    !accountBoundsEstablishRunway ||
+    percentRemaining !== 100 ||
+    window.percentUsed !== 0 ||
+    pace?.status !== "unknown" ||
+    pace.reason !== "future_cycle_start" ||
+    resetsAt.kind !== "ok" ||
+    windowSeconds === undefined ||
+    windowSeconds <= 0
+  ) {
+    return false;
+  }
+
+  const latestPlausibleResetMs =
+    generatedAtMs +
+    (windowSeconds + UNOPENED_WINDOW_MAX_FUTURE_START_SKEW_SECONDS) * 1000;
+  return (
+    isRepresentableDateMs(latestPlausibleResetMs) &&
+    resetsAt.ms > generatedAtMs &&
+    resetsAt.ms <= latestPlausibleResetMs
   );
 }
 

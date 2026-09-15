@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -25,6 +25,8 @@ const originalAgyProvider = PROVIDERS.agy;
 const originalAlibabaProvider = PROVIDERS.alibaba;
 const originalOpenCodeGoProvider = PROVIDERS["opencode-go"];
 const originalXdgCacheHome = process.env.XDG_CACHE_HOME;
+const originalClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
+const originalCodexHome = process.env.CODEX_HOME;
 let tempDir: string | undefined;
 
 afterEach(() => {
@@ -40,6 +42,11 @@ afterEach(() => {
   PROVIDERS["opencode-go"] = originalOpenCodeGoProvider;
   if (originalXdgCacheHome === undefined) delete process.env.XDG_CACHE_HOME;
   else process.env.XDG_CACHE_HOME = originalXdgCacheHome;
+  if (originalClaudeConfigDir === undefined)
+    delete process.env.CLAUDE_CONFIG_DIR;
+  else process.env.CLAUDE_CONFIG_DIR = originalClaudeConfigDir;
+  if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
+  else process.env.CODEX_HOME = originalCodexHome;
   if (tempDir) rmSync(tempDir, { recursive: true, force: true });
   tempDir = undefined;
   process.exitCode = undefined;
@@ -103,6 +110,7 @@ describe("CLI flag parsing", () => {
         once: false,
         allowKeychainPrompt: true,
         noCredentialRefresh: false,
+        profileOnly: false,
       },
     );
     expect(parseFlags(["--tui"]).tui).toBe(true);
@@ -176,6 +184,15 @@ describe("CLI flag parsing", () => {
       parseModelsFlags(["--no-credential-refresh"]).noCredentialRefresh,
     ).toBe(true);
   });
+
+  it("parses profile-only mode and rejects it for models", () => {
+    expect(
+      parseFlags(["--provider", "claude", "--profile-only"]).profileOnly,
+    ).toBe(true);
+    expect(() => parseModelsFlags(["--profile-only"])).toThrow(
+      "--profile-only is only supported by the quota command",
+    );
+  });
 });
 
 describe("delegated credential refresh wiring", () => {
@@ -231,6 +248,61 @@ describe("delegated credential refresh wiring", () => {
       { allowKeychainPrompt: false, refreshCredentials: false },
     ]);
   });
+
+  it("wires profile-only mode without refresh or Keychain access", async () => {
+    const seen: ProviderOptions[] = [];
+    PROVIDERS.claude = recordingProvider(seen);
+    process.env.CLAUDE_CONFIG_DIR = "/explicit/claude-profile";
+
+    await quotaCommand(["--provider", "claude", "--profile-only"], undefined);
+
+    expect(seen).toEqual([
+      {
+        allowKeychainPrompt: false,
+        refreshCredentials: false,
+        credentialMode: "profile-only",
+      },
+    ]);
+  });
+
+  it("rejects invalid profile-only scopes before provider I/O", async () => {
+    const seen: ProviderOptions[] = [];
+    PROVIDERS.claude = recordingProvider(seen);
+
+    await expect(quotaCommand(["--profile-only"], undefined)).rejects.toThrow(
+      "--profile-only requires exactly one --provider selector",
+    );
+    await expect(
+      quotaCommand(["--provider", "claude,codex", "--profile-only"], undefined),
+    ).rejects.toThrow(
+      "--profile-only requires exactly one --provider selector",
+    );
+    await expect(
+      quotaCommand(["--provider", "cursor", "--profile-only"], undefined),
+    ).rejects.toThrow("--profile-only does not support provider: cursor");
+    await expect(
+      authCommand(["--provider", "claude", "--profile-only"], undefined),
+    ).rejects.toThrow("--profile-only is only supported by the quota command");
+    delete process.env.CLAUDE_CONFIG_DIR;
+    await expect(
+      quotaCommand(["--provider", "claude", "--profile-only"], undefined),
+    ).rejects.toThrow(
+      "--profile-only with --provider claude requires explicit CLAUDE_CONFIG_DIR",
+    );
+    process.env.CLAUDE_CONFIG_DIR = "   ";
+    await expect(
+      quotaCommand(["--provider", "claude", "--profile-only"], undefined),
+    ).rejects.toThrow(
+      "--profile-only with --provider claude requires explicit CLAUDE_CONFIG_DIR",
+    );
+    delete process.env.CODEX_HOME;
+    await expect(
+      quotaCommand(["--provider", "codex", "--profile-only"], undefined),
+    ).rejects.toThrow(
+      "--profile-only with --provider codex requires explicit CODEX_HOME",
+    );
+    expect(seen).toEqual([]);
+  });
 });
 
 describe("argv normalization", () => {
@@ -285,6 +357,20 @@ describe("argv normalization", () => {
 });
 
 describe("CLI quota rendering", () => {
+  it("bypasses cache persistence only in profile-only mode", async () => {
+    tempDir = mkdtempSync(join(tmpdir(), "quota-axi-profile-cache-"));
+    process.env.XDG_CACHE_HOME = tempDir;
+    process.env.CLAUDE_CONFIG_DIR = join(tempDir, "claude-profile");
+    PROVIDERS.claude = providerWithQuota(freshClaudeQuota());
+    const cachePath = join(tempDir, "quota-axi", "quotas.json");
+
+    await quotaCommand(["--provider", "claude", "--profile-only"], undefined);
+    expect(existsSync(cachePath)).toBe(false);
+
+    await quotaCommand(["--provider", "claude"], undefined);
+    expect(existsSync(cachePath)).toBe(true);
+  });
+
   it("renders live quota when cache persistence fails", async () => {
     tempDir = mkdtempSync(join(tmpdir(), "quota-axi-cli-cache-"));
     const blockedCacheRoot = join(tempDir, "cache-root");

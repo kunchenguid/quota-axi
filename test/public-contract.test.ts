@@ -22,5 +22,6 @@ describe("published package contract", () => {
       { cwd: process.cwd(), encoding: "utf8" },
     );
     expect(typecheck.status, `${typecheck.stdout}${typecheck.stderr}`).toBe(0);
-  });
+    // Spawns a real tsc compile, which outruns vitest's 5s default on a cold cache.
+  }, 60_000);
 });

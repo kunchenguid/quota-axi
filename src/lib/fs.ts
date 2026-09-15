@@ -2,6 +2,7 @@ import { mkdirSync, readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { claudeProfileLocations } from "./claude-profile.js";
 
 export type JsonFileReadResult =
   | { status: "success"; value: unknown }
@@ -53,30 +54,38 @@ export function cacheFilePath(): string {
  * selected by the current process. The selected path never leaves this helper.
  */
 export function claudeCredentialContextId(): string {
-  const configDir = resolve(
-    (process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude")).normalize(
-      "NFC",
-    ),
-  );
+  const { configDir, keychainService } = claudeProfileLocations();
+  // Include the exact service: it already encodes the secure-storage selector,
+  // including a relative raw path hash.
+  // Version the identity to withhold snapshots from earlier opaque discovery.
   return createHash("sha256")
-    .update(`claude-config-dir:${configDir}`)
+    .update(
+      JSON.stringify([
+        "claude-profile-v2",
+        resolve(configDir),
+        keychainService,
+      ]),
+    )
     .digest("hex");
 }
 
+// The grant is per Keychain item, so the marker is keyed by the service the
+// value read will name, which already encodes any explicit profile directory.
 export function claudeKeychainAccessMarkerPath(
   account: string,
-  configDir?: string,
+  service: string,
 ): string {
-  const profileSuffix = configDir
-    ? `-${createHash("sha256").update(configDir).digest("hex").slice(0, 8)}`
-    : "";
+  const serviceSuffix = createHash("sha256")
+    .update(service)
+    .digest("hex")
+    .slice(0, 8);
   const accountSuffix = createHash("sha256")
     .update(account)
     .digest("hex")
     .slice(0, 16);
   return join(
     cacheDirPath(),
-    `claude-keychain-access-granted${profileSuffix}-account-${accountSuffix}`,
+    `claude-keychain-access-granted-${serviceSuffix}-account-${accountSuffix}`,
   );
 }
 

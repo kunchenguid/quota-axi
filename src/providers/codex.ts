@@ -5,6 +5,7 @@ import { readCachedProvider } from "../cache.js";
 import { readJsonFileResult, type JsonFileReadResult } from "../lib/fs.js";
 import { providerFetch } from "../lib/http.js";
 import { findCommandPath, terminateChild } from "../lib/process.js";
+import { redactSecret } from "../lib/secret.js";
 import {
   clampPercent,
   nowIso,
@@ -126,7 +127,7 @@ export function createCodexAdapter(
   return {
     id: "codex",
     label: "Codex",
-    fetchQuota: (_options) => fetchQuotaWithDependencies(dependencies),
+    fetchQuota: (options) => fetchQuotaWithDependencies(dependencies, options),
     inspectAuth: (_options) => inspectAuthWithDependencies(dependencies),
   };
 }
@@ -134,14 +135,17 @@ export function createCodexAdapter(
 export const codexAdapter = createCodexAdapter();
 
 export async function fetchQuota(
-  _options: ProviderOptions,
+  options: ProviderOptions,
 ): Promise<ProviderQuota> {
-  return fetchQuotaWithDependencies(defaultCodexDependencies);
+  return fetchQuotaWithDependencies(defaultCodexDependencies, options);
 }
 
 async function fetchQuotaWithDependencies(
   dependencies: CodexDependencies,
+  options: ProviderOptions,
 ): Promise<ProviderQuota> {
+  if (isProfileOnly(options)) return fetchProfileOnlyQuota();
+
   const attempts: SourceAttempt[] = [];
   let finalError = "Codex quota unavailable";
   // False once a source has recorded a real failure. Sources are consulted in
@@ -714,6 +718,115 @@ function codexAuthFile(): string {
     : join(homedir(), ".codex", "auth.json");
 }
 
+function isProfileOnly(options: ProviderOptions): boolean {
+  return (
+    (options as ProviderOptions & { credentialMode?: "profile-only" })
+      .credentialMode === "profile-only"
+  );
+}
+
+/**
+ * Profile-only is deliberately stricter than normal Codex discovery: the
+ * caller must select a home explicitly, and only that home's auth file is
+ * eligible to answer.
+ */
+function selectedProfileAuthFile(): string | undefined {
+  const selector = process.env.CODEX_HOME;
+  return selector?.trim() ? join(selector, "auth.json") : undefined;
+}
+
+async function fetchProfileOnlyQuota(): Promise<ProviderQuota> {
+  const selected = selectedProfileAuthFile();
+  if (!selected) {
+    return profileOnlyFailure("Codex profile selector missing", "unavailable", [
+      {
+        source: "oauth",
+        status: "skipped",
+        error: "profile_selector_missing",
+      },
+    ]);
+  }
+
+  const credentialState = readCredentialState(selected);
+  if (
+    credentialState.status !== "available" &&
+    credentialState.status !== "expired"
+  ) {
+    const reason =
+      credentialState.status === "missing"
+        ? "credentials_missing"
+        : (credentialState.source.error ?? "credentials_invalid");
+    return profileOnlyFailure(
+      profileOnlyCredentialError(reason),
+      credentialState.status === "missing" ? "unavailable" : "error",
+      [
+        {
+          source: "oauth",
+          status: "skipped",
+          error: reason,
+          ...(credentialState.status === "invalid"
+            ? { credentialPresent: true }
+            : {}),
+        },
+      ],
+    );
+  }
+
+  const attempt = await attemptCodexCandidate({
+    source: "oauth",
+    credentials: credentialState.credentials,
+  });
+  if (attempt.kind === "quota") {
+    return codexSuccessReport(attempt.result, "oauth", [
+      { source: "oauth", status: "success" },
+    ]);
+  }
+
+  const error =
+    attempt.kind === "live_no_quota"
+      ? "Codex quota unavailable"
+      : attempt.error;
+  return profileOnlyFailure(
+    error,
+    attempt.kind === "rejected"
+      ? "auth_required"
+      : attempt.kind === "transient" && attempt.retryAfter
+        ? "rate_limited"
+        : "error",
+    [{ source: "oauth", status: "failed", error }],
+    attempt.kind === "transient" ? attempt.retryAfter : undefined,
+  );
+}
+
+/**
+ * Keep `state.error` a sentence like every other Codex failure, and leave the
+ * stable reason code on the attempt.
+ */
+function profileOnlyCredentialError(reason: string): string {
+  if (reason === "credentials_missing")
+    return "Codex profile credentials missing";
+  if (reason === "file_read_error") return "Codex credential file unreadable";
+  if (reason === "json_parse_error") return "Codex credential file malformed";
+  return "Codex credential invalid";
+}
+
+function profileOnlyFailure(
+  error: string,
+  status: ProviderQuota["state"]["status"],
+  attempts: SourceAttempt[],
+  retryAfter?: string,
+): ProviderQuota {
+  return failedProvider({
+    provider: "codex",
+    label: "Codex",
+    status,
+    error,
+    retryAfter,
+    sourcesTried: sourceNames(attempts),
+    attempts,
+  });
+}
+
 function readCredentialState(authFile = codexAuthFile()): CredentialState {
   return extractCredentialState(readJsonFileResult(authFile), authFile);
 }
@@ -1112,7 +1225,7 @@ function credentialSafeErrorMessage(
   error: unknown,
   credential: string,
 ): string {
-  return errorMessage(error).replaceAll(credential, "[redacted]");
+  return redactSecret(errorMessage(error), credential);
 }
 
 function errorMessage(error: unknown): string {

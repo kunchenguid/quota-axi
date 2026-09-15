@@ -1039,6 +1039,328 @@ describe("Codex credential-state reporting", () => {
     expect(rendered).not.toContain(refreshToken);
     expect(rendered).toContain("[redacted]");
   });
+
+  describe("profile-only credential mode", () => {
+    const options = {
+      allowKeychainPrompt: false,
+      refreshCredentials: true,
+      credentialMode: "profile-only" as const,
+    };
+
+    it("reads each explicitly selected home independently with matching bearer and account headers", async () => {
+      const firstHome = join(tempDir!, "first-profile");
+      const secondHome = join(tempDir!, "second-profile");
+      mkdirSync(firstHome, { recursive: true });
+      mkdirSync(secondHome, { recursive: true });
+      writeFileSync(
+        join(firstHome, "auth.json"),
+        JSON.stringify({
+          tokens: {
+            access_token: "CODEX-SENTINEL-DO-NOT-LEAK-220001",
+            account_id: "acct-first",
+          },
+        }),
+      );
+      writeFileSync(
+        join(secondHome, "auth.json"),
+        JSON.stringify({
+          tokens: {
+            access_token: "CODEX-SENTINEL-DO-NOT-LEAK-220002",
+            account_id: "acct-second",
+          },
+        }),
+      );
+      const requests: Array<Record<string, string>> = [];
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (_url: unknown, init?: RequestInit) => {
+          requests.push(init?.headers as Record<string, string>);
+          const accountId = (init?.headers as Record<string, string>)[
+            "ChatGPT-Account-Id"
+          ];
+          return new Response(
+            JSON.stringify({
+              email: `${accountId}@example.invalid`,
+              account_id: accountId,
+              rate_limit: {
+                primary_window: {
+                  used_percent: 12,
+                  limit_window_seconds: 18_000,
+                },
+              },
+            }),
+            { status: 200 },
+          );
+        }),
+      );
+
+      const { fetchQuota } = await import("../../src/providers/codex.js");
+      process.env.CODEX_HOME = firstHome;
+      const first = await fetchQuota(options);
+      process.env.CODEX_HOME = secondHome;
+      const second = await fetchQuota(options);
+
+      expect(requests).toEqual([
+        {
+          authorization: "Bearer CODEX-SENTINEL-DO-NOT-LEAK-220001",
+          accept: "application/json",
+          "ChatGPT-Account-Id": "acct-first",
+        },
+        {
+          authorization: "Bearer CODEX-SENTINEL-DO-NOT-LEAK-220002",
+          accept: "application/json",
+          "ChatGPT-Account-Id": "acct-second",
+        },
+      ]);
+      expect(first).toMatchObject({
+        source: "oauth",
+        account: {
+          email: "acct-first@example.invalid",
+          accountId: "acct-first",
+        },
+        state: { status: "fresh", stale: false },
+        attempts: [{ source: "oauth", status: "success" }],
+      });
+      expect(second).toMatchObject({
+        source: "oauth",
+        account: {
+          email: "acct-second@example.invalid",
+          accountId: "acct-second",
+        },
+        attempts: [{ source: "oauth", status: "success" }],
+      });
+      expect(first.state.refreshedAt).toBeTruthy();
+      expect(JSON.stringify({ first, second })).not.toMatch(
+        /CODEX-SENTINEL-DO-NOT-LEAK-220001|CODEX-SENTINEL-DO-NOT-LEAK-220002/,
+      );
+    });
+
+    it("does not consult Pi, binaries, subprocesses, or cache when the selected profile fails", async () => {
+      delete process.env.CODEX_HOME;
+      const resolve = vi.fn(async () => {
+        throw new Error("hostile Pi rescue");
+      });
+      const inspect = vi.fn(async () => {
+        throw new Error("hostile Pi inspection");
+      });
+      const readCachedProvider = vi.fn(() => {
+        throw new Error("hostile cache rescue");
+      });
+      const findCommandPath = vi.fn(async () => "/hostile/codex");
+      const spawn = vi.fn();
+      vi.doMock("../../src/cache.js", () => ({ readCachedProvider }));
+      vi.doMock("../../src/lib/process.js", () => ({
+        findCommandPath,
+        terminateChild: vi.fn(),
+      }));
+      vi.doMock("node:child_process", () => ({ spawn }));
+
+      const { createCodexAdapter } =
+        await import("../../src/providers/codex.js");
+      const adapter = createCodexAdapter({
+        piCodexBroker: { resolve, inspect },
+      });
+      const result = await adapter.fetchQuota(options);
+
+      expect(result).toMatchObject({
+        source: "unavailable",
+        windows: [],
+        state: {
+          status: "unavailable",
+          stale: false,
+          error: "Codex profile selector missing",
+          sourcesTried: ["oauth"],
+        },
+        attempts: [
+          {
+            source: "oauth",
+            status: "skipped",
+            error: "profile_selector_missing",
+          },
+        ],
+      });
+      expect(resolve).not.toHaveBeenCalled();
+      expect(inspect).not.toHaveBeenCalled();
+      expect(readCachedProvider).not.toHaveBeenCalled();
+      expect(findCommandPath).not.toHaveBeenCalled();
+      expect(spawn).not.toHaveBeenCalled();
+    });
+
+    it("keeps trailing whitespace in a nonblank selected home", async () => {
+      const selectedHome = join(tempDir!, "profile ");
+      const trimmedHome = selectedHome.trim();
+      mkdirSync(selectedHome, { recursive: true });
+      mkdirSync(trimmedHome, { recursive: true });
+      writeFileSync(
+        join(selectedHome, "auth.json"),
+        JSON.stringify({
+          tokens: { access_token: "CODEX-SENTINEL-DO-NOT-LEAK-220003" },
+        }),
+      );
+      writeFileSync(
+        join(trimmedHome, "auth.json"),
+        JSON.stringify({
+          tokens: { access_token: "CODEX-SENTINEL-DO-NOT-LEAK-220004" },
+        }),
+      );
+      process.env.CODEX_HOME = selectedHome;
+      const bearers: string[] = [];
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (_url: unknown, init?: RequestInit) => {
+          bearers.push(new Headers(init?.headers).get("authorization") ?? "");
+          return successfulUsageResponse();
+        }),
+      );
+
+      const { fetchQuota } = await import("../../src/providers/codex.js");
+      const result = await fetchQuota(options);
+
+      expect(result.state.status).toBe("fresh");
+      expect(bearers).toEqual(["Bearer CODEX-SENTINEL-DO-NOT-LEAK-220003"]);
+      expect(JSON.stringify(result)).not.toMatch(
+        /CODEX-SENTINEL-DO-NOT-LEAK-220003|CODEX-SENTINEL-DO-NOT-LEAK-220004/,
+      );
+    });
+
+    it.each([
+      {
+        failure: "selected file missing",
+        arrange: () => {},
+        expectedStatus: "unavailable",
+        expectedError: "Codex profile credentials missing",
+        expectedReason: "credentials_missing",
+        credentialPresent: undefined,
+      },
+      {
+        failure: "selected file unreadable",
+        arrange: () => mkdirSync(authFile()),
+        expectedStatus: "error",
+        expectedError: "Codex credential file unreadable",
+        expectedReason: "file_read_error",
+        credentialPresent: true,
+      },
+      {
+        failure: "selected file has malformed JSON",
+        arrange: () => writeAuth("{not-json"),
+        expectedStatus: "error",
+        expectedError: "Codex credential file malformed",
+        expectedReason: "json_parse_error",
+        credentialPresent: true,
+      },
+      {
+        failure: "selected file has an invalid credential",
+        arrange: () => writeAuth({ tokens: {} }),
+        expectedStatus: "error",
+        expectedError: "Codex credential invalid",
+        expectedReason: "credentials_invalid",
+        credentialPresent: true,
+      },
+    ])(
+      "keeps $failure distinct without fallback",
+      async ({
+        arrange,
+        expectedStatus,
+        expectedError,
+        expectedReason,
+        credentialPresent,
+      }) => {
+        arrange();
+        const fetchMock = vi.fn();
+        vi.stubGlobal("fetch", fetchMock);
+
+        const { fetchQuota } = await import("../../src/providers/codex.js");
+        const result = await fetchQuota(options);
+
+        expect(result).toMatchObject({
+          source: "unavailable",
+          state: { status: expectedStatus, error: expectedError, stale: false },
+          attempts: [
+            {
+              source: "oauth",
+              status: "skipped",
+              error: expectedReason,
+              ...(credentialPresent ? { credentialPresent } : {}),
+            },
+          ],
+        });
+        expect(fetchMock).not.toHaveBeenCalled();
+      },
+    );
+
+    it("reports definitive selected-profile rejection as auth required without exposing the token", async () => {
+      const token = "CODEX-SENTINEL-DO-NOT-LEAK-220005";
+      writeAuth({ tokens: { access_token: token } });
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => new Response(null, { status: 401 })),
+      );
+
+      const { fetchQuota } = await import("../../src/providers/codex.js");
+      const result = await fetchQuota(options);
+
+      expect(result).toMatchObject({
+        source: "unavailable",
+        state: {
+          status: "auth_required",
+          error: "Codex sign-in required",
+          stale: false,
+        },
+        attempts: [
+          {
+            source: "oauth",
+            status: "failed",
+            error: "Codex sign-in required",
+          },
+        ],
+      });
+      expect(JSON.stringify(result)).not.toContain(token);
+    });
+
+    it("probes stored-expired selected credentials without allowing fallback", async () => {
+      writeAuth({
+        tokens: {
+          access_token: jwt({ exp: 1 }),
+          account_id: "selected-account",
+        },
+      });
+      writePiAuth(piOauthEntry());
+      const fetchMock = vi.fn(async () => new Response(null, { status: 401 }));
+      vi.stubGlobal("fetch", fetchMock);
+
+      const { fetchQuota } = await import("../../src/providers/codex.js");
+      const result = await fetchQuota(options);
+
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(result.source).toBe("unavailable");
+      expect(result.state).toMatchObject({
+        status: "auth_required",
+        stale: false,
+        error: "Codex sign-in required",
+        sourcesTried: ["oauth"],
+      });
+      expect(result.attempts).toEqual([
+        { source: "oauth", status: "failed", error: "Codex sign-in required" },
+      ]);
+    });
+
+    it("keeps omitted credential mode on the legacy Pi fallback path", async () => {
+      writePiAuth(piOauthEntry());
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => successfulUsageResponse()),
+      );
+
+      const { fetchQuota } = await import("../../src/providers/codex.js");
+      const result = await fetchQuota({
+        allowKeychainPrompt: false,
+        refreshCredentials: false,
+      });
+
+      expect(result.source).toBe("pi:openai-codex");
+      expect(result.state.sourcesTried).toEqual(["oauth", "pi:openai-codex"]);
+    });
+  });
 });
 
 function failingChild(): ChildProcessWithoutNullStreams {

@@ -13,10 +13,38 @@ import type {
   QuotaWindow,
 } from "./types.js";
 
+export function markAgyStaleIfExpiredReset(
+  provider: ProviderQuota,
+  nowMs = Date.now(),
+): ProviderQuota {
+  const hasExpired = provider.windows.some((w) => {
+    if (!w.resetsAt) return false;
+    const ms = Date.parse(w.resetsAt);
+    return Number.isFinite(ms) && ms <= nowMs;
+  });
+  if (
+    hasExpired &&
+    (!provider.state.stale || provider.state.status !== "stale")
+  ) {
+    return {
+      ...provider,
+      state: {
+        ...provider.state,
+        status: "stale",
+        stale: true,
+      },
+    };
+  }
+  return provider;
+}
+
 export function withQuotaSemantics(
   provider: ProviderQuota,
   generatedAt: string,
 ): ProviderQuota {
+  if (provider.provider === "agy") {
+    provider = markAgyStaleIfExpiredReset(provider, Date.parse(generatedAt));
+  }
   const windows = provider.windows.map((window) => ({
     ...window,
     pace: computeWindowPace(window, generatedAt, {
@@ -128,11 +156,55 @@ function semanticsFor(
     case "alibaba":
       return alibabaSemantics(provider.windows, generatedAt);
     case "opencode-go":
-      return unknownSemantics(
-        provider.windows,
-        "OpenCode Go reports rolling, weekly, and monthly windows, but quota-axi has no provider evidence that they jointly bound all models, so it does not claim an effective combined percentage.",
-      );
+      return opencodeGoSemantics(provider.windows, generatedAt);
   }
+}
+
+/**
+ * OpenCode Go's usage endpoint reports the plan's stacked caps: the vendor
+ * documents $12 per rolling 5 hours, $30 per week, and $60 per month, and
+ * reaching a cap blocks Go-plan requests (the vendor's free-model fallback or
+ * an opted-in Zen balance may still serve past a zeroed plan window, which
+ * this endpoint does not report). That is the missing joint-bound evidence,
+ * so the three windows jointly bound Go-plan usage at `all_models` scope.
+ */
+function opencodeGoSemantics(
+  windows: QuotaWindow[],
+  generatedAt: string,
+): QuotaSemantics {
+  const plan = windows.filter(({ id }) =>
+    ["rolling", "five_hour", "weekly", "monthly"].includes(id),
+  );
+  const recognized = new Set(plan);
+  // The endpoint always reports all three stacked caps; a missing cap is a
+  // data gap, not a complete bound, so a subset alone never reads as known.
+  // `five_hour` is the duration-confirmed identity of the `rolling` cap.
+  const present = new Set(
+    plan.map(({ id }) => (id === "five_hour" ? "rolling" : id)),
+  );
+  const missing = (["rolling", "weekly", "monthly"] as const).filter(
+    (id) => !present.has(id),
+  );
+  const unresolved = windows.filter((window) => !recognized.has(window));
+  const unresolvedWindowIds = [
+    ...new Set([...unresolved.map(({ id }) => id), ...missing]),
+  ];
+  if (unresolvedWindowIds.length > 0) {
+    return {
+      status: "partial",
+      description:
+        "OpenCode Go's rolling, weekly, and monthly windows are stacked plan caps that jointly bound Go-plan usage, but unfamiliar or missing windows prevent a definitive effective percentage.",
+      effectiveAvailability:
+        plan.length > 0
+          ? [unresolvedAvailability("all_models", plan, unresolvedWindowIds)]
+          : [],
+      unresolvedWindowIds,
+    };
+  }
+  return knownSemantics(
+    plan.length > 0 ? [availability("all_models", plan, generatedAt)] : [],
+    "OpenCode Go's rolling, weekly, and monthly windows are stacked plan caps ($12 per rolling 5 hours, $30 per week, $60 per month) that jointly bound Go-plan usage, so effective remaining is the minimum across the named windows. A zeroed plan window blocks Go-plan requests; the vendor's free-model fallback or an opted-in Zen balance may still serve past it, which this endpoint does not report.",
+  );
 }
 
 function alibabaSemantics(
@@ -426,7 +498,7 @@ function zaiSemantics(
     return {
       status: "partial",
       description:
-        "Z.AI's five-hour and weekly token windows jointly bound model usage and the monthly tool window is a separate resource, but unfamiliar windows prevent a definitive effective percentage.",
+        "Z.AI's five-hour and weekly usage windows jointly bound model usage and the monthly tool window is a separate resource, but unfamiliar windows prevent a definitive effective percentage.",
       effectiveAvailability,
       unresolvedWindowIds,
     };
@@ -441,7 +513,7 @@ function zaiSemantics(
   }
   return knownSemantics(
     effectiveAvailability,
-    "Z.AI's five-hour and weekly token windows jointly bound model usage, so effective remaining is the minimum across the named windows. The monthly tool window is an independent resource.",
+    "Z.AI's five-hour and weekly usage windows jointly bound model usage, so effective remaining is the minimum across the named windows. The monthly tool window is an independent resource.",
   );
 }
 

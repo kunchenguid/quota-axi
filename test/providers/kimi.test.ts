@@ -1118,16 +1118,20 @@ describe("Kimi credential outcomes and cache policy", () => {
   );
 
   it.each([
-    ["invalid", "kimi_code_cli_credential_invalid"],
-    ["expired", "kimi_code_cli_credential_expired"],
+    ["invalid", { status: "invalid" }, "kimi_code_cli_credential_invalid"],
+    [
+      "expired",
+      { status: "expired", refreshable: false },
+      "kimi_code_cli_credential_expired",
+    ],
   ] as const)(
     "fails closed for a %s CLI credential after Pi is unavailable",
-    async (status, error) => {
+    async (_label, input, error) => {
       const request = vi.fn();
       const remove = vi.fn();
       const report = await testAdapter({
         broker: broker({ status: "missing" }),
-        cliCredentialSource: cliCredentialSource({ status }),
+        cliCredentialSource: cliCredentialSource(input),
         fetch: request,
         deleteCachedProvider: remove,
       }).fetchQuota(OPTIONS);
@@ -1259,6 +1263,256 @@ describe("Kimi credential outcomes and cache policy", () => {
       error: "pi_kimi_credential_expired",
       sourcesTried: ["pi:kimi-coding", "kimi-code-cli"],
     });
+  });
+
+  it("keeps a rejected non-refreshable soft-expired probe as sign-out", async () => {
+    const request = vi.fn(async () => new Response(null, { status: 401 }));
+    const remove = vi.fn();
+    const report = await testAdapter({
+      broker: broker({ status: "missing" }),
+      cliCredentialSource: cliCredentialSource({
+        status: "expired",
+        refreshable: false,
+        accessToken: "dead-non-refreshable-cli-token",
+      }),
+      fetch: request,
+      deleteCachedProvider: remove,
+    }).fetchQuota(OPTIONS);
+
+    expect(request).toHaveBeenCalledOnce();
+    expect(remove).toHaveBeenCalledWith("kimi");
+    expect(report.state).toMatchObject({
+      status: "auth_required",
+      stale: false,
+      error: "provider_auth_rejected",
+    });
+    expect(report.state.authStatus).toBeUndefined();
+  });
+
+  it("reports a rejected refreshable CLI soft-expiry probe as expired_refreshable, not sign-out", async () => {
+    const request = vi.fn(async () => new Response(null, { status: 401 }));
+    const remove = vi.fn();
+    const report = await testAdapter({
+      broker: broker({ status: "missing" }),
+      cliCredentialSource: cliCredentialSource({
+        status: "expired",
+        refreshable: true,
+        accessToken: "soft-expired-cli-token",
+      }),
+      fetch: request,
+      deleteCachedProvider: remove,
+    }).fetchQuota(OPTIONS);
+
+    expect(request).toHaveBeenCalledOnce();
+    expect(remove).not.toHaveBeenCalled();
+    expect(report.source).toBe("unavailable");
+    expect(report.windows).toEqual([]);
+    expect(report.state).toMatchObject({
+      status: "unavailable",
+      stale: false,
+      error: "kimi_code_cli_credential_expired",
+      authStatus: "expired_refreshable",
+      sourcesTried: ["pi:kimi-coding", "kimi-code-cli"],
+    });
+    expect(report.attempts).toEqual([
+      {
+        source: "pi:kimi-coding",
+        status: "skipped",
+        error: "kimi_credential_unavailable",
+      },
+      {
+        source: "kimi-code-cli",
+        status: "failed",
+        error: "kimi_code_cli_credential_expired",
+      },
+    ]);
+    expect(JSON.stringify(report)).not.toContain("soft-expired-cli-token");
+  });
+
+  it("serves eligible stale cache under a rejected refreshable soft-expiry probe", async () => {
+    const request = vi.fn(async () => new Response(null, { status: 401 }));
+    const remove = vi.fn();
+    const report = await testAdapter({
+      broker: broker({ status: "missing" }),
+      cliCredentialSource: cliCredentialSource({
+        status: "expired",
+        refreshable: true,
+        accessToken: "soft-expired-cli-token",
+      }),
+      fetch: request,
+      deleteCachedProvider: remove,
+      readCachedProvider: () => cachedQuota(),
+    }).fetchQuota(OPTIONS);
+
+    expect(remove).not.toHaveBeenCalled();
+    expect(report).toMatchObject({
+      source: "cache",
+      windows: cachedQuota().windows,
+      state: {
+        status: "stale",
+        stale: true,
+        error: "kimi_code_cli_credential_expired",
+        authStatus: "expired_refreshable",
+        sourcesTried: ["pi:kimi-coding", "kimi-code-cli", "cache"],
+      },
+    });
+  });
+
+  it("keeps probing a refreshable soft-expired CLI token that still answers", async () => {
+    const request = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        jsonResponse(SUCCESS_PAYLOAD),
+    );
+    const report = await testAdapter({
+      broker: broker({ status: "missing" }),
+      cliCredentialSource: cliCredentialSource({
+        status: "expired",
+        refreshable: true,
+        accessToken: "still-live-cli-token",
+      }),
+      fetch: request,
+    }).fetchQuota(OPTIONS);
+
+    expect(request).toHaveBeenCalledOnce();
+    expect(
+      new Headers(request.mock.calls[0][1]?.headers).get("authorization"),
+    ).toBe("Bearer still-live-cli-token");
+    expect(report.state).toMatchObject({
+      status: "fresh",
+      sourcesTried: ["pi:kimi-coding", "kimi-code-cli"],
+    });
+    expect(report.attempts).toEqual([
+      {
+        source: "pi:kimi-coding",
+        status: "skipped",
+        error: "kimi_credential_unavailable",
+      },
+      { source: "kimi-code-cli", status: "success" },
+    ]);
+  });
+
+  it("propagates the Pi refreshable flag to expired_refreshable on a rejected probe", async () => {
+    const request = vi.fn(async () => new Response(null, { status: 401 }));
+    const remove = vi.fn();
+    const report = await testAdapter({
+      broker: broker({
+        status: "expired",
+        refreshable: true,
+        credential: "soft-expired-pi-token",
+      }),
+      cliCredentialSource: cliCredentialSource({ status: "missing" }),
+      fetch: request,
+      deleteCachedProvider: remove,
+    }).fetchQuota(OPTIONS);
+
+    expect(request).toHaveBeenCalledOnce();
+    expect(remove).not.toHaveBeenCalled();
+    expect(report.state).toMatchObject({
+      status: "unavailable",
+      stale: false,
+      error: "pi_kimi_credential_expired",
+      authStatus: "expired_refreshable",
+      sourcesTried: ["pi:kimi-coding", "kimi-code-cli"],
+    });
+    expect(report.attempts).toEqual([
+      {
+        source: "pi:kimi-coding",
+        status: "failed",
+        error: "pi_kimi_credential_expired",
+      },
+      {
+        source: "kimi-code-cli",
+        status: "skipped",
+        error: "kimi_code_cli_credential_unavailable",
+      },
+    ]);
+    expect(JSON.stringify(report)).not.toContain("soft-expired-pi-token");
+  });
+
+  it("reports both sources soft-expired at once as expired_refreshable without retiring cache", async () => {
+    const request = vi.fn(async () => new Response(null, { status: 401 }));
+    const remove = vi.fn();
+    const report = await testAdapter({
+      broker: broker({
+        status: "expired",
+        refreshable: true,
+        credential: "soft-expired-pi-token",
+      }),
+      cliCredentialSource: cliCredentialSource({
+        status: "expired",
+        refreshable: true,
+        accessToken: "soft-expired-cli-token",
+      }),
+      fetch: request,
+      deleteCachedProvider: remove,
+    }).fetchQuota(OPTIONS);
+
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(remove).not.toHaveBeenCalled();
+    expect(report.source).toBe("unavailable");
+    expect(report.windows).toEqual([]);
+    expect(report.state).toMatchObject({
+      status: "unavailable",
+      stale: false,
+      error: "pi_kimi_credential_expired",
+      authStatus: "expired_refreshable",
+      sourcesTried: ["pi:kimi-coding", "kimi-code-cli"],
+    });
+    expect(report.attempts).toEqual([
+      {
+        source: "pi:kimi-coding",
+        status: "failed",
+        error: "pi_kimi_credential_expired",
+      },
+      {
+        source: "kimi-code-cli",
+        status: "failed",
+        error: "kimi_code_cli_credential_expired",
+      },
+    ]);
+
+    const rendered = renderQuotaToon(
+      {
+        generatedAt: new Date(NOW).toISOString(),
+        schemaVersion: 5,
+        providers: [withQuotaSemantics(report, new Date(NOW).toISOString())],
+      },
+      "quota-axi",
+      false,
+    );
+    expect(rendered).toContain("(auth expired_refreshable)");
+    expect(rendered).not.toContain("auth_required");
+  });
+
+  it("lets a CLI transient outrank a rejected refreshable Pi expiry", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(null, { status: 401 }))
+      .mockResolvedValueOnce(new Response(null, { status: 503 }));
+    const remove = vi.fn();
+    const report = await testAdapter({
+      broker: broker({
+        status: "expired",
+        refreshable: true,
+        credential: "soft-expired-pi-token",
+      }),
+      cliCredentialSource: cliCredentialSource({
+        status: "available",
+        accessToken: "cli-token",
+      }),
+      fetch: request,
+      deleteCachedProvider: remove,
+    }).fetchQuota(OPTIONS);
+
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(remove).not.toHaveBeenCalled();
+    expect(report.state).toMatchObject({
+      status: "error",
+      stale: false,
+      error: "provider_unavailable",
+    });
+    expect(report.state.authStatus).toBeUndefined();
+    expect(report.state.error).not.toBe("pi_kimi_credential_expired");
   });
 
   it("preserves stale cache after a CLI credential read failure", async () => {
@@ -1431,7 +1685,12 @@ function cliCredentialSource(
   const resolution: KimiCodeCliCredentialResolution =
     input.status === "available"
       ? { ...input, baseUrl: input.baseUrl ?? "https://api.kimi.com/coding/v1" }
-      : input;
+      : input.status === "expired"
+        ? {
+            ...input,
+            baseUrl: input.baseUrl ?? "https://api.kimi.com/coding/v1",
+          }
+        : input;
   return {
     select: vi.fn(async () => TEST_SELECTION),
     resolve: vi.fn(async () => resolution),

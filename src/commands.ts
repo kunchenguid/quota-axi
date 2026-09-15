@@ -41,9 +41,11 @@ export async function quotaCommand(
 ): Promise<string> {
   const binPath = context?.binPath ?? "quota-axi";
   const flags = parseFlags(args);
+  validateProfileOnly(flags);
   const options: ProviderOptions = {
-    allowKeychainPrompt: flags.allowKeychainPrompt,
-    refreshCredentials: !flags.noCredentialRefresh,
+    allowKeychainPrompt: flags.profileOnly ? false : flags.allowKeychainPrompt,
+    refreshCredentials: flags.profileOnly ? false : !flags.noCredentialRefresh,
+    ...(flags.profileOnly ? { credentialMode: "profile-only" as const } : {}),
   };
 
   if (flags.tui) return quotaTuiReport(flags, options);
@@ -126,8 +128,9 @@ function processLiveTuiIo(): LiveTuiIo {
 }
 
 /**
- * Fetch, apply the all-failed exit code, and refresh the cache. A live report
- * re-evaluates the exit code every cycle so quitting reflects the last frame.
+ * Fetch, apply the all-failed exit code, and refresh the cache unless the read
+ * is profile-only, which never touches cached quota. A live report re-evaluates
+ * the exit code every cycle so quitting reflects the last frame.
  */
 async function loadQuota(
   providers: ProviderId[],
@@ -138,7 +141,9 @@ async function loadQuota(
   const allFailed = response.providers.every(isFailed);
   if (allFailed) process.exitCode = 1;
   else if (live) process.exitCode = undefined;
-  writeCachedProvidersBestEffort(response.providers);
+  if (options.credentialMode !== "profile-only") {
+    writeCachedProvidersBestEffort(response.providers);
+  }
   return response;
 }
 
@@ -174,6 +179,15 @@ export async function authCommand(
 ): Promise<string> {
   const binPath = context?.binPath ?? "quota-axi";
   const flags = parseFlags(args);
+  if (flags.profileOnly) {
+    throw new AxiError(
+      "--profile-only is only supported by the quota command",
+      "VALIDATION_ERROR",
+      [
+        "Set CLAUDE_CONFIG_DIR and run `quota-axi --provider claude --profile-only --full --json`",
+      ],
+    );
+  }
   if (flags.tui) {
     throw new AxiError(
       "--tui is only supported by the quota command",
@@ -225,6 +239,40 @@ async function inspectAuth(
 
 function isFailed(provider: ProviderQuota): boolean {
   return !["fresh", "stale"].includes(provider.state.status);
+}
+
+function validateProfileOnly(flags: QuotaFlags): void {
+  if (!flags.profileOnly) return;
+  if (flags.providers.length !== 1) {
+    throw new AxiError(
+      "--profile-only requires exactly one --provider selector",
+      "VALIDATION_ERROR",
+      ["Choose `--provider claude` or `--provider codex`"],
+    );
+  }
+  const provider = flags.providers[0];
+  if (provider !== "claude" && provider !== "codex") {
+    throw new AxiError(
+      `--profile-only does not support provider: ${provider}`,
+      "VALIDATION_ERROR",
+      ["Choose `--provider claude` or `--provider codex`"],
+    );
+  }
+  if (flags.allowKeychainPrompt) {
+    throw new AxiError(
+      "--profile-only cannot be combined with --allow-keychain-prompt",
+      "VALIDATION_ERROR",
+      ["Profile-only mode never reads Keychain credentials"],
+    );
+  }
+  const selector = provider === "claude" ? "CLAUDE_CONFIG_DIR" : "CODEX_HOME";
+  if (!process.env[selector]?.trim()) {
+    throw new AxiError(
+      `--profile-only with --provider ${provider} requires explicit ${selector}`,
+      "VALIDATION_ERROR",
+      [`Set ${selector} to the profile directory to read`],
+    );
+  }
 }
 
 function writeCachedProvidersBestEffort(providers: ProviderQuota[]): void {

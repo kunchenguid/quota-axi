@@ -10,6 +10,8 @@ import {
   readCachedProvider as readCachedProviderFromDisk,
 } from "../cache.js";
 import { readJsonFileResult, type JsonFileReadResult } from "../lib/fs.js";
+import { resolvePiAuthFilePath } from "../lib/pi-agent-dir.js";
+import { classifyPiAuthEntry } from "../lib/pi-auth-store.js";
 import { usableLiteralSecret } from "../lib/secret.js";
 import type {
   AuthProviderReport,
@@ -32,6 +34,8 @@ const MONTH_SECONDS = 30 * 24 * 60 * 60;
 const ZAI_HOST = "api.z.ai";
 const ZHIPU_HOST = "open.bigmodel.cn";
 const OPENCODE_AUTH_SOURCE = "opencode:auth.json";
+const PI_ZAI_SOURCE = "pi:zai";
+const PI_ZAI_PROVIDER_ID = "zai";
 const USER_AGENT = `quota-axi/${VERSION}`;
 
 const ZAI_PROVIDER_IDS = ["zai-coding-plan", "zai", "z-ai", "z.ai"];
@@ -72,8 +76,13 @@ export type ZaiCredentialSource = {
   inspect(): ZaiCredentialInspection;
 };
 
+export type NamedZaiCredentialSource = {
+  name: string;
+  source: ZaiCredentialSource;
+};
+
 type ZaiDependencies = {
-  credentialSource: ZaiCredentialSource;
+  credentialSources: NamedZaiCredentialSource[];
   fetch: typeof globalThis.fetch;
   readCachedProvider: typeof readCachedProviderFromDisk;
   deleteCachedProvider: typeof deleteCachedProviderFromDisk;
@@ -119,8 +128,36 @@ export function extractZaiCredential(
   return { status: "missing", path };
 }
 
+function extractPiZaiCredential(
+  value: unknown,
+  path: string,
+): ZaiCredentialResolution {
+  const classified = classifyPiAuthEntry(value, PI_ZAI_PROVIDER_ID);
+  if (classified.status === "missing") return { status: "missing", path };
+  const key =
+    classified.status === "present" && classified.entry.type === "api_key"
+      ? usableLiteralSecret(classified.entry.key)
+      : undefined;
+  return key
+    ? { status: "available", apiKey: key, host: ZAI_HOST, path }
+    : { status: "invalid", path, error: "invalid_credential" };
+}
+
 export function createOpencodeAuthCredentialSource(
   filePath: () => string = opencodeAuthFilePath,
+): ZaiCredentialSource {
+  return createJsonAuthCredentialSource(filePath, extractZaiCredential);
+}
+
+export function createPiAuthCredentialSource(
+  filePath: () => string = resolvePiAuthFilePath,
+): ZaiCredentialSource {
+  return createJsonAuthCredentialSource(filePath, extractPiZaiCredential);
+}
+
+function createJsonAuthCredentialSource(
+  filePath: () => string,
+  extract: (value: unknown, path: string) => ZaiCredentialResolution,
 ): ZaiCredentialSource {
   function resolve(): ZaiCredentialResolution {
     const path = filePath();
@@ -130,7 +167,7 @@ export function createOpencodeAuthCredentialSource(
       return result.error === "file_read_error"
         ? { status: "error", path, error: result.error }
         : { status: "invalid", path, error: result.error };
-    return extractZaiCredential(result.value, path);
+    return extract(result.value, path);
   }
   return {
     resolve,
@@ -143,11 +180,21 @@ export function createOpencodeAuthCredentialSource(
   };
 }
 
+export function defaultZaiCredentialSources(): NamedZaiCredentialSource[] {
+  return [
+    { name: PI_ZAI_SOURCE, source: createPiAuthCredentialSource() },
+    {
+      name: OPENCODE_AUTH_SOURCE,
+      source: createOpencodeAuthCredentialSource(),
+    },
+  ];
+}
+
 export function createZaiAdapter(
   overrides: Partial<ZaiDependencies> = {},
 ): ProviderAdapter {
   const dependencies: ZaiDependencies = {
-    credentialSource: createOpencodeAuthCredentialSource(),
+    credentialSources: defaultZaiCredentialSources(),
     fetch: globalThis.fetch,
     readCachedProvider: readCachedProviderFromDisk,
     deleteCachedProvider: deleteCachedProviderFromDisk,
@@ -169,16 +216,20 @@ export function createZaiAdapter(
       return acquisition;
     },
     async inspectAuth(_options: ProviderOptions): Promise<AuthProviderReport> {
-      const inspection = dependencies.credentialSource.inspect();
-      const source: AuthSourceReport = {
-        source: OPENCODE_AUTH_SOURCE,
-        path: inspection.path,
-        status: inspection.status,
-        ...(inspection.status === "invalid" || inspection.status === "error"
-          ? { error: inspection.error }
-          : {}),
-      };
-      return { provider: "zai", sources: [source] };
+      const sources: AuthSourceReport[] = dependencies.credentialSources.map(
+        ({ name, source }) => {
+          const inspection = source.inspect();
+          return {
+            source: name,
+            path: inspection.path,
+            status: inspection.status,
+            ...(inspection.status === "invalid" || inspection.status === "error"
+              ? { error: inspection.error }
+              : {}),
+          };
+        },
+      );
+      return { provider: "zai", sources };
     },
   };
 }
@@ -193,53 +244,91 @@ async function acquireZaiQuota(
     () => controller.abort(),
     dependencies.deadlineMs,
   );
-  let attempts: SourceAttempt[] = [];
+  const attempts: SourceAttempt[] = [];
+  let lastFailure: ZaiFailure | undefined;
 
   try {
-    const resolution = dependencies.credentialSource.resolve();
-    attempts = [{ source: OPENCODE_AUTH_SOURCE, status: "failed" }];
+    for (const { name, source } of dependencies.credentialSources) {
+      const resolution = source.resolve();
+      if (resolution.status !== "available") {
+        const failure = credentialFailureFor(resolution);
+        attempts.push({
+          source: name,
+          status: resolution.status === "missing" ? "skipped" : "failed",
+          error: failure.code,
+        });
+        lastFailure = preferCredentialFailure(lastFailure, failure);
+        continue;
+      }
 
-    if (resolution.status !== "available") {
-      const failure = credentialFailureFor(resolution);
-      attempts[attempts.length - 1] = {
-        source: OPENCODE_AUTH_SOURCE,
-        status: resolution.status === "missing" ? "skipped" : "failed",
-        error: failure.code,
-      };
-      return failureReport(failure, attempts, dependencies);
+      attempts.push({ source: name, status: "failed" });
+      try {
+        const payload = await requestZaiQuota(
+          resolution.apiKey,
+          resolution.host,
+          controller.signal,
+          dependencies.fetch,
+          dependencies.now,
+        );
+        const normalized = normalizeZaiPayload(payload);
+        const untrustedWindowIds = normalized.diagnostics.map(
+          (diagnostic) => `limit:${diagnostic.index}`,
+        );
+        const refreshedAt = new Date(dependencies.now()).toISOString();
+        attempts[attempts.length - 1] = {
+          source: name,
+          status: "success",
+        };
+        return {
+          provider: "zai",
+          label: "Z.AI",
+          source: "api",
+          ...(normalized.plan ? { plan: normalized.plan } : {}),
+          windows: normalized.windows,
+          state: {
+            status: "fresh",
+            stale: false,
+            refreshedAt,
+            ...(untrustedWindowIds.length > 0 ? { untrustedWindowIds } : {}),
+            sourcesTried: attempts.map(({ source: tried }) => tried),
+          },
+          attempts,
+        };
+      } catch (error) {
+        const failure =
+          error instanceof ZaiFailure
+            ? error
+            : new ZaiFailure("credential_resolution_failed", {
+                staleEligible: true,
+              });
+        attempts[attempts.length - 1] = {
+          source: name,
+          status: "failed",
+          error: failure.code,
+        };
+        lastFailure = preferCredentialFailure(lastFailure, failure);
+        if (failure.definitiveAuth) {
+          continue;
+        }
+        return failureReport(failure, attempts, dependencies);
+      }
     }
 
-    const payload = await requestZaiQuota(
-      resolution.apiKey,
-      resolution.host,
-      controller.signal,
-      dependencies.fetch,
-      dependencies.now,
-    );
-    const normalized = normalizeZaiPayload(payload);
-    const untrustedWindowIds = normalized.diagnostics.map(
-      (diagnostic) => `limit:${diagnostic.index}`,
-    );
-    const refreshedAt = new Date(dependencies.now()).toISOString();
-    attempts[attempts.length - 1] = {
-      source: OPENCODE_AUTH_SOURCE,
-      status: "success",
-    };
-    return {
-      provider: "zai",
-      label: "Z.AI",
-      source: "api",
-      ...(normalized.plan ? { plan: normalized.plan } : {}),
-      windows: normalized.windows,
-      state: {
-        status: "fresh",
-        stale: false,
-        refreshedAt,
-        ...(untrustedWindowIds.length > 0 ? { untrustedWindowIds } : {}),
-        sourcesTried: attempts.map(({ source }) => source),
-      },
-      attempts,
-    };
+    if (attempts.length === 0) {
+      attempts.push({
+        source: PI_ZAI_SOURCE,
+        status: "failed",
+        error: "zai_credential_unavailable",
+      });
+    }
+
+    const failure =
+      lastFailure ??
+      new ZaiFailure("zai_credential_unavailable", {
+        status: "auth_required",
+        definitiveAuth: true,
+      });
+    return failureReport(failure, attempts, dependencies);
   } catch (error) {
     const failure =
       error instanceof ZaiFailure
@@ -248,19 +337,11 @@ async function acquireZaiQuota(
             staleEligible: true,
           });
     if (attempts.length === 0) {
-      attempts = [
-        {
-          source: OPENCODE_AUTH_SOURCE,
-          status: "failed",
-          error: failure.code,
-        },
-      ];
-    } else {
-      attempts[attempts.length - 1] = {
-        source: attempts[attempts.length - 1].source,
+      attempts.push({
+        source: PI_ZAI_SOURCE,
         status: "failed",
         error: failure.code,
-      };
+      });
     }
     return failureReport(failure, attempts, dependencies);
   } finally {
@@ -286,6 +367,15 @@ function credentialFailureFor(
     status: "auth_required",
     definitiveAuth: true,
   });
+}
+
+function preferCredentialFailure(
+  current: ZaiFailure | undefined,
+  next: ZaiFailure,
+): ZaiFailure {
+  if (!current || current.code === "zai_credential_unavailable") return next;
+  if (current.definitiveAuth && !next.definitiveAuth) return next;
+  return current;
 }
 
 function failureReport(
@@ -588,6 +678,12 @@ function createResponseBodyLifetime(response: Response): ResponseBodyLifetime {
 
 export function normalizeZaiPayload(payload: unknown): NormalizedZaiPayload {
   const root = objectValue(payload);
+  if (isVendorAuthRejection(root)) {
+    throw new ZaiFailure("provider_auth_rejected", {
+      status: "auth_required",
+      definitiveAuth: true,
+    });
+  }
   const data = objectValue(root?.data) ?? root;
   const limitsValue = data?.limits;
   if (!Array.isArray(limitsValue)) {
@@ -705,7 +801,11 @@ function identifyWindow(
       windowSeconds?: number;
     }
   | undefined {
-  if (type === "TOKENS_LIMIT" && unit === 3 && number === 5) {
+  if (
+    (type === "TOKENS_LIMIT" || type === "CREDIT_LIMIT") &&
+    unit === 3 &&
+    number === 5
+  ) {
     return {
       id: "five_hour",
       label: "session",
@@ -713,7 +813,11 @@ function identifyWindow(
       windowSeconds: FIVE_HOURS_SECONDS,
     };
   }
-  if (type === "TOKENS_LIMIT" && unit === 6 && number === 1) {
+  if (
+    (type === "TOKENS_LIMIT" || type === "CREDIT_LIMIT") &&
+    unit === 6 &&
+    number === 1
+  ) {
     return {
       id: "weekly",
       label: "week",
@@ -813,6 +917,14 @@ function localTransportCode(
   return code && /(?:TLS|SSL|CERT|UNABLE_TO_VERIFY)/i.test(code)
     ? "tls_failed"
     : "network_unavailable";
+}
+
+const VENDOR_AUTH_FAILED_CODE = 1000;
+
+function isVendorAuthRejection(
+  root: Record<string, unknown> | undefined,
+): boolean {
+  return root?.success === false && root.code === VENDOR_AUTH_FAILED_CODE;
 }
 
 function objectValue(value: unknown): Record<string, unknown> | undefined {

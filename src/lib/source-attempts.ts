@@ -8,7 +8,9 @@ import type { DegradedSource, SourceAttempt } from "../types.js";
  * provider inherits the correct answer without restating it. A provider whose
  * non-success attempt is not a credential problem (a live model-auth probe
  * that simply carries no quota, an identity lookup that is not a source at all)
- * sets `degraded: false` on that attempt to say so explicitly.
+ * sets `degraded: false` on that attempt to say so explicitly, and a provider
+ * whose skipped source was itself unreadable - so presence could not be
+ * established either way - sets `degraded: true`.
  */
 export function isDegradedSourceAttempt(attempt: SourceAttempt): boolean {
   if (attempt.degraded !== undefined) return attempt.degraded;

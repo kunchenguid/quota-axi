@@ -303,6 +303,8 @@ export type QuotaAxiResponse = {
 
 export type ProviderOptions = {
   allowKeychainPrompt: boolean;
+  /** Restrict discovery to the provider's selected native profile file. */
+  credentialMode?: "profile-only";
   /**
    * Permit the quota path to run a vendor CLI's own non-interactive refresh
    * command when the same stored access token is expired, refreshable, and

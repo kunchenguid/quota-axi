@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.1.44](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.43...quota-axi-v0.1.44) (2026-09-15)
+
+
+### Features
+
+* **cli:** add opt-in --profile-only quota reads for Claude and Codex ([#168](https://github.com/kunchenguid/quota-axi/issues/168)) ([f690918](https://github.com/kunchenguid/quota-axi/commit/f690918bb58fa532643373d41efbc59e35709987))
+
+
+### Bug Fixes
+
+* **agy:** fall back to Antigravity CLI structured usage print when loopback is CSRF-protected ([#172](https://github.com/kunchenguid/quota-axi/issues/172)) ([940194b](https://github.com/kunchenguid/quota-axi/commit/940194ba63c5be61942587346d3f0eee5f84cfcd))
+* **claude:** discover the selected macOS Keychain credential ([#173](https://github.com/kunchenguid/quota-axi/issues/173)) ([abcf211](https://github.com/kunchenguid/quota-axi/commit/abcf211848997ae5aa1917790b24271565dffc9f)), closes [#170](https://github.com/kunchenguid/quota-axi/issues/170)
+* **providers:** read Z.AI Coding Plan keys from Pi auth.json ([#175](https://github.com/kunchenguid/quota-axi/issues/175)) ([5d915de](https://github.com/kunchenguid/quota-axi/commit/5d915dee60e26a40ed56c9d609b91687d8f09dd2))
+
+## [0.1.43](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.42...quota-axi-v0.1.43) (2026-09-14)
+
+
+### Bug Fixes
+
+* **providers:** report refreshable Kimi expiry without sign-out ([#174](https://github.com/kunchenguid/quota-axi/issues/174)) ([e1c67e0](https://github.com/kunchenguid/quota-axi/commit/e1c67e0c15b9ace936afc5339a62031da2e5dc6a))
+* recognize provably unopened future model windows ([#162](https://github.com/kunchenguid/quota-axi/issues/162)) ([9e693a2](https://github.com/kunchenguid/quota-axi/commit/9e693a2cac97d64729e6953a65c90c8dde81a07c))
+
+## [0.1.42](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.41...quota-axi-v0.1.42) (2026-09-12)
+
+
+### Bug Fixes
+
+* **providers:** recognize Z.AI CREDIT_LIMIT quota windows ([#160](https://github.com/kunchenguid/quota-axi/issues/160)) ([2a8b018](https://github.com/kunchenguid/quota-axi/commit/2a8b0186ae30873d1f808f5ea464414209ab92e4))
+
 ## [0.1.41](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.40...quota-axi-v0.1.41) (2026-09-08)
 
 

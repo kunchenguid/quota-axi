@@ -80,6 +80,11 @@ describe("Kimi Code CLI credential discovery", () => {
        * issued for, so it can still be probed against its own environment.
        */
       accessToken?: string;
+      /**
+       * Stored-expired resolutions report whether the record also carries a
+       * refresh token; presence only, the value is never read.
+       */
+      refreshable?: boolean;
     }> = [
       { status: "missing" },
       { raw: "{not-json", status: "invalid" },
@@ -97,11 +102,23 @@ describe("Kimi Code CLI credential discovery", () => {
         payload: { access_token: "token", expires_at: NOW / 1_000 - 1 },
         status: "expired",
         accessToken: "token",
+        refreshable: false,
       },
       {
         payload: { access_token: "token", expires_at: NOW / 1_000 + 60 },
         status: "expired",
         accessToken: "token",
+        refreshable: false,
+      },
+      {
+        payload: {
+          access_token: "token",
+          refresh_token: "must-not-be-read",
+          expires_at: NOW / 1_000 - 1,
+        },
+        status: "expired",
+        accessToken: "token",
+        refreshable: true,
       },
     ];
 
@@ -122,6 +139,7 @@ describe("Kimi Code CLI credential discovery", () => {
           : {
               accessToken: fixture.accessToken,
               baseUrl: "https://api.kimi.com/coding/v1",
+              refreshable: fixture.refreshable,
             }),
       });
       await expect(source.inspect()).resolves.toBe(fixture.status);
@@ -189,7 +207,7 @@ describe("Kimi Code CLI credential discovery", () => {
     );
 
     expect(implementation).not.toMatch(
-      /node:child_process|\b(?:spawn|execFile|writeFile|mkdir|rename|unlink)\b|refresh_token|device_id|\.pi\/agent\/auth\.json/,
+      /node:child_process|\b(?:spawn|execFile|writeFile|mkdir|rename|unlink)\b|device_id|\.pi\/agent\/auth\.json/,
     );
   });
 

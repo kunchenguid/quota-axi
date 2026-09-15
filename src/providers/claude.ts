@@ -1,6 +1,5 @@
 import { chmodSync, existsSync, renameSync, writeFileSync } from "node:fs";
-import { createHash } from "node:crypto";
-import { homedir, userInfo } from "node:os";
+import { userInfo } from "node:os";
 import { join } from "node:path";
 import { deleteCachedProvider, readCachedClaudeProvider } from "../cache.js";
 import {
@@ -11,8 +10,14 @@ import {
   type JsonFileReadResult,
 } from "../lib/fs.js";
 import { providerFetch } from "../lib/http.js";
+import {
+  CLAUDE_KEYCHAIN_SERVICE,
+  isOpaqueSuffixedKeychainService,
+  claudeProfileLocations,
+} from "../lib/claude-profile.js";
 import { execFileText } from "../lib/process.js";
 import { listRunningCommandLines } from "../lib/running-processes.js";
+import { redactSecret } from "../lib/secret.js";
 import { clampPercent, nowIso, retryAfterToIso } from "../lib/time.js";
 import type {
   AuthProviderReport,
@@ -50,7 +55,6 @@ const KEYCHAIN_PRESENCE_TIMEOUT_MS = 5_000;
 /** `security` exit 44 is cannot-reach (locked, TCC, daemon), not item-absent. */
 const KEYCHAIN_ITEM_UNREACHABLE_EXIT_CODE = 44;
 const KEYCHAIN_UNREACHABLE_ERROR = "keychain_unreachable";
-const DEFAULT_KEYCHAIN_SERVICE = "Claude Code-credentials";
 const DEFAULT_KEYCHAIN_ACCOUNT = "claude-code-user";
 const SAFE_KEYCHAIN_ACCOUNT = /^[a-zA-Z0-9._-]+$/;
 const FIVE_HOURS_MS = 5 * 60 * 60 * 1_000;
@@ -84,22 +88,36 @@ type UnavailableCredentialState = {
   status: "missing" | "invalid";
   source: AuthSourceReport;
 };
-type SkippedCredentialState = { status: "skipped"; source: AuthSourceReport };
+type SkippedCredentialState = {
+  status: "skipped";
+  source: AuthSourceReport;
+  /** Overrides the attempt's derived degraded classification when set. */
+  degraded?: boolean;
+};
 type CredentialState =
   | AvailableCredentialState
   | AdvisoryExpiredCredentialState
   | UnavailableCredentialState
   | SkippedCredentialState;
-type KeychainItemPresence = "present" | "missing" | "unknown";
+type KeychainItemPresence = "present" | "missing" | "unknown" | "unreachable";
+type KeychainCandidate = {
+  service: string;
+  keychain: string;
+};
+type KeychainSelection =
+  | { status: "present"; item: KeychainCandidate }
+  | { status: "missing" | "unknown" };
 type ClaudeAccount = NonNullable<ProviderQuota["account"]>;
 type ClaudeIdentityResult = {
   account: ClaudeAccount;
   error?: string;
 };
 type ClaudeProfileLocations = {
-  credentialFile: string;
+  credentialFile?: string;
   keychainAccount: string;
   keychainService: string;
+  acceptsOpaqueDefaultItem: boolean;
+  keychainPath?: string;
   keychainAccessMarker: string;
 };
 
@@ -183,6 +201,8 @@ type ClaudeQuotaPass =
 export async function fetchQuota(
   options: ProviderOptions,
 ): Promise<ProviderQuota> {
+  if (isProfileOnly(options)) return fetchProfileOnlyQuota();
+
   const attempts: SourceAttempt[] = [];
   const credentialContextId = claudeCredentialContextId();
 
@@ -213,6 +233,173 @@ export async function fetchQuota(
   }
 
   return failureReport(pass.failure, attempts, credentialContextId);
+}
+
+function isProfileOnly(options: ProviderOptions): boolean {
+  return (
+    (options as ProviderOptions & { credentialMode?: "profile-only" })
+      .credentialMode === "profile-only"
+  );
+}
+
+/**
+ * Read exactly the profile selected by CLAUDE_CONFIG_DIR. This path is kept
+ * separate from normal discovery so profile isolation can never reach the
+ * default home, Keychain, refresh delegate, or quota cache.
+ */
+async function fetchProfileOnlyQuota(): Promise<ProviderQuota> {
+  const credentialFile = profileOnlyCredentialFile();
+  if (!credentialFile) {
+    return profileOnlyFailure(
+      new ClaudeFailure("Claude profile selector missing", {
+        status: "unavailable",
+      }),
+      [
+        {
+          source: "oauth-file",
+          status: "skipped",
+          error: "profile_selector_missing",
+        },
+      ],
+    );
+  }
+
+  const raw = readJsonFileResult(credentialFile);
+  if (raw.status === "missing") {
+    return profileOnlyFailure(
+      new ClaudeFailure("Claude profile credentials missing", {
+        status: "unavailable",
+      }),
+      [
+        {
+          source: "oauth-file",
+          status: "skipped",
+          error: "credentials_missing",
+        },
+      ],
+    );
+  }
+  if (raw.status === "invalid") {
+    const reason =
+      raw.error === "file_read_error" ? "file_read_error" : "json_parse_error";
+    const error =
+      reason === "file_read_error"
+        ? "Claude credential file unreadable"
+        : "Claude credential file malformed";
+    return profileOnlyFailure(new ClaudeFailure(error, { status: "error" }), [
+      {
+        source: "oauth-file",
+        status: "skipped",
+        error: reason,
+        credentialPresent: true,
+      },
+    ]);
+  }
+
+  const state = extractCredentialState(raw, "oauth-file", credentialFile);
+  if (state.status === "invalid") {
+    return profileOnlyFailure(
+      new ClaudeFailure("Claude credential invalid", { status: "error" }),
+      [
+        {
+          source: "oauth-file",
+          status: "skipped",
+          error: "credentials_invalid",
+          credentialPresent: true,
+        },
+      ],
+    );
+  }
+  if (!("credentials" in state)) {
+    return profileOnlyFailure(
+      new ClaudeFailure("Claude credential invalid", { status: "error" }),
+      [
+        {
+          source: "oauth-file",
+          status: "skipped",
+          error: "credentials_invalid",
+          credentialPresent: true,
+        },
+      ],
+    );
+  }
+
+  const attempts: SourceAttempt[] = [
+    { source: "oauth-file", status: "failed" },
+  ];
+  try {
+    // Stored expiry is advisory here too: the selected bearer is always tested.
+    const quota = await fetchOauthUsage(state.credentials);
+    attempts[0] = { source: "oauth-file", status: "success" };
+    attempts.push(
+      quota.identityError
+        ? {
+            source: "oauth-profile",
+            status: "failed",
+            error: quota.identityError,
+            degraded: false,
+          }
+        : { source: "oauth-profile", status: "success" },
+    );
+    return successProvider({
+      provider: "claude",
+      label: "Claude",
+      source: "oauth",
+      plan: quota.plan,
+      account: quota.account,
+      windows: quota.windows,
+      refreshedAt: quota.refreshedAt,
+      sourcesTried: sourceNames(attempts),
+      attempts,
+    });
+  } catch (error) {
+    const failure = profileOnlyClaudeFailureFor(
+      error,
+      state.credentials.accessToken,
+    );
+    attempts[0] = {
+      source: "oauth-file",
+      status: "failed",
+      error: failure.code,
+    };
+    return profileOnlyFailure(failure, attempts);
+  }
+}
+
+/**
+ * Keep the real cause of a profile-only failure - a refused connection, a
+ * malformed response - so a single-account probe stays diagnosable, with the
+ * probed bearer stripped out of it.
+ */
+function profileOnlyClaudeFailureFor(
+  error: unknown,
+  accessToken: string,
+): ClaudeFailure {
+  if (error instanceof ClaudeFailure) return error;
+  return new ClaudeFailure(redactSecret(errorMessage(error), accessToken), {
+    status: "error",
+  });
+}
+
+function profileOnlyCredentialFile(): string | undefined {
+  const selector = process.env.CLAUDE_CONFIG_DIR;
+  if (!selector || !selector.trim()) return undefined;
+  return join(selector, ".credentials.json");
+}
+
+function profileOnlyFailure(
+  failure: ClaudeFailure,
+  attempts: SourceAttempt[],
+): ProviderQuota {
+  return failedProvider({
+    provider: "claude",
+    label: "Claude",
+    status: failure.status,
+    error: failure.code,
+    retryAfter: failure.retryAfter,
+    sourcesTried: sourceNames(attempts),
+    attempts,
+  });
 }
 
 /**
@@ -336,6 +523,7 @@ async function attemptClaudeQuota(
         error: state.source.error,
       };
       if (state.source.credentialPresent) attempt.credentialPresent = true;
+      if (state.degraded !== undefined) attempt.degraded = state.degraded;
       attempts.push(attempt);
       continue;
     }
@@ -428,20 +616,26 @@ async function attemptClaudeQuota(
     }
   }
 
-  const keychainDenied = credentialStates.some(
-    (state) =>
+  const keychainFailure = credentialStates.find(
+    (state): state is SkippedCredentialState =>
       state.status === "skipped" &&
       state.source.source === "keychain" &&
-      state.source.error === "keychain_access_denied",
+      [
+        "keychain_access_denied",
+        "keychain_prompt_required",
+        "keychain_prompt_timeout",
+        "keychain_presence_check_failed",
+        KEYCHAIN_UNREACHABLE_ERROR,
+      ].includes(state.source.error ?? ""),
   );
   let failure =
     transientFailure ??
     definitiveFailure ??
     new ClaudeFailure("Claude quota unavailable", { staleEligible: true });
-  // A denied Keychain read never saw the live session. A 401 from a leftover
+  // A failed Keychain discovery/read never saw the live session. A 401 from a leftover
   // oauth-file sidecar is not evidence the user is signed out of Claude.
-  if (keychainDenied && failure.definitiveAuth) {
-    failure = new ClaudeFailure("keychain_access_denied", {
+  if (keychainFailure && failure.definitiveAuth) {
+    failure = new ClaudeFailure(keychainFailure.source.error!, {
       staleEligible: true,
     });
   }
@@ -719,14 +913,25 @@ async function readCredentialStates(
 ): Promise<CredentialState[]> {
   const states: CredentialState[] = [];
 
-  const fileState = extractCredentialState(
-    readJsonFileResult(locations.credentialFile),
-    "oauth-file",
-    locations.credentialFile,
-  );
-  states.push(fileState);
+  if (locations.credentialFile !== undefined)
+    states.push(
+      extractCredentialState(
+        readJsonFileResult(locations.credentialFile),
+        "oauth-file",
+        locations.credentialFile,
+      ),
+    );
 
   if (process.platform === "darwin") {
+    const selection = await listKeychainItem(locations);
+    if (selection.status === "missing") {
+      states.push(keychainPresenceState("missing"));
+      return states;
+    }
+    // Inconclusive metadata never establishes sign-out. The exact vendor
+    // service/account lookup still searches the whole Keychain search list.
+    if (selection.status === "present")
+      locations = withDiscoveredKeychainItem(locations, selection.item);
     if (options.allowKeychainPrompt || hasKeychainAccessMarker(locations)) {
       states.push(await readKeychainCredentialState(locations));
     } else {
@@ -740,7 +945,15 @@ async function readCredentialStates(
 async function readSkippedKeychainCredentialState(
   locations: ClaudeProfileLocations,
 ): Promise<CredentialState> {
-  const presence = await readKeychainItemPresence(locations);
+  const presence = locations.keychainPath
+    ? "present"
+    : await readKeychainItemPresence(locations);
+  return keychainPresenceState(presence);
+}
+
+function keychainPresenceState(
+  presence: KeychainItemPresence,
+): CredentialState {
   if (presence === "present") {
     return {
       status: "skipped",
@@ -758,13 +971,18 @@ async function readSkippedKeychainCredentialState(
       source: { source: "keychain", status: "missing" },
     };
   }
+  // A store that could not be checked still stays visible behind a sibling
+  // that answered, without claiming the item is there.
   return {
     status: "skipped",
+    degraded: true,
     source: {
       source: "keychain",
       status: "skipped",
-      error: "keychain_presence_check_failed",
-      credentialPresent: true,
+      error:
+        presence === "unreachable"
+          ? KEYCHAIN_UNREACHABLE_ERROR
+          : "keychain_presence_check_failed",
     },
   };
 }
@@ -785,9 +1003,121 @@ async function readKeychainItemPresence(
       KEYCHAIN_PRESENCE_TIMEOUT_MS,
     );
     return "present";
-  } catch {
-    return "unknown";
+  } catch (error) {
+    return isKeychainItemUnreachable(error) ? "unreachable" : "unknown";
   }
+}
+
+// Re-resolve metadata on each credential pass: a TUI must notice replaced
+// items and changed search lists without retaining a stale service/path pin.
+async function listKeychainItem(
+  locations: ClaudeProfileLocations,
+): Promise<KeychainSelection> {
+  try {
+    const output = await execFileText(
+      "security",
+      ["list-keychains"],
+      KEYCHAIN_PRESENCE_TIMEOUT_MS,
+    );
+    const paths: string[] = [];
+    for (const line of output.split(/\r?\n/)) {
+      if (!line.trim()) continue;
+      const path = /^\s*"(\/[^"\n]+)"\s*$/.exec(line)?.[1];
+      if (!path) return { status: "unknown" };
+      if (!paths.includes(path)) paths.push(path);
+    }
+    if (!paths.length) return { status: "unknown" };
+    // Search the same keychains as an unqualified exact read. Metadata only:
+    // no -d (values), -r (raw data), -a (ACLs), or -i (ACL editing). One bounded
+    // dump (5s / 16 MiB) covers the list; failure withholds any absence verdict.
+    const metadata = await execFileText(
+      "security",
+      ["dump-keychain", ...paths],
+      KEYCHAIN_PRESENCE_TIMEOUT_MS,
+    );
+    return selectKeychainItem(metadata, locations, paths);
+  } catch {
+    return { status: "unknown" };
+  }
+}
+
+function selectKeychainItem(
+  metadata: string,
+  locations: ClaudeProfileLocations,
+  paths: string[],
+): KeychainSelection {
+  let exactItem: KeychainCandidate | undefined;
+  // Keyed by service: the same item can appear in several search-list
+  // keychains, and only distinct services are distinct candidates.
+  const opaqueItems = new Map<string, KeychainCandidate>();
+  const seenKeychains = new Set<string>();
+  let inconclusive = false;
+  for (const record of metadata.split(/(?=^keychain: )/m)) {
+    if (!record.trim()) continue;
+    const keychain = keychainMetadataValue(
+      /^keychain: (.+)$/m.exec(record)?.[1],
+    );
+    const kind = /^class: (.+)$/m.exec(record)?.[1];
+    if (!keychain || !paths.includes(keychain) || !kind) {
+      inconclusive = true;
+      continue;
+    }
+    seenKeychains.add(keychain);
+    if (kind !== '"genp"') continue;
+    const service = keychainMetadataValue(
+      /^\s+"svce"<blob>=(.+)$/m.exec(record)?.[1],
+    );
+    const itemAccount = keychainMetadataValue(
+      /^\s+"acct"<blob>=(.+)$/m.exec(record)?.[1],
+    );
+    if (service === undefined || itemAccount === undefined) {
+      inconclusive = true;
+      continue;
+    }
+    // Another account name can own the live session's item, and an unfamiliar
+    // Claude-prefixed item can belong to a profile this process did not
+    // select. Never open those or use them to assert a sign-out.
+    const claudeOwned = service.startsWith(CLAUDE_KEYCHAIN_SERVICE);
+    if (itemAccount !== locations.keychainAccount) {
+      if (claudeOwned) inconclusive = true;
+      continue;
+    }
+    const opaque =
+      locations.acceptsOpaqueDefaultItem &&
+      isOpaqueSuffixedKeychainService(service);
+    if (service !== locations.keychainService && !opaque) {
+      if (claudeOwned) inconclusive = true;
+      continue;
+    }
+    // Duplicates follow the vendor's lookup ordering, independent of dump order.
+    const earlier = opaque ? opaqueItems.get(service) : exactItem;
+    if (earlier && paths.indexOf(earlier.keychain) <= paths.indexOf(keychain))
+      continue;
+    if (opaque) opaqueItems.set(service, { service, keychain });
+    else exactItem = { service, keychain };
+  }
+  // The exact selector always wins. Failing that, a default selection cannot
+  // re-derive its own opaque suffix, so it accepts one only when a single
+  // eligible item exists; several are indistinguishable and none is opened.
+  if (exactItem) return { status: "present", item: exactItem };
+  // Uniqueness, like absence, requires the whole search list: incomplete or
+  // inconclusive metadata can hide the selected item or a competing profile.
+  if (inconclusive || paths.some((path) => !seenKeychains.has(path)))
+    return { status: "unknown" };
+  if (opaqueItems.size === 1)
+    return { status: "present", item: [...opaqueItems.values()][0]! };
+  if (opaqueItems.size > 1) return { status: "unknown" };
+  return { status: "missing" };
+}
+
+// security's print_buffer emits printable bytes in quotes, or hex followed by
+// an optional ASCII annotation. Decode only the small metadata fields we use.
+function keychainMetadataValue(raw?: string): string | undefined {
+  if (!raw || raw.length > 8192) return undefined;
+  if (raw === "<NULL>") return "";
+  const hex = /^0x((?:[0-9a-fA-F]{2})+)(?:\s|$)/.exec(raw)?.[1];
+  if (hex) return Buffer.from(hex, "hex").toString("utf8");
+  return /^"(.*)"$/.exec(raw)?.[1];
 }
 
 async function readKeychainCredentialState(
@@ -804,6 +1134,7 @@ async function readKeychainCredentialState(
         "-w",
         "-s",
         locations.keychainService,
+        ...(locations.keychainPath ? [locations.keychainPath] : []),
       ],
       KEYCHAIN_PROMPT_TIMEOUT_MS,
     );
@@ -828,6 +1159,21 @@ async function readKeychainCredentialState(
   }
 }
 
+function withDiscoveredKeychainItem(
+  locations: ClaudeProfileLocations,
+  item: KeychainCandidate,
+): ClaudeProfileLocations {
+  return {
+    ...locations,
+    keychainService: item.service,
+    keychainPath: item.keychain,
+    keychainAccessMarker: claudeKeychainAccessMarkerPath(
+      locations.keychainAccount,
+      item.service,
+    ),
+  };
+}
+
 function hasKeychainAccessMarker(locations: ClaudeProfileLocations): boolean {
   return existsSync(locations.keychainAccessMarker);
 }
@@ -848,7 +1194,7 @@ function writeKeychainAccessMarkerBestEffort(
   }
 }
 
-export function claudeCredentialFile(): string {
+export function claudeCredentialFile(): string | undefined {
   return resolveClaudeProfileLocations().credentialFile;
 }
 
@@ -871,30 +1217,26 @@ export function claudeKeychainAccount(): string {
 }
 
 function resolveClaudeProfileLocations(): ClaudeProfileLocations {
-  const configuredDir = process.env.CLAUDE_CONFIG_DIR;
-  const configDir = (configuredDir ?? join(homedir(), ".claude")).normalize(
-    "NFC",
-  );
-  const keychainConfigDir = configuredDir ? configDir : undefined;
+  const {
+    configDir,
+    secureStorageSelected,
+    keychainService,
+    acceptsOpaqueDefaultItem,
+  } = claudeProfileLocations();
   const keychainAccount = claudeKeychainAccount();
   return {
-    credentialFile: join(configDir, ".credentials.json"),
+    credentialFile:
+      secureStorageSelected && process.platform === "darwin"
+        ? undefined
+        : join(configDir, ".credentials.json"),
     keychainAccount,
-    keychainService: keychainServiceForConfigDir(keychainConfigDir),
+    keychainService,
+    acceptsOpaqueDefaultItem,
     keychainAccessMarker: claudeKeychainAccessMarkerPath(
       keychainAccount,
-      keychainConfigDir,
+      keychainService,
     ),
   };
-}
-
-function keychainServiceForConfigDir(configDir?: string): string {
-  if (!configDir) return DEFAULT_KEYCHAIN_SERVICE;
-  const suffix = createHash("sha256")
-    .update(configDir)
-    .digest("hex")
-    .slice(0, 8);
-  return `${DEFAULT_KEYCHAIN_SERVICE}-${suffix}`;
 }
 
 function isKeychainItemUnreachable(error: unknown): boolean {

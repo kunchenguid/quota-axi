@@ -8,6 +8,7 @@ import {
   SELECTION_MIN_TIME_REMAINING_PERCENT,
   summarizeEffectivePace,
   summarizeEffectiveSelection,
+  UNOPENED_WINDOW_MAX_FUTURE_START_SKEW_SECONDS,
 } from "../src/pace.js";
 import { SELECTION_SCALAR_KEY } from "../src/types.js";
 import type { QuotaPace, QuotaWindow } from "../src/types.js";
@@ -500,6 +501,148 @@ describe("computeEffectiveRunway", () => {
     );
     expect(runway.status).not.toBe("unknown");
     expect(runway.unmeasurableWindowIds).toBeUndefined();
+  });
+
+  it("does not block established runway on a provably unopened future cycle", () => {
+    const unopened = window({
+      id: "model:fable",
+      kind: "model",
+      percentUsed: 0,
+      percentRemaining: 100,
+      windowSeconds: WEEK_SECONDS,
+      resetsAt: new Date(
+        Date.parse(GENERATED_AT) + (WEEK_SECONDS + 1) * 1000,
+      ).toISOString(),
+    });
+    unopened.pace = computeWindowPace(unopened, GENERATED_AT);
+    expect(unopened.pace).toEqual({
+      status: "unknown",
+      reason: "future_cycle_start",
+    });
+
+    const account = pacedWindow("seven_day", 90, 0.5);
+    expect(computeEffectiveRunway([account, unopened], GENERATED_AT)).toEqual({
+      status: "through_reset",
+      projectionConfidence: "established",
+    });
+  });
+
+  it("keeps a provably unopened model unmeasurable without an account bound", () => {
+    const unopened = window({
+      id: "model:fable",
+      kind: "model",
+      percentUsed: 0,
+      percentRemaining: 100,
+      windowSeconds: WEEK_SECONDS,
+      resetsAt: new Date(
+        Date.parse(GENERATED_AT) + (WEEK_SECONDS + 1) * 1000,
+      ).toISOString(),
+    });
+    unopened.pace = computeWindowPace(unopened, GENERATED_AT);
+
+    expect(computeEffectiveRunway([unopened], GENERATED_AT)).toEqual({
+      status: "unknown",
+      unmeasurableWindowIds: ["model:fable"],
+    });
+  });
+
+  it("keeps a future unopened account window unmeasurable", () => {
+    const futureAccount = window({
+      id: "five_hour",
+      kind: "session",
+      percentUsed: 0,
+      percentRemaining: 100,
+      windowSeconds: FIVE_HOURS_SECONDS,
+      resetsAt: new Date(
+        Date.parse(GENERATED_AT) + (FIVE_HOURS_SECONDS + 1) * 1000,
+      ).toISOString(),
+    });
+    futureAccount.pace = computeWindowPace(futureAccount, GENERATED_AT);
+    const establishedAccount = pacedWindow("seven_day", 90, 0.5);
+
+    expect(
+      computeEffectiveRunway([establishedAccount, futureAccount], GENERATED_AT),
+    ).toEqual({
+      status: "unknown",
+      unmeasurableWindowIds: ["five_hour"],
+    });
+  });
+
+  it.each([
+    {
+      name: "partially used",
+      percentUsed: 1,
+      percentRemaining: 99,
+      reason: "future_cycle_start" as const,
+    },
+    {
+      name: "contradictory usage",
+      percentUsed: 1,
+      percentRemaining: 100,
+      reason: "future_cycle_start" as const,
+    },
+    {
+      name: "missing explicit usage",
+      percentUsed: undefined,
+      percentRemaining: 100,
+      reason: "future_cycle_start" as const,
+    },
+    {
+      name: "differently unexplained",
+      percentUsed: 0,
+      percentRemaining: 100,
+      reason: "missing_cycle" as const,
+    },
+    {
+      name: "stale",
+      percentUsed: 0,
+      percentRemaining: 100,
+      reason: "stale" as const,
+    },
+  ])("keeps $name future-window evidence unmeasurable", (candidate) => {
+    const future = window({
+      id: "model:fable",
+      kind: "model",
+      percentUsed: candidate.percentUsed,
+      percentRemaining: candidate.percentRemaining,
+      windowSeconds: WEEK_SECONDS,
+      resetsAt: new Date(
+        Date.parse(GENERATED_AT) + (WEEK_SECONDS + 1) * 1000,
+      ).toISOString(),
+      pace: { status: "unknown", reason: candidate.reason },
+    });
+    const account = pacedWindow("seven_day", 90, 0.5);
+
+    expect(computeEffectiveRunway([account, future], GENERATED_AT)).toEqual({
+      status: "unknown",
+      unmeasurableWindowIds: ["model:fable"],
+    });
+  });
+
+  it("keeps an unused but implausibly far-future cycle unmeasurable", () => {
+    const farFuture = window({
+      id: "model:fable",
+      kind: "model",
+      percentUsed: 0,
+      percentRemaining: 100,
+      windowSeconds: WEEK_SECONDS,
+      resetsAt: new Date(
+        Date.parse(GENERATED_AT) +
+          (WEEK_SECONDS + UNOPENED_WINDOW_MAX_FUTURE_START_SKEW_SECONDS + 1) *
+            1000,
+      ).toISOString(),
+    });
+    farFuture.pace = computeWindowPace(farFuture, GENERATED_AT);
+    expect(farFuture.pace).toEqual({
+      status: "unknown",
+      reason: "future_cycle_start",
+    });
+
+    const account = pacedWindow("seven_day", 90, 0.5);
+    expect(computeEffectiveRunway([account, farFuture], GENERATED_AT)).toEqual({
+      status: "unknown",
+      unmeasurableWindowIds: ["model:fable"],
+    });
   });
 
   it("reports through_reset when every window in scope has not yet triggered", () => {

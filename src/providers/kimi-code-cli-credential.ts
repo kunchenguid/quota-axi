@@ -22,6 +22,12 @@ export type KimiCodeCliCredentialResolution =
   | {
       status: "expired";
       /**
+       * True when the same record carries a `refresh_token`, so this soft
+       * expiry has a rotation path the vendor CLI owns. Presence only: the
+       * value is never read, rendered, or exchanged here.
+       */
+      refreshable: boolean;
+      /**
        * The stored access token and the base URL it was issued for, present so
        * a bounded read-only liveness probe can test it despite the stored
        * expiry field. Probe use only; never log or render.
@@ -173,9 +179,16 @@ async function resolveCredential(
       ? credential.access_token.trim()
       : "";
   const expiresAt = expirySeconds(credential?.expires_at);
-  if (!accessToken || expiresAt === undefined) return { status: "invalid" };
+  if (!credential || !accessToken || expiresAt === undefined) {
+    return { status: "invalid" };
+  }
   if (expiresAt <= dependencies.now() / 1_000 + MINIMUM_FRESHNESS_SECONDS) {
-    return { status: "expired", accessToken, baseUrl: environment.baseUrl };
+    return {
+      status: "expired",
+      refreshable: Object.hasOwn(credential, "refresh_token"),
+      accessToken,
+      baseUrl: environment.baseUrl,
+    };
   }
   return { status: "available", accessToken, baseUrl: environment.baseUrl };
 }

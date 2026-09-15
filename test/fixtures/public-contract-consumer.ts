@@ -4,8 +4,15 @@ import {
   type EffectiveAvailability,
   type ModelQuotaRecord,
   type ModelsResponse,
+  type ProviderOptions,
   type QuotaAxiResponse,
 } from "quota-axi";
+
+const profileOnlyOptions: ProviderOptions = {
+  allowKeychainPrompt: false,
+  refreshCredentials: false,
+  credentialMode: "profile-only",
+};
 
 const quota: QuotaAxiResponse = {
   generatedAt: "2026-08-05T12:00:00.000Z",
@@ -48,6 +55,7 @@ const demoted: Array<string | undefined> = [
 ];
 
 void models;
+void profileOnlyOptions;
 void spendPriority;
 void demoted;
 void compareModelsByRunway(model, model);

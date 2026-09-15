@@ -57,6 +57,15 @@ function withUnlistableProcesses(): void {
 
 const USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
 const PROFILE_URL = "https://api.anthropic.com/api/oauth/profile";
+const CLAUDE_LOGIN_KEYCHAIN = `    "/fixture/login.keychain-db"\n`;
+const CLAUDE_KEYCHAIN_METADATA = `keychain: "/fixture/login.keychain-db"
+version: 512
+class: "genp"
+attributes:
+    "acct"<blob>="fixture-user"
+    "svce"<blob>="Claude Code-credentials"
+    "mdat"<timedate>="20260701000000Z"
+`;
 const originalHome = process.env.HOME;
 const originalUserProfile = process.env.USERPROFILE;
 const originalUser = process.env.USER;
@@ -529,15 +538,19 @@ describe.skipIf(process.platform === "win32")(
           await importOriginal<typeof import("../../src/lib/process.js")>();
         return {
           ...actual,
-          execFileText: vi.fn(async () =>
-            JSON.stringify({
-              claudeAiOauth: {
-                accessToken: "keychain-valid-token",
-                refreshToken: true,
-                expiresAt: Date.parse("2035-01-01T00:00:00.000Z"),
-                subscriptionType: "max",
-              },
-            }),
+          execFileText: vi.fn(async (_command: string, args: string[]) =>
+            args[0] === "list-keychains"
+              ? CLAUDE_LOGIN_KEYCHAIN
+              : args[0] === "dump-keychain"
+                ? CLAUDE_KEYCHAIN_METADATA
+                : JSON.stringify({
+                    claudeAiOauth: {
+                      accessToken: "keychain-valid-token",
+                      refreshToken: true,
+                      expiresAt: Date.parse("2035-01-01T00:00:00.000Z"),
+                      subscriptionType: "max",
+                    },
+                  }),
           ),
         };
       });
@@ -594,7 +607,14 @@ describe.skipIf(process.platform === "win32")(
       vi.doMock("../../src/lib/process.js", async (importOriginal) => {
         const actual =
           await importOriginal<typeof import("../../src/lib/process.js")>();
-        return { ...actual, execFileText: vi.fn(async () => "") };
+        return {
+          ...actual,
+          execFileText: vi.fn(async (_command: string, args: string[]) =>
+            args[0] === "list-keychains"
+              ? CLAUDE_LOGIN_KEYCHAIN
+              : CLAUDE_KEYCHAIN_METADATA,
+          ),
+        };
       });
 
       const { fetchQuota } = await import("../../src/providers/claude.js");
