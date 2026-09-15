@@ -69,7 +69,7 @@ Default TOON is decision-shaped: `quota[]` carries one fully populated row per m
 $ quota-axi --provider claude --json
 {
   "generatedAt": "2026-03-15T16:42:00.000Z",
-  "schemaVersion": 5,
+  "schemaVersion": 6,
   "providers": [
     {
       "provider": "claude",
@@ -348,13 +348,13 @@ CODEX_HOME=/path/to/codex-profile quota-axi --provider codex --profile-only --fu
 
 ## Output Model
 
-The `quota` command's `--json` emits `schemaVersion: 5`.
+The `quota` command's `--json` emits `schemaVersion: 6`.
 
 ### Normalized schema contract
 
 The package publishes TypeScript declarations from its package root, so consumers can use `import type { QuotaAxiResponse, ModelsResponse } from "quota-axi"`. The adapter contract is `ProviderAdapter` in and normalized `ProviderQuota` out: adapters report observed quota data, never rank, mint credentials, or retain raw responses. The narrowly bounded vendor-owned renewal path is documented under [Delegated credential refresh](#delegated-credential-refresh).
 
-`schemaVersion` is command-specific. Additive optional fields do not bump it. A semantic or incompatible shape change does. The `quota` report is version 5, `auth` is version 1, and `models` is version 1.
+`schemaVersion` is command-specific. Additive optional fields do not bump it. A semantic or incompatible shape change does. The `quota` report is version 6, `auth` is version 1, and `models` is version 1. Version 6 changes how the default TOON output writes an empty block: it is now `name: []`, not `name[0]:`.
 
 ### Default report blocks
 
