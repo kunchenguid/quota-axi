@@ -353,6 +353,50 @@ describe("quota semantics", () => {
     });
   });
 
+  it("keeps OpenCode Go effective unknown when a cap is missing", () => {
+    const result = withQuotaSemantics(
+      provider("opencode-go", [
+        window("weekly", "weekly", 80),
+        window("monthly", "monthly", 70),
+      ]),
+      GENERATED_AT,
+    );
+
+    expect(result.quotaSemantics).toMatchObject({
+      status: "partial",
+      effectiveAvailability: [
+        {
+          scope: "all_models",
+          status: "unknown",
+          boundedBy: ["weekly", "monthly"],
+        },
+      ],
+      unresolvedWindowIds: ["rolling"],
+    });
+  });
+
+  it("treats a duration-confirmed rolling window as the rolling cap", () => {
+    const result = withQuotaSemantics(
+      provider("opencode-go", [
+        window("five_hour", "session", 90),
+        window("weekly", "weekly", 80),
+        window("monthly", "monthly", 70),
+      ]),
+      GENERATED_AT,
+    );
+
+    expect(result.quotaSemantics).toMatchObject({
+      status: "known",
+      effectiveAvailability: [
+        {
+          scope: "all_models",
+          status: "known",
+          effectivePercentRemaining: 70,
+          limitingWindowIds: ["monthly"],
+        },
+      ],
+    });
+  });
   it("keeps OpenCode Go effective unknown when an unfamiliar window appears", () => {
     const result = withQuotaSemantics(
       provider("opencode-go", [
@@ -372,7 +416,7 @@ describe("quota semantics", () => {
           boundedBy: ["weekly", "monthly"],
         },
       ],
-      unresolvedWindowIds: ["credits"],
+      unresolvedWindowIds: ["credits", "rolling"],
     });
   });
 

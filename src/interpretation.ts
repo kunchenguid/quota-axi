@@ -147,13 +147,24 @@ function opencodeGoSemantics(
     ["rolling", "five_hour", "weekly", "monthly"].includes(id),
   );
   const recognized = new Set(plan);
+  // The endpoint always reports all three stacked caps; a missing cap is a
+  // data gap, not a complete bound, so a subset alone never reads as known.
+  // `five_hour` is the duration-confirmed identity of the `rolling` cap.
+  const present = new Set(
+    plan.map(({ id }) => (id === "five_hour" ? "rolling" : id)),
+  );
+  const missing = (["rolling", "weekly", "monthly"] as const).filter(
+    (id) => !present.has(id),
+  );
   const unresolved = windows.filter((window) => !recognized.has(window));
-  const unresolvedWindowIds = [...new Set(unresolved.map(({ id }) => id))];
+  const unresolvedWindowIds = [
+    ...new Set([...unresolved.map(({ id }) => id), ...missing]),
+  ];
   if (unresolvedWindowIds.length > 0) {
     return {
       status: "partial",
       description:
-        "OpenCode Go's rolling, weekly, and monthly windows are stacked plan caps that jointly bound Go-plan usage, but unfamiliar windows prevent a definitive effective percentage.",
+        "OpenCode Go's rolling, weekly, and monthly windows are stacked plan caps that jointly bound Go-plan usage, but unfamiliar or missing windows prevent a definitive effective percentage.",
       effectiveAvailability:
         plan.length > 0
           ? [unresolvedAvailability("all_models", plan, unresolvedWindowIds)]
