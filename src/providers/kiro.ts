@@ -285,7 +285,8 @@ function credentialFromFields(
   value: Record<string, unknown>,
   path: string,
 ): CredentialResolution {
-  const region = normalizeRegion(value.region) ?? "us-east-1";
+  const region = normalizeRegion(value.region);
+  if (!region) return { status: "invalid", path, error: "region_missing" };
   const expiresAt = parseEpochOrIso(value.expiresAt ?? value.expires_at);
   const profileArn = stringValue(value.profileArn ?? value.profile_arn);
   const credential: KiroCredential = {

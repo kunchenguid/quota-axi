@@ -60,13 +60,24 @@ describe("Kiro provider", () => {
     });
     expect(
       extractPiKiroCredential(
-        { status: "success", value: { kiro: { type: "api_key", key: TOKEN } } },
+        {
+          status: "success",
+          value: {
+            kiro: { type: "api_key", key: TOKEN, region: "us-east-1" },
+          },
+        },
         "/pi/auth.json",
       ),
     ).toMatchObject({
       status: "available",
       credential: { accessToken: TOKEN },
     });
+    expect(
+      extractPiKiroCredential(
+        { status: "success", value: { kiro: { type: "api_key", key: TOKEN } } },
+        "/pi/auth.json",
+      ),
+    ).toMatchObject({ status: "invalid", error: "region_missing" });
   });
 
   it("reads the IDE access token without requiring a refresh token", () => {
