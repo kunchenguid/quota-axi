@@ -185,7 +185,7 @@ describe("Kiro quota normalization", () => {
       }),
     ).fetchQuota(OPTIONS);
     expect(report.credits).toEqual({ remaining: 450, unit: "credits" });
-    expect(report.windows[0].percentRemaining).toBe(82);
+    expect(report.windows[0].percentRemaining).toBeCloseTo((450 / 550) * 100);
     const interpreted = withQuotaSemantics(report, new Date().toISOString());
     expect(interpreted.quotaSemantics?.effectiveAvailability[0]).toMatchObject({
       scope: "all_models",
@@ -194,8 +194,41 @@ describe("Kiro quota normalization", () => {
     expect(
       interpreted.quotaSemantics?.effectiveAvailability[0]
         .effectivePercentRemaining,
-    ).toBe(82);
+    ).toBeCloseTo((450 / 550) * 100);
   });
+
+  it.each([
+    [1995, 5, 99.75, 0.25, "unknown"],
+    [1999.5, 0.5, 99.975, 0.025, "unknown"],
+    [2000, 0, 100, 0, "exhausted_now"],
+  ] as const)(
+    "preserves quota precision at %s of 2000 credits used",
+    async (used, remaining, usedPercent, remainingPercent, runway) => {
+      const report = await adapterWith(CREDENTIALS, async () =>
+        jsonResponse({
+          ...USAGE_PAYLOAD,
+          usageBreakdownList: [
+            {
+              resourceType: "CREDIT",
+              currentUsageWithPrecision: used,
+              usageLimitWithPrecision: 2000,
+            },
+          ],
+        }),
+      ).fetchQuota(OPTIONS);
+      expect(report.credits?.remaining).toBe(remaining);
+      expect(report.windows[0].percentUsed).toBeCloseTo(usedPercent, 10);
+      expect(report.windows[0].percentRemaining).toBe(remainingPercent);
+      const interpreted = withQuotaSemantics(report, new Date().toISOString());
+      const availability = interpreted.quotaSemantics?.effectiveAvailability[0];
+      expect(availability?.effectivePercentRemaining).toBe(remainingPercent);
+      expect(availability?.runway?.status).toBe(runway);
+      writeCachedProviders([interpreted]);
+      expect(readCachedProvider("kiro")?.windows[0].percentRemaining).toBe(
+        remainingPercent,
+      );
+    },
+  );
 
   it.each([
     ["EXPIRED", "2099-10-01T00:00:00.000Z"],
@@ -424,6 +457,48 @@ describe("Kiro credential store reader", () => {
 });
 
 describe("Kiro cache retirement without a region override", () => {
+  it("withholds account A quota after an unobserved logout and login to B", async () => {
+    vi.stubEnv("KIRO_REGION", undefined);
+    const path = process.env.KIRO_CLI_DB!;
+    writeKiroStore(path, {
+      token: JSON.stringify({
+        access_token: "synthetic-account-a",
+        region: "us-east-1",
+      }),
+    });
+    const fresh = await createKiroAdapter({
+      fetch: async () => jsonResponse(USAGE_PAYLOAD),
+    }).fetchQuota(OPTIONS);
+    writeCachedProviders([fresh]);
+    writeKiroStore(path, {});
+    writeKiroStore(path, {
+      token: JSON.stringify({
+        access_token: "synthetic-account-b",
+        region: "us-east-1",
+      }),
+    });
+    const request = vi.fn(
+      async (_input: RequestInfo | URL, init?: RequestInit) => {
+        expect(new Headers(init?.headers).get("authorization")).toBe(
+          "Bearer synthetic-account-b",
+        );
+        throw new DOMException("aborted", "AbortError");
+      },
+    );
+    const report = await createKiroAdapter({ fetch: request }).fetchQuota(
+      OPTIONS,
+    );
+    expect(request).toHaveBeenCalledOnce();
+    expect(report).toMatchObject({
+      source: "unavailable",
+      windows: [],
+      state: { status: "error", error: "Kiro quota request timed out" },
+    });
+    expect(report.plan).toBeUndefined();
+    expect(report.credits).toBeUndefined();
+    expect(readCachedProvider("kiro")?.credits?.remaining).toBe(1500);
+  });
+
   it.each([
     ["us-east-1", ""],
     ["eu-west-1", "synthetic-profile-identity"],
@@ -757,7 +832,7 @@ describe("Kiro quota transport", () => {
       },
     );
 
-    it("preserves retry-after on a stale rate-limited reading", async () => {
+    it("preserves retry-after while withholding cached quota on rate limiting", async () => {
       const report = await adapterWith(
         CREDENTIALS,
         async () =>
@@ -767,13 +842,16 @@ describe("Kiro quota transport", () => {
           }),
       ).fetchQuota(OPTIONS);
       expect(report.state).toMatchObject({
-        status: "stale",
+        status: "rate_limited",
         retryAfter: "2099-01-01T00:00:00.000Z",
       });
+      expect(report.windows).toEqual([]);
+      expect(report.plan).toBeUndefined();
+      expect(report.credits).toBeUndefined();
     });
 
     it.each(["KIRO_CLI_DB", "KIRO_REGION", "KIRO_PROFILE_ARN"])(
-      "isolates fallback and retirement when %s selects another context",
+      "isolates reports and retirement when %s selects another context",
       async (key) => {
         const original = process.env[key]!;
         vi.stubEnv(
@@ -807,14 +885,12 @@ describe("Kiro quota transport", () => {
         writeCachedProviders([empty]);
         expect(readCachedProvider("kiro")).toBeDefined();
         vi.stubEnv(key, original);
-        const restored = await adapterWith(CREDENTIALS, async () => {
-          throw new Error("timeout");
-        }).fetchQuota(OPTIONS);
-        expect(restored).toMatchObject({
-          source: "cache",
-          plan: "KIRO PRO+",
-          windows: [{ percentRemaining: 75 }],
-        });
+        const restored = await adapterWith(
+          CREDENTIALS,
+          async () => new Response(null, { status: 401 }),
+        ).fetchQuota(OPTIONS);
+        expect(restored.state.status).toBe("auth_required");
+        expect(readCachedProvider("kiro")).toBeUndefined();
       },
     );
 
@@ -832,10 +908,12 @@ describe("Kiro quota transport", () => {
         expect(logout.state.status).toBe("auth_required");
         expect(readCachedProvider("kiro")).toBeDefined();
         vi.stubEnv(key, original);
-        const restored = await adapterWith(CREDENTIALS, async () => {
-          throw new Error("timeout");
-        }).fetchQuota(OPTIONS);
-        expect(restored.source).toBe("cache");
+        const restored = await adapterWith(
+          CREDENTIALS,
+          async () => new Response(null, { status: 401 }),
+        ).fetchQuota(OPTIONS);
+        expect(restored.state.status).toBe("auth_required");
+        expect(readCachedProvider("kiro")).toBeUndefined();
       },
     );
 
@@ -961,10 +1039,12 @@ describe("Kiro quota transport", () => {
       }).fetchQuota(OPTIONS);
       expect(other).toMatchObject({ source: "unavailable", windows: [] });
       vi.stubEnv("KIRO_PROFILE_ARN", "");
-      const restored = await adapterWith(CREDENTIALS, async () => {
-        throw new Error("timeout");
-      }).fetchQuota(OPTIONS);
-      expect(restored.source).toBe("cache");
+      const restored = await adapterWith(
+        CREDENTIALS,
+        async () => new Response(null, { status: 401 }),
+      ).fetchQuota(OPTIONS);
+      expect(restored.state.status).toBe("auth_required");
+      expect(readCachedProvider("kiro")).toBeUndefined();
     });
 
     it("clears a matching context after a fresh response with no windows", async () => {
@@ -997,10 +1077,12 @@ describe("Kiro quota transport", () => {
       }).fetchQuota(OPTIONS);
       expect(other.windows).toEqual([]);
       vi.stubEnv("KIRO_PROFILE_ARN", "");
-      const original = await adapterWith(CREDENTIALS, async () => {
-        throw new Error("timeout");
-      }).fetchQuota(OPTIONS);
-      expect(original.source).toBe("cache");
+      const original = await adapterWith(
+        CREDENTIALS,
+        async () => new Response(null, { status: 401 }),
+      ).fetchQuota(OPTIONS);
+      expect(original.state.status).toBe("auth_required");
+      expect(readCachedProvider("kiro")).toBeUndefined();
     });
 
     it("retires the cache after logout instead of serving stale credit", async () => {
@@ -1044,7 +1126,7 @@ describe("Kiro quota transport", () => {
       },
     );
 
-    it("serves the last fresh snapshot for a timed-out request and keeps the cache", async () => {
+    it("withholds cached quota on timeout when account continuity is unconfirmed", async () => {
       const request = vi.fn(async () => {
         throw new DOMException("The operation was aborted", "AbortError");
       });
@@ -1052,39 +1134,39 @@ describe("Kiro quota transport", () => {
         OPTIONS,
       );
       expect(report).toMatchObject({
-        source: "cache",
-        windows: [{ id: "credit", percentRemaining: 75 }],
+        source: "unavailable",
+        windows: [],
         state: {
-          status: "stale",
-          stale: true,
+          status: "error",
+          stale: false,
           error: "Kiro quota request timed out",
         },
       });
       expect(readCachedProvider("kiro")).toBeDefined();
     });
 
-    it("serves the last fresh snapshot for soft expiry and keeps the cache", async () => {
+    it("withholds cached quota on soft expiry and keeps the cache", async () => {
       const request = vi.fn(async () => new Response(null, { status: 401 }));
       const report = await adapterWith(
         STORED_EXPIRED_REFRESHABLE,
         request,
       ).fetchQuota(OPTIONS);
       expect(report).toMatchObject({
-        source: "cache",
-        windows: [{ id: "credit" }],
-        state: { status: "stale", authStatus: "expired_refreshable" },
+        source: "unavailable",
+        windows: [],
+        state: { status: "unavailable", authStatus: "expired_refreshable" },
       });
       expect(readCachedProvider("kiro")).toBeDefined();
     });
 
-    it("serves the last fresh snapshot for a locked store and keeps the cache", async () => {
+    it("withholds cached quota for a locked store and keeps the cache", async () => {
       const busy: KiroCredentialState = {
         status: "error",
         source: { ...SOURCE, status: "error", error: "database_busy" },
       };
       const report = await adapterWith(busy, vi.fn()).fetchQuota(OPTIONS);
       expect(report.state).toMatchObject({
-        status: "stale",
+        status: "error",
         error: "Kiro credential store unavailable",
       });
       expect(readCachedProvider("kiro")).toBeDefined();

@@ -115,18 +115,15 @@ export function readCachedKimiProvider(
   return readCachedProviderInContext("kimi", contextId);
 }
 
-export function readCachedProviderInContext(
+function readCachedProviderInContext(
   provider: ProviderId,
   contextId: string,
-  retirementId?: string,
 ): ProviderQuota | undefined {
   if (!CREDENTIAL_CONTEXT_ID.test(contextId)) return undefined;
   return readCacheProviders().find(
     (item) =>
       item.snapshot.provider === provider &&
-      item.credentialContextId === contextId &&
-      (retirementId === undefined ||
-        item.credentialRetirementContextId === retirementId),
+      item.credentialContextId === contextId,
   )?.snapshot;
 }
 

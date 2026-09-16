@@ -3,16 +3,10 @@ import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { deleteCachedProvider, readCachedProviderInContext } from "../cache.js";
+import { deleteCachedProvider } from "../cache.js";
 import { collapseHome } from "../lib/fs.js";
 import { providerFetch } from "../lib/http.js";
-import {
-  clampPercent,
-  nowIso,
-  parseEpochOrIso,
-  percentRemaining,
-  retryAfterToIso,
-} from "../lib/time.js";
+import { nowIso, parseEpochOrIso, retryAfterToIso } from "../lib/time.js";
 import { VERSION } from "../version.js";
 import type {
   AuthSourceReport,
@@ -27,7 +21,6 @@ import type {
 import {
   failedProvider,
   sourceNames,
-  staleFromCache,
   statusFromError,
   successProvider,
 } from "./common.js";
@@ -246,26 +239,6 @@ function unavailableReport(
 ): ProviderQuota {
   const definitiveAuthFailure = failure.status === "auth_required";
   if (definitiveAuthFailure) retireCache(contextId, retirementId);
-  const cached =
-    definitiveAuthFailure || !contextId
-      ? undefined
-      : readCachedProviderInContext("kiro", contextId, retirementId);
-  if (cached) {
-    const stale = staleFromCache(
-      cached,
-      failure.error,
-      sourceNames(attempts),
-      attempts,
-    );
-    return {
-      ...stale,
-      state: {
-        ...stale.state,
-        ...(failure.authStatus ? { authStatus: failure.authStatus } : {}),
-        ...(failure.retryAfter ? { retryAfter: failure.retryAfter } : {}),
-      },
-    };
-  }
   const report = failedProvider({
     provider: "kiro",
     label: "Kiro",
@@ -481,7 +454,9 @@ function normalizeBreakdowns(
       limit += pool.limit;
     }
     if (limit <= 0) return [];
-    const percentUsed = clampPercent((used / limit) * 100);
+    const remaining = Math.max(0, limit - used);
+    const percentUsed = Math.min(100, Math.max(0, (used / limit) * 100));
+    const percentRemaining = Math.min(100, (remaining / limit) * 100);
     const resource =
       stringValue(item.resourceType) ??
       stringValue(item.displayName) ??
@@ -492,13 +467,13 @@ function normalizeBreakdowns(
       "Credits";
     return [
       {
-        remaining: Math.max(0, limit - used),
+        remaining,
         window: {
           id: slug(resource, index),
           label,
           kind: "credits" as const,
           percentUsed,
-          percentRemaining: percentRemaining(percentUsed),
+          percentRemaining,
           resetsAt: parseEpochOrIso(item.nextDateReset) ?? fallbackReset,
         },
       },
