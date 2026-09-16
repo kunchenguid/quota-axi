@@ -196,7 +196,7 @@ $ quota-axi --provider claude --json
 $ quota-axi auth
 bin: ~/.npm/_npx/.../quota-axi
 description: Inspect local quota auth sources without printing secret values
-auth[16]{provider,source,path,status,error}:
+auth[17]{provider,source,path,status,error}:
   claude,oauth-file,~/.claude/.credentials.json,available,none
   claude,keychain,none,skipped,keychain_prompt_required
   codex,auth-json,~/.codex/auth.json,available,none
@@ -205,6 +205,7 @@ auth[16]{provider,source,path,status,error}:
   cursor,state-vscdb,~/Library/Application Support/Cursor/User/globalStorage/state.vscdb,available,none
   cursor,cli-keychain,~/.cursor/cli-config.json,skipped,keychain_prompt_required
   copilot,apps-json,~/.config/github-copilot/apps.json,available,none
+  copilot,gh:hosts.yml,~/.config/gh/hosts.yml,available,none
   grok,auth-json,~/.grok/auth.json,available,none
   kimi,pi:kimi-coding,none,available,none
   kimi,kimi-code-cli,none,available,none
@@ -631,10 +632,10 @@ Default model order is deterministic and non-preferential: provider, then model 
 
 Auth source entries can include `credentialPresent` when a source is not genuinely absent, including when a read failure prevents a more precise classification.
 
-| Name                 | Values                                                                                                                                                                                                                                             |
-| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Auth source statuses | `available`, `missing`, `invalid`, `expired`, `skipped`, or `error`                                                                                                                                                                                |
-| Auth source names    | `oauth-file`, `keychain`, `auth-json`, `auth-env`, `apps-json`, `state-vscdb`, `cli-keychain`, `cli-authfile`, `cli-rpc`, `pi:openai-codex`, `pi:kimi-coding`, `pi:xai`, `pi:zai`, `kimi-code-cli`, `opencode:auth.json`, `bl-cli`, and `loopback` |
+| Name                 | Values                                                                                                                                                                                                                                                             |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Auth source statuses | `available`, `missing`, `invalid`, `expired`, `skipped`, or `error`                                                                                                                                                                                                |
+| Auth source names    | `oauth-file`, `keychain`, `auth-json`, `auth-env`, `apps-json`, `gh:hosts.yml`, `state-vscdb`, `cli-keychain`, `cli-authfile`, `cli-rpc`, `pi:openai-codex`, `pi:kimi-coding`, `pi:xai`, `pi:zai`, `kimi-code-cli`, `opencode:auth.json`, `bl-cli`, and `loopback` |
 
 ## Security Posture
 
@@ -645,7 +646,7 @@ Auth source entries can include `credentialPresent` when a source is not genuine
 | Claude         | `CLAUDE_CODE_OAUTH_TOKEN` when it is set to a usable literal token; `$CLAUDE_CONFIG_DIR/.credentials.json` or `~/.claude/.credentials.json` (on macOS, not read when a nonempty secure-storage selector is set); on macOS, the discovered Claude Code Keychain value for the selected profile, pinned to Claude Code's validated current-user account, with `--allow-keychain-prompt` or, after a service-and-account-scoped non-secret access marker exists, on plain calls |
 | Codex          | `$CODEX_HOME/auth.json` or `~/.codex/auth.json`, then Pi's `$PI_CODING_AGENT_DIR/auth.json` `openai-codex` subscription OAuth entry (default `~/.pi/agent/auth.json`), before the read-only CLI fallback; `$QUOTA_AXI_CODEX_BINARY` can pin that fallback to an absolute executable path                                                                                                                                                                                     |
 | Cursor         | Cursor editor: `$CURSOR_STATE_DB` when set or the platform Cursor state database path. Cursor CLI (`cursor-agent`), macOS: identity from `$CURSOR_CLI_CONFIG` or `~/.cursor/cli-config.json` plus the `cursor-access-token` / `cursor-user` Keychain value with `--allow-keychain-prompt` or an account-scoped marker; Linux: only `accessToken` from `$CURSOR_CLI_CONFIG` or `${XDG_CONFIG_HOME:-~/.config}/cursor/auth.json`                                               |
-| GitHub Copilot | `$GITHUB_COPILOT_APPS_JSON` when set or the local Copilot apps auth file                                                                                                                                                                                                                                                                                                                                                                                                     |
+| GitHub Copilot | `$GITHUB_COPILOT_APPS_JSON` when set or the local Copilot apps auth file, then only the `github.com` host `oauth_token` from the GitHub CLI's `hosts.yml` (`$GH_CONFIG_DIR`, else `$XDG_CONFIG_HOME/gh`, else `%AppData%\GitHub CLI` on Windows, else `~/.config/gh`)                                                                                                                                                                                                        |
 | Grok           | Grok CLI session auth from `$GROK_AUTH_JSON`, inline `$GROK_AUTH`, `$GROK_AUTH_PATH`, or `$GROK_HOME/auth.json` / `~/.grok/auth.json`, plus Pi's independent `$PI_CODING_AGENT_DIR/auth.json` `xai` entry (default `~/.pi/agent/auth.json`) for OAuth or literal API-key model auth                                                                                                                                                                                          |
 | Kimi           | Pi's `$PI_CODING_AGENT_DIR/auth.json` (default `~/.pi/agent/auth.json`) for a literal `kimi-coding` API key or OAuth access token first, then an official Kimi Code CLI access token from the slot `$KIMI_CODE_HOME/config.toml` names (default `$HOME/.kimi-code/`), falling back to `credentials/kimi-code.json` when it names none. Stored-expired tokens are probed; rejected refreshable expiry is soft, not sign-out                                                   |
 | Z.AI           | Pi's `$PI_CODING_AGENT_DIR/auth.json` (default `~/.pi/agent/auth.json`) for a literal Coding Plan `api_key` entry under `zai`, then opencode's `auth.json` (`$XDG_DATA_HOME/opencode/auth.json` when set, otherwise `~/.local/share/opencode/auth.json`) for a literal key under `zai-coding-plan`, `zai`, `z-ai`, `z.ai`, `zhipu`, or `zhipuai`                                                                                                                             |
@@ -709,8 +710,14 @@ The Claude and Codex rows describe default discovery; [`--profile-only`](#profil
 **GitHub Copilot**
 
 - It calls GitHub's first-party Copilot user endpoint.
+- It checks two credential stores in order. Copilot's own `apps.json` is first, and a working `apps.json` reads exactly as before. The GitHub CLI (`gh`) login in `hosts.yml` is second, because current Copilot sign-ins no longer write `apps.json` and the Copilot CLI accepts a `gh` OAuth token as a Copilot credential. A reading from the GitHub CLI login names `gh:hosts.yml` in `sourcesTried`.
+- quota-axi hands over to the GitHub CLI login only when `apps.json` is absent, cannot be used, or its token gets HTTP 401 or 403 that is not a rate limit. A server, network, decoding, or rate-limit failure stops the search. When the GitHub CLI login answers, a present `apps.json` that did not answer shows as a degraded source. A rejected `apps.json` token is named `apps-json` rather than `api` in that case, so the report shows which store was superseded.
+- From `hosts.yml`, quota-axi reads only the `github.com` host's own `oauth_token`, which is the token `gh` itself uses for that host. It uses a narrow block-mapping reader, not a YAML library, and it keeps no other value. Enterprise hosts, per-user token copies, and all other keys are parsed past and not kept. A file shape it cannot read with certainty is reported as `credentials_invalid`, not guessed.
+- quota-axi never reads the OS keyring and never runs `gh` or `copilot` to get a token. When `gh` keeps the `github.com` token in the keyring, `hosts.yml` holds no token for that host. The source then reports `credentials_keyring_storage`, and the provider reads as `unavailable`, not as signed out. A `hosts.yml` that cannot be read or parsed is also `unavailable`. Only absent stores, an unusable `apps.json` (as before), and rejected tokens produce `GitHub Copilot sign-in required`.
+- `GH_TOKEN`, `GITHUB_TOKEN`, and `COPILOT_GITHUB_TOKEN` are not read.
+- A `gh` token can have wider scopes than a Copilot app token. quota-axi sends it only to `api.github.com`, the host `gh` already sends it to, and only as the bearer of the read-only Copilot user request.
 - It only sends tokens associated with public GitHub hosts to that public endpoint; host-specific GitHub Enterprise tokens are treated as unavailable there.
-- The stored Copilot OAuth token does not expire and carries no refresh token, so there is nothing to renew and Copilot has no delegated refresh.
+- Neither store's OAuth token expires or carries a refresh token, so there is nothing to renew and Copilot has no delegated refresh.
 
 **Grok**
 
@@ -791,7 +798,7 @@ A Claude or Grok delegated run appears in `--full` output as its own attempt (`c
 
 A `refresh_timed_out` run is never treated as a credential verdict. Claude reports that read as unmeasured (`claude_refresh_unconfirmed`), falling back to a stale cached snapshot when one applies, and keeps the cached snapshot rather than retiring it. On Windows, a resolved `.cmd` or `.bat` command shim runs through the platform command interpreter without enabling Node's shell mode, preserving the no-shell argument boundary. Quota accuracy and the no-shell safety guarantee are unchanged. Codex needs no extra spawn: its existing read-only `cli-rpc` app-server probe both refreshes `auth.json` and returns the rate limits, so an expired Codex token already reports live quota through the vendor CLI.
 
-Providers with no established non-interactive rotation command stay read-only on purpose. That is a documented limitation rather than a reason to force an unsafe path: Cursor's CLI token is long-lived and no non-interactive `cursor-agent` command was observed to rotate it, GitHub Copilot's stored OAuth token does not expire, Z.AI uses a non-expiring API key, Alibaba is accessed through the read-only `bl` usage command, OpenCode Go has no vendor-owned rotation command, Pi-owned OAuth entries (`openai-codex`, `xai`, `kimi-coding`) have no non-interactive Pi refresh command, and Antigravity exposes no credential store at all.
+Providers with no established non-interactive rotation command stay read-only on purpose. That is a documented limitation rather than a reason to force an unsafe path: Cursor's CLI token is long-lived and no non-interactive `cursor-agent` command was observed to rotate it, GitHub Copilot's stored OAuth tokens (in `apps.json` and the GitHub CLI's `hosts.yml`) do not expire, Z.AI uses a non-expiring API key, Alibaba is accessed through the read-only `bl` usage command, OpenCode Go has no vendor-owned rotation command, Pi-owned OAuth entries (`openai-codex`, `xai`, `kimi-coding`) have no non-interactive Pi refresh command, and Antigravity exposes no credential store at all.
 
 ### Safety guarantees
 
@@ -801,7 +808,7 @@ Providers with no established non-interactive rotation command stay read-only on
 - It never prints, logs, or caches credential values.
 - It never mints, rotates, or writes a credential, and never performs a refresh-token exchange. Credential renewal is always delegated to the vendor CLI that owns the store (see [Delegated credential refresh](#delegated-credential-refresh)).
 - It never retains, prints, logs, renders, caches, sends, or exchanges a refresh token's value. The Pi credential brokers read a stored refresh value only to derive a usability boolean - whether it is a usable literal secret rather than absent or an environment, template, or command reference - and discard it immediately; elsewhere only its presence is checked, as evidence that the vendor can still recover.
-- It never launches the Cursor, Pi, Kimi, or OpenCode CLIs. It runs the read-only Alibaba `bl` usage command, the declared read-only Codex app-server probe, Antigravity's noninteractive structured `/quota` read (`agy -p "/quota"`), preferred ahead of its loopback access, and the two declared refresh delegates (`claude doctor`, `grok models`); none starts an agent session or spends the quota being measured.
+- It never launches the Cursor, GitHub (`gh`), Copilot, Pi, Kimi, or OpenCode CLIs. It runs the read-only Alibaba `bl` usage command, the declared read-only Codex app-server probe, Antigravity's noninteractive structured `/quota` read (`agy -p "/quota"`), preferred ahead of its loopback access, and the two declared refresh delegates (`claude doctor`, `grok models`); none starts an agent session or spends the quota being measured.
 - It never signals or kills a delegated refresh. A vendor that outruns quota-axi's wait is left to finish its own token exchange, and quota-axi reports an unconfirmed refresh instead of a credential verdict.
 - It never routes, ranks a winner, or orders providers preferentially. Derived comparative signals, including `effectiveAvailability[].selection`, are published as data for the consumer to act on.
 

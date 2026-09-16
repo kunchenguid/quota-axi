@@ -1,4 +1,5 @@
 import { mkdirSync, readFileSync } from "node:fs";
+import { open } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -138,6 +139,34 @@ export function readJsonFileResult(file: string): JsonFileReadResult {
     return { status: "success", value: JSON.parse(text) };
   } catch {
     return { status: "invalid", error: "json_parse_error" };
+  }
+}
+
+/**
+ * Read at most `maxBytes + 1` bytes, so a caller can tell an oversized file from
+ * one that fits without ever holding more than its own limit in memory.
+ */
+export async function readBoundedFile(
+  path: string,
+  maxBytes: number,
+): Promise<Buffer> {
+  const file = await open(path, "r");
+  try {
+    const contents = new Uint8Array(maxBytes + 1);
+    let offset = 0;
+    while (offset < contents.byteLength) {
+      const { bytesRead } = await file.read(
+        contents,
+        offset,
+        contents.byteLength - offset,
+        null,
+      );
+      if (bytesRead === 0) break;
+      offset += bytesRead;
+    }
+    return Buffer.from(contents.buffer, contents.byteOffset, offset);
+  } finally {
+    await file.close();
   }
 }
 

@@ -87,6 +87,8 @@ const ENV_KEYS = [
   "GROK_AUTH_PATH",
   "XDG_CACHE_HOME",
   "XDG_DATA_HOME",
+  "GITHUB_COPILOT_APPS_JSON",
+  "GH_CONFIG_DIR",
 ] as const;
 
 const originalEnv = Object.fromEntries(
@@ -107,6 +109,12 @@ beforeEach(() => {
   process.env.XDG_CACHE_HOME = join(tempDir, "cache");
   process.env.XDG_DATA_HOME = join(tempDir, "data");
   process.env.QUOTA_AXI_CODEX_BINARY = join(tempDir, "no-such-codex");
+  process.env.GITHUB_COPILOT_APPS_JSON = join(
+    tempDir,
+    "github-copilot",
+    "apps.json",
+  );
+  process.env.GH_CONFIG_DIR = join(tempDir, "gh");
   delete process.env.GROK_AUTH;
   delete process.env.GROK_AUTH_JSON;
   delete process.env.GROK_AUTH_PATH;
@@ -202,6 +210,101 @@ describe("credential source contract", { timeout: 30_000 }, () => {
 
       const token = testCase.liveEntry.access as string;
       expect(api.bearers).toContain(`Bearer ${token}`);
+    });
+  });
+
+  /**
+   * GitHub Copilot has two independent stores and no stored expiry: Copilot's
+   * own `apps.json`, then the GitHub CLI login. Neither ever reads as absent
+   * once it holds something, and no readable token is skipped before a
+   * sign-in verdict.
+   */
+  describe("copilot", () => {
+    const copilotSources = ["apps-json", "gh:hosts.yml"];
+
+    function writeAppsJson(text: string): void {
+      const path = process.env.GITHUB_COPILOT_APPS_JSON!;
+      mkdirSync(join(path, ".."), { recursive: true });
+      writeFileSync(path, text, { mode: 0o600 });
+    }
+
+    function writeGhHosts(text: string): void {
+      const dir = process.env.GH_CONFIG_DIR!;
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "hosts.yml"), text, { mode: 0o600 });
+    }
+
+    it("leaves absent stores unmarked, so nothing reads as degraded", async () => {
+      // A GitHub CLI store with only an enterprise login holds nothing for
+      // the public endpoint.
+      writeGhHosts("ghe.example.test:\n  oauth_token: enterprise-fixture\n");
+      stubRejectingApi();
+
+      const result = await readQuota("copilot");
+
+      for (const source of copilotSources) {
+        const attempts = attemptsFor(result, source);
+        expect(attempts.length).toBeGreaterThan(0);
+        for (const attempt of attempts) {
+          expect(attempt.credentialPresent).toBeUndefined();
+        }
+      }
+    });
+
+    it.each([
+      ["malformed JSON", "{not json"],
+      ["a scalar", '"token"'],
+      ["no token", '{"github.com":{"user":"fixture"}}'],
+    ])(
+      "marks a present but broken apps.json (%s) as a credential that exists",
+      async (_label, text) => {
+        writeAppsJson(text);
+        stubRejectingApi();
+
+        const result = await readQuota("copilot");
+        const attempts = attemptsFor(result, "apps-json");
+
+        expect(attempts.length).toBeGreaterThan(0);
+        for (const attempt of attempts) {
+          expect(attempt.credentialPresent).toBe(true);
+        }
+      },
+    );
+
+    it.each([
+      ["keyring storage", "github.com:\n  user: fixture-user\n"],
+      ["tab indentation", "github.com:\n\toauth_token: gho_fixture\n"],
+      ["a scalar host", "github.com: gho_fixture\n"],
+      ["a token reference", "github.com:\n  oauth_token: $GH_TOKEN\n"],
+    ])(
+      "marks a present but unusable GitHub CLI store (%s) as a credential that exists",
+      async (_label, text) => {
+        writeGhHosts(text);
+        stubRejectingApi();
+
+        const result = await readQuota("copilot");
+        const attempts = attemptsFor(result, "gh:hosts.yml");
+
+        expect(attempts.length).toBeGreaterThan(0);
+        for (const attempt of attempts) {
+          expect(attempt.credentialPresent).toBe(true);
+        }
+        expect(result.state.status).not.toBe("auth_required");
+      },
+    );
+
+    it("probes every readable store's token, in declared order, before a sign-in verdict", async () => {
+      writeAppsJson('{"github.com":{"oauth_token":"apps-probe-token"}}');
+      writeGhHosts("github.com:\n  oauth_token: gho_probe_fixture\n");
+      const api = stubRejectingApi();
+
+      const result = await readQuota("copilot");
+
+      expect(api.bearers).toEqual([
+        "Bearer apps-probe-token",
+        "Bearer gho_probe_fixture",
+      ]);
+      expect(result.state.status).toBe("auth_required");
     });
   });
 });
