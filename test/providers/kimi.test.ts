@@ -637,6 +637,29 @@ describe("Kimi request transport", () => {
     expect(rendered).toContain("code month");
   });
 
+  it("never lets the monthly code share bound a scope of its own", async () => {
+    const report = await testAdapter({
+      fetch: vi.fn(async () =>
+        jsonResponse(CURRENT_USAGES_PAYLOAD),
+      ) as unknown as typeof fetch,
+    }).fetchQuota(OPTIONS);
+
+    const interpreted = withQuotaSemantics(report, new Date(NOW).toISOString());
+    expect(interpreted.quotaSemantics?.status).toBe("known");
+    expect(
+      interpreted.quotaSemantics?.effectiveAvailability.map(
+        ({ scope }) => scope,
+      ),
+    ).toEqual(["all_models"]);
+    expect(
+      interpreted.quotaSemantics?.effectiveAvailability[0]?.boundedBy,
+    ).toEqual(["five_hour", "weekly", "month_total"]);
+    expect(
+      interpreted.quotaSemantics?.effectiveAvailability[0]
+        ?.effectivePercentRemaining,
+    ).toBe(60);
+  });
+
   it("leaves the account bound unresolved when a declared usages limit is unparsed", async () => {
     const report = await testAdapter({
       fetch: vi.fn(async () =>
@@ -820,7 +843,6 @@ describe("Kimi payload normalization", () => {
           label: "code month",
           kind: "monthly",
           percentUsed: 25,
-          percentRemaining: 75,
           resetsAt: "2026-10-01T00:00:00.000Z",
         },
       ],
@@ -862,13 +884,41 @@ describe("Kimi payload normalization", () => {
         label: "code month",
         kind: "monthly",
         percentUsed: 25,
-        percentRemaining: 75,
         resetsAt: "2026-10-01T00:00:00.000Z",
       },
     ]);
     expect(
       normalized.windows.every((window) => window.windowSeconds === undefined),
     ).toBe(true);
+  });
+
+  it("reports the monthly code share as used only, never as its own headroom", () => {
+    const [monthTotal, monthCode] = normalizeKimiPayload({
+      usages: {
+        limit_month_total: {
+          used_ratio: 0.4,
+          reset_time: "2026-10-01T00:00:00Z",
+        },
+        limit_month_code: {
+          used_ratio: 0.25,
+          reset_time: "2026-10-01T00:00:00Z",
+        },
+      },
+    }).windows;
+
+    expect(monthTotal).toMatchObject({
+      id: "month_total",
+      percentUsed: 40,
+      percentRemaining: 60,
+    });
+    expect(monthCode?.percentUsed).toBe(25);
+    expect(monthCode?.percentRemaining).toBeUndefined();
+  });
+
+  it("reads only the snake_case wire ratio", () => {
+    expect(() =>
+      normalizeKimiPayload({ usages: { limit_7d: { usedRatio: 0.2 } } }),
+    ).toThrow("schema_invalid");
   });
 
   it("prefers a valid usages map over a legacy usage object", () => {

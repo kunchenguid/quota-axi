@@ -1088,6 +1088,7 @@ const KIMI_USAGES_WINDOWS: ReadonlyArray<{
   label: string;
   kind: QuotaWindow["kind"];
   windowSeconds?: number;
+  shareOfTotal?: true;
 }> = [
   {
     key: "limit_5h",
@@ -1114,6 +1115,7 @@ const KIMI_USAGES_WINDOWS: ReadonlyArray<{
     id: "month_code",
     label: "code month",
     kind: "monthly",
+    shareOfTotal: true,
   },
 ];
 
@@ -1200,7 +1202,9 @@ function normalizeUsagesMap(value: unknown): NormalizedKimiPayload | undefined {
       label: spec.label,
       kind: spec.kind,
       percentUsed: detail.percentUsed,
-      percentRemaining: detail.percentRemaining,
+      ...(spec.shareOfTotal
+        ? {}
+        : { percentRemaining: detail.percentRemaining }),
       ...(typeof spec.windowSeconds === "number"
         ? { windowSeconds: spec.windowSeconds }
         : {}),
@@ -1213,8 +1217,7 @@ function normalizeUsagesMap(value: unknown): NormalizedKimiPayload | undefined {
 function normalizeRatioDetail(value: unknown): NormalizedDetail | undefined {
   const detail = objectValue(value);
   if (!detail) return undefined;
-  const ratio =
-    nonnegativeScalar(detail.used_ratio) ?? nonnegativeScalar(detail.usedRatio);
+  const ratio = nonnegativeScalar(detail.used_ratio);
   if (ratio === undefined) return undefined;
   const percentUsed = clampPercent(ratio * 100);
   const resetsAt = normalizedReset(detail);

@@ -684,12 +684,18 @@ describe("quota semantics", () => {
     ]);
   });
 
-  it("keeps Kimi monthly total and code windows as distinct scopes", () => {
+  it("bounds Kimi by its account windows and never by the monthly code share", () => {
+    const monthCode: QuotaWindow = {
+      id: "month_code",
+      label: "code month",
+      kind: "monthly",
+      percentUsed: 25,
+    };
     const result = withQuotaSemantics(
       provider("kimi", [
         window("five_hour", "session", 50),
         window("month_total", "monthly", 60),
-        window("month_code", "monthly", 25),
+        monthCode,
       ]),
       GENERATED_AT,
     );
@@ -704,13 +710,6 @@ describe("quota semantics", () => {
         boundedBy: ["five_hour", "month_total"],
         limitingWindowIds: ["five_hour"],
       }),
-      expect.objectContaining({
-        scope: "code",
-        status: "known",
-        effectivePercentRemaining: 25,
-        boundedBy: ["month_code"],
-        limitingWindowIds: ["month_code"],
-      }),
     ]);
   });
 
@@ -723,7 +722,7 @@ describe("quota semantics", () => {
     expect(result.quotaSemantics).toEqual({
       status: "partial",
       description:
-        "Kimi's valid weekly, five-hour, and monthly-total account windows are known bounds and the monthly code window is a separate resource, but unrecognized or unparsed limits may add bounds, so effective remaining is unknown.",
+        "Kimi's valid weekly, five-hour, and monthly-total account windows are known bounds, but unrecognized or unparsed limits may add bounds, so effective remaining is unknown. The monthly code window is the code-typed share of that monthly total rather than a separate allowance, so it adds no bound.",
       effectiveAvailability: [
         {
           scope: "all_models",
