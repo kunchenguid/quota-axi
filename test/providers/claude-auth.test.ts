@@ -1342,6 +1342,66 @@ describe("Claude credential-state reporting", () => {
     }
   });
 
+  it("reclassifies a 429 against a stored-expired credential as expired, not rate limited", async () => {
+    const home = useTempHome();
+    writeClaudeCredential(home, {
+      accessToken: "advisory-expired-token",
+      expiresAt: "2000-01-01T00:00:00.000Z",
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(null, {
+            status: 429,
+            headers: { "retry-after": "2864" },
+          }),
+      ),
+    );
+
+    const { fetchQuota } = await import("../../src/providers/claude.js");
+    const result = await fetchQuota({
+      allowKeychainPrompt: false,
+      refreshCredentials: false,
+    });
+
+    expect(result.state.status).toBe("unavailable");
+    expect(result.state.error).toBe("Claude credential expired");
+    expect(result.state.retryAfter).toBeUndefined();
+    expect(result.attempts).toContainEqual({
+      source: "oauth-file",
+      status: "failed",
+      error: "Claude quota endpoint rate limited",
+    });
+  });
+
+  it("does not reclassify a 429 against a live (non-expired) credential", async () => {
+    const home = useTempHome();
+    writeClaudeCredential(home, {
+      accessToken: "live-token",
+      expiresAt: "2035-01-01T00:00:00.000Z",
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(null, {
+            status: 429,
+            headers: { "retry-after": "60" },
+          }),
+      ),
+    );
+
+    const { fetchQuota } = await import("../../src/providers/claude.js");
+    const result = await fetchQuota({
+      allowKeychainPrompt: false,
+      refreshCredentials: false,
+    });
+
+    expect(result.state.status).toBe("rate_limited");
+    expect(result.state.error).toBe("Claude quota endpoint rate limited");
+  });
+
   it.each(["5xx", "timeout"])(
     "does not advise Keychain access after an oauth-file %s failure",
     async (failureKind) => {

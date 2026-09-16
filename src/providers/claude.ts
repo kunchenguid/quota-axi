@@ -628,6 +628,21 @@ async function attemptClaudeQuota(
           // source still lets a remaining sibling stored source be tried,
           // matching the existing behavior for stored-only candidates.
           if (credential.source === "env") break;
+        } else if (
+          state.status === "expired" &&
+          failure.status === "rate_limited"
+        ) {
+          // The vendor's usage endpoint answers an *expired* OAuth token with
+          // 429 while an *invalid* one gets 401, so a non-definitive rejection
+          // of a credential this store already records as expired is expiry,
+          // not a rate limit. Stored expiry stays advisory: it only reclassifies
+          // a rejection that already happened, never asserts a sign-out, and
+          // keeps the cache (`staleEligible`).
+          transientFailure = new ClaudeFailure("Claude credential expired", {
+            status: "unavailable",
+            staleEligible: true,
+          }).withUsageFetchFailure();
+          break;
         } else {
           transientFailure = failure.withUsageFetchFailure();
           transientFailureIsEnv = credential.source === "env";
