@@ -166,10 +166,11 @@ async function discoverCodexAccounts(
     return undefined;
   }
 
-  const accounts: ProviderAccount[] = [];
-  const seenAccountIds = new Set<string>();
-  const piLaneAccountIds = new Set<string>();
   const nativeState = readCredentialState();
+  const nativeStoredAccountId =
+    nativeState.status === "available" || nativeState.status === "expired"
+      ? nativeState.credentials.accountId
+      : undefined;
   const nativeAccount: Extract<CodexAccountContext, { kind: "native" }> = {
     kind: "native",
     accountKey: CODEX_HOME_ACCOUNT_KEY,
@@ -178,33 +179,73 @@ async function discoverCodexAccounts(
   const cliOnly =
     nativeState.status === "missing" &&
     (await resolveCodexBinary()).status === "available";
-  let cliReading: Promise<ProviderQuota | undefined> | undefined;
-  const readCliAccount = () => (cliReading ??= fetchCliAccountQuota());
-  if (nativeState.status !== "missing") {
-    const nativeAccountId =
-      nativeState.status === "available" || nativeState.status === "expired"
-        ? nativeState.credentials.accountId
+  const hasNativeLane = nativeState.status !== "missing" || cliOnly;
+
+  const piLanes: {
+    account: Extract<CodexAccountContext, { kind: "pi" }>;
+    storedAccountId?: string;
+    reading?: Promise<ProviderQuota>;
+  }[] = [];
+  const seenAccountIds = new Set<string>();
+  for (const piProviderId of ids) {
+    const resolution = await resolvePiEntry(dependencies, piProviderId);
+    const storedAccountId =
+      resolution.status === "available" || resolution.status === "expired"
+        ? resolution.credentials?.accountId
         : undefined;
-    if (nativeAccountId) seenAccountIds.add(nativeAccountId);
+    if (storedAccountId !== undefined) {
+      if (
+        nativeState.status !== "missing" &&
+        piProviderId === PI_CODEX_BUILTIN_ID &&
+        storedAccountId === nativeStoredAccountId
+      ) {
+        nativeAccount.includesBuiltinPi = true;
+        continue;
+      }
+      if (seenAccountIds.has(storedAccountId)) continue;
+      seenAccountIds.add(storedAccountId);
+    }
+    piLanes.push({
+      account: { kind: "pi", piProviderId, accountKey: piProviderId },
+      storedAccountId,
+    });
   }
-  if (nativeState.status !== "missing" || cliOnly) {
+
+  // Lanes are read once per collection and reconciled on the vendor account
+  // id each reading reports, falling back to the stored one. A native login
+  // for the same account as a Pi lane is not a second lane: the Pi lane owns
+  // the account and shows the fresher of the two readings.
+  let nativeReading: Promise<ProviderQuota | undefined> | undefined;
+  const readNative = (options: ProviderOptions) =>
+    (nativeReading ??= cliOnly
+      ? fetchCliAccountQuota()
+      : fetchQuotaWithDependencies(dependencies, options, nativeAccount));
+  const readPi = (lane: (typeof piLanes)[number], options: ProviderOptions) =>
+    (lane.reading ??= fetchQuotaWithDependencies(
+      dependencies,
+      options,
+      lane.account,
+    ));
+  const accounts: ProviderAccount[] = [];
+  if (hasNativeLane) {
     accounts.push({
       accountKey: nativeAccount.accountKey,
       fetchQuota: async (options) => {
-        if (!cliOnly) {
-          return fetchQuotaWithDependencies(
-            dependencies,
-            options,
-            nativeAccount,
-          );
-        }
-        const reading = await readCliAccount();
-        const readingAccountId =
-          reading?.state.status === "fresh"
-            ? reading.account?.accountId
-            : undefined;
-        if (readingAccountId && piLaneAccountIds.has(readingAccountId)) {
-          retireCodexHomeSnapshot();
+        const reading = await readNative(options);
+        const accountId =
+          reading && laneIdentity(reading, nativeStoredAccountId);
+        if (!reading || !accountId) return reading;
+        for (const lane of piLanes) {
+          const piReading = await readPi(lane, options);
+          if (laneIdentity(piReading, lane.storedAccountId) !== accountId) {
+            continue;
+          }
+          if (
+            reading.state.status === "fresh" ||
+            piReading.state.status === "fresh"
+          ) {
+            retireCodexHomeSnapshot();
+          }
           return undefined;
         }
         return reading;
@@ -213,46 +254,24 @@ async function discoverCodexAccounts(
         inspectAuthWithDependencies(dependencies, nativeAccount),
     });
   }
-  for (const piProviderId of ids) {
-    const resolution = await resolvePiEntry(dependencies, piProviderId);
-    const accountId =
-      resolution.status === "available" || resolution.status === "expired"
-        ? resolution.credentials?.accountId
-        : undefined;
-    if (accountId !== undefined) {
-      if (seenAccountIds.has(accountId)) {
-        if (
-          nativeState.status !== "missing" &&
-          piProviderId === PI_CODEX_BUILTIN_ID
-        ) {
-          nativeAccount.includesBuiltinPi = true;
-        }
-        continue;
-      }
-      seenAccountIds.add(accountId);
-      piLaneAccountIds.add(accountId);
-    }
-    const account: CodexAccountContext = {
-      kind: "pi",
-      piProviderId,
-      accountKey: piProviderId,
-    };
+  for (const lane of piLanes) {
     accounts.push({
-      accountKey: account.accountKey,
-      locator: await piAccountLocator(dependencies, piProviderId),
+      accountKey: lane.account.accountKey,
+      locator: await piAccountLocator(dependencies, lane.account.piProviderId),
       fetchQuota: async (options) => {
-        const report = await fetchQuotaWithDependencies(
-          dependencies,
-          options,
-          account,
-        );
-        if (report.state.status === "fresh" || !cliOnly || !accountId) {
+        const report = await readPi(lane, options);
+        const accountId = laneIdentity(report, lane.storedAccountId);
+        if (report.state.status === "fresh" || !hasNativeLane || !accountId) {
           return report;
         }
-        const reading = await readCliAccount();
+        const reading = await readNative(options);
         if (
-          reading?.state.status !== "fresh" ||
-          reading.account?.accountId !== accountId
+          !reading ||
+          laneIdentity(reading, nativeStoredAccountId) !== accountId ||
+          !(
+            reading.state.status === "fresh" ||
+            (reading.state.stale && !report.state.stale)
+          )
         ) {
           return report;
         }
@@ -266,10 +285,20 @@ async function discoverCodexAccounts(
           state: { ...reading.state, sourcesTried: sourceNames(attempts) },
         };
       },
-      inspectAuth: () => inspectAuthWithDependencies(dependencies, account),
+      inspectAuth: () =>
+        inspectAuthWithDependencies(dependencies, lane.account),
     });
   }
   return accounts.length > 0 ? accounts : undefined;
+}
+
+function laneIdentity(
+  reading: ProviderQuota,
+  storedAccountId: string | undefined,
+): string | undefined {
+  return reading.state.status === "fresh"
+    ? (reading.account?.accountId ?? storedAccountId)
+    : storedAccountId;
 }
 
 function retireCodexHomeSnapshot(): void {

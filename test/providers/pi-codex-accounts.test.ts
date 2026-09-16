@@ -553,6 +553,106 @@ describe("Codex Pi sibling account lanes", () => {
     });
   });
 
+  it("coalesces a native login without a stored account id into the matching Pi lane", async () => {
+    process.env.QUOTA_AXI_CODEX_BINARY = join(tempDir!, "missing-codex");
+    writeNativeAuth("native-access-token");
+    writePiAuth({
+      "openai-codex-work": piOauthEntry({
+        access: "work-access-token",
+        accountId: "acct-same",
+      }),
+    });
+    stubUsageByToken({
+      "native-access-token": usage(20, "same@example.invalid", "acct-same"),
+      "work-access-token": usage(20, "same@example.invalid", "acct-same"),
+    });
+
+    const { fetchQuota } = await import("../../src/commands.js");
+    const response = await fetchQuota(["codex"], OPTIONS);
+    expect(response.providers).toHaveLength(1);
+    expect(response.providers[0]).toMatchObject({
+      accountKey: "openai-codex-work",
+      account: { accountId: "acct-same" },
+      state: { status: "fresh" },
+      windows: [{ percentUsed: 20, percentRemaining: 80 }],
+    });
+
+    const json = quotaJsonReport(response, true);
+    expect(
+      json.providers.map((provider) => provider.account?.accountId),
+    ).toEqual(["acct-same"]);
+    const tui = renderQuotaTui(response, { columns: 100 });
+    expect(tui).toContain("account openai-codex-work");
+    expect(tui).not.toContain("account codex-home");
+  });
+
+  it("shows the live Pi sibling when the same account's native login is rejected", async () => {
+    process.env.QUOTA_AXI_CODEX_BINARY = join(tempDir!, "missing-codex");
+    writeNativeAuth("rejected-native-access-token", "acct-same");
+    writePiAuth({
+      "openai-codex-work": piOauthEntry({
+        access: "work-access-token",
+        accountId: "acct-same",
+      }),
+    });
+    stubUsageByToken({
+      "rejected-native-access-token": new Response("unauthorized", {
+        status: 401,
+      }),
+      "work-access-token": usage(20, "same@example.invalid", "acct-same"),
+    });
+
+    const { fetchQuota } = await import("../../src/commands.js");
+    const response = await fetchQuota(["codex"], OPTIONS);
+    expect(response.providers).toHaveLength(1);
+    expect(response.providers[0]).toMatchObject({
+      accountKey: "openai-codex-work",
+      source: "pi:openai-codex-work",
+      account: { accountId: "acct-same" },
+      state: { status: "fresh" },
+      windows: [{ percentUsed: 20, percentRemaining: 80 }],
+    });
+
+    const json = quotaJsonReport(response, true);
+    expect(json.providers.map((provider) => provider.state.status)).toEqual([
+      "fresh",
+    ]);
+    const tui = renderQuotaTui(response, { columns: 100 });
+    expect(tui).toContain("account openai-codex-work");
+    expect(tui).not.toContain("account codex-home");
+  });
+
+  it("keeps a native login and a Pi sibling for different accounts as two lanes", async () => {
+    process.env.QUOTA_AXI_CODEX_BINARY = join(tempDir!, "missing-codex");
+    writeNativeAuth("native-access-token");
+    writePiAuth({
+      "openai-codex-work": piOauthEntry({
+        access: "work-access-token",
+        accountId: "acct-work",
+      }),
+    });
+    stubUsageByToken({
+      "native-access-token": usage(20, "same@example.invalid", "acct-home"),
+      "work-access-token": usage(60, "same@example.invalid", "acct-work"),
+    });
+
+    const adapter = (
+      await import("../../src/providers/codex.js")
+    ).createCodexAdapter();
+    const reports = await fetchAccountQuotas(adapter, OPTIONS);
+    expect(
+      reports.map((report) => [
+        report.accountKey,
+        report.account?.accountId,
+        report.state.status,
+        report.windows[0]?.percentUsed,
+      ]),
+    ).toEqual([
+      ["codex-home", "acct-home", "fresh", 20],
+      ["openai-codex-work", "acct-work", "fresh", 60],
+    ]);
+  });
+
   it("keeps a CLI-only Codex login beside a work-only Pi sibling", async () => {
     writePiAuth({
       "openai-codex-work": piOauthEntry({
@@ -1157,11 +1257,14 @@ async function readCodexLanes() {
   return fetchAccountQuotas(adapter, OPTIONS);
 }
 
-function writeNativeAuth(accessToken: string, accountId: string): void {
+function writeNativeAuth(accessToken: string, accountId?: string): void {
   writeFileSync(
     join(process.env.CODEX_HOME!, "auth.json"),
     JSON.stringify({
-      tokens: { access_token: accessToken, account_id: accountId },
+      tokens: {
+        access_token: accessToken,
+        ...(accountId ? { account_id: accountId } : {}),
+      },
     }),
     { mode: 0o600 },
   );

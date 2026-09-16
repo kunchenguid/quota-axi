@@ -371,13 +371,15 @@ A key whose identity cannot be compared is left as its own lane so the uncertain
 
 When only the built-in Pi entry (or none) is present, Codex keeps its existing single-winner path: native `$CODEX_HOME/auth.json`, then `openai-codex`, then the CLI fallback.
 When siblings are present and a native `$CODEX_HOME/auth.json` exists, that login stays first as its own `codex-home` lane, read from `auth.json` and then the CLI fallback.
-A Pi key whose stored `accountId` matches the native login is not a separate lane; the built-in `openai-codex` copy of that account stays the native lane's fallback, as it was before.
+The built-in `openai-codex` entry whose stored `accountId` matches the native login is not a separate lane; it stays the native lane's fallback, as it was before.
 Without a native `auth.json`, an installed Codex CLI fallback is probed once as the `codex-home` lane.
 The lane is left out only when the app-server's `account/read` positively reports no ChatGPT login (`account: null` or a non-ChatGPT account).
 A reading without the optional `accountId` stays its own lane with no identity.
 A failed CLI reading is shown as stale or unavailable only when `account/read` confirmed a ChatGPT login or a `codex-home` snapshot is cached; a probe that fails before that evidence adds no lane, and `auth` still shows the `cli-rpc` source.
-A proven sign-out, or a CLI login that coalesces into a Pi lane, removes the cached `codex-home` snapshot so a later failed probe cannot bring that account back.
-A CLI login for the same `accountId` as a Pi lane is not a second lane: that Pi lane keeps its own reading when fresh, and shows the CLI reading when its own is expired, rejected, or stale.
+A native login (from `auth.json` or the CLI) for the same account as a Pi lane is not a second lane.
+The account is compared by the vendor `accountId` a fresh reading reports, or else the stored one; email, tokens, and key names are never used as identity.
+That Pi lane keeps its own reading when fresh, and shows the native reading when its own is expired, rejected, or stale and the native one is fresh, or when only the native one has stale cached windows.
+A proven sign-out, or a native login that coalesces into a Pi lane with a fresh reading on either side, removes the cached `codex-home` snapshot so a later failed probe cannot bring that account back.
 `--profile-only` still reads one native Codex file and never opens Pi auth.
 
 ### Account keys and compatibility
