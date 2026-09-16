@@ -63,7 +63,35 @@ function annotateProviderAdvice(provider: ProviderQuota): ProviderQuota {
       },
     };
   }
+  if (needsClaudeReauthAdvice(provider)) {
+    return {
+      ...provider,
+      state: {
+        ...provider.state,
+        reason: CREDENTIALS_EXPIRED_REASON,
+        remedyCommand: claudeReauthRemedyCommand(provider),
+      },
+    };
+  }
   return provider;
+}
+
+/**
+ * A discovered sibling Claude lane is excluded from the refresh delegate (only
+ * the process-selected profile owns it), so it can never self-heal a credential
+ * rejection on its own. Point at the exact non-interactive rotation for that
+ * lane's own config directory instead.
+ */
+function needsClaudeReauthAdvice(provider: ProviderQuota): boolean {
+  return (
+    provider.provider === "claude" &&
+    provider.accountLocator?.path !== undefined &&
+    provider.state.status === "auth_required"
+  );
+}
+
+function claudeReauthRemedyCommand(provider: ProviderQuota): string {
+  return `CLAUDE_CONFIG_DIR=${provider.accountLocator!.path} claude doctor`;
 }
 
 function needsKeychainAccessAdvice(provider: ProviderQuota): boolean {
@@ -121,6 +149,7 @@ function providerHelpLines(provider: ProviderQuota): string[] {
   if (hasKeychainAccessAdvice(provider))
     return [keychainAccessHelpLine(provider)];
   if (hasGrokTokenRefreshAdvice(provider)) return [grokTokenRefreshHelpLine()];
+  if (hasClaudeReauthAdvice(provider)) return [claudeReauthHelpLine(provider)];
   return [];
 }
 
@@ -138,10 +167,22 @@ function hasGrokTokenRefreshAdvice(provider: ProviderQuota): boolean {
   );
 }
 
+function hasClaudeReauthAdvice(provider: ProviderQuota): boolean {
+  return (
+    provider.provider === "claude" &&
+    provider.state.reason === CREDENTIALS_EXPIRED_REASON &&
+    provider.state.remedyCommand?.startsWith("CLAUDE_CONFIG_DIR=") === true
+  );
+}
+
 function keychainAccessHelpLine(provider: ProviderQuota): string {
   return `Tell your user: run \`${KEYCHAIN_ACCESS_REMEDY_COMMAND}\` once and approve Keychain access ("Always Allow") so quota-axi can read ${provider.provider}'s live quota.`;
 }
 
 function grokTokenRefreshHelpLine(): string {
   return `Tell your user: run \`${GROK_TOKEN_REFRESH_REMEDY_COMMAND}\` once so the Grok CLI can refresh its own session token. quota-axi delegates that refresh to the Grok CLI and never rotates credentials itself.`;
+}
+
+function claudeReauthHelpLine(provider: ProviderQuota): string {
+  return `Tell your user: this Claude account (${provider.accountKey ?? "default"}) is a sibling lane quota-axi never auto-refreshes, so run \`${provider.state.remedyCommand}\` once to have Claude Code rotate its own session.`;
 }
