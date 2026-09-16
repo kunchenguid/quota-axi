@@ -780,6 +780,52 @@ describe("Codex Pi sibling account lanes", () => {
     ).toBe(false);
   });
 
+  it("reports every lane unchanged when retiring the CLI snapshot fails", async () => {
+    writePiAuth({
+      "openai-codex": piOauthEntry({
+        access: "personal-access-token",
+        accountId: "acct-personal",
+      }),
+      "openai-codex-work": piOauthEntry({
+        access: "work-access-token",
+        accountId: "acct-work",
+      }),
+    });
+    stubUsageByToken({
+      "personal-access-token": usage(
+        20,
+        "personal@example.invalid",
+        "acct-personal",
+      ),
+      "work-access-token": new Response("unauthorized", { status: 401 }),
+    });
+    vi.doMock("../../src/cache.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../../src/cache.js")>()),
+      deleteCachedProvider: vi.fn(() => {
+        throw new Error("read-only cache");
+      }),
+    }));
+
+    try {
+      for (const fixture of ["signed-out", "coalesced"] as const) {
+        mockCodexCli(
+          fixture === "signed-out"
+            ? "signed-out"
+            : { accountId: "acct-personal", usedPercent: 20 },
+        );
+        const reports = await readCodexLanes();
+        expect(
+          reports.map((report) => [report.accountKey, report.state.status]),
+        ).toEqual([
+          ["openai-codex", "fresh"],
+          ["openai-codex-work", "auth_required"],
+        ]);
+      }
+    } finally {
+      vi.doUnmock("../../src/cache.js");
+    }
+  });
+
   it("adds no CLI lane when the probe fails before any account evidence", async () => {
     writePiAuth({
       "openai-codex-work": piOauthEntry({

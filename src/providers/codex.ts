@@ -204,7 +204,7 @@ async function discoverCodexAccounts(
             ? reading.account?.accountId
             : undefined;
         if (readingAccountId && piLaneAccountIds.has(readingAccountId)) {
-          deleteCachedProvider("codex", CODEX_HOME_ACCOUNT_KEY);
+          retireCodexHomeSnapshot();
           return undefined;
         }
         return reading;
@@ -272,6 +272,14 @@ async function discoverCodexAccounts(
   return accounts.length > 0 ? accounts : undefined;
 }
 
+function retireCodexHomeSnapshot(): void {
+  try {
+    deleteCachedProvider("codex", CODEX_HOME_ACCOUNT_KEY);
+  } catch {
+    return;
+  }
+}
+
 async function fetchCliAccountQuota(): Promise<ProviderQuota | undefined> {
   try {
     return codexSuccessReport(await probeCodexCli(), "cli-rpc", [
@@ -279,7 +287,7 @@ async function fetchCliAccountQuota(): Promise<ProviderQuota | undefined> {
     ]);
   } catch (error) {
     if (error instanceof CodexCliSignedOutError) {
-      deleteCachedProvider("codex", CODEX_HOME_ACCOUNT_KEY);
+      retireCodexHomeSnapshot();
       return undefined;
     }
     if (
