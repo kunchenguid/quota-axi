@@ -16,6 +16,7 @@ const EDITOR_TOKEN = "editor-token-stand-in";
 const originalEnv = {
   CURSOR_STATE_DB: process.env.CURSOR_STATE_DB,
   CURSOR_CLI_CONFIG: process.env.CURSOR_CLI_CONFIG,
+  CURSOR_CLI_AUTH_FILE: process.env.CURSOR_CLI_AUTH_FILE,
   XDG_CACHE_HOME: process.env.XDG_CACHE_HOME,
 };
 let tempDir: string;
@@ -26,6 +27,7 @@ beforeEach(() => {
   // Absent on purpose: the editor database is what a CLI-only machine lacks.
   process.env.CURSOR_STATE_DB = join(tempDir, "state.vscdb");
   process.env.CURSOR_CLI_CONFIG = join(tempDir, "cli-config.json");
+  process.env.CURSOR_CLI_AUTH_FILE = join(tempDir, "auth.json");
   process.env.XDG_CACHE_HOME = join(tempDir, "cache");
 });
 
@@ -71,7 +73,7 @@ function writeCliConfig(): void {
 
 function writeCliAuthFile(): void {
   writeFileSync(
-    process.env.CURSOR_CLI_CONFIG!,
+    process.env.CURSOR_CLI_AUTH_FILE!,
     JSON.stringify({
       accessToken: CLI_TOKEN,
       refreshToken: "refresh-token-must-not-be-used",
@@ -272,6 +274,41 @@ describe("Cursor CLI-only quota refresh", () => {
           error: "Cursor sign-in required",
         },
       ]);
+    });
+  });
+
+  it("refreshes quota from the macOS CLI file store without a Keychain prompt", async () => {
+    writeCliAuthFile();
+    writeCliConfig();
+    const { calls } = mockProcess({ keychainPresent: false });
+    const { bearers } = mockUsageApi();
+
+    await onDarwin(async () => {
+      const { fetchQuota } = await import("../../src/providers/cursor.js");
+      const result = await fetchQuota({
+        allowKeychainPrompt: false,
+        refreshCredentials: false,
+      });
+
+      expect(result.state.status).toBe("fresh");
+      expect(result.state.sourcesTried).toEqual([
+        "state-vscdb",
+        "cli-authfile",
+      ]);
+      expect(result.attempts).toEqual([
+        {
+          source: "state-vscdb",
+          status: "skipped",
+          error: "credentials_missing",
+        },
+        { source: "cli-authfile", status: "success" },
+      ]);
+      expect(bearers[0]).toBe(`Bearer ${CLI_TOKEN}`);
+      expect(calls.some((call) => call[0] === "security")).toBe(false);
+      expect(JSON.stringify(result)).not.toContain(CLI_TOKEN);
+      expect(JSON.stringify(result)).not.toContain(
+        "refresh-token-must-not-be-used",
+      );
     });
   });
 

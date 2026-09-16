@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -20,18 +20,23 @@ const CLI_CONFIG = {
 const originalEnv = {
   CURSOR_STATE_DB: process.env.CURSOR_STATE_DB,
   CURSOR_CLI_CONFIG: process.env.CURSOR_CLI_CONFIG,
+  CURSOR_CLI_AUTH_FILE: process.env.CURSOR_CLI_AUTH_FILE,
   XDG_CACHE_HOME: process.env.XDG_CACHE_HOME,
   XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
+  HOME: process.env.HOME,
 };
 let tempDir: string | undefined;
 let cliConfigPath: string;
+let authFilePath: string;
 
 beforeEach(() => {
   vi.resetModules();
   tempDir = mkdtempSync(join(tmpdir(), "quota-axi-cursor-cli-"));
   cliConfigPath = join(tempDir, "cli-config.json");
+  authFilePath = join(tempDir, "auth.json");
   process.env.CURSOR_STATE_DB = join(tempDir, "state.vscdb");
   process.env.CURSOR_CLI_CONFIG = cliConfigPath;
+  process.env.CURSOR_CLI_AUTH_FILE = authFilePath;
   process.env.XDG_CACHE_HOME = join(tempDir, "cache");
 });
 
@@ -66,7 +71,14 @@ function writeCliConfig(value: unknown = CLI_CONFIG): void {
 
 function writeLinuxAuthFile(accessToken = "linux-auth-token"): void {
   writeFileSync(
-    cliConfigPath,
+    authFilePath,
+    JSON.stringify({ accessToken, refreshToken: "must-never-be-used" }),
+  );
+}
+
+function writeDarwinAuthFile(accessToken = "darwin-file-token"): void {
+  writeFileSync(
+    authFilePath,
     JSON.stringify({ accessToken, refreshToken: "must-never-be-used" }),
   );
 }
@@ -433,7 +445,7 @@ describe("Cursor CLI keychain credential source", () => {
       identity: {},
       source: {
         source: "cli-authfile",
-        path: cliConfigPath,
+        path: authFilePath,
         status: "available",
         credentialPresent: true,
       },
@@ -443,10 +455,10 @@ describe("Cursor CLI keychain credential source", () => {
 
   it("resolves the Linux auth file below XDG config home", async () => {
     delete process.env.CURSOR_CLI_CONFIG;
+    delete process.env.CURSOR_CLI_AUTH_FILE;
     const xdgConfigHome = join(tempDir!, "xdg-config");
     process.env.XDG_CONFIG_HOME = xdgConfigHome;
     const authPath = join(xdgConfigHome, "cursor", "auth.json");
-    const { mkdirSync } = await import("node:fs");
     mkdirSync(join(xdgConfigHome, "cursor"), { recursive: true });
     writeFileSync(authPath, JSON.stringify({ accessToken: "xdg-token" }));
 
@@ -469,7 +481,7 @@ describe("Cursor CLI keychain credential source", () => {
   });
 
   it("reports the Linux auth-file source when its JSON is malformed", async () => {
-    writeFileSync(cliConfigPath, "{not json");
+    writeFileSync(authFilePath, "{not json");
 
     const result = await withPlatform("linux", async () => {
       const { readCursorCliCredentialState } =
@@ -484,7 +496,7 @@ describe("Cursor CLI keychain credential source", () => {
       status: "invalid",
       source: {
         source: "cli-authfile",
-        path: cliConfigPath,
+        path: authFilePath,
         status: "invalid",
         error: "json_parse_error",
         credentialPresent: true,
@@ -510,10 +522,164 @@ describe("Cursor CLI keychain credential source", () => {
     ]);
     expect(result.sources[1]).toEqual({
       source: "cli-authfile",
-      path: cliConfigPath,
+      path: authFilePath,
       status: "missing",
     });
     expect(securityCalls(calls)).toEqual([]);
+  });
+});
+
+describe("Cursor CLI file credential store", () => {
+  it("reports the macOS file store as missing when auth.json is absent", async () => {
+    const { calls } = mockProcess({});
+
+    const result = await withPlatform("darwin", async () => {
+      const { readCursorCliCredentialState } =
+        await import("../../src/providers/cursor-cli-credential.js");
+      return readCursorCliCredentialState({
+        allowKeychainPrompt: false,
+        refreshCredentials: false,
+      });
+    });
+
+    expect(result).toEqual({
+      status: "missing",
+      source: {
+        source: "cli-keychain",
+        path: cliConfigPath,
+        status: "missing",
+      },
+    });
+    expect(securityCalls(calls)).toEqual([]);
+  });
+
+  it("reports invalid JSON in the macOS file store without reading Keychain", async () => {
+    writeFileSync(authFilePath, "{not json");
+    const { calls } = mockProcess({});
+
+    const result = await withPlatform("darwin", async () => {
+      const { readCursorCliCredentialState } =
+        await import("../../src/providers/cursor-cli-credential.js");
+      return readCursorCliCredentialState({
+        allowKeychainPrompt: true,
+        refreshCredentials: false,
+      });
+    });
+
+    expect(result).toEqual({
+      status: "invalid",
+      source: {
+        source: "cli-authfile",
+        path: authFilePath,
+        status: "invalid",
+        error: "json_parse_error",
+        credentialPresent: true,
+      },
+    });
+    expect(securityCalls(calls)).toEqual([]);
+  });
+
+  it("reads a present macOS file-store token without a Keychain prompt", async () => {
+    writeDarwinAuthFile();
+    writeCliConfig();
+    const { calls } = mockProcess({});
+
+    const result = await withPlatform("darwin", async () => {
+      const { readCursorCliCredentialState } =
+        await import("../../src/providers/cursor-cli-credential.js");
+      return readCursorCliCredentialState({
+        allowKeychainPrompt: false,
+        refreshCredentials: false,
+      });
+    });
+
+    expect(result).toEqual({
+      status: "available",
+      accessToken: "darwin-file-token",
+      identity: {
+        email: "person@example.invalid",
+        userId: "user_abc123",
+      },
+      source: {
+        source: "cli-authfile",
+        path: authFilePath,
+        status: "available",
+        credentialPresent: true,
+      },
+    });
+    expect(securityCalls(calls)).toEqual([]);
+    expect(JSON.stringify(result)).not.toContain("must-never-be-used");
+  });
+
+  it("refreshes quota from the macOS file store when Keychain is empty", async () => {
+    writeDarwinAuthFile();
+    writeCliConfig();
+    const { calls } = mockProcess({});
+    stubCursorUsage();
+
+    const { quota, auth } = await withPlatform("darwin", async () => {
+      const { fetchQuota, inspectAuth } =
+        await import("../../src/providers/cursor.js");
+      const quota = await fetchQuota({
+        allowKeychainPrompt: false,
+        refreshCredentials: false,
+      });
+      expect(securityCalls(calls)).toEqual([]);
+      const auth = await inspectAuth({
+        allowKeychainPrompt: false,
+        refreshCredentials: false,
+      });
+      return { quota, auth };
+    });
+
+    expect(quota.state.status).toBe("fresh");
+    expect(quota.attempts).toContainEqual({
+      source: "cli-authfile",
+      status: "success",
+    });
+    expect(JSON.stringify(quota)).not.toContain("darwin-file-token");
+    expect(JSON.stringify(auth)).not.toContain("darwin-file-token");
+    expect(JSON.stringify({ quota, auth })).not.toContain("must-never-be-used");
+    expect(auth.sources).toContainEqual({
+      source: "cli-authfile",
+      path: authFilePath,
+      status: "available",
+      credentialPresent: true,
+    });
+  });
+
+  it("reads ~/.cursor/auth.json on macOS when no override is set", async () => {
+    delete process.env.CURSOR_CLI_AUTH_FILE;
+    process.env.HOME = tempDir;
+    const defaultAuthPath = join(tempDir!, ".cursor", "auth.json");
+    mkdirSync(join(tempDir!, ".cursor"), { recursive: true });
+    writeFileSync(
+      defaultAuthPath,
+      JSON.stringify({
+        accessToken: "darwin-home-file-token",
+        refreshToken: "must-never-be-used",
+      }),
+    );
+    const { calls } = mockProcess({});
+
+    const result = await withPlatform("darwin", async () => {
+      const { readCursorCliCredentialState } =
+        await import("../../src/providers/cursor-cli-credential.js");
+      return readCursorCliCredentialState({
+        allowKeychainPrompt: false,
+        refreshCredentials: false,
+      });
+    });
+
+    expect(result.status).toBe("available");
+    expect(result.source).toEqual({
+      source: "cli-authfile",
+      path: defaultAuthPath,
+      status: "available",
+      credentialPresent: true,
+    });
+    expect(securityCalls(calls)).toEqual([]);
+    expect(JSON.stringify(result)).not.toContain("must-never-be-used");
   });
 });
 
@@ -543,6 +709,11 @@ describe("Cursor editor state.vscdb source (regression)", () => {
         source: "state-vscdb",
         path: process.env.CURSOR_STATE_DB,
         status: "available",
+      },
+      {
+        source: "cli-authfile",
+        path: authFilePath,
+        status: "missing",
       },
       {
         source: "cli-keychain",

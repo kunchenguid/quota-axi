@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const originalCursorStateDb = process.env.CURSOR_STATE_DB;
 const originalCursorCliConfig = process.env.CURSOR_CLI_CONFIG;
+const originalCursorCliAuthFile = process.env.CURSOR_CLI_AUTH_FILE;
 const originalXdgCacheHome = process.env.XDG_CACHE_HOME;
 const originalXdgConfigHome = process.env.XDG_CONFIG_HOME;
 const originalHome = process.env.HOME;
@@ -16,6 +17,7 @@ beforeEach(() => {
   process.env.CURSOR_STATE_DB = join(tempDir, "state.vscdb");
   // Keeps these editor-source cases independent of any local Cursor CLI sign-in.
   process.env.CURSOR_CLI_CONFIG = join(tempDir, "cli-config.json");
+  process.env.CURSOR_CLI_AUTH_FILE = join(tempDir, "auth.json");
   process.env.XDG_CACHE_HOME = join(tempDir, "cache");
 });
 
@@ -28,6 +30,9 @@ afterEach(() => {
   if (originalCursorCliConfig === undefined)
     delete process.env.CURSOR_CLI_CONFIG;
   else process.env.CURSOR_CLI_CONFIG = originalCursorCliConfig;
+  if (originalCursorCliAuthFile === undefined)
+    delete process.env.CURSOR_CLI_AUTH_FILE;
+  else process.env.CURSOR_CLI_AUTH_FILE = originalCursorCliAuthFile;
   if (originalXdgCacheHome === undefined) delete process.env.XDG_CACHE_HOME;
   else process.env.XDG_CACHE_HOME = originalXdgCacheHome;
   if (originalXdgConfigHome === undefined) delete process.env.XDG_CONFIG_HOME;

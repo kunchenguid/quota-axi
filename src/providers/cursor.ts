@@ -24,8 +24,10 @@ import {
 import {
   CURSOR_CLI_AUTHFILE_SOURCE,
   CURSOR_CLI_SOURCE,
+  inspectCursorCliSources,
   isCursorCliSourceSupported,
-  readCursorCliCredentialState,
+  resolveCursorCliCredentials,
+  type CursorCliCredentialState,
 } from "./cursor-cli-credential.js";
 
 const API_URL = "https://api2.cursor.sh";
@@ -111,39 +113,10 @@ export async function fetchQuota(
           status: "failed",
           error: finalError,
         };
-        const cliState = await readCliCredentialState(options);
-        if (cliState.status === "available") {
-          attempts.push({
-            source: cliState.source.source,
-            status: "failed",
-          });
-          try {
-            const quota = await fetchCursorUsage(cliState.credentials);
-            attempts[attempts.length - 1] = {
-              source: cliState.source.source,
-              status: "success",
-            };
-            return cursorSuccess(quota, attempts);
-          } catch (cliError) {
-            finalError = errorMessage(cliError);
-            attempts[attempts.length - 1] = {
-              source: cliState.source.source,
-              status: "failed",
-              error: finalError,
-            };
-            if (cliError instanceof RateLimitError)
-              retryAfter = cliError.retryAfter;
-          }
-        } else {
-          attempts.push({
-            source: cliState.source.source,
-            status: "skipped",
-            error: cursorCredentialError(cliState),
-            ...(cliState.source.credentialPresent === undefined
-              ? {}
-              : { credentialPresent: cliState.source.credentialPresent }),
-          });
-        }
+        const cliQuota = await fetchQuotaFromCli(options, attempts);
+        if (cliQuota.quota) return cursorSuccess(cliQuota.quota, attempts);
+        if (cliQuota.retryAfter) retryAfter = cliQuota.retryAfter;
+        if (cliQuota.error) finalError = cliQuota.error;
       } else if (error instanceof RateLimitError) {
         retryAfter = error.retryAfter;
       }
@@ -177,14 +150,10 @@ export async function inspectAuth(
   if (isCursorCliSourceSupported()) {
     const editorAvailable = editorState.status === "available";
     sources.push(
-      (
-        await readCliCredentialState(
-          editorAvailable
-            ? { ...options, allowKeychainPrompt: false }
-            : options,
-          editorAvailable,
-        )
-      ).source,
+      ...(await inspectCursorCliSources(
+        editorAvailable ? { ...options, allowKeychainPrompt: false } : options,
+        editorAvailable,
+      )),
     );
   }
   return { provider: "cursor", sources };
@@ -194,9 +163,9 @@ export async function inspectAuth(
  * The Cursor editor and CLI keep credentials in different stores, and either
  * source is enough, so a CLI-only machine with no editor `state.vscdb` can
  * still refresh quota after the CLI credential is available. Quota fetching
- * tries the non-prompting editor store first; it reads the platform CLI
- * credential source when the editor token is absent, unreadable, or rejected
- * by Cursor.
+ * tries the non-prompting editor store first; it reads the CLI file store,
+ * then the macOS Keychain, when the editor token is absent, unreadable, or
+ * rejected by Cursor.
  */
 async function resolveCredentials(options: ProviderOptions): Promise<{
   credentials?: CursorCredentials;
@@ -218,17 +187,17 @@ async function resolveCredentials(options: ProviderOptions): Promise<{
   unavailable.push(editorState);
 
   if (!isCursorCliSourceSupported()) return { unavailable };
-  const cliState = await readCliCredentialState(options);
-  if (cliState.status === "available") {
+  const cli = await resolveCursorCliCredentials(options);
+  unavailable.push(...cli.unavailable);
+  if (cli.available) {
     return {
-      credentials: cliState.credentials,
-      source: cliState.source.source as
+      credentials: credentialsFromCli(cli.available),
+      source: cli.available.source.source as
         | typeof CURSOR_CLI_SOURCE
         | typeof CURSOR_CLI_AUTHFILE_SOURCE,
       unavailable,
     };
   }
-  unavailable.push(cliState);
   return { unavailable };
 }
 
@@ -246,20 +215,58 @@ function primaryUnavailable(
   );
 }
 
-async function readCliCredentialState(
-  options: ProviderOptions,
-  presenceOnly = false,
-): Promise<CredentialState> {
-  const state = await readCursorCliCredentialState(options, presenceOnly);
-  if (state.status !== "available") return state;
+function credentialsFromCli(
+  state: Extract<CursorCliCredentialState, { status: "available" }>,
+): CursorCredentials {
   return {
-    status: "available",
-    credentials: {
-      accessToken: state.accessToken,
-      email: state.identity.email,
-    },
-    source: state.source,
+    accessToken: state.accessToken,
+    email: state.identity.email,
   };
+}
+
+function recordUnavailableCliAttempts(
+  attempts: SourceAttempt[],
+  states: UnavailableCredentialState[],
+): void {
+  for (const state of states) {
+    attempts.push({
+      source: state.source.source,
+      status: "skipped",
+      error: cursorCredentialError(state),
+      ...(state.source.credentialPresent === undefined
+        ? {}
+        : { credentialPresent: state.source.credentialPresent }),
+    });
+  }
+}
+
+async function fetchQuotaFromCli(
+  options: ProviderOptions,
+  attempts: SourceAttempt[],
+): Promise<{
+  quota?: Awaited<ReturnType<typeof fetchCursorUsage>>;
+  error?: string;
+  retryAfter?: string;
+}> {
+  const cli = await resolveCursorCliCredentials(options);
+  recordUnavailableCliAttempts(attempts, cli.unavailable);
+  if (!cli.available) return {};
+  const source = cli.available.source.source;
+  attempts.push({ source, status: "failed" });
+  try {
+    const quota = await fetchCursorUsage(credentialsFromCli(cli.available));
+    attempts[attempts.length - 1] = { source, status: "success" };
+    return { quota };
+  } catch (cliError) {
+    const error = errorMessage(cliError);
+    attempts[attempts.length - 1] = { source, status: "failed", error };
+    return {
+      error,
+      ...(cliError instanceof RateLimitError
+        ? { retryAfter: cliError.retryAfter }
+        : {}),
+    };
+  }
 }
 
 export function normalizeCursorUsage(
