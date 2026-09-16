@@ -15,7 +15,6 @@ import type {
   ProviderAdapter,
   ProviderOptions,
   ProviderQuota,
-  ProviderStatus,
   QuotaWindow,
   SourceAttempt,
 } from "../types.js";
@@ -86,12 +85,10 @@ type UnavailableResolution = Exclude<
 type CopilotFailure = {
   error: string;
   /**
-   * True only for evidence that no usable credential exists: an absent store,
-   * a legacy `apps.json` reading, or a first-party 401/403. Anything else says
-   * quota-axi could not reach a credential, which is not a sign-out.
+   * True only for a first-party 401/403. A transient failure says the request
+   * did not answer, which is not a sign-out.
    */
   definitive: boolean;
-  status?: ProviderStatus;
   retryAfter?: string;
 };
 
@@ -117,7 +114,6 @@ export async function fetchQuota(
     const resolution = await resolveCopilotCredential(source);
     if (resolution.status !== "resolved") {
       attempts.push(unavailableAttempt(source, resolution));
-      failures.push(localFailure(source, resolution));
       continue;
     }
 
@@ -213,7 +209,7 @@ export async function fetchQuota(
     label: "GitHub Copilot",
     status: failure.retryAfter
       ? "rate_limited"
-      : (failure.status ?? statusFromError(failure.error)),
+      : statusFromError(failure.error),
     error: failure.error,
     retryAfter: failure.retryAfter,
     sourcesTried: sourceNames(attempts),
@@ -324,31 +320,10 @@ function unavailableAttempt(
 }
 
 /**
- * `apps.json` keeps its established verdict: any store it cannot use reads as
- * sign-in required. A GitHub CLI store quota-axi cannot use is a login it cannot
- * reach - a keyring token, a file it cannot walk or read - so it never asserts
- * a sign-out.
- */
-function localFailure(
-  source: CopilotSource,
-  resolution: UnavailableResolution,
-): CopilotFailure {
-  if (source === APPS_JSON_SOURCE || resolution.status === "absent") {
-    return { error: SIGN_IN_REQUIRED, definitive: true };
-  }
-  const error =
-    resolution.status === "unsupported"
-      ? "GitHub CLI token is in the system keyring, which quota-axi does not read"
-      : resolution.status === "read_error"
-        ? "GitHub CLI hosts.yml could not be read"
-        : "GitHub CLI hosts.yml could not be parsed";
-  return { error, definitive: false, status: "unavailable" };
-}
-
-/**
- * A failure that is not a verdict speaks for the provider over a sign-in
- * verdict from another store, so a login quota-axi could not reach is never
- * reported as one the user does not have.
+ * A transient failure speaks for the provider over a sign-in verdict from an
+ * earlier store. A store that holds no credential quota-axi can reach adds no
+ * failure, so when no reachable store answers, the verdict stays sign-in
+ * required.
  */
 function definingFailure(failures: CopilotFailure[]): CopilotFailure {
   return (

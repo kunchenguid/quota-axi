@@ -289,7 +289,7 @@ describe("credential source contract", { timeout: 30_000 }, () => {
         for (const attempt of attempts) {
           expect(attempt.credentialPresent).toBe(true);
         }
-        expect(result.state.status).not.toBe("auth_required");
+        expect(result.state.status).toBe("auth_required");
       },
     );
 

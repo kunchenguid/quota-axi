@@ -508,7 +508,7 @@ describe("GitHub Copilot credential sources", () => {
     },
   );
 
-  it("never reports a keyring-stored GitHub CLI login as a sign-out", async () => {
+  it("keeps the sign-in verdict when the GitHub CLI login is in the keyring", async () => {
     writeAppsJson({ "github.com": { oauth_token: "stale-apps-token" } });
     writeGhHosts(
       "github.com:\n    users:\n        fixture-user:\n    user: fixture-user\n",
@@ -517,8 +517,8 @@ describe("GitHub Copilot credential sources", () => {
 
     const result = await fetchQuota(options);
 
-    expect(result.state.status).toBe("unavailable");
-    expect(result.state.error).toContain("keyring");
+    expect(result.state.status).toBe("auth_required");
+    expect(result.state.error).toBe("GitHub Copilot sign-in required");
     expect(api.bearers).toEqual(["Bearer stale-apps-token"]);
     expect(result.attempts?.[1]).toEqual({
       source: "gh:hosts.yml",
@@ -528,13 +528,13 @@ describe("GitHub Copilot credential sources", () => {
     });
   });
 
-  it("reports a present but unparseable GitHub CLI store as unavailable rather than signed out", async () => {
+  it("keeps the sign-in verdict when the GitHub CLI store cannot be parsed", async () => {
     writeGhHosts("github.com:\n\toauth_token: gho_cli_fixture\n");
     const api = stubUserEndpoint({ gho_cli_fixture: 200 });
 
     const result = await fetchQuota(options);
 
-    expect(result.state.status).toBe("unavailable");
+    expect(result.state.status).toBe("auth_required");
     expect(api.bearers).toEqual([]);
     expect(result.attempts?.[1]).toEqual({
       source: "gh:hosts.yml",
