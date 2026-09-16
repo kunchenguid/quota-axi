@@ -16,7 +16,8 @@ export type ProviderId =
   | "openrouter"
   | "elevenlabs"
   | "devin"
-  | "muse";
+  | "muse"
+  | "kiro";
 
 export const PROVIDER_IDS = [
   "claude",
@@ -37,6 +38,7 @@ export const PROVIDER_IDS = [
   "elevenlabs",
   "devin",
   "muse",
+  "kiro",
 ] as const satisfies readonly ProviderId[];
 
 export type ProviderSource =
@@ -212,6 +214,15 @@ export type QuotaWindow = {
   windowSeconds?: number;
   spentUsd?: number;
   limitUsd?: number;
+  /** Provider-native usage values whose unit is not necessarily currency. */
+  usage?: number;
+  limit?: number;
+  unit?: string;
+  overage?: number;
+  overageCharges?: number;
+  currency?: string;
+  overageRate?: number;
+  overageCap?: number;
   /** Cycle-average pace relative to generatedAt. Not cached. */
   pace?: QuotaPace;
 };
@@ -313,6 +324,7 @@ export type ProviderQuota = {
     unlimited?: boolean;
     unit?: "usd" | "cny" | "credits";
   };
+  overageStatus?: string;
   state: {
     status: ProviderStatus;
     stale: boolean;

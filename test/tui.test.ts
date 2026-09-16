@@ -718,7 +718,7 @@ describe("cards for providers with no combinable bound", () => {
     return renderQuotaTui(
       {
         generatedAt: GENERATED_AT,
-        schemaVersion: 5,
+        schemaVersion: 6,
         providers: [claudeProvider(), copilotProvider(stale)],
       },
       { timeZone: "America/Los_Angeles" },
@@ -844,7 +844,7 @@ describe("cards for providers with no combinable bound", () => {
     const lines = renderQuotaTui(
       {
         generatedAt: GENERATED_AT,
-        schemaVersion: 5,
+        schemaVersion: 6,
         providers: [claudeProvider(), cursor],
       },
       { timeZone: "America/Los_Angeles" },
@@ -860,7 +860,7 @@ describe("cards for providers with no combinable bound", () => {
     const withoutCopilot = renderQuotaTui(
       {
         generatedAt: GENERATED_AT,
-        schemaVersion: 5,
+        schemaVersion: 6,
         providers: [claudeProvider()],
       },
       { timeZone: "America/Los_Angeles" },
@@ -881,7 +881,7 @@ describe("cards for providers with no combinable bound", () => {
       const output = renderQuotaTui(
         {
           generatedAt: GENERATED_AT,
-          schemaVersion: 5,
+          schemaVersion: 6,
           providers: [unfamiliarClaude(stale)],
         },
         { timeZone: "America/Los_Angeles" },

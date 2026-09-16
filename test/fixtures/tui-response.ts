@@ -240,7 +240,7 @@ export function signedOutProvider(
 export function fixtureResponse(): QuotaAxiResponse {
   return {
     generatedAt: GENERATED_AT,
-    schemaVersion: 5,
+    schemaVersion: 6,
     providers: [
       claudeProvider(),
       codexProvider(),

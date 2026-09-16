@@ -1962,7 +1962,7 @@ describe("Kimi credential outcomes and cache policy", () => {
     const rendered = renderQuotaToon(
       {
         generatedAt: new Date(NOW).toISOString(),
-        schemaVersion: 5,
+        schemaVersion: 6,
         providers: [withQuotaSemantics(report, new Date(NOW).toISOString())],
       },
       "quota-axi",
@@ -2199,7 +2199,7 @@ describe("Kimi credential outcomes and cache policy", () => {
     const rendered = renderQuotaToon(
       {
         generatedAt: new Date(NOW).toISOString(),
-        schemaVersion: 5,
+        schemaVersion: 6,
         providers: [withQuotaSemantics(report, new Date(NOW).toISOString())],
       },
       "quota-axi",

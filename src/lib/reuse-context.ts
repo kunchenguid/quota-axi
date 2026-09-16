@@ -54,6 +54,8 @@ export const CREDENTIAL_SELECTION_ENV = [
   "WINDSURF_API_KEY",
   "WINDSURF_API_SERVER_URL",
   "META_API_KEY",
+  "KIRO_CLI_DB",
+  "KIRO_PROFILE_ARN",
 ] as const;
 
 /**

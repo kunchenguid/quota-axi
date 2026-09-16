@@ -9,6 +9,7 @@ import { devinAdapter } from "./devin.js";
 import { elevenLabsAdapter } from "./elevenlabs.js";
 import { grokAdapter } from "./grok.js";
 import { kimiAdapter } from "./kimi.js";
+import { kiroAdapter } from "./kiro.js";
 import { opencodeGoAdapter } from "./opencode-go.js";
 import { minimaxAdapter } from "./minimax.js";
 import { mimoAdapter } from "./mimo.js";
@@ -41,6 +42,7 @@ export const PROVIDERS: Record<ProviderId, ProviderAdapter> = {
   elevenlabs: elevenLabsAdapter,
   devin: devinAdapter,
   muse: museAdapter,
+  kiro: kiroAdapter,
 };
 
 export function parseProviders(value: string | undefined): ProviderId[] {
