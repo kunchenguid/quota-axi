@@ -193,7 +193,7 @@ function normalizeQuotaSnapshots(
       percentUsed,
       percentRemaining: percentRemaining(percentUsed),
       resetsAt:
-        parseEpochSecondsOrMillis(item.quota_reset_at) ??
+        parseSnapshotReset(item.quota_reset_at) ??
         parseEpochSecondsOrMillis(resetFallback),
     });
   }
@@ -345,6 +345,12 @@ function rateLimitSignal(response: Response): {
     };
   }
   return { limited: false };
+}
+
+function parseSnapshotReset(value: unknown): string | undefined {
+  const number = numberValue(value);
+  if (number !== undefined && number <= 0) return undefined;
+  return parseEpochSecondsOrMillis(value);
 }
 
 function parseEpochSecondsOrMillis(value: unknown): string | undefined {

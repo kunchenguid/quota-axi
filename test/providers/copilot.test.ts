@@ -99,6 +99,27 @@ describe("GitHub Copilot quota parsing", () => {
     ]);
   });
 
+  it("uses the top-level reset date when a snapshot reset is non-positive", () => {
+    const result = normalizeCopilotUser({
+      quota_reset_date_utc: "2026-10-01T00:00:00Z",
+      quota_snapshots: {
+        chat: {
+          percent_remaining: 80,
+          quota_reset_at: 0,
+        },
+        completions: {
+          percent_remaining: 60,
+          quota_reset_at: -1,
+        },
+      },
+    });
+
+    expect(result?.windows).toMatchObject([
+      { id: "chat", resetsAt: "2026-10-01T00:00:00.000Z" },
+      { id: "completions", resetsAt: "2026-10-01T00:00:00.000Z" },
+    ]);
+  });
+
   it("can return a fresh entitlement report with no numeric windows", () => {
     const result = normalizeCopilotUser({
       login: "fixture-user",
