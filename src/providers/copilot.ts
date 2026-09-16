@@ -82,13 +82,9 @@ type UnavailableResolution = Exclude<
   { status: "resolved" }
 >;
 
+/** A request failure on Copilot's own store; it is not a sign-out. */
 type CopilotFailure = {
   error: string;
-  /**
-   * True only for a first-party 401/403. A transient failure says the request
-   * did not answer, which is not a sign-out.
-   */
-  definitive: boolean;
   retryAfter?: string;
 };
 
@@ -108,7 +104,7 @@ export async function fetchQuota(
   _options: ProviderOptions,
 ): Promise<ProviderQuota> {
   const attempts: SourceAttempt[] = [];
-  const failures: CopilotFailure[] = [];
+  let failure: CopilotFailure | undefined;
 
   for (const source of COPILOT_SOURCE_ORDER) {
     const resolution = await resolveCopilotCredential(source);
@@ -167,14 +163,11 @@ export async function fetchQuota(
     }
 
     if (selection.outcome === "all_rejected") {
-      // Handover: the rejected store is named, so a sibling reading shows
-      // which login was superseded rather than a generic `api` attempt.
       attempts[attempts.length - 1] = {
-        source,
+        source: attemptSource,
         status: "failed",
         error: SIGN_IN_REQUIRED,
       };
-      failures.push({ error: SIGN_IN_REQUIRED, definitive: true });
       continue;
     }
 
@@ -185,20 +178,18 @@ export async function fetchQuota(
       status: "failed",
       error,
     };
-    failures.push({
-      error,
-      definitive: false,
-      retryAfter: selection.retryAfter,
-    });
+    if (source !== GH_CLI_CREDENTIAL_SOURCE) {
+      failure = { error, retryAfter: selection.retryAfter };
+    }
     break;
   }
 
-  const failure = definingFailure(failures);
+  const verdict: CopilotFailure = failure ?? { error: SIGN_IN_REQUIRED };
   const cached = readCachedProvider("copilot");
   if (cached) {
     return staleFromCache(
       cached,
-      failure.error,
+      verdict.error,
       sourceNames(attempts),
       attempts,
     );
@@ -207,11 +198,11 @@ export async function fetchQuota(
   return failedProvider({
     provider: "copilot",
     label: "GitHub Copilot",
-    status: failure.retryAfter
+    status: verdict.retryAfter
       ? "rate_limited"
-      : statusFromError(failure.error),
-    error: failure.error,
-    retryAfter: failure.retryAfter,
+      : statusFromError(verdict.error),
+    error: verdict.error,
+    retryAfter: verdict.retryAfter,
     sourcesTried: sourceNames(attempts),
     attempts,
   });
@@ -317,19 +308,6 @@ function unavailableAttempt(
         : "credentials_invalid",
     credentialPresent: true,
   };
-}
-
-/**
- * A transient failure speaks for the provider over a sign-in verdict from an
- * earlier store. A store that holds no credential quota-axi can reach adds no
- * failure, so when no reachable store answers, the verdict stays sign-in
- * required.
- */
-function definingFailure(failures: CopilotFailure[]): CopilotFailure {
-  return (
-    failures.find((failure) => !failure.definitive) ??
-    failures[0] ?? { error: SIGN_IN_REQUIRED, definitive: true }
-  );
 }
 
 export function normalizeCopilotUser(raw: unknown):
