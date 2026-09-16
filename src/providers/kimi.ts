@@ -1219,6 +1219,8 @@ function normalizeRatioDetail(value: unknown): NormalizedDetail | undefined {
   if (!detail) return undefined;
   const ratio = nonnegativeScalar(detail.used_ratio);
   if (ratio === undefined) return undefined;
+  // Both percents are rounded to 10 decimals so float ratios such as 0.57 or
+  // 0.873 publish 57 / 12.7 rather than IEEE-754 tails; fractions are kept.
   const percentUsed = clampPercent(Number((ratio * 100).toFixed(10)));
   const resetsAt = normalizedReset(detail);
   return {
