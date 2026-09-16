@@ -233,6 +233,48 @@ describe("Claude CLAUDE_CODE_OAUTH_TOKEN credential source", () => {
     ]);
   });
 
+  it("reports a genuine stored sign-out even when the env token failed transiently first", async () => {
+    vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", ENV_TOKEN);
+    mockStore({ accessToken: STORED_TOKEN });
+    fetchMock.mockImplementation(async (_url: string, init: unknown) => {
+      const bearer = (init as { headers: Record<string, string> }).headers
+        .authorization;
+      const status = bearer === `Bearer ${ENV_TOKEN}` ? 403 : 401;
+      return new Response("{}", { status });
+    });
+    const { fetchQuota } = await import("../../src/providers/claude.js");
+    const report = await fetchQuota(options);
+
+    // The stored credential's definitive 401 must win over the env token's
+    // earlier, merely transient 403, not be hidden behind it.
+    expect(report.state.status).toBe("auth_required");
+    expect(report.windows).toEqual([]);
+  });
+
+  it("purges the cache when a stored credential is definitively rejected after a transient env failure", async () => {
+    mockStore({ accessToken: STORED_TOKEN });
+    const { fetchQuota } = await import("../../src/providers/claude.js");
+    const { writeCachedProviders, readCachedProvider } = await import(
+      "../../src/cache.js"
+    );
+    const fresh = await fetchQuota(options);
+    expect(fresh.state.status).toBe("fresh");
+    writeCachedProviders([fresh]);
+    expect(readCachedProvider("claude")).toBeDefined();
+
+    vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", ENV_TOKEN);
+    fetchMock.mockImplementation(async (_url: string, init: unknown) => {
+      const bearer = (init as { headers: Record<string, string> }).headers
+        .authorization;
+      const status = bearer === `Bearer ${ENV_TOKEN}` ? 403 : 401;
+      return new Response("{}", { status });
+    });
+    const rejected = await fetchQuota(options);
+
+    expect(rejected.state.status).toBe("auth_required");
+    expect(readCachedProvider("claude")).toBeUndefined();
+  });
+
   it("trims surrounding whitespace on the environment token before sending it", async () => {
     vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", `  ${ENV_TOKEN}\n`);
     mockStore();
