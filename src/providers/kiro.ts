@@ -39,6 +39,7 @@ const KIRO_DB_DEFAULT = join(
 const KIRO_TOKEN_KEY = "kirocli:odic:token";
 const KIRO_SOURCE = "kiro-sqlite";
 const API_TIMEOUT_MS = 15_000;
+const RESPONSE_LIMIT_BYTES = 262_144;
 const API_TARGET = "AmazonCodeWhispererService.GetUsageLimits";
 const SQLITE_BUSY_CODES = new Set([5, 6]);
 
@@ -330,11 +331,58 @@ async function fetchKiroUsage(
       },
     );
     rejectUnusableResponse(response);
-    const quota = normalizeKiroUsage(await response.json());
+    const quota = normalizeKiroUsage(await readBoundedJson(response));
     if (!quota) throw new Error("Kiro quota unavailable");
     return quota;
   } finally {
     clearTimeout(timer);
+  }
+}
+
+async function readBoundedJson(response: Response): Promise<unknown> {
+  const declaredLength = response.headers.get("content-length")?.trim();
+  if (
+    declaredLength &&
+    /^\d+$/.test(declaredLength) &&
+    BigInt(declaredLength) > BigInt(RESPONSE_LIMIT_BYTES)
+  ) {
+    void response.body?.cancel().catch(() => undefined);
+    throw new Error("Kiro quota response too large");
+  }
+
+  const chunks: Uint8Array[] = [];
+  let length = 0;
+  if (response.body) {
+    const reader = response.body.getReader();
+    let consumed = false;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+          consumed = true;
+          break;
+        }
+        length += value.byteLength;
+        if (length > RESPONSE_LIMIT_BYTES)
+          throw new Error("Kiro quota response too large");
+        chunks.push(value);
+      }
+    } finally {
+      if (!consumed) void reader.cancel().catch(() => undefined);
+      reader.releaseLock();
+    }
+  }
+
+  const bytes = new Uint8Array(length);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  try {
+    return JSON.parse(new TextDecoder().decode(bytes)) as unknown;
+  } catch {
+    throw new Error("Kiro quota response malformed JSON");
   }
 }
 

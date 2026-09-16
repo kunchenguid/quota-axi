@@ -605,6 +605,88 @@ describe("Kiro cache retirement without a region override", () => {
 });
 
 describe("Kiro quota transport", () => {
+  const responseLimit = 262_144;
+
+  it("rejects an oversized declared body before reading it", async () => {
+    const pull = vi.fn();
+    const cancel = vi.fn();
+    const response = new Response(
+      new ReadableStream({ pull, cancel }, { highWaterMark: 0 }),
+      { headers: { "content-length": String(responseLimit + 1) } },
+    );
+    const report = await adapterWith(
+      CREDENTIALS,
+      async () => response,
+    ).fetchQuota(OPTIONS);
+    expect(report).toMatchObject({
+      source: "unavailable",
+      windows: [],
+      state: { status: "error", error: "Kiro quota response too large" },
+    });
+    expect(pull).not.toHaveBeenCalled();
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(response.body?.locked).toBe(false);
+  });
+
+  it.each([undefined, "1"])(
+    "stops an oversized stream with content-length %s at the byte limit",
+    async (contentLength) => {
+      const chunk = new TextEncoder().encode("é".repeat(responseLimit / 4));
+      const pull = vi.fn(
+        (controller: ReadableStreamDefaultController<Uint8Array>) => {
+          controller.enqueue(chunk);
+          if (pull.mock.calls.length === 4) controller.close();
+        },
+      );
+      const cancel = vi.fn();
+      const response = new Response(
+        new ReadableStream({ pull, cancel }, { highWaterMark: 0 }),
+        { headers: contentLength ? { "content-length": contentLength } : {} },
+      );
+      const report = await adapterWith(
+        CREDENTIALS,
+        async () => response,
+      ).fetchQuota(OPTIONS);
+      expect(report).toMatchObject({
+        source: "unavailable",
+        windows: [],
+        state: { status: "error", error: "Kiro quota response too large" },
+      });
+      expect(pull).toHaveBeenCalledTimes(3);
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(response.body?.locked).toBe(false);
+    },
+  );
+
+  it("accepts valid JSON at the response byte limit", async () => {
+    const body = JSON.stringify(USAGE_PAYLOAD).padEnd(responseLimit, " ");
+    const report = await adapterWith(
+      CREDENTIALS,
+      async () =>
+        new Response(body, {
+          headers: { "content-length": String(responseLimit) },
+        }),
+    ).fetchQuota(OPTIONS);
+    expect(report).toMatchObject({
+      source: "api",
+      state: { status: "fresh" },
+      credits: { remaining: 1500 },
+    });
+  });
+
+  it("reports malformed JSON without exposing response content", async () => {
+    const report = await adapterWith(
+      CREDENTIALS,
+      async () => new Response("not-json-sensitive-response"),
+    ).fetchQuota(OPTIONS);
+    expect(report).toMatchObject({
+      source: "unavailable",
+      windows: [],
+      state: { status: "error", error: "Kiro quota response malformed JSON" },
+    });
+    expect(JSON.stringify(report)).not.toContain("not-json-sensitive-response");
+  });
+
   it("calls the first-party usage endpoint with a read-only bearer request", async () => {
     const request = vi.fn(async () => jsonResponse(USAGE_PAYLOAD));
     const report = await adapterWith(CREDENTIALS, request).fetchQuota(OPTIONS);
