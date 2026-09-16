@@ -125,13 +125,18 @@ export async function fetchQuota(
     // is named for its store so `sourcesTried` shows which login answered.
     const attemptSource = source === APPS_JSON_SOURCE ? "api" : source;
     attempts.push({ source: attemptSource, status: "failed" });
-    let quota: Awaited<ReturnType<typeof fetchCopilotUser>> | undefined;
     const selection = await selectCredential(
       [{ source, localState: "valid", credential: resolution.credentials }],
-      async (candidate): Promise<AttemptOutcome<true>> => {
+      async (
+        candidate,
+      ): Promise<
+        AttemptOutcome<Awaited<ReturnType<typeof fetchCopilotUser>>>
+      > => {
         try {
-          quota = await fetchCopilotUser(candidate.credential);
-          return { kind: "quota", result: true };
+          return {
+            kind: "quota",
+            result: await fetchCopilotUser(candidate.credential),
+          };
         } catch (error) {
           if (error instanceof CopilotAuthError) {
             return { kind: "rejected", error: error.message };
@@ -146,6 +151,7 @@ export async function fetchQuota(
       },
     );
 
+    const quota = selection.result;
     if (selection.outcome === "quota" && quota) {
       attempts[attempts.length - 1] = {
         source: attemptSource,
