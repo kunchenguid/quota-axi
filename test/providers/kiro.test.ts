@@ -281,21 +281,37 @@ describe("Kiro provider", () => {
     });
   });
 
-  it("preserves malformed windows as untrusted evidence", async () => {
-    const request = vi.fn(
-      async () =>
-        new Response(JSON.stringify({ usageBreakdownList: [null] }), {
-          status: 200,
-        }),
-    );
+  it("reports a later provider failure after quota_missing", async () => {
+    const request = vi
+      .fn<(...args: Parameters<typeof fetch>) => ReturnType<typeof fetch>>()
+      .mockResolvedValueOnce(new Response(JSON.stringify({}), { status: 200 }))
+      .mockResolvedValueOnce(new Response(null, { status: 429 }));
     const report = await createKiroAdapter({
-      credentialSources: [{ name: "test", source: availableSource() }],
+      credentialSources: [
+        { name: "empty", source: availableSource() },
+        { name: "rate-limited", source: availableSource() },
+      ],
       fetch: request,
       now: () => NOW,
     }).fetchQuota(OPTIONS);
 
-    expect(report.state.untrustedWindowIds).toEqual(["usage:0"]);
-    expect(report.windows[0].kind).toBe("unknown");
+    expect(report.state).toMatchObject({
+      status: "rate_limited",
+      error: "provider_rate_limited",
+    });
+  });
+
+  it("omits malformed windows while retaining their IDs", () => {
+    const normalized = normalizeKiroUsage({
+      usageBreakdownList: [
+        null,
+        { resourceType: "CREDIT", currentUsage: 1, usageLimit: 2 },
+      ],
+    });
+
+    expect(normalized.untrustedWindowIds).toEqual(["usage:0"]);
+    expect(normalized.windows).toHaveLength(1);
+    expect(normalized.windows[0].kind).toBe("credits");
   });
 
   it("requests profiles then usage with the Kiro read-only headers", async () => {
