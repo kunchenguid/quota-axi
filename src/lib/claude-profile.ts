@@ -21,7 +21,7 @@ export const CLAUDE_OAUTH_TOKEN_ENV = "CLAUDE_CODE_OAUTH_TOKEN";
  * @returns the literal token, or undefined when none is supplied
  */
 export function claudeEnvOauthToken(): string | undefined {
-  return usableLiteralSecret(process.env[CLAUDE_OAUTH_TOKEN_ENV]);
+  return usableLiteralSecret(process.env[CLAUDE_OAUTH_TOKEN_ENV]?.trim());
 }
 
 /**

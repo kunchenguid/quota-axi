@@ -234,7 +234,16 @@ export async function fetchQuota(
     }
   }
 
-  return failureReport(pass.failure, attempts, credentialContextId);
+  // The env context id is presence-only (AGENTS.md), so it cannot distinguish
+  // which account supplied the token. A stale cache read under it could hand
+  // back a different account's snapshot, so an env-selected run never falls
+  // back to stale cache.
+  return failureReport(
+    pass.failure,
+    attempts,
+    credentialContextId,
+    claudeEnvOauthToken() !== undefined,
+  );
 }
 
 function isProfileOnly(options: ProviderOptions): boolean {
@@ -601,7 +610,11 @@ async function attemptClaudeQuota(
           }
         } else {
           transientFailure = failure.withUsageFetchFailure();
-          break;
+          // The env token is an independent source the vendor merely resolves
+          // first; its non-definitive failure must not withhold a still-untried
+          // stored source. A transient failure from a stored source still stops
+          // the loop, matching the existing within-source rule.
+          if (credential.source !== "env") break;
         }
       }
     }
@@ -664,6 +677,7 @@ function failureReport(
   failure: ClaudeFailure,
   attempts: SourceAttempt[],
   credentialContextId: string,
+  envSelected: boolean,
 ): ProviderQuota {
   if (failure.definitiveAuth) {
     try {
@@ -673,7 +687,7 @@ function failureReport(
     }
   }
 
-  if (failure.staleEligible) {
+  if (failure.staleEligible && !envSelected) {
     try {
       const cached = readCachedClaudeProvider(credentialContextId);
       const stale = cached

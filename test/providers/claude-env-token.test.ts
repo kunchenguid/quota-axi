@@ -204,6 +204,50 @@ describe("Claude CLAUDE_CODE_OAUTH_TOKEN credential source", () => {
     expect(report.state.error).toContain("403");
   });
 
+  it("falls through to the stored credential when the env token fails with a non-definitive error", async () => {
+    vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", ENV_TOKEN);
+    mockStore({ accessToken: STORED_TOKEN });
+    fetchMock.mockImplementation(async (_url: string, init: unknown) => {
+      const bearer = (init as { headers: Record<string, string> }).headers
+        .authorization;
+      if (bearer === `Bearer ${ENV_TOKEN}`) {
+        return new Response("{}", { status: 403 });
+      }
+      return new Response(
+        JSON.stringify({ five_hour: { utilization: 12 } }),
+        { status: 200 },
+      );
+    });
+    const { fetchQuota } = await import("../../src/providers/claude.js");
+    const report = await fetchQuota(options);
+
+    // The env source's 403 is not definitive, so the loop hands over to the
+    // still-untried stored credential instead of aborting.
+    expect(report.state.status).toBe("fresh");
+    expect(usageBearers()).toEqual([
+      `Bearer ${ENV_TOKEN}`,
+      `Bearer ${STORED_TOKEN}`,
+    ]);
+    expect(report.windows).toMatchObject([
+      { id: "five_hour", percentUsed: 12 },
+    ]);
+  });
+
+  it("trims surrounding whitespace on the environment token before sending it", async () => {
+    vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", `  ${ENV_TOKEN}\n`);
+    mockStore();
+    const { fetchQuota } = await import("../../src/providers/claude.js");
+    const report = await fetchQuota(options);
+
+    expect(report.state.status).toBe("fresh");
+    expect(usageBearers()).toContain(`Bearer ${ENV_TOKEN}`);
+    expect(
+      report.attempts?.some(
+        (a) => a.source === "env" && a.error === "credentials_invalid",
+      ),
+    ).toBe(false);
+  });
+
   it("never delegates a credential refresh for an environment token", async () => {
     vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", ENV_TOKEN);
     mockStore();
@@ -287,6 +331,27 @@ describe("Claude cache context identity", () => {
 // Source selection driven through the real command bodies, not helper units.
 // The CLI is exercised in-process with every credential, filesystem, process
 // and HTTP boundary mocked, so no real store or endpoint is reachable.
+describe("Claude env-token stale cache fallback", () => {
+  it("never serves a stale cached snapshot for an env-selected reading", async () => {
+    vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", ENV_TOKEN);
+    mockStore();
+    const { fetchQuota } = await import("../../src/providers/claude.js");
+    const { writeCachedProviders } = await import("../../src/cache.js");
+    const fresh = await fetchQuota(options);
+    expect(fresh.state.status).toBe("fresh");
+    writeCachedProviders([fresh]);
+
+    // A different account's env token, presence-only identity notwithstanding:
+    // a transient failure here must never resurrect the previous account's cache.
+    vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", "a-different-synthetic-token");
+    respondWith({}, 403);
+    const retry = await fetchQuota(options);
+
+    expect(retry.state.status).not.toBe("stale");
+    expect(retry.windows).toEqual([]);
+  });
+});
+
 describe("CLI source selection", () => {
   it("reports Claude quota from the environment token", async () => {
     vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", ENV_TOKEN);
