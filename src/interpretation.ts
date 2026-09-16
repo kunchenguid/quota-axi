@@ -380,45 +380,59 @@ function grokSemantics(
   );
 }
 
+const KIMI_ALL_MODELS_WINDOW_IDS = new Set([
+  "weekly",
+  "five_hour",
+  "month_total",
+]);
+const KIMI_CODE_WINDOW_ID = "month_code";
+
 function kimiSemantics(
   windows: QuotaWindow[],
   untrustedWindowIds: string[],
   generatedAt: string,
 ): QuotaSemantics {
-  const unresolved = windows.filter(
-    ({ id }) => id !== "weekly" && id !== "five_hour",
+  const allModels = windows.filter(({ id }) =>
+    KIMI_ALL_MODELS_WINDOW_IDS.has(id),
   );
+  const code = windows.filter(({ id }) => id === KIMI_CODE_WINDOW_ID);
+  const recognized = new Set([...allModels, ...code]);
+  const unresolved = windows.filter((window) => !recognized.has(window));
   const unresolvedWindowIds = [
     ...new Set([...unresolved.map(({ id }) => id), ...untrustedWindowIds]),
   ];
   if (unresolvedWindowIds.length > 0) {
-    const recognized = windows.filter(
-      ({ id }) => id === "weekly" || id === "five_hour",
-    );
+    const effectiveAvailability: EffectiveAvailability[] = [];
+    if (allModels.length > 0) {
+      effectiveAvailability.push(
+        unresolvedAvailability("all_models", allModels, unresolvedWindowIds),
+      );
+    }
+    if (code.length > 0) {
+      effectiveAvailability.push(
+        unresolvedAvailability("code", code, unresolvedWindowIds),
+      );
+    }
     return {
       status: "partial",
       description:
-        "Kimi's valid weekly and five-hour account windows are known bounds, but unrecognized or unparsed limits may add bounds, so effective remaining is unknown.",
-      effectiveAvailability:
-        recognized.length > 0
-          ? [
-              unresolvedAvailability(
-                "all_models",
-                recognized,
-                unresolvedWindowIds,
-              ),
-            ]
-          : [],
+        "Kimi's valid weekly, five-hour, and monthly-total account windows are known bounds and the monthly code window is a separate resource, but unrecognized or unparsed limits may add bounds, so effective remaining is unknown.",
+      effectiveAvailability,
       unresolvedWindowIds,
     };
   }
-  const effectiveAvailability =
-    windows.length > 0
-      ? [availability("all_models", windows, generatedAt)]
-      : [];
+  const effectiveAvailability: EffectiveAvailability[] = [];
+  if (allModels.length > 0) {
+    effectiveAvailability.push(
+      availability("all_models", allModels, generatedAt),
+    );
+  }
+  if (code.length > 0) {
+    effectiveAvailability.push(availability("code", code, generatedAt));
+  }
   return knownSemantics(
     effectiveAvailability,
-    "Kimi's weekly and five-hour account windows jointly bound every model, so effective remaining is the minimum across the named windows.",
+    "Kimi's weekly, five-hour, and monthly-total account windows jointly bound every model, so effective remaining is the minimum across the named windows. The monthly code window is an independent resource.",
   );
 }
 

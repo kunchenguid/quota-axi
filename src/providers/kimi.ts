@@ -1074,10 +1074,56 @@ function createResponseBodyLifetime(response: Response): ResponseBodyLifetime {
   };
 }
 
+const KIMI_USAGES_WINDOWS: ReadonlyArray<{
+  key: string;
+  id: string;
+  label: string;
+  kind: QuotaWindow["kind"];
+  windowSeconds?: number;
+}> = [
+  {
+    key: "limit_5h",
+    id: "five_hour",
+    label: "session",
+    kind: "session",
+    windowSeconds: FIVE_HOURS_SECONDS,
+  },
+  {
+    key: "limit_7d",
+    id: "weekly",
+    label: "week",
+    kind: "weekly",
+    windowSeconds: WEEK_SECONDS,
+  },
+  {
+    key: "limit_month_total",
+    id: "month_total",
+    label: "month",
+    kind: "monthly",
+  },
+  {
+    key: "limit_month_code",
+    id: "month_code",
+    label: "code month",
+    kind: "monthly",
+  },
+];
+
+const KIMI_USAGES_WINDOW_KEYS = new Set(
+  KIMI_USAGES_WINDOWS.map(({ key }) => key),
+);
+
 export function normalizeKimiPayload(payload: unknown): NormalizedKimiPayload {
   const root = objectValue(payload);
-  const principal = normalizeDetail(root?.usage);
-  if (!root || !principal) {
+  if (!root) {
+    throw new KimiFailure("schema_invalid", { staleEligible: true });
+  }
+
+  const fromUsages = normalizeUsagesMap(root.usages);
+  if (fromUsages) return fromUsages;
+
+  const principal = normalizeDetail(root.usage);
+  if (!principal) {
     throw new KimiFailure("schema_invalid", { staleEligible: true });
   }
 
@@ -1130,6 +1176,58 @@ export function normalizeKimiPayload(payload: unknown): NormalizedKimiPayload {
   }
 
   return { windows, diagnostics };
+}
+
+function normalizeUsagesMap(value: unknown): NormalizedKimiPayload | undefined {
+  const usages = objectValue(value);
+  if (!usages) return undefined;
+
+  const windows: QuotaWindow[] = [];
+  for (const spec of KIMI_USAGES_WINDOWS) {
+    if (!Object.hasOwn(usages, spec.key)) continue;
+    const detail = normalizeRatioDetail(usages[spec.key]);
+    if (!detail) continue;
+    windows.push({
+      id: spec.id,
+      label: spec.label,
+      kind: spec.kind,
+      percentUsed: detail.percentUsed,
+      percentRemaining: detail.percentRemaining,
+      ...(typeof spec.windowSeconds === "number"
+        ? { windowSeconds: spec.windowSeconds }
+        : {}),
+      ...(detail.resetsAt ? { resetsAt: detail.resetsAt } : {}),
+    });
+  }
+  for (const key of Object.keys(usages)) {
+    if (KIMI_USAGES_WINDOW_KEYS.has(key)) continue;
+    const detail = normalizeRatioDetail(usages[key]);
+    if (!detail) continue;
+    windows.push({
+      id: key,
+      label: key,
+      kind: "unknown",
+      percentUsed: detail.percentUsed,
+      percentRemaining: detail.percentRemaining,
+      ...(detail.resetsAt ? { resetsAt: detail.resetsAt } : {}),
+    });
+  }
+  return windows.length > 0 ? { windows, diagnostics: [] } : undefined;
+}
+
+function normalizeRatioDetail(value: unknown): NormalizedDetail | undefined {
+  const detail = objectValue(value);
+  if (!detail) return undefined;
+  const ratio =
+    nonnegativeScalar(detail.used_ratio) ?? nonnegativeScalar(detail.usedRatio);
+  if (ratio === undefined) return undefined;
+  const percentUsed = clampPercent(ratio * 100);
+  const resetsAt = normalizedReset(detail);
+  return {
+    percentUsed,
+    percentRemaining: clampPercent(100 - percentUsed),
+    ...(resetsAt ? { resetsAt } : {}),
+  };
 }
 
 function normalizeDetail(value: unknown): NormalizedDetail | undefined {

@@ -49,6 +49,16 @@ const SUCCESS_PAYLOAD = {
   ],
 };
 
+/** Vendor `/usages` quota-model fixture from MoonshotAI/kimi-code #3787. */
+const CURRENT_USAGES_PAYLOAD = {
+  usages: {
+    limit_5h: { used_ratio: 0.3, reset_time: "2026-09-11T18:00:00Z" },
+    limit_7d: { used_ratio: 0.2, reset_time: "2026-09-17T00:00:00Z" },
+    limit_month_total: { used_ratio: 0.4, reset_time: "2026-10-01T00:00:00Z" },
+    limit_month_code: { used_ratio: 0.25, reset_time: "2026-10-01T00:00:00Z" },
+  },
+};
+
 describe("Kimi request transport", () => {
   it("makes one fixed-origin read-only request with only the Pi-resolved key", async () => {
     const request = vi.fn(
@@ -576,6 +586,13 @@ describe("Kimi request transport", () => {
         "malformed_json",
       ],
       [jsonResponse({ usage: { limit: 0, used: 0 } }), "schema_invalid"],
+      [jsonResponse({ usages: {} }), "schema_invalid"],
+      [
+        jsonResponse({
+          usages: { limit_7d: { reset_time: "2026-09-17T00:00:00Z" } },
+        }),
+        "schema_invalid",
+      ],
     ];
 
     for (const [response, code] of cases) {
@@ -584,6 +601,40 @@ describe("Kimi request transport", () => {
       }).fetchQuota(OPTIONS);
       expect(report.state.error).toBe(code);
     }
+  });
+
+  it("reports current usages windows on the CLI path instead of schema_invalid", async () => {
+    const report = await testAdapter({
+      fetch: vi.fn(async () => jsonResponse(CURRENT_USAGES_PAYLOAD)),
+    }).fetchQuota(OPTIONS);
+
+    expect(report.state).toMatchObject({
+      status: "fresh",
+      stale: false,
+      sourcesTried: ["pi:kimi-coding"],
+    });
+    expect(report.state.error).toBeUndefined();
+    expect(report.windows.map(({ id }) => id)).toEqual([
+      "five_hour",
+      "weekly",
+      "month_total",
+      "month_code",
+    ]);
+
+    const generatedAt = new Date(NOW).toISOString();
+    const rendered = renderQuotaToon(
+      {
+        generatedAt,
+        schemaVersion: 5,
+        providers: [withQuotaSemantics(report, generatedAt)],
+      },
+      "quota-axi",
+      true,
+    );
+    expect(rendered).not.toContain("schema_invalid");
+    expect(rendered).toContain("month_total");
+    expect(rendered).toContain("month_code");
+    expect(rendered).toContain("code month");
   });
 
   it.each([
@@ -680,6 +731,137 @@ describe("Kimi payload normalization", () => {
       ],
       diagnostics: [{ code: "limits_missing" }],
     });
+  });
+
+  it("normalizes the current usages map without inventing absent windows", () => {
+    expect(normalizeKimiPayload(CURRENT_USAGES_PAYLOAD)).toEqual({
+      windows: [
+        {
+          id: "five_hour",
+          label: "session",
+          kind: "session",
+          percentUsed: 30,
+          percentRemaining: 70,
+          windowSeconds: 18_000,
+          resetsAt: "2026-09-11T18:00:00.000Z",
+        },
+        {
+          id: "weekly",
+          label: "week",
+          kind: "weekly",
+          percentUsed: 20,
+          percentRemaining: 80,
+          windowSeconds: 604_800,
+          resetsAt: "2026-09-17T00:00:00.000Z",
+        },
+        {
+          id: "month_total",
+          label: "month",
+          kind: "monthly",
+          percentUsed: 40,
+          percentRemaining: 60,
+          resetsAt: "2026-10-01T00:00:00.000Z",
+        },
+        {
+          id: "month_code",
+          label: "code month",
+          kind: "monthly",
+          percentUsed: 25,
+          percentRemaining: 75,
+          resetsAt: "2026-10-01T00:00:00.000Z",
+        },
+      ],
+      diagnostics: [],
+    });
+    expect(
+      normalizeKimiPayload({
+        usages: {
+          limit_7d: { used_ratio: 0.2, reset_time: "2026-09-17T00:00:00Z" },
+        },
+      }).windows.map(({ id }) => id),
+    ).toEqual(["weekly"]);
+  });
+
+  it("keeps monthly total and code as distinct windows and omits a monthly duration", () => {
+    const normalized = normalizeKimiPayload({
+      usages: {
+        limit_month_total: {
+          used_ratio: 0.4,
+          reset_time: "2026-10-01T00:00:00Z",
+        },
+        limit_month_code: {
+          used_ratio: 0.25,
+          reset_time: "2026-10-01T00:00:00Z",
+        },
+      },
+    });
+    expect(normalized.windows).toEqual([
+      {
+        id: "month_total",
+        label: "month",
+        kind: "monthly",
+        percentUsed: 40,
+        percentRemaining: 60,
+        resetsAt: "2026-10-01T00:00:00.000Z",
+      },
+      {
+        id: "month_code",
+        label: "code month",
+        kind: "monthly",
+        percentUsed: 25,
+        percentRemaining: 75,
+        resetsAt: "2026-10-01T00:00:00.000Z",
+      },
+    ]);
+    expect(
+      normalized.windows.every((window) => window.windowSeconds === undefined),
+    ).toBe(true);
+  });
+
+  it("prefers a valid usages map over a legacy usage object", () => {
+    const normalized = normalizeKimiPayload({
+      ...CURRENT_USAGES_PAYLOAD,
+      usage: { used: "20", limit: "100", resetTime: "2026-09-17T00:00:00Z" },
+    });
+    expect(normalized.windows.map(({ id }) => id)).toEqual([
+      "five_hour",
+      "weekly",
+      "month_total",
+      "month_code",
+    ]);
+    expect(normalized.windows[1]?.percentRemaining).toBe(80);
+  });
+
+  it("falls back to legacy usage when the usages map has no valid windows", () => {
+    expect(
+      normalizeKimiPayload({
+        usages: { limit_7d: { reset_time: "2026-09-17T00:00:00Z" } },
+        usage: { used: "20", limit: "100" },
+      }).windows,
+    ).toEqual([
+      {
+        id: "weekly",
+        label: "week",
+        kind: "weekly",
+        percentUsed: 20,
+        percentRemaining: 80,
+        windowSeconds: 604_800,
+      },
+    ]);
+  });
+
+  it("rejects payloads that establish no quota windows", () => {
+    expect(() => normalizeKimiPayload({ usages: {} })).toThrow(
+      "schema_invalid",
+    );
+    expect(() =>
+      normalizeKimiPayload({
+        usages: { limit_7d: { reset_time: "2026-09-17T00:00:00Z" } },
+      }),
+    ).toThrow("schema_invalid");
+    expect(() => normalizeKimiPayload({ usage: { used: 1 } })).toThrow(
+      "schema_invalid",
+    );
   });
 
   it.each([
