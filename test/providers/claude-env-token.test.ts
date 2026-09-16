@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -13,6 +13,7 @@ vi.mock("../../src/lib/process.js", () => ({ execFileText }));
 
 const ENV_TOKEN = "synthetic-env-token";
 const STORED_TOKEN = "synthetic-stored-token";
+const OAUTH_FILE_TOKEN = "synthetic-oauth-file-token";
 const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
 const options = { allowKeychainPrompt: true, refreshCredentials: false };
 const service = "Claude Code-credentials";
@@ -56,6 +57,20 @@ function mockUnreadableStore(): void {
     if (args[0] === "dump-keychain") return "";
     throw Object.assign(new Error("unreachable"), { code: 44 });
   });
+}
+
+/**
+ * Writes the `.credentials.json` sidecar quota-axi reads as the `oauth-file`
+ * source. On darwin this exists alongside the Keychain source (both are
+ * checked), giving a second, independent stored candidate.
+ */
+function writeOauthFile(accessToken: string): void {
+  const dir = join(home, ".claude");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    join(dir, ".credentials.json"),
+    JSON.stringify({ claudeAiOauth: { accessToken } }),
+  );
 }
 
 function respondWith(body: unknown, status = 200): void {
@@ -204,6 +219,29 @@ describe("Claude CLAUDE_CODE_OAUTH_TOKEN credential source", () => {
     expect(report.state.error).toContain("403");
   });
 
+  it("stops on a definitive 401 without trying a healthy stored credential", async () => {
+    vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", ENV_TOKEN);
+    mockStore({ accessToken: STORED_TOKEN });
+    fetchMock.mockImplementation(async (_url: string, init: unknown) => {
+      const bearer = (init as { headers: Record<string, string> }).headers
+        .authorization;
+      if (bearer === `Bearer ${ENV_TOKEN}`) {
+        return new Response("{}", { status: 401 });
+      }
+      // The stored credential is healthy and would succeed if tried, so a
+      // fresh report here would mean quota-axi reported a bystander account.
+      return new Response(JSON.stringify({ five_hour: { utilization: 12 } }), {
+        status: 200,
+      });
+    });
+    const { fetchQuota } = await import("../../src/providers/claude.js");
+    const report = await fetchQuota(options);
+
+    expect(report.state.status).toBe("auth_required");
+    expect(report.windows).toEqual([]);
+    expect(usageBearers()).toEqual([`Bearer ${ENV_TOKEN}`]);
+  });
+
   it("falls through to the stored credential when the env token fails with a non-definitive error", async () => {
     vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", ENV_TOKEN);
     mockStore({ accessToken: STORED_TOKEN });
@@ -271,6 +309,60 @@ describe("Claude CLAUDE_CODE_OAUTH_TOKEN credential source", () => {
 
     expect(rejected.state.status).toBe("auth_required");
     expect(readCachedProvider("claude")).toBeUndefined();
+  });
+
+  it("does not purge an unrelated stored-profile cache on an env-only definitive rejection", async () => {
+    // Seed a stored-profile cache with no environment variable set.
+    mockStore({ accessToken: STORED_TOKEN });
+    const { fetchQuota } = await import("../../src/providers/claude.js");
+    const { writeCachedProviders, readCachedProvider } =
+      await import("../../src/cache.js");
+    const fresh = await fetchQuota(options);
+    expect(fresh.state.status).toBe("fresh");
+    writeCachedProviders([fresh]);
+    expect(readCachedProvider("claude")).toBeDefined();
+
+    // A later run selects the environment token instead. Its account is
+    // definitively rejected before any stored candidate is ever tried, so
+    // that verdict describes only the env-selected session and must not
+    // retire the unrelated stored-profile snapshot above.
+    vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", ENV_TOKEN);
+    fetchMock.mockClear();
+    respondWith({}, 401);
+    const rejected = await fetchQuota(options);
+
+    expect(rejected.state.status).toBe("auth_required");
+    expect(usageBearers()).toEqual([`Bearer ${ENV_TOKEN}`]);
+    expect(readCachedProvider("claude")).toBeDefined();
+  });
+
+  it("retains transient-before-definitive precedence for stored-only sources and does not purge the cache", async () => {
+    // On darwin both the Keychain and the .credentials.json sidecar are
+    // checked; Keychain is tried first. No environment variable is set, so
+    // this is a stored-only combination.
+    writeOauthFile(OAUTH_FILE_TOKEN);
+    mockStore({ accessToken: STORED_TOKEN });
+    const { fetchQuota } = await import("../../src/providers/claude.js");
+    const { writeCachedProviders, readCachedProvider } =
+      await import("../../src/cache.js");
+    const fresh = await fetchQuota(options);
+    expect(fresh.state.status).toBe("fresh");
+    writeCachedProviders([fresh]);
+    expect(readCachedProvider("claude")).toBeDefined();
+
+    // Keychain (tried first) is definitively rejected; the oauth-file sibling
+    // that runs next only fails transiently, so its outcome is unresolved
+    // rather than a confirmed sign-out.
+    fetchMock.mockImplementation(async (_url: string, init: unknown) => {
+      const bearer = (init as { headers: Record<string, string> }).headers
+        .authorization;
+      const status = bearer === `Bearer ${STORED_TOKEN}` ? 401 : 500;
+      return new Response("{}", { status });
+    });
+    const report = await fetchQuota(options);
+
+    expect(report.state.status).not.toBe("auth_required");
+    expect(readCachedProvider("claude")).toBeDefined();
   });
 
   it("trims surrounding whitespace on the environment token before sending it", async () => {

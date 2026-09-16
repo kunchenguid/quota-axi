@@ -198,6 +198,13 @@ type ClaudeQuotaPass =
       refreshableExpiredRejected: boolean;
       /** A Keychain value read was withheld, so its store cannot be re-read. */
       keychainWithheld: boolean;
+      /**
+       * The reported failure is the environment token's own definitive
+       * rejection, reached with no stored candidate ever tried. It must not
+       * be treated as a verdict on, or invalidate the cache of, an unrelated
+       * stored-profile account.
+       */
+      definitiveFailureIsEnvOnly: boolean;
     };
 
 export async function fetchQuota(
@@ -243,6 +250,7 @@ export async function fetchQuota(
     attempts,
     credentialContextId,
     claudeEnvOauthToken() !== undefined,
+    pass.definitiveFailureIsEnvOnly,
   );
 }
 
@@ -556,7 +564,9 @@ async function attemptClaudeQuota(
   }
 
   let definitiveFailure: ClaudeFailure | undefined;
+  let definitiveFailureIsEnv = false;
   let transientFailure: ClaudeFailure | undefined;
+  let transientFailureIsEnv = false;
   let refreshableExpiredRejected = false;
 
   if (credentialCandidates.length > 0) {
@@ -604,12 +614,23 @@ async function attemptClaudeQuota(
           error: failure.code,
         };
         if (failure.definitiveAuth) {
-          definitiveFailure ??= failure;
+          if (!definitiveFailure) {
+            definitiveFailure = failure;
+            definitiveFailureIsEnv = credential.source === "env";
+          }
           if (state.status === "expired" && state.refreshable) {
             refreshableExpiredRejected = true;
           }
+          // The env token names the account a live session actually uses, so
+          // its own definitive rejection is a verdict on that session: it must
+          // stop here rather than reporting a bystander stored account as the
+          // selected credential's result. A definitive failure from a stored
+          // source still lets a remaining sibling stored source be tried,
+          // matching the existing behavior for stored-only candidates.
+          if (credential.source === "env") break;
         } else {
           transientFailure = failure.withUsageFetchFailure();
+          transientFailureIsEnv = credential.source === "env";
           // The env token is an independent source the vendor merely resolves
           // first; its non-definitive failure must not withhold a still-untried
           // stored source. A transient failure from a stored source still stops
@@ -650,9 +671,15 @@ async function attemptClaudeQuota(
         KEYCHAIN_UNREACHABLE_ERROR,
       ].includes(state.source.error ?? ""),
   );
+  // Stored-only candidates keep the established rule that an unresolved
+  // (transient) sibling source must never be hidden behind an earlier
+  // definitive verdict. The env token is the one narrowly scoped exception:
+  // its own non-definitive failure must not mask a stored source's genuine
+  // definitive rejection, since that stored verdict is still fully resolved.
   let failure =
-    definitiveFailure ??
+    (transientFailureIsEnv ? definitiveFailure : undefined) ??
     transientFailure ??
+    definitiveFailure ??
     new ClaudeFailure("Claude quota unavailable", { staleEligible: true });
   // A failed Keychain discovery/read never saw the live session. A 401 from a leftover
   // oauth-file sidecar is not evidence the user is signed out of Claude.
@@ -670,6 +697,8 @@ async function attemptClaudeQuota(
       (state) =>
         state.status === "skipped" && state.source.source === "keychain",
     ),
+    definitiveFailureIsEnvOnly:
+      failure === definitiveFailure && definitiveFailureIsEnv,
   };
 }
 
@@ -678,8 +707,12 @@ function failureReport(
   attempts: SourceAttempt[],
   credentialContextId: string,
   envSelected: boolean,
+  definitiveFailureIsEnvOnly: boolean,
 ): ProviderQuota {
-  if (failure.definitiveAuth) {
+  // The env token's own rejection describes only the env-selected session; it
+  // never resolved a stored candidate, so it must not retire a cached snapshot
+  // that belongs to an unrelated stored-profile account.
+  if (failure.definitiveAuth && !definitiveFailureIsEnvOnly) {
     try {
       deleteCachedProvider("claude");
     } catch {
