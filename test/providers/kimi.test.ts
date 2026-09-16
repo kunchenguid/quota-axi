@@ -7,7 +7,7 @@ import {
   normalizeKimiPayload,
   normalizeRetryAfter,
 } from "../../src/providers/kimi.js";
-import { renderQuotaToon } from "../../src/render.js";
+import { quotaJsonReport, renderQuotaToon } from "../../src/render.js";
 import type {
   KimiCodeCliCredentialInspection,
   KimiCodeCliCredentialResolution,
@@ -855,6 +855,56 @@ describe("Kimi payload normalization", () => {
         },
       }).windows.map(({ id }) => id),
     ).toEqual(["weekly"]);
+  });
+
+  it("does not leak binary-decimal used_ratio noise into JSON or TOON", async () => {
+    const report = await testAdapter({
+      fetch: vi.fn(async () =>
+        jsonResponse({
+          usages: {
+            limit_5h: {
+              used_ratio: 0.3,
+              reset_time: "2026-09-16T20:00:00Z",
+            },
+            limit_7d: {
+              used_ratio: 0.57,
+              reset_time: "2026-09-20T00:00:00Z",
+            },
+            limit_month_total: {
+              used_ratio: 0.4,
+              reset_time: "2026-10-01T00:00:00Z",
+            },
+          },
+        }),
+      ),
+    }).fetchQuota(OPTIONS);
+
+    const weekly = report.windows.find(({ id }) => id === "weekly");
+    expect(weekly).toMatchObject({
+      percentUsed: 57,
+      percentRemaining: 43,
+    });
+    expect(JSON.stringify(weekly)).not.toContain("56.99999999999999");
+    expect(JSON.stringify(weekly)).not.toContain("43.00000000000001");
+
+    const generatedAt = new Date(NOW).toISOString();
+    const response = {
+      generatedAt,
+      schemaVersion: 5 as const,
+      providers: [withQuotaSemantics(report, generatedAt)],
+    };
+    const json = JSON.stringify(quotaJsonReport(response, false));
+    const toon = renderQuotaToon(response, "quota-axi");
+    expect(json).toContain('"effectivePercentRemaining":43');
+    expect(json).not.toContain("43.00000000000001");
+    expect(toon).toContain("kimi,all_models,43,");
+    expect(toon).not.toContain("43.00000000000001");
+
+    expect(
+      normalizeKimiPayload({
+        usages: { limit_7d: { used_ratio: 0.571 } },
+      }).windows[0],
+    ).toMatchObject({ percentUsed: 57.1, percentRemaining: 42.9 });
   });
 
   it("keeps monthly total and code as distinct windows and omits a monthly duration", () => {

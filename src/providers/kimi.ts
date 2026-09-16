@@ -1219,7 +1219,7 @@ function normalizeRatioDetail(value: unknown): NormalizedDetail | undefined {
   if (!detail) return undefined;
   const ratio = nonnegativeScalar(detail.used_ratio);
   if (ratio === undefined) return undefined;
-  const percentUsed = clampPercent(ratio * 100);
+  const percentUsed = clampPercent(Number((ratio * 100).toFixed(10)));
   const resetsAt = normalizedReset(detail);
   return {
     percentUsed,
