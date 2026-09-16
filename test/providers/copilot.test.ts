@@ -69,7 +69,7 @@ describe("GitHub Copilot quota parsing", () => {
       quota_snapshots: {
         chat: {
           percent_remaining: 80,
-          quota_reset_at: 1785542400,
+          quota_reset_at: 1784332800,
         },
         premium_interactions: {
           percent_remaining: "25",
@@ -86,7 +86,7 @@ describe("GitHub Copilot quota parsing", () => {
         kind: "monthly",
         percentUsed: 20,
         percentRemaining: 80,
-        resetsAt: "2026-08-01T00:00:00.000Z",
+        resetsAt: "2026-07-18T00:00:00.000Z",
       },
       {
         id: "premium_interactions",
@@ -111,12 +111,17 @@ describe("GitHub Copilot quota parsing", () => {
           percent_remaining: 60,
           quota_reset_at: -1,
         },
+        premium_interactions: {
+          percent_remaining: 40,
+          quota_reset_at: "0",
+        },
       },
     });
 
     expect(result?.windows).toMatchObject([
       { id: "chat", resetsAt: "2026-10-01T00:00:00.000Z" },
       { id: "completions", resetsAt: "2026-10-01T00:00:00.000Z" },
+      { id: "premium_interactions", resetsAt: "2026-10-01T00:00:00.000Z" },
     ]);
   });
 
