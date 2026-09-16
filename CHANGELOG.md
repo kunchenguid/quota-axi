@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.1.45](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.44...quota-axi-v0.1.45) (2026-09-16)
+
+
+### Features
+
+* **claude:** read CLAUDE_CODE_OAUTH_TOKEN as a credential source ([#196](https://github.com/kunchenguid/quota-axi/issues/196)) ([d1ea843](https://github.com/kunchenguid/quota-axi/commit/d1ea843cbacae0d2b05de1c29d424e755ba90d35))
+* **providers:** report Antigravity quota via CLI /quota with grouped semantics ([#159](https://github.com/kunchenguid/quota-axi/issues/159)) ([4b91f9e](https://github.com/kunchenguid/quota-axi/commit/4b91f9e9064cbadddc079729f35799ef0a996225))
+* **providers:** report Z.AI coding-plan and OpenCode Go contributor-package quota ([#184](https://github.com/kunchenguid/quota-axi/issues/184)) ([408e4f5](https://github.com/kunchenguid/quota-axi/commit/408e4f508e20868e1226d769cfe30cf408a6cc6a))
+
+
+### Bug Fixes
+
+* **codex:** use supported app-server approval policy ([#190](https://github.com/kunchenguid/quota-axi/issues/190)) ([5e2a6ae](https://github.com/kunchenguid/quota-axi/commit/5e2a6aee5309445113e8cda533a893cb45ce2b4a))
+
 ## [0.1.44](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.43...quota-axi-v0.1.44) (2026-09-15)
 
 
