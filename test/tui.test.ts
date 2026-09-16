@@ -933,13 +933,10 @@ describe("color handling", () => {
 
     const cardLines = (card: 0 | 1): string[] =>
       lines.map((line) =>
-        card === 0
-          ? line.slice(0, CARD_COLUMNS)
-          : line.slice(CARD_COLUMNS + 2),
+        card === 0 ? line.slice(0, CARD_COLUMNS) : line.slice(CARD_COLUMNS + 2),
       );
     const accountRows = (card: 0 | 1, key: string): number =>
-      cardLines(card).filter((line) => line.includes(`account ${key} `))
-        .length;
+      cardLines(card).filter((line) => line.includes(`account ${key} `)).length;
     expect(accountRows(0, "openai-codex-work")).toBe(1);
     expect(accountRows(1, "openai-codex")).toBe(1);
     expect(findCardLine(lines, 1, "Codex sign-in required")).toBeDefined();
