@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { readCachedProvider } from "../cache.js";
+import { deleteCachedProvider, readCachedProvider } from "../cache.js";
 import { collapseHome } from "../lib/fs.js";
 import { providerFetch } from "../lib/http.js";
 import {
@@ -212,7 +212,9 @@ function unavailableReport(
   failure: KiroFailure,
   attempts: SourceAttempt[],
 ): ProviderQuota {
-  const cached = readCachedProvider("kiro");
+  const definitiveAuthFailure = failure.status === "auth_required";
+  if (definitiveAuthFailure) deleteCachedProvider("kiro");
+  const cached = definitiveAuthFailure ? undefined : readCachedProvider("kiro");
   if (cached) {
     const stale = staleFromCache(
       cached,

@@ -3,6 +3,7 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { readCachedProvider, writeCachedProviders } from "../../src/cache.js";
 import {
   createKiroAdapter,
   normalizeKiroUsage,
@@ -455,6 +456,123 @@ describe("Kiro quota transport", () => {
     expect(report.state).toMatchObject({
       status: "error",
       error: "Kiro quota unavailable (500)",
+    });
+  });
+
+  describe("with a cached fresh reading", () => {
+    const cachedKiro = () => ({
+      provider: "kiro" as const,
+      label: "Kiro",
+      source: "api" as const,
+      plan: "KIRO PRO+",
+      windows: [
+        {
+          id: "credit",
+          label: "Credits",
+          kind: "credits" as const,
+          percentUsed: 25,
+          percentRemaining: 75,
+          resetsAt: "2099-09-01T00:00:00.000Z",
+        },
+      ],
+      state: {
+        status: "fresh" as const,
+        stale: false,
+        refreshedAt: "2026-08-01T00:00:00.000Z",
+        sourcesTried: ["kiro-sqlite"],
+      },
+    });
+
+    beforeEach(() => {
+      writeCachedProviders([cachedKiro()]);
+      expect(readCachedProvider("kiro")).toBeDefined();
+    });
+
+    it("retires the cache after logout instead of serving stale credit", async () => {
+      const missing: KiroCredentialState = {
+        status: "missing",
+        source: { ...SOURCE, status: "missing" },
+      };
+      const report = await adapterWith(missing, vi.fn()).fetchQuota(OPTIONS);
+      expect(report).toMatchObject({
+        source: "unavailable",
+        windows: [],
+        state: { status: "auth_required", error: "Kiro sign-in required" },
+      });
+      expect(readCachedProvider("kiro")).toBeUndefined();
+    });
+
+    it("retires the cache for a broken store", async () => {
+      const invalid: KiroCredentialState = {
+        status: "invalid",
+        source: { ...SOURCE, status: "invalid", error: "json_parse_error" },
+      };
+      const report = await adapterWith(invalid, vi.fn()).fetchQuota(OPTIONS);
+      expect(report.state.status).toBe("auth_required");
+      expect(report.windows).toEqual([]);
+      expect(readCachedProvider("kiro")).toBeUndefined();
+    });
+
+    it.each([401, 403])(
+      "retires the cache when a stored-valid token is rejected with %d",
+      async (status) => {
+        const request = vi.fn(async () => new Response(null, { status }));
+        const report = await adapterWith(CREDENTIALS, request).fetchQuota(
+          OPTIONS,
+        );
+        expect(report).toMatchObject({
+          source: "unavailable",
+          windows: [],
+          state: { status: "auth_required", authStatus: "unusable" },
+        });
+        expect(readCachedProvider("kiro")).toBeUndefined();
+      },
+    );
+
+    it("serves the last fresh snapshot for a timed-out request and keeps the cache", async () => {
+      const request = vi.fn(async () => {
+        throw new DOMException("The operation was aborted", "AbortError");
+      });
+      const report = await adapterWith(CREDENTIALS, request).fetchQuota(
+        OPTIONS,
+      );
+      expect(report).toMatchObject({
+        source: "cache",
+        windows: [{ id: "credit", percentRemaining: 75 }],
+        state: {
+          status: "stale",
+          stale: true,
+          error: "Kiro quota request timed out",
+        },
+      });
+      expect(readCachedProvider("kiro")).toBeDefined();
+    });
+
+    it("serves the last fresh snapshot for soft expiry and keeps the cache", async () => {
+      const request = vi.fn(async () => new Response(null, { status: 401 }));
+      const report = await adapterWith(
+        STORED_EXPIRED_REFRESHABLE,
+        request,
+      ).fetchQuota(OPTIONS);
+      expect(report).toMatchObject({
+        source: "cache",
+        windows: [{ id: "credit" }],
+        state: { status: "stale", authStatus: "expired_refreshable" },
+      });
+      expect(readCachedProvider("kiro")).toBeDefined();
+    });
+
+    it("serves the last fresh snapshot for a locked store and keeps the cache", async () => {
+      const busy: KiroCredentialState = {
+        status: "error",
+        source: { ...SOURCE, status: "error", error: "database_busy" },
+      };
+      const report = await adapterWith(busy, vi.fn()).fetchQuota(OPTIONS);
+      expect(report.state).toMatchObject({
+        status: "stale",
+        error: "Kiro credential store unavailable",
+      });
+      expect(readCachedProvider("kiro")).toBeDefined();
     });
   });
 });
