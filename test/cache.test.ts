@@ -240,6 +240,22 @@ describe("quota cache", () => {
     expect(readCachedClaudeProvider(claudeCredentialContextId())).toBeDefined();
   });
 
+  it("keeps one Claude snapshot when the credential context changes", () => {
+    useTempCache();
+    process.env.CLAUDE_CONFIG_DIR = join(tempDir!, "claude-context-a");
+    writeCachedProviders([quota("claude", 10)]);
+    process.env.CLAUDE_CONFIG_DIR = join(tempDir!, "claude-context-b");
+    writeCachedProviders([quota("claude", 20)]);
+
+    const payload = JSON.parse(readFileSync(cacheFilePath(), "utf8")) as {
+      providers: Array<{ snapshot: ProviderQuota }>;
+    };
+    expect(payload.providers).toHaveLength(1);
+
+    writeCachedProviders([quotaWithoutWindows("claude")]);
+    expect(readCachedProvider("claude")).toBeUndefined();
+  });
+
   it("refuses Kimi cache captured under another Kimi Code environment", async () => {
     useTempCache();
     const codeHome = join(tempDir!, "synthetic-kimi-code-home");

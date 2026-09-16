@@ -370,6 +370,8 @@ Two keys that carry the same stored `accountId` are the same ChatGPT account and
 A key whose identity cannot be compared is left as its own lane so the uncertainty stays visible.
 
 When only the built-in Pi entry (or none) is present, Codex keeps its existing single-winner path: native `$CODEX_HOME/auth.json`, then `openai-codex`, then the CLI fallback.
+When siblings are present and a native `$CODEX_HOME/auth.json` exists, that login stays first as its own `codex-home` lane, read from `auth.json` and then the CLI fallback.
+A Pi key whose stored `accountId` matches the native login is not a separate lane; the built-in `openai-codex` copy of that account stays the native lane's fallback, as it was before.
 `--profile-only` still reads one native Codex file and never opens Pi auth.
 
 ### Account keys and compatibility
@@ -381,6 +383,7 @@ Models and model sort ties use **`provider` + `accountKey` + `id`**.
 Declaration order remains non-preferential; quotas are never combined across accounts.
 
 A Codex Pi lane's key is the auth.json provider id (`openai-codex`, `openai-codex-work`).
+The native Codex lane's key is `codex-home` and has no `accountLocator`.
 It is stable across refreshes and discovery order and contains no token, email, or path.
 `--full` adds `accountLocator` (`kind: pi-auth`, `path`, and `entry`) plus the vendor identity the usage endpoint supplied, when any.
 

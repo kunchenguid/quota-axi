@@ -250,16 +250,15 @@ export type DegradedSource = {
 
 export type AccountLocator = {
   /** Local credential selector, never a credential or a verified user identity. */
-  kind: string;
+  kind: "pi-auth";
   path: string;
-  entry?: string;
-  keychainService?: string;
+  entry: string;
 };
 
 export type ProviderAccount = {
   /** Opaque local lane identity, stable across refresh and discovery order. */
   accountKey: string;
-  locator: AccountLocator;
+  locator?: AccountLocator;
   fetchQuota(options: ProviderOptions): Promise<ProviderQuota>;
   inspectAuth(options: ProviderOptions): Promise<AuthProviderReport>;
 };

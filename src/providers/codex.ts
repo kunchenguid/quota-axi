@@ -145,10 +145,11 @@ export async function fetchQuota(
   return fetchQuotaWithDependencies(defaultCodexDependencies, options);
 }
 
-type CodexAccountContext = {
-  piProviderId: string;
-  accountKey: string;
-};
+const CODEX_HOME_ACCOUNT_KEY = "codex-home";
+
+type CodexAccountContext =
+  | { kind: "native"; accountKey: string; includesBuiltinPi: boolean }
+  | { kind: "pi"; piProviderId: string; accountKey: string };
 
 async function discoverCodexAccounts(
   dependencies: CodexDependencies,
@@ -163,6 +164,29 @@ async function discoverCodexAccounts(
 
   const accounts: ProviderAccount[] = [];
   const seenAccountIds = new Set<string>();
+  const nativeState = readCredentialState();
+  let nativeAccount:
+    | Extract<CodexAccountContext, { kind: "native" }>
+    | undefined;
+  if (nativeState.status !== "missing") {
+    const nativeAccountId =
+      nativeState.status === "available" || nativeState.status === "expired"
+        ? nativeState.credentials.accountId
+        : undefined;
+    if (nativeAccountId) seenAccountIds.add(nativeAccountId);
+    nativeAccount = {
+      kind: "native",
+      accountKey: CODEX_HOME_ACCOUNT_KEY,
+      includesBuiltinPi: false,
+    };
+    const account = nativeAccount;
+    accounts.push({
+      accountKey: account.accountKey,
+      fetchQuota: (options) =>
+        fetchQuotaWithDependencies(dependencies, options, account),
+      inspectAuth: () => inspectAuthWithDependencies(dependencies, account),
+    });
+  }
   for (const piProviderId of ids) {
     const resolution = await resolvePiEntry(dependencies, piProviderId);
     const accountId =
@@ -170,20 +194,25 @@ async function discoverCodexAccounts(
         ? resolution.credentials?.accountId
         : undefined;
     if (accountId !== undefined) {
-      if (seenAccountIds.has(accountId)) continue;
+      if (seenAccountIds.has(accountId)) {
+        if (nativeAccount && piProviderId === PI_CODEX_BUILTIN_ID) {
+          nativeAccount.includesBuiltinPi = true;
+        }
+        continue;
+      }
       seenAccountIds.add(accountId);
     }
-    const locator = await piAccountLocator(dependencies, piProviderId);
-    accounts.push({
+    const account: CodexAccountContext = {
+      kind: "pi",
+      piProviderId,
       accountKey: piProviderId,
-      locator,
+    };
+    accounts.push({
+      accountKey: account.accountKey,
+      locator: await piAccountLocator(dependencies, piProviderId),
       fetchQuota: (options) =>
-        fetchQuotaWithDependencies(dependencies, options, {
-          piProviderId,
-          accountKey: piProviderId,
-        }),
-      inspectAuth: () =>
-        inspectAuthWithDependencies(dependencies, piProviderId),
+        fetchQuotaWithDependencies(dependencies, options, account),
+      inspectAuth: () => inspectAuthWithDependencies(dependencies, account),
     });
   }
   return accounts.length > 0 ? accounts : undefined;
@@ -252,7 +281,7 @@ async function piAccountLocator(
 
 async function fetchPiAccountQuota(
   dependencies: CodexDependencies,
-  account: CodexAccountContext,
+  account: Extract<CodexAccountContext, { kind: "pi" }>,
 ): Promise<ProviderQuota> {
   const source = piCodexSource(account.piProviderId);
   const attempts: SourceAttempt[] = [];
@@ -318,7 +347,7 @@ async function fetchQuotaWithDependencies(
   account?: CodexAccountContext,
 ): Promise<ProviderQuota> {
   if (isProfileOnly(options)) return fetchProfileOnlyQuota();
-  if (account) return fetchPiAccountQuota(dependencies, account);
+  if (account?.kind === "pi") return fetchPiAccountQuota(dependencies, account);
 
   const attempts: SourceAttempt[] = [];
   let finalError = "Codex quota unavailable";
@@ -370,6 +399,7 @@ async function fetchQuotaWithDependencies(
       oauthSelection.retryAfter,
       attempts,
       "oauth",
+      account?.accountKey,
     );
   }
   if (oauthSelection.outcome === "all_rejected") {
@@ -377,78 +407,80 @@ async function fetchQuotaWithDependencies(
     errorIsDefault = false;
   }
 
-  let piResolution: PiCodexCredentialResolution;
-  try {
-    piResolution = await dependencies.piCodexBroker.resolve();
-  } catch {
-    piResolution = { status: "error" };
-  }
-  const piCandidates: CredentialCandidate<CodexAttemptCredential>[] = [];
-  if (piResolution.status === "available") {
-    piCandidates.push({
-      source: PI_CODEX_CREDENTIAL_SOURCE,
-      localState: "valid",
-      credential: {
+  if (!account || account.includesBuiltinPi) {
+    let piResolution: PiCodexCredentialResolution;
+    try {
+      piResolution = await dependencies.piCodexBroker.resolve();
+    } catch {
+      piResolution = { status: "error" };
+    }
+    const piCandidates: CredentialCandidate<CodexAttemptCredential>[] = [];
+    if (piResolution.status === "available") {
+      piCandidates.push({
         source: PI_CODEX_CREDENTIAL_SOURCE,
-        credentials: piResolution.credentials,
-      },
-    });
-  } else if (
-    piResolution.status === "expired" &&
-    piResolution.credentials !== undefined
-  ) {
-    piCandidates.push({
-      source: PI_CODEX_CREDENTIAL_SOURCE,
-      localState: "expired",
-      refreshable: piResolution.refreshable,
-      credential: {
-        source: PI_CODEX_CREDENTIAL_SOURCE,
-        credentials: piResolution.credentials,
-      },
-    });
-  } else {
-    attempts.push(piSourceAttempt(piResolution));
-    if (
-      piResolution.status === "error" &&
-      (errorIsDefault || statusFromError(finalError) === "auth_required")
+        localState: "valid",
+        credential: {
+          source: PI_CODEX_CREDENTIAL_SOURCE,
+          credentials: piResolution.credentials,
+        },
+      });
+    } else if (
+      piResolution.status === "expired" &&
+      piResolution.credentials !== undefined
     ) {
-      finalError = "Codex Pi credential resolution failed";
-      errorIsDefault = false;
-    } else if (errorIsDefault) {
-      if (piResolution.status === "expired") {
-        // Expired and unprobeable: the store held no token to test.
-        finalError = "Pi Codex access token expired";
+      piCandidates.push({
+        source: PI_CODEX_CREDENTIAL_SOURCE,
+        localState: "expired",
+        refreshable: piResolution.refreshable,
+        credential: {
+          source: PI_CODEX_CREDENTIAL_SOURCE,
+          credentials: piResolution.credentials,
+        },
+      });
+    } else {
+      attempts.push(piSourceAttempt(piResolution));
+      if (
+        piResolution.status === "error" &&
+        (errorIsDefault || statusFromError(finalError) === "auth_required")
+      ) {
+        finalError = "Codex Pi credential resolution failed";
         errorIsDefault = false;
-      } else if (piResolution.status !== "missing") {
+      } else if (errorIsDefault) {
+        if (piResolution.status === "expired") {
+          // Expired and unprobeable: the store held no token to test.
+          finalError = "Pi Codex access token expired";
+          errorIsDefault = false;
+        } else if (piResolution.status !== "missing") {
+          finalError = "Codex sign-in required";
+          errorIsDefault = false;
+        }
+      }
+    }
+
+    const piSelection = await selectCredential(piCandidates, (candidate) =>
+      attemptCodexCandidate(candidate.credential),
+    );
+    appendSelectionAttempts(attempts, piSelection);
+    if (piSelection.outcome === "quota") {
+      return codexSuccessReport(
+        piSelection.result!,
+        PI_CODEX_CREDENTIAL_SOURCE,
+        attempts,
+      );
+    }
+    if (piSelection.outcome === "transient") {
+      return codexFailureReport(
+        piSelection.transientError ?? finalError,
+        piSelection.retryAfter,
+        attempts,
+        PI_CODEX_CREDENTIAL_SOURCE,
+      );
+    }
+    if (piSelection.outcome === "all_rejected") {
+      if (errorIsDefault || statusFromError(finalError) === "auth_required") {
         finalError = "Codex sign-in required";
         errorIsDefault = false;
       }
-    }
-  }
-
-  const piSelection = await selectCredential(piCandidates, (candidate) =>
-    attemptCodexCandidate(candidate.credential),
-  );
-  appendSelectionAttempts(attempts, piSelection);
-  if (piSelection.outcome === "quota") {
-    return codexSuccessReport(
-      piSelection.result!,
-      PI_CODEX_CREDENTIAL_SOURCE,
-      attempts,
-    );
-  }
-  if (piSelection.outcome === "transient") {
-    return codexFailureReport(
-      piSelection.transientError ?? finalError,
-      piSelection.retryAfter,
-      attempts,
-      PI_CODEX_CREDENTIAL_SOURCE,
-    );
-  }
-  if (piSelection.outcome === "all_rejected") {
-    if (errorIsDefault || statusFromError(finalError) === "auth_required") {
-      finalError = "Codex sign-in required";
-      errorIsDefault = false;
     }
   }
 
@@ -480,7 +512,13 @@ async function fetchQuotaWithDependencies(
     }
   }
 
-  return codexFailureReport(finalError, undefined, attempts);
+  return codexFailureReport(
+    finalError,
+    undefined,
+    attempts,
+    undefined,
+    account?.accountKey,
+  );
 }
 
 /**
@@ -589,18 +627,18 @@ export async function inspectAuth(
 
 async function inspectAuthWithDependencies(
   dependencies: CodexDependencies,
-  piProviderId?: string,
+  account?: CodexAccountContext,
 ): Promise<AuthProviderReport> {
-  if (piProviderId !== undefined) {
+  if (account?.kind === "pi") {
     let piSource: AuthSourceReport;
     try {
       piSource = piInspectionSource(
-        await inspectPiEntry(dependencies, piProviderId),
-        piCodexSource(piProviderId),
+        await inspectPiEntry(dependencies, account.piProviderId),
+        piCodexSource(account.piProviderId),
       );
     } catch {
       piSource = {
-        source: piCodexSource(piProviderId),
+        source: piCodexSource(account.piProviderId),
         status: "error",
         error: "credential_resolution_failed",
       };
@@ -612,22 +650,25 @@ async function inspectAuthWithDependencies(
   }
   const authFile = codexAuthFile();
   const credentialState = readCredentialState(authFile);
-  let piSource: AuthSourceReport;
-  try {
-    piSource = piInspectionSource(await dependencies.piCodexBroker.inspect());
-  } catch {
-    piSource = {
-      source: PI_CODEX_CREDENTIAL_SOURCE,
-      status: "error",
-      error: "credential_resolution_failed",
-    };
+  const sources: AuthSourceReport[] = [credentialState.source];
+  if (!account || account.includesBuiltinPi) {
+    try {
+      sources.push(
+        piInspectionSource(await dependencies.piCodexBroker.inspect()),
+      );
+    } catch {
+      sources.push({
+        source: PI_CODEX_CREDENTIAL_SOURCE,
+        status: "error",
+        error: "credential_resolution_failed",
+      });
+    }
   }
   const binary = await resolveCodexBinary();
   return {
     provider: "codex",
     sources: [
-      credentialState.source,
-      piSource,
+      ...sources,
       {
         source: "cli-rpc",
         path: binary.path,

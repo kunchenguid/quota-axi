@@ -422,6 +422,133 @@ describe("Codex Pi sibling account lanes", () => {
     );
   });
 
+  it("keeps a native Codex login as its own lane beside Pi siblings", async () => {
+    writeNativeAuth("native-access-token", "acct-native");
+    writePiAuth({
+      "openai-codex": piOauthEntry({
+        access: "personal-access-token",
+        accountId: "acct-personal",
+      }),
+      "openai-codex-work": piOauthEntry({
+        access: "work-access-token",
+        accountId: "acct-work",
+      }),
+    });
+    stubUsageByToken({
+      "native-access-token": usage(5, "native@example.invalid", "acct-native"),
+      "personal-access-token": usage(
+        20,
+        "personal@example.invalid",
+        "acct-personal",
+      ),
+      "work-access-token": usage(80, "work@example.invalid", "acct-work"),
+    });
+
+    const adapter = (
+      await import("../../src/providers/codex.js")
+    ).createCodexAdapter();
+    const reports = await fetchAccountQuotas(adapter, OPTIONS);
+    expect(
+      reports.map((report) => [
+        report.accountKey,
+        report.source,
+        report.windows[0]?.percentUsed,
+      ]),
+    ).toEqual([
+      ["codex-home", "oauth", 5],
+      ["openai-codex", "pi:openai-codex", 20],
+      ["openai-codex-work", "pi:openai-codex-work", 80],
+    ]);
+    expect(reports[0]?.accountLocator).toBeUndefined();
+
+    const auth = await inspectAccountAuth(adapter, OPTIONS);
+    expect(auth[0]).toMatchObject({ accountKey: "codex-home" });
+    expect(auth[0]?.sources.map((source) => source.source)).toEqual([
+      "auth-json",
+      "cli-rpc",
+    ]);
+  });
+
+  it("reads a usable native login instead of its expired Pi copy", async () => {
+    writeNativeAuth("native-access-token", "acct-personal");
+    writePiAuth({
+      "openai-codex": piOauthEntry({
+        access: "expired-personal-access-token",
+        accountId: "acct-personal",
+        expires: Date.now() - 3_600_000,
+      }),
+      "openai-codex-work": piOauthEntry({
+        access: "work-access-token",
+        accountId: "acct-work",
+      }),
+    });
+    stubUsageByToken({
+      "native-access-token": usage(
+        30,
+        "personal@example.invalid",
+        "acct-personal",
+      ),
+      "expired-personal-access-token": new Response("unauthorized", {
+        status: 401,
+      }),
+      "work-access-token": usage(80, "work@example.invalid", "acct-work"),
+    });
+
+    const adapter = (
+      await import("../../src/providers/codex.js")
+    ).createCodexAdapter();
+    const reports = await fetchAccountQuotas(adapter, OPTIONS);
+    expect(reports).toHaveLength(2);
+    expect(reports[0]).toMatchObject({
+      accountKey: "codex-home",
+      source: "oauth",
+      windows: [{ percentUsed: 30 }],
+      state: { status: "fresh" },
+    });
+    expect(reports[1]).toMatchObject({
+      accountKey: "openai-codex-work",
+      windows: [{ percentUsed: 80 }],
+    });
+  });
+
+  it("falls back to the same account's Pi copy when the native login is rejected", async () => {
+    writeNativeAuth("rejected-native-access-token", "acct-personal");
+    writePiAuth({
+      "openai-codex": piOauthEntry({
+        access: "personal-access-token",
+        accountId: "acct-personal",
+      }),
+      "openai-codex-work": piOauthEntry({
+        access: "work-access-token",
+        accountId: "acct-work",
+      }),
+    });
+    stubUsageByToken({
+      "rejected-native-access-token": new Response("unauthorized", {
+        status: 401,
+      }),
+      "personal-access-token": usage(
+        30,
+        "personal@example.invalid",
+        "acct-personal",
+      ),
+      "work-access-token": usage(80, "work@example.invalid", "acct-work"),
+    });
+
+    const adapter = (
+      await import("../../src/providers/codex.js")
+    ).createCodexAdapter();
+    const reports = await fetchAccountQuotas(adapter, OPTIONS);
+    expect(reports.map((report) => report.accountKey)).toEqual([
+      "codex-home",
+      "openai-codex-work",
+    ]);
+    expect(reports[0]).toMatchObject({
+      source: "pi:openai-codex",
+      windows: [{ percentUsed: 30 }],
+    });
+  });
+
   it("does not open Pi sibling lanes under --profile-only", async () => {
     writePiAuth({
       "openai-codex": piOauthEntry({
@@ -512,6 +639,16 @@ function writePiAuth(store: Record<string, unknown>): void {
   );
 }
 
+function writeNativeAuth(accessToken: string, accountId: string): void {
+  writeFileSync(
+    join(process.env.CODEX_HOME!, "auth.json"),
+    JSON.stringify({
+      tokens: { access_token: accessToken, account_id: accountId },
+    }),
+    { mode: 0o600 },
+  );
+}
+
 function piOauthEntry(overrides: Record<string, unknown> = {}) {
   return {
     type: "oauth",
@@ -551,6 +688,20 @@ function stubUsageByAccount(responses: Record<string, Response>): void {
     vi.fn(async (_url: string, init?: RequestInit) => {
       const accountId = new Headers(init?.headers).get("ChatGPT-Account-Id");
       const response = accountId ? responses[accountId] : undefined;
+      if (!response) return new Response("not found", { status: 404 });
+      return response.clone();
+    }),
+  );
+}
+
+function stubUsageByToken(responses: Record<string, Response>): void {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (_url: string, init?: RequestInit) => {
+      const token = new Headers(init?.headers)
+        .get("authorization")
+        ?.replace(/^Bearer /, "");
+      const response = token ? responses[token] : undefined;
       if (!response) return new Response("not found", { status: 404 });
       return response.clone();
     }),

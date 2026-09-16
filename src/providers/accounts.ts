@@ -61,7 +61,7 @@ export async function fetchAccountQuotas(
         : {
             ...report,
             accountKey: account.accountKey,
-            accountLocator: account.locator,
+            ...(account.locator ? { accountLocator: account.locator } : {}),
           },
     );
   }

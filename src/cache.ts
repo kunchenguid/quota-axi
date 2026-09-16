@@ -126,7 +126,7 @@ export function writeCachedProviders(providers: ProviderQuota[]): void {
         (provider) =>
           provider.state.status === "fresh" && provider.windows.length === 0,
       )
-      .map((provider) => cacheIdentity(provider, providerContextId(provider))),
+      .map(cacheIdentity),
   );
   const cacheable = providers
     .map(toCacheProvider)
@@ -136,25 +136,15 @@ export function writeCachedProviders(providers: ProviderQuota[]): void {
   const byProvider = new Map<string, CachedProvider>();
   let clearedExisting = false;
   for (const provider of readCacheProviders()) {
-    if (
-      clearProviders.has(
-        cacheIdentity(provider.snapshot, provider.credentialContextId),
-      )
-    ) {
+    if (clearProviders.has(cacheIdentity(provider.snapshot))) {
       clearedExisting = true;
       continue;
     }
-    byProvider.set(
-      cacheIdentity(provider.snapshot, provider.credentialContextId),
-      provider,
-    );
+    byProvider.set(cacheIdentity(provider.snapshot), provider);
   }
   if (cacheable.length === 0 && !clearedExisting) return;
   for (const provider of cacheable)
-    byProvider.set(
-      cacheIdentity(provider.snapshot, provider.credentialContextId),
-      provider,
-    );
+    byProvider.set(cacheIdentity(provider.snapshot), provider);
   const merged = [...byProvider.values()].sort(
     (a, b) =>
       PROVIDER_IDS.indexOf(a.snapshot.provider) -
@@ -167,12 +157,8 @@ export function writeCachedProviders(providers: ProviderQuota[]): void {
   writeCacheFile(file, merged);
 }
 
-function providerContextId(provider: ProviderQuota): string | undefined {
-  return CONTEXT_SCOPED_PROVIDERS[provider.provider]?.();
-}
-
-function cacheIdentity(provider: ProviderQuota, contextId?: string): string {
-  return `${provider.provider}/${contextId ?? provider.accountKey ?? "default"}`;
+function cacheIdentity(provider: ProviderQuota): string {
+  return `${provider.provider}/${provider.accountKey ?? "default"}`;
 }
 
 export function deleteCachedProvider(
