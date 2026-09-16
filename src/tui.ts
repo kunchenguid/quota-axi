@@ -849,11 +849,13 @@ function padCardToHeight(card: Card, height: number): Card {
   const missing = height - card.length;
   if (missing <= 0) return card;
   const bottom = card.at(-1);
-  const interiorLine = card[1];
-  if (!bottom || !interiorLine) return card;
+  // Row 1 carries content on account cards, so pad with a blank interior in
+  // the card's own border style rather than copying that row.
+  const borderStyle = card[1]?.[0]?.style;
+  if (!bottom || !borderStyle) return card;
   return [
     ...card.slice(0, -1),
-    ...Array.from({ length: missing }, () => [...interiorLine]),
+    ...Array.from({ length: missing }, () => interior([], borderStyle)),
     bottom,
   ];
 }

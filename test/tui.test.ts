@@ -11,8 +11,10 @@ import { withQuotaSemantics } from "../src/interpretation.js";
 import type { ProviderQuota } from "../src/types.js";
 import {
   claudeProvider,
+  codexProvider,
   fixtureResponse,
   GENERATED_AT,
+  signedOutProvider,
 } from "./fixtures/tui-response.js";
 
 const CARD_COLUMNS = 49;
@@ -910,6 +912,37 @@ describe("color handling", () => {
     expect(exhausted).toContain(
       "\x1b[1;38;2;243;139;168m✗ exhausted now\x1b[0m",
     );
+  });
+
+  it("pads a shorter account card with blank rows, not its account line", () => {
+    const work = { ...codexProvider(), accountKey: "openai-codex-work" };
+    const personal = {
+      ...signedOutProvider("kimi", "Codex sign-in required"),
+      provider: "codex",
+      label: "Codex",
+      accountKey: "openai-codex",
+    };
+    const lines = renderQuotaTui(
+      {
+        generatedAt: GENERATED_AT,
+        schemaVersion: 5,
+        providers: [work, personal],
+      },
+      { columns: 120, timeZone: "America/Los_Angeles" },
+    ).split("\n");
+
+    const cardLines = (card: 0 | 1): string[] =>
+      lines.map((line) =>
+        card === 0
+          ? line.slice(0, CARD_COLUMNS)
+          : line.slice(CARD_COLUMNS + 2),
+      );
+    const accountRows = (card: 0 | 1, key: string): number =>
+      cardLines(card).filter((line) => line.includes(`account ${key} `))
+        .length;
+    expect(accountRows(0, "openai-codex-work")).toBe(1);
+    expect(accountRows(1, "openai-codex")).toBe(1);
+    expect(findCardLine(lines, 1, "Codex sign-in required")).toBeDefined();
   });
 
   it("detects color depth from the environment", () => {
