@@ -372,8 +372,9 @@ A key whose identity cannot be compared is left as its own lane so the uncertain
 When only the built-in Pi entry (or none) is present, Codex keeps its existing single-winner path: native `$CODEX_HOME/auth.json`, then `openai-codex`, then the CLI fallback.
 When siblings are present and a native `$CODEX_HOME/auth.json` exists, that login stays first as its own `codex-home` lane, read from `auth.json` and then the CLI fallback.
 A Pi key whose stored `accountId` matches the native login is not a separate lane; the built-in `openai-codex` copy of that account stays the native lane's fallback, as it was before.
-Without a native `auth.json`, an installed Codex CLI fallback is probed once and rendered as `codex-home` only when it returns a fresh reading with an `accountId` that no Pi lane stores.
-A logged-out or unreachable CLI adds no lane.
+Without a native `auth.json`, an installed Codex CLI fallback is probed once as the `codex-home` lane.
+The lane is left out only when the app-server's `account/read` positively reports no ChatGPT login (`account: null` or a non-ChatGPT account).
+A reading without the optional `accountId` stays its own lane with no identity, and a CLI that times out or fails is shown as stale or unavailable rather than dropped.
 A CLI login for the same `accountId` as a Pi lane is not a second lane: that Pi lane keeps its own reading when fresh, and shows the CLI reading when its own is expired, rejected, or stale.
 `--profile-only` still reads one native Codex file and never opens Pi auth.
 

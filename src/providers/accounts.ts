@@ -58,7 +58,7 @@ export async function fetchAccountQuotas(
     if (report) readings.push({ account, report });
   }
   return readings.map(({ account, report }) =>
-    readings.length === 1
+    accounts.length === 1
       ? report
       : {
           ...report,

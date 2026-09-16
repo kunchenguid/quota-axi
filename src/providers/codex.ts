@@ -179,16 +179,7 @@ async function discoverCodexAccounts(
     nativeState.status === "missing" &&
     (await resolveCodexBinary()).status === "available";
   let cliReading: Promise<ProviderQuota | undefined> | undefined;
-  const readCliAccount = (options: ProviderOptions) =>
-    (cliReading ??= fetchQuotaWithDependencies(
-      dependencies,
-      options,
-      nativeAccount,
-    ).then((report) =>
-      report.state.status === "fresh" && report.account?.accountId
-        ? report
-        : undefined,
-    ));
+  const readCliAccount = () => (cliReading ??= fetchCliAccountQuota());
   if (nativeState.status !== "missing") {
     const nativeAccountId =
       nativeState.status === "available" || nativeState.status === "expired"
@@ -207,10 +198,14 @@ async function discoverCodexAccounts(
             nativeAccount,
           );
         }
-        const reading = await readCliAccount(options);
-        return reading && !piLaneAccountIds.has(reading.account!.accountId!)
-          ? reading
-          : undefined;
+        const reading = await readCliAccount();
+        const readingAccountId =
+          reading?.state.status === "fresh"
+            ? reading.account?.accountId
+            : undefined;
+        return readingAccountId && piLaneAccountIds.has(readingAccountId)
+          ? undefined
+          : reading;
       },
       inspectAuth: () =>
         inspectAuthWithDependencies(dependencies, nativeAccount),
@@ -252,8 +247,13 @@ async function discoverCodexAccounts(
         if (report.state.status === "fresh" || !cliOnly || !accountId) {
           return report;
         }
-        const reading = await readCliAccount(options);
-        if (reading?.account?.accountId !== accountId) return report;
+        const reading = await readCliAccount();
+        if (
+          reading?.state.status !== "fresh" ||
+          reading.account?.accountId !== accountId
+        ) {
+          return report;
+        }
         const attempts = [
           ...(report.attempts ?? []),
           ...(reading.attempts ?? []),
@@ -268,6 +268,24 @@ async function discoverCodexAccounts(
     });
   }
   return accounts.length > 0 ? accounts : undefined;
+}
+
+async function fetchCliAccountQuota(): Promise<ProviderQuota | undefined> {
+  try {
+    return codexSuccessReport(await probeCodexCli(), "cli-rpc", [
+      { source: "cli-rpc", status: "success" },
+    ]);
+  } catch (error) {
+    if (error instanceof CodexCliSignedOutError) return undefined;
+    const message = errorMessage(error);
+    return codexFailureReport(
+      message,
+      undefined,
+      [{ source: "cli-rpc", status: "failed", error: message }],
+      undefined,
+      CODEX_HOME_ACCOUNT_KEY,
+    );
+  }
 }
 
 async function listPiCodexProviderIds(
@@ -1341,6 +1359,9 @@ async function probeCodexCli(): Promise<{
     const account = await waitFor(accountId, RPC_TIMEOUT_MS).catch(
       () => undefined,
     );
+    if (isSignedOutAccountRead(account)) {
+      throw new CodexCliSignedOutError("Codex quota unavailable");
+    }
 
     const limitsId = nextId++;
     sendRpc(child, limitsId, "account/rateLimits/read");
@@ -1525,6 +1546,16 @@ function errorMessage(error: unknown): string {
 class CodexAuthRejectedError extends Error {}
 
 class CodexCliUnavailableError extends Error {}
+
+class CodexCliSignedOutError extends Error {}
+
+function isSignedOutAccountRead(value: unknown): boolean {
+  const data = objectValue(value);
+  if (!data || !Object.hasOwn(data, "account")) return false;
+  if (data.account === null) return true;
+  const type = objectValue(data.account)?.type;
+  return type !== undefined && type !== "chatgpt";
+}
 
 class RateLimitError extends Error {
   constructor(readonly retryAfter: string | undefined) {

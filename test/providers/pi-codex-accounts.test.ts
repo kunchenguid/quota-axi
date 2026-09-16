@@ -563,7 +563,7 @@ describe("Codex Pi sibling account lanes", () => {
     stubUsageByToken({
       "work-access-token": usage(80, "work@example.invalid", "acct-work"),
     });
-    const spawn = mockCodexCli("acct-cli", 15);
+    const spawn = mockCodexCli({ accountId: "acct-cli", usedPercent: 15 });
 
     const adapter = (
       await import("../../src/providers/codex.js")
@@ -635,7 +635,7 @@ describe("Codex Pi sibling account lanes", () => {
       ),
       "work-access-token": usage(80, "work@example.invalid", "acct-work"),
     });
-    const spawn = mockCodexCli(undefined, 0);
+    const spawn = mockCodexCli("signed-out");
 
     const adapter = (
       await import("../../src/providers/codex.js")
@@ -648,6 +648,127 @@ describe("Codex Pi sibling account lanes", () => {
       ["openai-codex", "fresh"],
       ["openai-codex-work", "fresh"],
     ]);
+  });
+
+  it("keeps a CLI-only reading whose backend omits the optional accountId", async () => {
+    writePiAuth({
+      "openai-codex-work": piOauthEntry({
+        access: "work-access-token",
+        accountId: "acct-work",
+      }),
+    });
+    stubUsageByToken({
+      "work-access-token": usage(80, "work@example.invalid", "acct-work"),
+    });
+    mockCodexCli({ usedPercent: 15 });
+
+    const adapter = (
+      await import("../../src/providers/codex.js")
+    ).createCodexAdapter();
+    const reports = await fetchAccountQuotas(adapter, OPTIONS);
+    expect(reports.map((report) => report.accountKey)).toEqual([
+      "codex-home",
+      "openai-codex-work",
+    ]);
+    expect(reports[0]).toMatchObject({
+      source: "cli-rpc",
+      windows: [{ percentUsed: 15 }],
+      state: { status: "fresh" },
+    });
+    expect(reports[0]?.account?.accountId).toBeUndefined();
+  });
+
+  it("keeps an established CLI lane stale when its probe cannot be reached", async () => {
+    const { writeCachedProviders } = await import("../../src/cache.js");
+    writeCachedProviders([
+      {
+        provider: "codex",
+        accountKey: "codex-home",
+        label: "Codex",
+        source: "cli-rpc",
+        windows: [
+          {
+            id: "weekly",
+            label: "week",
+            kind: "weekly",
+            percentUsed: 42,
+            windowSeconds: 604_800,
+          },
+        ],
+        state: { status: "fresh", stale: false, sourcesTried: ["cli-rpc"] },
+      },
+    ]);
+    writePiAuth({
+      "openai-codex-work": piOauthEntry({
+        access: "work-access-token",
+        accountId: "acct-work",
+      }),
+    });
+    stubUsageByToken({
+      "work-access-token": usage(80, "work@example.invalid", "acct-work"),
+    });
+    mockCodexCli("unreachable");
+
+    vi.resetModules();
+    const adapter = (
+      await import("../../src/providers/codex.js")
+    ).createCodexAdapter();
+    const reports = await fetchAccountQuotas(adapter, OPTIONS);
+    expect(reports.map((report) => report.accountKey)).toEqual([
+      "codex-home",
+      "openai-codex-work",
+    ]);
+    expect(reports[0]).toMatchObject({
+      windows: [{ percentUsed: 42 }],
+      state: { status: "stale", stale: true },
+    });
+  });
+
+  it("discloses an unreadable CLI instead of dropping its lane", async () => {
+    writePiAuth({
+      "openai-codex-work": piOauthEntry({
+        access: "work-access-token",
+        accountId: "acct-work",
+      }),
+    });
+    stubUsageByToken({
+      "work-access-token": usage(80, "work@example.invalid", "acct-work"),
+    });
+    mockCodexCli("unreachable");
+
+    const adapter = (
+      await import("../../src/providers/codex.js")
+    ).createCodexAdapter();
+    const reports = await fetchAccountQuotas(adapter, OPTIONS);
+    expect(reports.map((report) => report.accountKey)).toEqual([
+      "codex-home",
+      "openai-codex-work",
+    ]);
+    expect(reports[0]?.windows).toEqual([]);
+    expect(reports[0]?.state.status).not.toBe("fresh");
+  });
+
+  it("keeps the remaining Pi lane keyed when the CLI is signed out", async () => {
+    writePiAuth({
+      "openai-codex-work": piOauthEntry({
+        access: "work-access-token",
+        accountId: "acct-work",
+      }),
+    });
+    stubUsageByToken({
+      "work-access-token": usage(80, "work@example.invalid", "acct-work"),
+    });
+    mockCodexCli("signed-out");
+
+    const adapter = (
+      await import("../../src/providers/codex.js")
+    ).createCodexAdapter();
+    const reports = await fetchAccountQuotas(adapter, OPTIONS);
+    expect(reports).toHaveLength(1);
+    expect(reports[0]).toMatchObject({
+      accountKey: "openai-codex-work",
+      windows: [{ percentUsed: 80 }],
+    });
   });
 
   it("coalesces a CLI login with the fresh Pi lane for the same account", async () => {
@@ -669,7 +790,7 @@ describe("Codex Pi sibling account lanes", () => {
       ),
       "work-access-token": usage(80, "work@example.invalid", "acct-work"),
     });
-    mockCodexCli("acct-work", 80);
+    mockCodexCli({ accountId: "acct-work", usedPercent: 80 });
 
     const adapter = (
       await import("../../src/providers/codex.js")
@@ -709,7 +830,7 @@ describe("Codex Pi sibling account lanes", () => {
         status: 401,
       }),
     });
-    mockCodexCli("acct-work", 35);
+    mockCodexCli({ accountId: "acct-work", usedPercent: 35 });
 
     const adapter = (
       await import("../../src/providers/codex.js")
@@ -769,7 +890,7 @@ describe("Codex Pi sibling account lanes", () => {
       ),
       "work-access-token": new Response("slow down", { status: 429 }),
     });
-    mockCodexCli("acct-work", 35);
+    mockCodexCli({ accountId: "acct-work", usedPercent: 35 });
 
     vi.resetModules();
     const adapter = (
@@ -944,7 +1065,12 @@ function stubUsageByToken(responses: Record<string, Response>): void {
   );
 }
 
-function mockCodexCli(accountId: string | undefined, usedPercent: number) {
+type CodexCliFixture =
+  | { accountId?: string; usedPercent: number }
+  | "signed-out"
+  | "unreachable";
+
+function mockCodexCli(fixture: CodexCliFixture) {
   vi.doMock("../../src/lib/process.js", async (importOriginal) => {
     const actual =
       await importOriginal<typeof import("../../src/lib/process.js")>();
@@ -956,19 +1082,14 @@ function mockCodexCli(accountId: string | undefined, usedPercent: number) {
       terminateChild: vi.fn(),
     };
   });
-  const spawn = vi.fn(() => {
-    if (accountId) return codexCliChild(accountId, usedPercent);
-    const child = codexCliChild("unused", usedPercent);
-    queueMicrotask(() => child.emit("close", 1));
-    return child;
-  });
+  const spawn = vi.fn(() => codexCliChild(fixture));
   vi.doMock("node:child_process", () => ({ spawn }));
   return spawn;
 }
 
+/** Responses shaped like codex app-server v2 GetAccountResponse and GetAccountRateLimitsResponse. */
 function codexCliChild(
-  accountId: string,
-  usedPercent: number,
+  fixture: CodexCliFixture,
 ): ChildProcessWithoutNullStreams {
   const child = new EventEmitter() as ChildProcessWithoutNullStreams;
   Object.assign(child, {
@@ -979,6 +1100,10 @@ function codexCliChild(
     signalCode: null,
     kill: vi.fn(() => true),
   });
+  if (fixture === "unreachable") {
+    queueMicrotask(() => child.emit("close", 1));
+    return child;
+  }
   let buffer = "";
   child.stdin.setEncoding("utf8");
   child.stdin.on("data", (chunk: string) => {
@@ -988,18 +1113,41 @@ function codexCliChild(
     for (const line of lines) {
       if (!line.trim()) continue;
       const request = JSON.parse(line) as { id: number; method: string };
-      const result =
-        request.method === "account/read"
-          ? { account: { planType: "plus", accountId } }
-          : request.method === "account/rateLimits/read"
-            ? {
-                rateLimits: {
-                  primary: { usedPercent, windowDurationMins: 10_080 },
+      let reply: Record<string, unknown> = { result: {} };
+      if (request.method === "account/read") {
+        reply = {
+          result:
+            fixture === "signed-out"
+              ? { account: null, requiresOpenaiAuth: true }
+              : {
+                  account: {
+                    type: "chatgpt",
+                    email: "cli@example.invalid",
+                    planType: "plus",
+                  },
+                  requiresOpenaiAuth: true,
                 },
-              }
-            : {};
+        };
+      } else if (request.method === "account/rateLimits/read") {
+        reply =
+          fixture === "signed-out"
+            ? { error: { code: -32600, message: "not signed in" } }
+            : {
+                result: {
+                  ...(fixture.accountId
+                    ? { accountId: fixture.accountId }
+                    : {}),
+                  rateLimits: {
+                    primary: {
+                      usedPercent: fixture.usedPercent,
+                      windowDurationMins: 10_080,
+                    },
+                  },
+                },
+              };
+      }
       queueMicrotask(() => {
-        child.stdout.write(`${JSON.stringify({ id: request.id, result })}\n`);
+        child.stdout.write(`${JSON.stringify({ id: request.id, ...reply })}\n`);
       });
     }
   });
