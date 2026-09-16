@@ -1,8 +1,10 @@
+import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { readCachedProvider } from "../cache.js";
 import { collapseHome } from "../lib/fs.js";
+import { providerFetch } from "../lib/http.js";
 import {
   clampPercent,
   nowIso,
@@ -14,8 +16,10 @@ import { VERSION } from "../version.js";
 import type {
   AuthSourceReport,
   ProviderAdapter,
+  ProviderAuthStatus,
   ProviderOptions,
   ProviderQuota,
+  ProviderStatus,
   QuotaWindow,
   SourceAttempt,
 } from "../types.js";
@@ -38,10 +42,11 @@ const KIRO_DB_DEFAULT = join(
   "data.sqlite3",
 );
 const KIRO_TOKEN_KEY = "kirocli:odic:token";
+const KIRO_SOURCE = "kiro-sqlite";
 const API_TIMEOUT_MS = 15_000;
 const API_TARGET = "AmazonCodeWhispererService.GetUsageLimits";
+const SQLITE_BUSY_CODES = new Set([5, 6]);
 
-const require = createRequire(import.meta.url);
 type SqliteStatement = { get(...params: unknown[]): unknown };
 type SqliteDatabase = {
   prepare(sql: string): SqliteStatement;
@@ -51,19 +56,32 @@ type SqliteDatabaseConstructor = new (
   path: string,
   options?: { readOnly?: boolean },
 ) => SqliteDatabase;
-const { DatabaseSync } = require("node:sqlite") as {
-  DatabaseSync: SqliteDatabaseConstructor;
-};
 
-type KiroCredentials = { accessToken: string; region: string };
+let sqliteDatabase: SqliteDatabaseConstructor | undefined;
+function loadSqlite(): SqliteDatabaseConstructor {
+  if (!sqliteDatabase) {
+    const require = createRequire(import.meta.url);
+    sqliteDatabase = (
+      require("node:sqlite") as { DatabaseSync: SqliteDatabaseConstructor }
+    ).DatabaseSync;
+  }
+  return sqliteDatabase;
+}
+
+type KiroCredentials = {
+  accessToken: string;
+  region: string;
+  storedExpired: boolean;
+  refreshable: boolean;
+};
 export type KiroCredentialState =
   | {
-      status: "available";
+      status: "available" | "expired";
       credentials: KiroCredentials;
       source: AuthSourceReport;
     }
   | {
-      status: "missing" | "invalid" | "expired";
+      status: "missing" | "invalid" | "error";
       source: AuthSourceReport;
     };
 type KiroDependencies = {
@@ -84,7 +102,7 @@ export function createKiroAdapter(
     fetchQuota: (options) =>
       fetchQuotaWith(
         options,
-        dependencies.fetch ?? globalThis.fetch,
+        dependencies.fetch ?? providerFetch,
         readCredentials,
       ),
     inspectAuth: async () => ({
@@ -94,12 +112,6 @@ export function createKiroAdapter(
   };
 }
 
-export async function fetchQuota(
-  options: ProviderOptions,
-): Promise<ProviderQuota> {
-  return fetchQuotaWith(options, globalThis.fetch, readCredentialState);
-}
-
 async function fetchQuotaWith(
   _options: ProviderOptions,
   request: typeof fetch,
@@ -107,38 +119,36 @@ async function fetchQuotaWith(
 ): Promise<ProviderQuota> {
   const attempts: SourceAttempt[] = [];
   const credentialState = readCredentials();
-  const source = "kiro-sqlite";
+  const credentialPresent =
+    credentialState.status !== "missing" && credentialState.status !== "error";
 
-  if (credentialState.status !== "available") {
+  if (!("credentials" in credentialState)) {
     attempts.push({
-      source,
+      source: KIRO_SOURCE,
       status: "skipped",
-      error: `credentials_${credentialState.status}`,
+      ...(credentialState.status === "error"
+        ? { error: credentialState.source.error, degraded: true }
+        : {
+            error: `credentials_${credentialState.status}`,
+            ...(credentialPresent ? { credentialPresent } : {}),
+          }),
     });
-    const finalError = "Kiro sign-in required";
-    const cached = readCachedProvider("kiro");
-    if (cached) {
-      return staleFromCache(
-        cached,
-        finalError,
-        sourceNames(attempts),
-        attempts,
-      );
-    }
-    return failedProvider({
-      provider: "kiro",
-      label: "Kiro",
-      status: statusFromError(finalError),
-      error: finalError,
-      sourcesTried: sourceNames(attempts),
+    return unavailableReport(
+      credentialState.status === "error"
+        ? { error: "Kiro credential store unavailable", status: "error" }
+        : { error: "Kiro sign-in required", status: "auth_required" },
       attempts,
-    });
+    );
   }
 
-  attempts.push({ source, status: "failed" });
+  attempts.push({ source: KIRO_SOURCE, status: "failed", credentialPresent });
   try {
     const quota = await fetchKiroUsage(credentialState.credentials, request);
-    attempts[attempts.length - 1] = { source, status: "success" };
+    attempts[attempts.length - 1] = {
+      source: KIRO_SOURCE,
+      status: "success",
+      credentialPresent,
+    };
     return successProvider({
       provider: "kiro",
       label: "Kiro",
@@ -151,33 +161,81 @@ async function fetchQuotaWith(
       attempts,
     });
   } catch (error) {
-    const finalError = errorMessage(error);
+    const failure = classifyFailure(error, credentialState.credentials);
     attempts[attempts.length - 1] = {
-      source,
+      source: KIRO_SOURCE,
       status: "failed",
-      error: finalError,
+      error: failure.error,
+      credentialPresent,
     };
-    const retryAfter =
-      error instanceof RateLimitError ? error.retryAfter : undefined;
-    const cached = readCachedProvider("kiro");
-    if (cached) {
-      return staleFromCache(
-        cached,
-        finalError,
-        sourceNames(attempts),
-        attempts,
-      );
-    }
-    return failedProvider({
-      provider: "kiro",
-      label: "Kiro",
-      status: retryAfter ? "rate_limited" : statusFromError(finalError),
-      error: finalError,
-      retryAfter,
-      sourcesTried: sourceNames(attempts),
-      attempts,
-    });
+    return unavailableReport(failure, attempts);
   }
+}
+
+type KiroFailure = {
+  error: string;
+  status: ProviderStatus;
+  retryAfter?: string;
+  authStatus?: ProviderAuthStatus;
+};
+
+function classifyFailure(
+  error: unknown,
+  credentials: KiroCredentials,
+): KiroFailure {
+  if (error instanceof RateLimitError) {
+    return {
+      error: error.message,
+      status: "rate_limited",
+      retryAfter: error.retryAfter,
+    };
+  }
+  if (error instanceof RejectedError) {
+    if (credentials.storedExpired && credentials.refreshable) {
+      return {
+        error: "Kiro access token expired",
+        status: "unavailable",
+        authStatus: "expired_refreshable",
+      };
+    }
+    return {
+      error: "Kiro sign-in required",
+      status: "auth_required",
+      authStatus: "unusable",
+    };
+  }
+  const message = errorMessage(error);
+  return { error: message, status: statusFromError(message) };
+}
+
+function unavailableReport(
+  failure: KiroFailure,
+  attempts: SourceAttempt[],
+): ProviderQuota {
+  const cached = readCachedProvider("kiro");
+  if (cached) {
+    const stale = staleFromCache(
+      cached,
+      failure.error,
+      sourceNames(attempts),
+      attempts,
+    );
+    return failure.authStatus
+      ? { ...stale, state: { ...stale.state, authStatus: failure.authStatus } }
+      : stale;
+  }
+  const report = failedProvider({
+    provider: "kiro",
+    label: "Kiro",
+    status: failure.status,
+    error: failure.error,
+    retryAfter: failure.retryAfter,
+    sourcesTried: sourceNames(attempts),
+    attempts,
+  });
+  return failure.authStatus
+    ? { ...report, state: { ...report.state, authStatus: failure.authStatus } }
+    : report;
 }
 
 export function normalizeKiroUsage(raw: unknown):
@@ -195,21 +253,17 @@ export function normalizeKiroUsage(raw: unknown):
     data.usageBreakdownList ?? data.usage_breakdown_list,
   );
   const windows = normalizeBreakdowns(breakdowns, resetAt);
-  const fallbackWindows =
-    windows.length > 0
-      ? windows
-      : normalizeLimits(arrayValue(data.limits), resetAt);
   const subscription = objectValue(
     data.subscriptionInfo ?? data.subscription_info,
   );
   const plan =
     stringValue(subscription?.subscriptionTitle) ??
     stringValue(subscription?.type);
-  if (fallbackWindows.length === 0 && !plan && !subscription) return undefined;
+  if (windows.length === 0 && !plan && !subscription) return undefined;
   const balance = creditBalance(breakdowns);
   return {
     plan,
-    windows: fallbackWindows,
+    windows,
     credits:
       balance === undefined
         ? undefined
@@ -230,7 +284,7 @@ async function fetchKiroUsage(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
   try {
-    const body: Record<string, unknown> = { isEmailRequired: true };
+    const body: Record<string, unknown> = {};
     const profileArn = process.env[KIRO_PROFILE_ARN_ENV]?.trim();
     if (profileArn) body.profileArn = profileArn;
     const response = await request(
@@ -263,84 +317,81 @@ export function readCredentialState(
   databasePath = process.env[KIRO_DB_ENV] || KIRO_DB_DEFAULT,
 ): KiroCredentialState {
   const path = collapseHome(databasePath);
-  let database: SqliteDatabase;
-  try {
-    database = new DatabaseSync(databasePath, { readOnly: true });
-  } catch (error) {
-    const missing = errorCode(error) === "ENOENT";
-    return {
-      status: missing ? "missing" : "invalid",
-      source: {
-        source: "kiro-sqlite",
-        path,
-        status: missing ? "missing" : "invalid",
-        error: missing ? undefined : "database_read_error",
-      },
-    };
+  const report = (
+    status: AuthSourceReport["status"],
+    error?: string,
+  ): AuthSourceReport => ({
+    source: KIRO_SOURCE,
+    path,
+    status,
+    ...(error ? { error } : {}),
+    ...(status === "missing" || status === "error"
+      ? {}
+      : { credentialPresent: true }),
+  });
+  if (!existsSync(databasePath)) {
+    return { status: "missing", source: report("missing") };
   }
+  let raw: string | undefined;
   try {
-    const row = objectValue(
-      database
-        .prepare("SELECT value FROM auth_kv WHERE key = ?")
-        .get(KIRO_TOKEN_KEY),
-    );
-    const raw = stringValue(row?.value);
-    if (!raw) {
-      return {
-        status: "missing",
-        source: { source: "kiro-sqlite", path, status: "missing" },
-      };
-    }
-    let token: Record<string, unknown>;
+    const database = new (loadSqlite())(databasePath, { readOnly: true });
     try {
-      token = objectValue(JSON.parse(raw)) ?? {};
-    } catch {
-      return {
-        status: "invalid",
-        source: {
-          source: "kiro-sqlite",
-          path,
-          status: "invalid",
-          error: "json_parse_error",
-        },
-      };
+      const row = objectValue(
+        database
+          .prepare("SELECT value FROM auth_kv WHERE key = ?")
+          .get(KIRO_TOKEN_KEY),
+      );
+      raw = stringValue(row?.value);
+    } finally {
+      database.close();
     }
-    const accessToken = stringValue(token.access_token);
-    const region =
-      stringValue(process.env[KIRO_REGION_ENV]) ??
-      stringValue(token.region) ??
-      "us-east-1";
-    if (!accessToken || !/^[a-z0-9-]+$/.test(region)) {
-      return {
-        status: "invalid",
-        source: {
-          source: "kiro-sqlite",
-          path,
-          status: "invalid",
-          error: "credential_shape_invalid",
-        },
-      };
-    }
-    const expiresAt = epochMillis(token.expires_at);
-    if (expiresAt !== undefined && expiresAt <= Date.now()) {
-      return {
-        status: "expired",
-        source: {
-          source: "kiro-sqlite",
-          path,
-          status: "expired",
-          error: "access_token_expired",
-        },
-      };
-    }
-    return {
-      status: "available",
-      credentials: { accessToken, region },
-      source: { source: "kiro-sqlite", path, status: "available" },
-    };
-  } finally {
-    database.close();
+  } catch (error) {
+    return SQLITE_BUSY_CODES.has(sqliteErrorCode(error) ?? -1)
+      ? { status: "error", source: report("error", "database_busy") }
+      : { status: "invalid", source: report("invalid", "database_read_error") };
   }
+  if (!raw) {
+    return {
+      status: "missing",
+      source: { source: KIRO_SOURCE, path, status: "missing" },
+    };
+  }
+  let token: Record<string, unknown>;
+  try {
+    token = objectValue(JSON.parse(raw)) ?? {};
+  } catch {
+    return {
+      status: "invalid",
+      source: report("invalid", "json_parse_error"),
+    };
+  }
+  const accessToken = stringValue(token.access_token);
+  const region =
+    stringValue(process.env[KIRO_REGION_ENV]) ??
+    stringValue(token.region) ??
+    "us-east-1";
+  if (!accessToken || !/^[a-z0-9-]+$/.test(region)) {
+    return {
+      status: "invalid",
+      source: report("invalid", "credential_shape_invalid"),
+    };
+  }
+  const expiresAt = epochMillis(token.expires_at);
+  const storedExpired = expiresAt !== undefined && expiresAt <= Date.now();
+  const credentials: KiroCredentials = {
+    accessToken,
+    region,
+    storedExpired,
+    refreshable: Object.hasOwn(token, "refresh_token"),
+  };
+  if (storedExpired) {
+    return {
+      status: "expired",
+      credentials,
+      source: report("expired", "access_token_expired"),
+    };
+  }
+  return { status: "available", credentials, source: report("available") };
 }
 
 function creditBalance(values: unknown[]): number | undefined {
@@ -408,40 +459,6 @@ function normalizeBreakdowns(
     .filter((window): window is QuotaWindow => Boolean(window));
 }
 
-function normalizeLimits(
-  values: unknown[],
-  fallbackReset: string | undefined,
-): QuotaWindow[] {
-  return values
-    .map((value, index): QuotaWindow | undefined => {
-      const item = objectValue(value);
-      if (!item) return undefined;
-      const directPercent = numberValue(item.percentUsed ?? item.percent_used);
-      const used = numberValue(item.currentUsage ?? item.current_usage);
-      const limit = numberValue(item.totalUsageLimit ?? item.total_usage_limit);
-      const percentUsed =
-        directPercent !== undefined
-          ? clampPercent(directPercent)
-          : used !== undefined && limit !== undefined && limit > 0
-            ? clampPercent((used / limit) * 100)
-            : undefined;
-      if (percentUsed === undefined) return undefined;
-      const feature =
-        stringValue(item.feature) ??
-        stringValue(item.resourceType) ??
-        `limit_${index + 1}`;
-      return {
-        id: slug(feature, index),
-        label: humanize(feature),
-        kind: "credits",
-        percentUsed,
-        percentRemaining: percentRemaining(percentUsed),
-        resetsAt: fallbackReset,
-      };
-    })
-    .filter((window): window is QuotaWindow => Boolean(window));
-}
-
 function slug(value: string, index: number): string {
   const normalized = value
     .trim()
@@ -452,14 +469,6 @@ function slug(value: string, index: number): string {
   return normalized || `credit_${index + 1}`;
 }
 
-function humanize(value: string): string {
-  return value
-    .replace(/([a-z])([A-Z])/g, "$1 $2")
-    .replace(/[_-]+/g, " ")
-    .toLowerCase()
-    .replace(/\b\w/g, (letter) => letter.toUpperCase());
-}
-
 function rejectUnusableResponse(response: Response): void {
   if (response.status >= 300 && response.status < 400)
     throw new Error("redirect_rejected");
@@ -468,7 +477,7 @@ function rejectUnusableResponse(response: Response): void {
       retryAfterToIso(response.headers.get("retry-after")),
     );
   if (response.status === 401 || response.status === 403)
-    throw new Error("Kiro sign-in required");
+    throw new RejectedError();
   if (!response.ok)
     throw new Error(`Kiro quota unavailable (${response.status})`);
 }
@@ -502,10 +511,10 @@ function epochMillis(value: unknown): number | undefined {
   }
   return undefined;
 }
-function errorCode(error: unknown): string | undefined {
-  return error && typeof error === "object" && "code" in error
-    ? typeof error.code === "string"
-      ? error.code
+function sqliteErrorCode(error: unknown): number | undefined {
+  return error && typeof error === "object" && "errcode" in error
+    ? typeof error.errcode === "number"
+      ? error.errcode
       : undefined
     : undefined;
 }
@@ -517,5 +526,10 @@ function errorMessage(error: unknown): string {
 class RateLimitError extends Error {
   constructor(readonly retryAfter: string | undefined) {
     super("Kiro quota endpoint rate limited");
+  }
+}
+class RejectedError extends Error {
+  constructor() {
+    super("Kiro credential rejected");
   }
 }

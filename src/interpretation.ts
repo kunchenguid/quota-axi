@@ -147,7 +147,6 @@ function semanticsFor(
     case "cursor":
       return cursorSemantics(provider.windows, generatedAt);
     case "copilot":
-    case "kiro":
       return unknownSemantics(
         provider.windows,
         `quota-axi does not know whether ${provider.label ?? provider.provider}'s reported windows are independent or jointly bounding, so it does not claim an effective remaining percentage.`,
@@ -158,7 +157,40 @@ function semanticsFor(
       return alibabaSemantics(provider.windows, generatedAt);
     case "opencode-go":
       return opencodeGoSemantics(provider.windows, generatedAt);
+    case "kiro":
+      return kiroSemantics(provider.windows, generatedAt);
   }
+}
+
+/**
+ * Kiro's `GetUsageLimits` response reports one vendor-metered credit pool per
+ * plan, and every Kiro request draws from that pool, so the `credit` window
+ * alone bounds usage at `all_models` scope. Any other breakdown the vendor
+ * adds is unfamiliar and stays unresolved rather than being folded in.
+ */
+function kiroSemantics(
+  windows: QuotaWindow[],
+  generatedAt: string,
+): QuotaSemantics {
+  const credit = windows.filter(({ id }) => id === "credit");
+  const unresolved = windows.filter((window) => !credit.includes(window));
+  if (unresolved.length > 0) {
+    const unresolvedWindowIds = unresolved.map(({ id }) => id);
+    return {
+      status: credit.length > 0 ? "partial" : "unknown",
+      description:
+        "Kiro's credit window is the plan's single vendor-metered pool, but unfamiliar windows are not folded into that bound, so they stay unresolved.",
+      effectiveAvailability:
+        credit.length > 0
+          ? [unresolvedAvailability("all_models", credit, unresolvedWindowIds)]
+          : [],
+      unresolvedWindowIds,
+    };
+  }
+  return knownSemantics(
+    credit.length > 0 ? [availability("all_models", credit, generatedAt)] : [],
+    "Kiro's credit window is the plan's single vendor-metered pool that every request draws from, so it alone bounds usage at all_models scope. The endpoint reports the next reset but no cycle start, so pace stays unknown.",
+  );
 }
 
 /**

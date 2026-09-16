@@ -1,4 +1,5 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -85,6 +86,9 @@ const ENV_KEYS = [
   "GROK_AUTH",
   "GROK_AUTH_JSON",
   "GROK_AUTH_PATH",
+  "KIRO_CLI_DB",
+  "KIRO_REGION",
+  "KIRO_PROFILE_ARN",
   "XDG_CACHE_HOME",
   "XDG_DATA_HOME",
   "GITHUB_COPILOT_APPS_JSON",
@@ -106,6 +110,7 @@ beforeEach(() => {
   process.env.PI_CODING_AGENT_DIR = join(tempDir, "pi-agent");
   process.env.KIMI_CODE_HOME = join(tempDir, "kimi-code");
   process.env.GROK_HOME = join(tempDir, "grok");
+  process.env.KIRO_CLI_DB = join(tempDir, "kiro-cli", "data.sqlite3");
   process.env.XDG_CACHE_HOME = join(tempDir, "cache");
   process.env.XDG_DATA_HOME = join(tempDir, "data");
   process.env.QUOTA_AXI_CODEX_BINARY = join(tempDir, "no-such-codex");
@@ -118,6 +123,8 @@ beforeEach(() => {
   delete process.env.GROK_AUTH;
   delete process.env.GROK_AUTH_JSON;
   delete process.env.GROK_AUTH_PATH;
+  delete process.env.KIRO_REGION;
+  delete process.env.KIRO_PROFILE_ARN;
   mkdirSync(process.env.CODEX_HOME, { recursive: true });
   vi.doMock("../src/lib/process.js", async (importOriginal) => ({
     ...(await importOriginal<typeof import("../src/lib/process.js")>()),
@@ -142,6 +149,64 @@ function writePiStore(store: unknown): void {
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, "auth.json"), JSON.stringify(store), { mode: 0o600 });
 }
+
+/** Builds a Kiro CLI store the way `kiro-cli` lays it out: `auth_kv(key, value)`. */
+function writeKiroStore(options: { table?: boolean; token?: string }): void {
+  const require = createRequire(import.meta.url);
+  const { DatabaseSync } = require("node:sqlite") as {
+    DatabaseSync: new (path: string) => {
+      exec(sql: string): void;
+      prepare(sql: string): { run(...params: unknown[]): unknown };
+      close(): void;
+    };
+  };
+  const path = process.env.KIRO_CLI_DB!;
+  mkdirSync(join(path, ".."), { recursive: true });
+  const database = new DatabaseSync(path);
+  try {
+    if (options.table !== false) {
+      database.exec(
+        "CREATE TABLE auth_kv (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
+      );
+    }
+    if (options.token !== undefined) {
+      database
+        .prepare("INSERT INTO auth_kv (key, value) VALUES (?, ?)")
+        .run("kirocli:odic:token", options.token);
+    }
+  } finally {
+    database.close();
+  }
+}
+
+const KIRO_SOURCE = "kiro-sqlite";
+const KIRO_LIVE_TOKEN = {
+  access_token: "kiro-probe-token",
+  refresh_token: "must-not-be-read",
+  region: "us-east-1",
+  expires_at: Math.floor(Date.now() / 1000) + 3_600,
+};
+
+/** Present-but-unusable Kiro stores: none of these is an absent source. */
+const BROKEN_KIRO_STORES: Array<[label: string, write: () => void]> = [
+  [
+    "file that is not a database",
+    () => {
+      const path = process.env.KIRO_CLI_DB!;
+      mkdirSync(join(path, ".."), { recursive: true });
+      writeFileSync(path, "not a sqlite database");
+    },
+  ],
+  ["store without the auth table", () => writeKiroStore({ table: false })],
+  ["malformed token record", () => writeKiroStore({ token: "{not json" })],
+  [
+    "token record without an access token",
+    () =>
+      writeKiroStore({
+        token: JSON.stringify({ refresh_token: "x", region: "us-east-1" }),
+      }),
+  ],
+];
 
 /** Rejects every bearer, so only credential enrolment is under test here. */
 function stubRejectingApi(): { bearers: string[] } {
@@ -305,6 +370,58 @@ describe("credential source contract", { timeout: 30_000 }, () => {
         "Bearer gho_probe_fixture",
       ]);
       expect(result.state.status).toBe("auth_required");
+    });
+  });
+
+  describe("kiro", () => {
+    it("leaves an absent store unmarked, so nothing reads as degraded", async () => {
+      stubRejectingApi();
+
+      const result = await readQuota("kiro");
+      const attempts = attemptsFor(result, KIRO_SOURCE);
+
+      expect(attempts.length).toBeGreaterThan(0);
+      for (const attempt of attempts) {
+        expect(attempt.credentialPresent).toBeUndefined();
+        expect(attempt.error).toBe("credentials_missing");
+      }
+    });
+
+    it.each(BROKEN_KIRO_STORES)(
+      "marks a present but broken store (%s) as a credential that exists",
+      async (_label, write) => {
+        write();
+        const api = stubRejectingApi();
+
+        const result = await readQuota("kiro");
+        const attempts = attemptsFor(result, KIRO_SOURCE);
+
+        expect(api.bearers).toEqual([]);
+        expect(attempts.length).toBeGreaterThan(0);
+        for (const attempt of attempts) {
+          expect(attempt.credentialPresent).toBe(true);
+        }
+      },
+    );
+
+    it("probes a stored-expired token instead of skipping it", async () => {
+      // Kiro CLI refreshes lazily on its next use, so the stored `expires_at`
+      // is advisory; only the endpoint may produce an auth verdict.
+      writeKiroStore({
+        token: JSON.stringify({
+          ...KIRO_LIVE_TOKEN,
+          expires_at: Math.floor(Date.now() / 1000) - 60,
+        }),
+      });
+      const api = stubRejectingApi();
+
+      const result = await readQuota("kiro");
+
+      expect(api.bearers).toContain(`Bearer ${KIRO_LIVE_TOKEN.access_token}`);
+      expect(result.state).toMatchObject({
+        status: "unavailable",
+        authStatus: "expired_refreshable",
+      });
     });
   });
 });
