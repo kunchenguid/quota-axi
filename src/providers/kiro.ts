@@ -379,7 +379,7 @@ async function fetchQuota(dependencies: Dependencies): Promise<ProviderQuota> {
         status: "failed",
         error: failure.code,
       };
-      if (lastFailure.code !== "quota_missing") lastFailure = failure;
+      lastFailure = failure;
       if (!failure.definitiveAuth && failure.code !== "quota_missing") break;
     }
   }
@@ -561,10 +561,13 @@ export function normalizeKiroUsage(raw: unknown): NormalizedKiroPayload {
         : [];
   const windows =
     breakdowns.length > 0
-      ? breakdowns.map((value, index) => {
+      ? breakdowns.flatMap((value, index) => {
           const window = normalizeBreakdown(value, index, root);
-          if (!window) untrustedWindowIds.push(`usage:${index}`);
-          return window ?? unknownWindow(`usage:${index}`, root);
+          if (!window) {
+            untrustedWindowIds.push(`usage:${index}`);
+            return [];
+          }
+          return [window];
         })
       : normalizeLimitList(root.limits, root, untrustedWindowIds);
   const subscription = objectValue(root.subscriptionInfo);
@@ -632,12 +635,12 @@ function normalizeLimitList(
   untrustedWindowIds: string[],
 ): QuotaWindow[] {
   if (!Array.isArray(value)) return [];
-  return value.map((raw, index) => {
+  return value.flatMap((raw, index) => {
     const record = objectValue(raw);
     const id = stringValue(record?.type) ?? `limit:${index}`;
     if (!record) {
       untrustedWindowIds.push(id);
-      return unknownWindow(id, root);
+      return [];
     }
     const window = usageWindow(
       id,
@@ -661,7 +664,7 @@ function normalizeLimitList(
       window.percentUsed = percent;
       window.percentRemaining = clampPercent(100 - percent);
     }
-    return window;
+    return [window];
   });
 }
 
@@ -697,19 +700,6 @@ function usageWindow(
     result.percentRemaining = clampPercent(100 - (usage / limit) * 100);
   }
   return result;
-}
-
-function unknownWindow(id: string, root: Record<string, unknown>): QuotaWindow {
-  const resetsAt = parseEpochOrIso(root.nextDateReset);
-  return {
-    id,
-    label: id,
-    kind: "unknown",
-    ...(resetsAt ? { resetsAt } : {}),
-    ...(!resetsAt && numberValue(root.daysUntilReset) !== undefined
-      ? { resetText: `${numberValue(root.daysUntilReset)}d` }
-      : {}),
-  };
 }
 
 function classifyKiroFailure(error: unknown): Failure {
