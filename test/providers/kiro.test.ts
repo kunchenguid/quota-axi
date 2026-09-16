@@ -234,6 +234,38 @@ describe("Kiro provider", () => {
     expect(report.state.sourcesTried).toEqual(["empty", "working"]);
   });
 
+  it("keeps quota_missing when later credentials are invalid", async () => {
+    const report = await createKiroAdapter({
+      credentialSources: [
+        { name: "empty", source: availableSource() },
+        {
+          name: "invalid",
+          source: {
+            resolve: async () => ({
+              status: "invalid" as const,
+              path: "/invalid/auth.json",
+              error: "invalid_credential",
+            }),
+            inspect: async () => ({
+              status: "invalid" as const,
+              path: "/invalid/auth.json",
+              error: "invalid_credential",
+            }),
+          },
+        },
+      ],
+      fetch: vi.fn(
+        async () => new Response(JSON.stringify({}), { status: 200 }),
+      ),
+      now: () => NOW,
+    }).fetchQuota(OPTIONS);
+
+    expect(report.state).toMatchObject({
+      status: "error",
+      error: "quota_missing",
+    });
+  });
+
   it("rejects an empty successful response instead of clearing quota evidence", async () => {
     const report = await createKiroAdapter({
       credentialSources: [{ name: "test", source: availableSource() }],

@@ -335,7 +335,7 @@ async function fetchQuota(dependencies: Dependencies): Promise<ProviderQuota> {
         error: failure.code,
         credentialPresent: true,
       });
-      lastFailure = failure;
+      if (lastFailure.code !== "quota_missing") lastFailure = failure;
       if (!failure.definitiveAuth) continue;
       continue;
     }
@@ -379,7 +379,7 @@ async function fetchQuota(dependencies: Dependencies): Promise<ProviderQuota> {
         status: "failed",
         error: failure.code,
       };
-      lastFailure = failure;
+      if (lastFailure.code !== "quota_missing") lastFailure = failure;
       if (!failure.definitiveAuth && failure.code !== "quota_missing") break;
     }
   }
