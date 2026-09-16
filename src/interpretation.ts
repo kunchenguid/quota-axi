@@ -163,10 +163,9 @@ function semanticsFor(
 }
 
 /**
- * Kiro's `GetUsageLimits` response reports one vendor-metered credit pool per
- * plan, and every Kiro request draws from that pool, so the `credit` window
- * alone bounds usage at `all_models` scope. Any other breakdown the vendor
- * adds is unfamiliar and stays unresolved rather than being folded in.
+ * The adapter combines applicable base and trial credits into `credit`; that
+ * shared meter bounds `all_models`. Unfamiliar breakdowns cannot establish a
+ * combined bound, so they leave effective availability unresolved.
  */
 function kiroSemantics(
   windows: QuotaWindow[],

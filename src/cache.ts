@@ -55,7 +55,7 @@ const CREDENTIAL_CONTEXT_ID = /^[a-f0-9]{64}$/;
  * nothing about another, so each is stamped on write and required to match on
  * stale reuse.
  *
- * How that stamp is obtained is not the same question for both. A Claude
+ * How that stamp is obtained depends on the provider. A Claude
  * profile is fixed by this process's own environment, so deriving it here reads
  * the same selection the reading used. Kimi's is not derivable here at all.
  * Kimi Code rewrites `config.toml` on login, so a read taken after the quota
@@ -63,7 +63,10 @@ const CREDENTIAL_CONTEXT_ID = /^[a-f0-9]{64}$/;
  * and a Kimi reading need not come from that configuration in the first place,
  * because Pi brokers a credential for the default endpoint while naming no
  * deployment. Kimi therefore reports the identity of whatever actually produced
- * its reading.
+ * its reading. Kiro likewise captures the context before its request, plus a
+ * region-independent retirement context so logout can retire the matching
+ * snapshot after the token row containing its region has gone. Configuration
+ * equality alone does not prove account continuity; Kiro withholds stale reuse.
  */
 const CONTEXT_SCOPED_PROVIDERS: Partial<
   Record<
