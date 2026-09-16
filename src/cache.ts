@@ -5,7 +5,10 @@ import {
   ensurePrivateParent,
   readJsonFile,
 } from "./lib/fs.js";
-import { kiroReadingContextId } from "./providers/kiro-cache-context.js";
+import {
+  kiroReadingContextId,
+  kiroRetirementContextId,
+} from "./providers/kiro-cache-context.js";
 import { kimiReadingContextId } from "./providers/kimi-cache-context.js";
 import type {
   ProviderId,
@@ -63,16 +66,23 @@ const CREDENTIAL_CONTEXT_ID = /^[a-f0-9]{64}$/;
  * its reading.
  */
 const CONTEXT_SCOPED_PROVIDERS: Partial<
-  Record<ProviderId, (provider: ProviderQuota) => string | undefined>
+  Record<
+    ProviderId,
+    {
+      reading: (provider: ProviderQuota) => string | undefined;
+      retirement?: (provider: ProviderQuota) => string | undefined;
+    }
+  >
 > = {
-  claude: claudeCredentialContextId,
-  kimi: kimiReadingContextId,
-  kiro: kiroReadingContextId,
+  claude: { reading: claudeCredentialContextId },
+  kimi: { reading: kimiReadingContextId },
+  kiro: { reading: kiroReadingContextId, retirement: kiroRetirementContextId },
 };
 
 type CachedProvider = {
   snapshot: ProviderQuota;
   credentialContextId?: string;
+  credentialRetirementContextId?: string;
 };
 
 export function readCachedProvider(
@@ -108,12 +118,15 @@ export function readCachedKimiProvider(
 export function readCachedProviderInContext(
   provider: ProviderId,
   contextId: string,
+  retirementId?: string,
 ): ProviderQuota | undefined {
   if (!CREDENTIAL_CONTEXT_ID.test(contextId)) return undefined;
   return readCacheProviders().find(
     (item) =>
       item.snapshot.provider === provider &&
-      item.credentialContextId === contextId,
+      item.credentialContextId === contextId &&
+      (retirementId === undefined ||
+        item.credentialRetirementContextId === retirementId),
   )?.snapshot;
 }
 
@@ -126,7 +139,7 @@ export function writeCachedProviders(providers: ProviderQuota[]): void {
       )
       .map((provider) => [
         provider.provider,
-        CONTEXT_SCOPED_PROVIDERS[provider.provider]?.(provider),
+        CONTEXT_SCOPED_PROVIDERS[provider.provider]?.reading(provider),
       ]),
   );
   const cacheable = providers
@@ -162,11 +175,14 @@ export function writeCachedProviders(providers: ProviderQuota[]): void {
 export function deleteCachedProvider(
   provider: ProviderId,
   contextId?: string,
+  retirementId?: string,
 ): void {
   const existing = readCacheProviders();
   const matches = (item: CachedProvider) =>
     item.snapshot.provider === provider &&
-    (contextId === undefined || item.credentialContextId === contextId);
+    (contextId === undefined || item.credentialContextId === contextId) &&
+    (retirementId === undefined ||
+      item.credentialRetirementContextId === retirementId);
   if (!existing.some(matches)) return;
   writeCacheFile(
     cacheFilePath(),
@@ -232,10 +248,14 @@ function toCacheProvider(provider: ProviderQuota): CachedProvider | undefined {
     CACHE_SCHEMA_VERSION,
   )?.snapshot;
   if (!snapshot) return undefined;
-  const contextId = CONTEXT_SCOPED_PROVIDERS[provider.provider]?.(provider);
+  const contextId =
+    CONTEXT_SCOPED_PROVIDERS[provider.provider]?.reading(provider);
+  const retirementId =
+    CONTEXT_SCOPED_PROVIDERS[provider.provider]?.retirement?.(provider);
   return {
     snapshot,
     ...(contextId ? { credentialContextId: contextId } : {}),
+    ...(retirementId ? { credentialRetirementContextId: retirementId } : {}),
   };
 }
 
@@ -246,6 +266,9 @@ function serializeCachedProvider(
     ...provider.snapshot,
     ...(provider.credentialContextId
       ? { credentialContext: provider.credentialContextId }
+      : {}),
+    ...(provider.credentialRetirementContextId
+      ? { credentialRetirementContext: provider.credentialRetirementContextId }
       : {}),
   };
 }
@@ -300,6 +323,7 @@ function normalizeCachedProvider(
     snapshot.state.untrustedWindowIds = untrustedWindowIds;
   if (credits) snapshot.credits = credits;
   const credentialContext = stringValue(data.credentialContext);
+  const retirementContext = stringValue(data.credentialRetirementContext);
   return {
     snapshot,
     ...(schemaVersion === CACHE_SCHEMA_VERSION &&
@@ -307,6 +331,12 @@ function normalizeCachedProvider(
     credentialContext &&
     CREDENTIAL_CONTEXT_ID.test(credentialContext)
       ? { credentialContextId: credentialContext }
+      : {}),
+    ...(schemaVersion === CACHE_SCHEMA_VERSION &&
+    CONTEXT_SCOPED_PROVIDERS[provider]?.retirement &&
+    retirementContext &&
+    CREDENTIAL_CONTEXT_ID.test(retirementContext)
+      ? { credentialRetirementContextId: retirementContext }
       : {}),
   };
 }

@@ -129,8 +129,11 @@ function writeKiroStore(
   try {
     if (options.table !== false) {
       database.exec(
-        "CREATE TABLE auth_kv (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
+        "CREATE TABLE IF NOT EXISTS auth_kv (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
       );
+      database
+        .prepare("DELETE FROM auth_kv WHERE key = ?")
+        .run("kirocli:odic:token");
     }
     if (options.token !== undefined) {
       database
@@ -418,6 +421,112 @@ describe("Kiro credential store reader", () => {
       source: { status: "available", credentialPresent: true },
     });
   });
+});
+
+describe("Kiro cache retirement without a region override", () => {
+  it.each([
+    ["us-east-1", ""],
+    ["eu-west-1", "synthetic-profile-identity"],
+  ])(
+    "retires a logged-out %s snapshot before another account uses the same store (%s)",
+    async (region, profile) => {
+      vi.stubEnv("KIRO_REGION", undefined);
+      vi.stubEnv("KIRO_PROFILE_ARN", profile);
+      const path = process.env.KIRO_CLI_DB!;
+      const token = (accessToken: string) =>
+        JSON.stringify({
+          access_token: accessToken,
+          region,
+          refresh_token: "synthetic-refresh-secret",
+        });
+      writeKiroStore(path, { token: token("synthetic-account-a-token") });
+      const fresh = await createKiroAdapter({
+        fetch: async () => jsonResponse(USAGE_PAYLOAD),
+      }).fetchQuota(OPTIONS);
+      expect(fresh.state.status).toBe("fresh");
+      writeCachedProviders([
+        withQuotaSemantics(fresh, new Date().toISOString()),
+      ]);
+      const saved = JSON.parse(
+        readFileSync(
+          join(process.env.XDG_CACHE_HOME!, "quota-axi", "quotas.json"),
+          "utf8",
+        ),
+      );
+      expect(saved.providers[0].credentialContext).toMatch(/^[a-f0-9]{64}$/);
+      expect(saved.providers[0].credentialRetirementContext).toMatch(
+        /^[a-f0-9]{64}$/,
+      );
+      for (const secret of [
+        path,
+        "synthetic-profile-identity",
+        "synthetic-account-a-token",
+        "synthetic-refresh-secret",
+      ]) {
+        expect(JSON.stringify(saved)).not.toContain(secret);
+      }
+      const retirementId = saved.providers[0].credentialRetirementContext;
+      writeCachedProviders([
+        {
+          provider: "copilot",
+          label: "Copilot",
+          source: "api",
+          windows: [
+            {
+              id: "chat",
+              label: "Chat",
+              kind: "monthly",
+              percentRemaining: 70,
+            },
+          ],
+          state: { status: "fresh", stale: false, sourcesTried: [] },
+        },
+      ]);
+      writeKiroStore(path, {});
+      const request = vi.fn();
+      const logout = await createKiroAdapter({ fetch: request }).fetchQuota(
+        OPTIONS,
+      );
+      expect(request).not.toHaveBeenCalled();
+      expect(logout).toMatchObject({
+        source: "unavailable",
+        windows: [],
+        state: { status: "auth_required" },
+      });
+      expect(readCachedProvider("kiro")).toBeUndefined();
+      expect(readCachedProvider("copilot")?.windows[0].percentRemaining).toBe(
+        70,
+      );
+      writeKiroStore(path, { token: token("synthetic-account-b-token") });
+      const next = await createKiroAdapter({
+        fetch: async () => {
+          throw new DOMException("aborted", "AbortError");
+        },
+      }).fetchQuota(OPTIONS);
+      expect(next).toMatchObject({
+        source: "unavailable",
+        windows: [],
+        state: { status: "error" },
+      });
+      expect(next.plan).toBeUndefined();
+      expect(next.credits).toBeUndefined();
+      const nextFresh = await createKiroAdapter({
+        fetch: async () => jsonResponse(USAGE_PAYLOAD),
+      }).fetchQuota(OPTIONS);
+      writeCachedProviders([nextFresh]);
+      const nextSaved = JSON.parse(
+        readFileSync(
+          join(process.env.XDG_CACHE_HOME!, "quota-axi", "quotas.json"),
+          "utf8",
+        ),
+      );
+      expect(
+        nextSaved.providers.find(
+          (entry: { provider: string }) => entry.provider === "kiro",
+        ).credentialRetirementContext,
+      ).toBe(retirementId);
+    },
+  );
 });
 
 describe("Kiro quota transport", () => {
@@ -708,6 +817,79 @@ describe("Kiro quota transport", () => {
         });
       },
     );
+
+    it.each(["KIRO_CLI_DB", "KIRO_PROFILE_ARN"])(
+      "does not retire another %s context during regionless logout",
+      async (key) => {
+        vi.stubEnv("KIRO_REGION", undefined);
+        const original = process.env[key]!;
+        vi.stubEnv(key, "synthetic-other-context");
+        const missing: KiroCredentialState = {
+          status: "missing",
+          source: { ...SOURCE, status: "missing" },
+        };
+        const logout = await adapterWith(missing, vi.fn()).fetchQuota(OPTIONS);
+        expect(logout.state.status).toBe("auth_required");
+        expect(readCachedProvider("kiro")).toBeDefined();
+        vi.stubEnv(key, original);
+        const restored = await adapterWith(CREDENTIALS, async () => {
+          throw new Error("timeout");
+        }).fetchQuota(OPTIONS);
+        expect(restored.source).toBe("cache");
+      },
+    );
+
+    it("retires an invalid store without the deleted token's region", async () => {
+      vi.stubEnv("KIRO_REGION", undefined);
+      const invalid: KiroCredentialState = {
+        status: "invalid",
+        source: { ...SOURCE, status: "invalid", error: "json_parse_error" },
+      };
+      const report = await adapterWith(invalid, vi.fn()).fetchQuota(OPTIONS);
+      expect(report).toMatchObject({
+        windows: [],
+        state: { status: "auth_required" },
+      });
+      expect(readCachedProvider("kiro")).toBeUndefined();
+    });
+
+    it("withholds a regionless logout even when cache retirement cannot write", async () => {
+      vi.stubEnv("KIRO_REGION", undefined);
+      vi.mocked(writeFileSync).mockImplementationOnce(() => {
+        throw Object.assign(new Error("read-only filesystem"), {
+          code: "EROFS",
+        });
+      });
+      const report = await adapterWith(
+        { status: "missing", source: { ...SOURCE, status: "missing" } },
+        vi.fn(),
+      ).fetchQuota(OPTIONS);
+      expect(report).toMatchObject({
+        windows: [],
+        state: { status: "auth_required" },
+      });
+      expect(vi.mocked(writeFileSync).mock.results.at(-1)?.type).toBe("throw");
+    });
+
+    it("withholds older snapshots without a retirement identity after logout", async () => {
+      const path = join(
+        process.env.XDG_CACHE_HOME!,
+        "quota-axi",
+        "quotas.json",
+      );
+      const saved = JSON.parse(readFileSync(path, "utf8"));
+      delete saved.providers[0].credentialRetirementContext;
+      writeFileSync(path, JSON.stringify(saved));
+      vi.stubEnv("KIRO_REGION", undefined);
+      await adapterWith(
+        { status: "missing", source: { ...SOURCE, status: "missing" } },
+        vi.fn(),
+      ).fetchQuota(OPTIONS);
+      const next = await adapterWith(CREDENTIALS, async () => {
+        throw new Error("timeout");
+      }).fetchQuota(OPTIONS);
+      expect(next).toMatchObject({ source: "unavailable", windows: [] });
+    });
 
     it("withholds cache when an unreadable store leaves the region unconfirmed", async () => {
       vi.stubEnv("KIRO_REGION", "");

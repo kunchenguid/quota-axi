@@ -129,6 +129,9 @@ async function fetchQuotaWith(
     ("credentials" in credentialState
       ? credentialState.credentials.region
       : undefined);
+  const retirementId = createHash("sha256")
+    .update(JSON.stringify([resolve(databasePath), profileArn ?? null]))
+    .digest("hex");
   const contextId = region
     ? createHash("sha256")
         .update(
@@ -156,6 +159,7 @@ async function fetchQuotaWith(
         : { error: "Kiro sign-in required", status: "auth_required" },
       attempts,
       contextId,
+      retirementId,
     );
   }
 
@@ -184,6 +188,7 @@ async function fetchQuotaWith(
         attempts,
       }),
       contextId,
+      retirementId,
     );
   } catch (error) {
     const failure = classifyFailure(error, credentialState.credentials);
@@ -193,7 +198,7 @@ async function fetchQuotaWith(
       error: failure.error,
       credentialPresent,
     };
-    return unavailableReport(failure, attempts, contextId);
+    return unavailableReport(failure, attempts, contextId, retirementId);
   }
 }
 
@@ -237,13 +242,14 @@ function unavailableReport(
   failure: KiroFailure,
   attempts: SourceAttempt[],
   contextId: string | undefined,
+  retirementId: string,
 ): ProviderQuota {
   const definitiveAuthFailure = failure.status === "auth_required";
-  if (definitiveAuthFailure && contextId) retireCache(contextId);
+  if (definitiveAuthFailure) retireCache(contextId, retirementId);
   const cached =
     definitiveAuthFailure || !contextId
       ? undefined
-      : readCachedProviderInContext("kiro", contextId);
+      : readCachedProviderInContext("kiro", contextId, retirementId);
   if (cached) {
     const stale = staleFromCache(
       cached,
@@ -274,9 +280,12 @@ function unavailableReport(
     : report;
 }
 
-function retireCache(contextId: string): void {
+function retireCache(
+  contextId: string | undefined,
+  retirementId: string,
+): void {
   try {
-    deleteCachedProvider("kiro", contextId);
+    deleteCachedProvider("kiro", contextId, retirementId);
   } catch {
     return;
   }
