@@ -77,7 +77,8 @@ const DURATION_MULTIPLIERS: Record<string, number> = {
 export type KimiDiagnostic =
   | { code: "limits_missing" }
   | { code: "limits_invalid" }
-  | { code: "detail_invalid"; index: number };
+  | { code: "detail_invalid"; index: number }
+  | { code: "usage_detail_invalid"; key: string };
 
 export type NormalizedKimiPayload = {
   windows: QuotaWindow[];
@@ -553,6 +554,17 @@ function unavailableCandidate(
   return { status: "unavailable", failure, attemptStatus, credentialPresent };
 }
 
+function untrustedWindowId(diagnostic: KimiDiagnostic): string {
+  switch (diagnostic.code) {
+    case "detail_invalid":
+      return `limit:${diagnostic.index}`;
+    case "usage_detail_invalid":
+      return `usages:${diagnostic.key}`;
+    default:
+      return "limits";
+  }
+}
+
 async function readKimiQuota(
   credential: string,
   quotaUrl: string,
@@ -569,11 +581,7 @@ async function readKimiQuota(
     dependencies.now,
   );
   const normalized = normalizeKimiPayload(payload);
-  const untrustedWindowIds = normalized.diagnostics.map((diagnostic) =>
-    diagnostic.code === "detail_invalid"
-      ? `limit:${diagnostic.index}`
-      : "limits",
-  );
+  const untrustedWindowIds = normalized.diagnostics.map(untrustedWindowId);
   const refreshedAt = new Date(dependencies.now()).toISOString();
   attempts[attempts.length - 1] = { source, status: "success" };
   return {
@@ -1109,10 +1117,6 @@ const KIMI_USAGES_WINDOWS: ReadonlyArray<{
   },
 ];
 
-const KIMI_USAGES_WINDOW_KEYS = new Set(
-  KIMI_USAGES_WINDOWS.map(({ key }) => key),
-);
-
 export function normalizeKimiPayload(payload: unknown): NormalizedKimiPayload {
   const root = objectValue(payload);
   if (!root) {
@@ -1120,7 +1124,7 @@ export function normalizeKimiPayload(payload: unknown): NormalizedKimiPayload {
   }
 
   const fromUsages = normalizeUsagesMap(root.usages);
-  if (fromUsages) return fromUsages;
+  if (fromUsages && fromUsages.windows.length > 0) return fromUsages;
 
   const principal = normalizeDetail(root.usage);
   if (!principal) {
@@ -1138,7 +1142,7 @@ export function normalizeKimiPayload(payload: unknown): NormalizedKimiPayload {
       ...(principal.resetsAt ? { resetsAt: principal.resetsAt } : {}),
     },
   ];
-  const diagnostics: KimiDiagnostic[] = [];
+  const diagnostics: KimiDiagnostic[] = [...(fromUsages?.diagnostics ?? [])];
   const limitsValue = root.limits;
   if (limitsValue === undefined || limitsValue === null) {
     diagnostics.push({ code: "limits_missing" });
@@ -1183,10 +1187,14 @@ function normalizeUsagesMap(value: unknown): NormalizedKimiPayload | undefined {
   if (!usages) return undefined;
 
   const windows: QuotaWindow[] = [];
+  const diagnostics: KimiDiagnostic[] = [];
   for (const spec of KIMI_USAGES_WINDOWS) {
     if (!Object.hasOwn(usages, spec.key)) continue;
     const detail = normalizeRatioDetail(usages[spec.key]);
-    if (!detail) continue;
+    if (!detail) {
+      diagnostics.push({ code: "usage_detail_invalid", key: spec.key });
+      continue;
+    }
     windows.push({
       id: spec.id,
       label: spec.label,
@@ -1199,20 +1207,7 @@ function normalizeUsagesMap(value: unknown): NormalizedKimiPayload | undefined {
       ...(detail.resetsAt ? { resetsAt: detail.resetsAt } : {}),
     });
   }
-  for (const key of Object.keys(usages)) {
-    if (KIMI_USAGES_WINDOW_KEYS.has(key)) continue;
-    const detail = normalizeRatioDetail(usages[key]);
-    if (!detail) continue;
-    windows.push({
-      id: key,
-      label: key,
-      kind: "unknown",
-      percentUsed: detail.percentUsed,
-      percentRemaining: detail.percentRemaining,
-      ...(detail.resetsAt ? { resetsAt: detail.resetsAt } : {}),
-    });
-  }
-  return windows.length > 0 ? { windows, diagnostics: [] } : undefined;
+  return { windows, diagnostics };
 }
 
 function normalizeRatioDetail(value: unknown): NormalizedDetail | undefined {

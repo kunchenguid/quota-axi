@@ -637,6 +637,59 @@ describe("Kimi request transport", () => {
     expect(rendered).toContain("code month");
   });
 
+  it("leaves the account bound unresolved when a declared usages limit is unparsed", async () => {
+    const report = await testAdapter({
+      fetch: vi.fn(async () =>
+        jsonResponse({
+          usages: {
+            limit_5h: { used_ratio: 0.3, reset_time: "2027-02-03T09:05:06Z" },
+            limit_7d: { reset_time: "2027-02-08T17:00:00Z" },
+          },
+        }),
+      ) as unknown as typeof fetch,
+    }).fetchQuota(OPTIONS);
+
+    expect(report.state.untrustedWindowIds).toEqual(["usages:limit_7d"]);
+
+    const interpreted = withQuotaSemantics(report, new Date(NOW).toISOString());
+    expect(interpreted.quotaSemantics?.status).toBe("partial");
+    expect(interpreted.quotaSemantics?.unresolvedWindowIds).toEqual([
+      "usages:limit_7d",
+    ]);
+    expect(interpreted.quotaSemantics?.effectiveAvailability[0]).toMatchObject({
+      scope: "all_models",
+      status: "unknown",
+      boundedBy: ["five_hour"],
+    });
+    expect(
+      interpreted.quotaSemantics?.effectiveAvailability[0]
+        ?.effectivePercentRemaining,
+    ).toBeUndefined();
+  });
+
+  it("does not let an unrecognized usages key bound the account scope", async () => {
+    const report = await testAdapter({
+      fetch: vi.fn(async () =>
+        jsonResponse({
+          usages: {
+            limit_7d: { used_ratio: 0.2, reset_time: "2027-02-08T17:00:00Z" },
+            weekly: { used_ratio: 0.95 },
+          },
+        }),
+      ) as unknown as typeof fetch,
+    }).fetchQuota(OPTIONS);
+
+    expect(report.windows.map(({ id }) => id)).toEqual(["weekly"]);
+    expect(report.state.untrustedWindowIds).toBeUndefined();
+
+    const interpreted = withQuotaSemantics(report, new Date(NOW).toISOString());
+    expect(interpreted.quotaSemantics?.status).toBe("known");
+    expect(
+      interpreted.quotaSemantics?.effectiveAvailability[0]
+        ?.effectivePercentRemaining,
+    ).toBe(80);
+  });
+
   it.each([
     [401, "auth_required", "provider_auth_rejected"],
     [403, "auth_required", "provider_auth_rejected"],
@@ -848,6 +901,53 @@ describe("Kimi payload normalization", () => {
         windowSeconds: 604_800,
       },
     ]);
+  });
+
+  it("names a declared usages limit it cannot parse instead of dropping it", () => {
+    const normalized = normalizeKimiPayload({
+      usages: {
+        limit_5h: { used_ratio: 0.3, reset_time: "2026-09-11T18:00:00Z" },
+        limit_7d: { reset_time: "2026-09-17T00:00:00Z" },
+      },
+    });
+    expect(normalized.windows.map(({ id }) => id)).toEqual(["five_hour"]);
+    expect(normalized.diagnostics).toEqual([
+      { code: "usage_detail_invalid", key: "limit_7d" },
+    ]);
+  });
+
+  it("carries an unparsed usages limit into a legacy-usage reading", () => {
+    const normalized = normalizeKimiPayload({
+      usages: { limit_7d: { reset_time: "2026-09-17T00:00:00Z" } },
+      usage: { used: "20", limit: "100" },
+    });
+    expect(normalized.windows.map(({ id }) => id)).toEqual(["weekly"]);
+    expect(normalized.diagnostics).toEqual([
+      { code: "usage_detail_invalid", key: "limit_7d" },
+      { code: "limits_missing" },
+    ]);
+  });
+
+  it("ignores an unrecognized usages key instead of reporting it as a window", () => {
+    const normalized = normalizeKimiPayload({
+      usages: {
+        limit_7d: { used_ratio: 0.2, reset_time: "2026-09-17T00:00:00Z" },
+        weekly: { used_ratio: 0.95 },
+        five_hour: { used_ratio: 0.99 },
+      },
+    });
+    expect(normalized.windows).toEqual([
+      {
+        id: "weekly",
+        label: "week",
+        kind: "weekly",
+        percentUsed: 20,
+        percentRemaining: 80,
+        windowSeconds: 604_800,
+        resetsAt: "2026-09-17T00:00:00.000Z",
+      },
+    ]);
+    expect(normalized.diagnostics).toEqual([]);
   });
 
   it("rejects payloads that establish no quota windows", () => {
