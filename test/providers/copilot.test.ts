@@ -508,52 +508,32 @@ describe("GitHub Copilot credential sources", () => {
     },
   );
 
-  it.each([
-    ["a missing entitlement", 404],
-    ["a server failure", 500],
-    ["a rate limit", 429],
-  ])(
-    "keeps the sign-in verdict when the GitHub CLI token gets %s",
-    async (_label, status) => {
-      writeAppsJson({ "github.com": { oauth_token: "stale-apps-token" } });
-      writeGhToken("gho_cli_fixture");
-      const api = stubUserEndpoint({
-        "stale-apps-token": 401,
-        gho_cli_fixture: status,
-      });
-
-      const result = await fetchQuota(options);
-
-      expect(result.state.status).toBe("auth_required");
-      expect(result.state.error).toBe("GitHub Copilot sign-in required");
-      expect(result.state.retryAfter).toBeUndefined();
-      expect(api.bearers).toEqual([
-        "Bearer stale-apps-token",
-        "Bearer gho_cli_fixture",
-      ]);
-      expect(result.attempts?.[0]).toEqual({
-        source: "api",
-        status: "failed",
-        error: "GitHub Copilot sign-in required",
-      });
-      expect(result.attempts?.[1]).toMatchObject({
-        source: "gh:hosts.yml",
-        status: "failed",
-      });
-      expect(degradedSources(result.attempts)).toContainEqual(
-        expect.objectContaining({ source: "gh:hosts.yml" }),
-      );
-    },
-  );
-
-  it("keeps the sign-in verdict when apps.json is absent and the GitHub CLI token gets a 404", async () => {
+  it("reports a GitHub CLI server failure as an error, not a sign-out", async () => {
+    writeAppsJson({ "github.com": { oauth_token: "stale-apps-token" } });
     writeGhToken("gho_cli_fixture");
-    stubUserEndpoint({ gho_cli_fixture: 404 });
+    const api = stubUserEndpoint({
+      "stale-apps-token": 401,
+      gho_cli_fixture: 500,
+    });
 
     const result = await fetchQuota(options);
 
-    expect(result.state.status).toBe("auth_required");
-    expect(result.state.error).toBe("GitHub Copilot sign-in required");
+    expect(result.state.status).toBe("error");
+    expect(result.state.error).not.toBe("GitHub Copilot sign-in required");
+    expect(api.bearers).toEqual([
+      "Bearer stale-apps-token",
+      "Bearer gho_cli_fixture",
+    ]);
+    expect(result.attempts?.[0]).toEqual({
+      source: "api",
+      status: "failed",
+      error: "GitHub Copilot sign-in required",
+    });
+    expect(result.attempts?.[1]).toMatchObject({
+      source: "gh:hosts.yml",
+      status: "failed",
+      error: result.state.error,
+    });
   });
 
   it("keeps the sign-in verdict when the GitHub CLI login is in the keyring", async () => {

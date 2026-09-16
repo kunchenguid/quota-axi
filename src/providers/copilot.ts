@@ -82,7 +82,7 @@ type UnavailableResolution = Exclude<
   { status: "resolved" }
 >;
 
-/** A request failure on Copilot's own store; it is not a sign-out. */
+/** A request failure from any store; it is not a sign-out. */
 type CopilotFailure = {
   error: string;
   retryAfter?: string;
@@ -178,9 +178,7 @@ export async function fetchQuota(
       status: "failed",
       error,
     };
-    if (source !== GH_CLI_CREDENTIAL_SOURCE) {
-      failure = { error, retryAfter: selection.retryAfter };
-    }
+    failure = { error, retryAfter: selection.retryAfter };
     break;
   }
 
