@@ -148,7 +148,12 @@ export async function fetchQuota(
 const CODEX_HOME_ACCOUNT_KEY = "codex-home";
 
 type CodexAccountContext =
-  | { kind: "native"; accountKey: string; includesBuiltinPi: boolean }
+  | {
+      kind: "native";
+      accountKey: string;
+      includesBuiltinPi: boolean;
+      reportedAccountIds?: ReadonlySet<string>;
+    }
   | { kind: "pi"; piProviderId: string; accountKey: string };
 
 async function discoverCodexAccounts(
@@ -164,28 +169,26 @@ async function discoverCodexAccounts(
 
   const accounts: ProviderAccount[] = [];
   const seenAccountIds = new Set<string>();
+  const reportedAccountIds = new Set<string>();
   const nativeState = readCredentialState();
-  let nativeAccount:
-    | Extract<CodexAccountContext, { kind: "native" }>
-    | undefined;
+  const nativeAccount: Extract<CodexAccountContext, { kind: "native" }> = {
+    kind: "native",
+    accountKey: CODEX_HOME_ACCOUNT_KEY,
+    includesBuiltinPi: false,
+  };
+  const nativeLane: ProviderAccount = {
+    accountKey: nativeAccount.accountKey,
+    fetchQuota: (options) =>
+      fetchQuotaWithDependencies(dependencies, options, nativeAccount),
+    inspectAuth: () => inspectAuthWithDependencies(dependencies, nativeAccount),
+  };
   if (nativeState.status !== "missing") {
     const nativeAccountId =
       nativeState.status === "available" || nativeState.status === "expired"
         ? nativeState.credentials.accountId
         : undefined;
     if (nativeAccountId) seenAccountIds.add(nativeAccountId);
-    nativeAccount = {
-      kind: "native",
-      accountKey: CODEX_HOME_ACCOUNT_KEY,
-      includesBuiltinPi: false,
-    };
-    const account = nativeAccount;
-    accounts.push({
-      accountKey: account.accountKey,
-      fetchQuota: (options) =>
-        fetchQuotaWithDependencies(dependencies, options, account),
-      inspectAuth: () => inspectAuthWithDependencies(dependencies, account),
-    });
+    accounts.push(nativeLane);
   }
   for (const piProviderId of ids) {
     const resolution = await resolvePiEntry(dependencies, piProviderId);
@@ -195,7 +198,10 @@ async function discoverCodexAccounts(
         : undefined;
     if (accountId !== undefined) {
       if (seenAccountIds.has(accountId)) {
-        if (nativeAccount && piProviderId === PI_CODEX_BUILTIN_ID) {
+        if (
+          nativeState.status !== "missing" &&
+          piProviderId === PI_CODEX_BUILTIN_ID
+        ) {
           nativeAccount.includesBuiltinPi = true;
         }
         continue;
@@ -210,10 +216,26 @@ async function discoverCodexAccounts(
     accounts.push({
       accountKey: account.accountKey,
       locator: await piAccountLocator(dependencies, piProviderId),
-      fetchQuota: (options) =>
-        fetchQuotaWithDependencies(dependencies, options, account),
+      fetchQuota: async (options) => {
+        const report = await fetchQuotaWithDependencies(
+          dependencies,
+          options,
+          account,
+        );
+        if (report.state.status === "fresh" && report.account?.accountId) {
+          reportedAccountIds.add(report.account.accountId);
+        }
+        return report;
+      },
       inspectAuth: () => inspectAuthWithDependencies(dependencies, account),
     });
+  }
+  if (
+    nativeState.status === "missing" &&
+    (await resolveCodexBinary()).status === "available"
+  ) {
+    nativeAccount.reportedAccountIds = reportedAccountIds;
+    accounts.push(nativeLane);
   }
   return accounts.length > 0 ? accounts : undefined;
 }
@@ -488,6 +510,21 @@ async function fetchQuotaWithDependencies(
   try {
     const quota = await probeCodexCli();
     attempts[attempts.length - 1] = { source: "cli-rpc", status: "success" };
+    if (
+      account?.reportedAccountIds &&
+      quota.account?.accountId &&
+      account.reportedAccountIds.has(quota.account.accountId)
+    ) {
+      return failedProvider({
+        provider: "codex",
+        label: "Codex",
+        source: "cli-rpc",
+        status: "unavailable",
+        error: "Codex CLI login is already reported by a Pi account lane",
+        sourcesTried: sourceNames(attempts),
+        attempts,
+      });
+    }
     return successProvider({
       provider: "codex",
       label: "Codex",

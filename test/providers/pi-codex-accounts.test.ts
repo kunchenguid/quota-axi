@@ -1,6 +1,9 @@
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   fetchAccountQuotas,
@@ -42,6 +45,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.doUnmock("../../src/lib/process.js");
+  vi.doUnmock("node:child_process");
   vi.resetModules();
   if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
   else process.env.CODEX_HOME = originalCodexHome;
@@ -549,6 +553,106 @@ describe("Codex Pi sibling account lanes", () => {
     });
   });
 
+  it("keeps a CLI-only Codex login beside a work-only Pi sibling", async () => {
+    writePiAuth({
+      "openai-codex-work": piOauthEntry({
+        access: "work-access-token",
+        accountId: "acct-work",
+      }),
+    });
+    stubUsageByToken({
+      "work-access-token": usage(80, "work@example.invalid", "acct-work"),
+    });
+    const spawn = mockCodexCli("acct-cli", 15);
+
+    const adapter = (
+      await import("../../src/providers/codex.js")
+    ).createCodexAdapter();
+    const reports = await fetchAccountQuotas(adapter, OPTIONS);
+    expect(
+      reports.map((report) => [
+        report.accountKey,
+        report.source,
+        report.state.status,
+        report.windows[0]?.percentUsed,
+      ]),
+    ).toEqual([
+      ["openai-codex-work", "pi:openai-codex-work", "fresh", 80],
+      ["codex-home", "cli-rpc", "fresh", 15],
+    ]);
+    expect(spawn).toHaveBeenCalledOnce();
+
+    const auth = await inspectAccountAuth(adapter, OPTIONS);
+    expect(
+      auth[1]?.sources.map((source) => [source.source, source.status]),
+    ).toEqual([
+      ["auth-json", "missing"],
+      ["cli-rpc", "available"],
+    ]);
+  });
+
+  it("opens no CLI lane when the Codex CLI fallback is unavailable", async () => {
+    writePiAuth({
+      "openai-codex-work": piOauthEntry({
+        access: "work-access-token",
+        accountId: "acct-work",
+      }),
+    });
+    stubUsageByToken({
+      "work-access-token": usage(80, "work@example.invalid", "acct-work"),
+    });
+    const spawn = vi.fn();
+    vi.doMock("node:child_process", () => ({ spawn }));
+
+    const adapter = (
+      await import("../../src/providers/codex.js")
+    ).createCodexAdapter();
+    const reports = await fetchAccountQuotas(adapter, OPTIONS);
+    expect(reports).toHaveLength(1);
+    expect(reports[0]).toMatchObject({
+      source: "pi:openai-codex-work",
+      windows: [{ percentUsed: 80 }],
+    });
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("does not count a CLI-only login already reported by a Pi lane as extra capacity", async () => {
+    writePiAuth({
+      "openai-codex": piOauthEntry({
+        access: "personal-access-token",
+        accountId: "acct-personal",
+      }),
+      "openai-codex-work": piOauthEntry({
+        access: "work-access-token",
+        accountId: "acct-work",
+      }),
+    });
+    stubUsageByToken({
+      "personal-access-token": usage(
+        20,
+        "personal@example.invalid",
+        "acct-personal",
+      ),
+      "work-access-token": usage(80, "work@example.invalid", "acct-work"),
+    });
+    mockCodexCli("acct-work", 80);
+
+    const adapter = (
+      await import("../../src/providers/codex.js")
+    ).createCodexAdapter();
+    const reports = await fetchAccountQuotas(adapter, OPTIONS);
+    expect(reports.map((report) => report.accountKey)).toEqual([
+      "openai-codex",
+      "openai-codex-work",
+      "codex-home",
+    ]);
+    expect(reports[2]).toMatchObject({
+      source: "cli-rpc",
+      windows: [],
+      state: { status: "unavailable" },
+    });
+  });
+
   it("does not open Pi sibling lanes under --profile-only", async () => {
     writePiAuth({
       "openai-codex": piOauthEntry({
@@ -706,4 +810,61 @@ function stubUsageByToken(responses: Record<string, Response>): void {
       return response.clone();
     }),
   );
+}
+
+function mockCodexCli(accountId: string, usedPercent: number) {
+  vi.doMock("../../src/lib/process.js", async (importOriginal) => {
+    const actual =
+      await importOriginal<typeof import("../../src/lib/process.js")>();
+    return {
+      ...actual,
+      findCommandPath: vi.fn(async (command: string) =>
+        command === "codex" ? "/fixture/bin/codex" : undefined,
+      ),
+      terminateChild: vi.fn(),
+    };
+  });
+  const spawn = vi.fn(() => codexCliChild(accountId, usedPercent));
+  vi.doMock("node:child_process", () => ({ spawn }));
+  return spawn;
+}
+
+function codexCliChild(
+  accountId: string,
+  usedPercent: number,
+): ChildProcessWithoutNullStreams {
+  const child = new EventEmitter() as ChildProcessWithoutNullStreams;
+  Object.assign(child, {
+    stdin: new PassThrough(),
+    stdout: new PassThrough(),
+    stderr: new PassThrough(),
+    exitCode: null,
+    signalCode: null,
+    kill: vi.fn(() => true),
+  });
+  let buffer = "";
+  child.stdin.setEncoding("utf8");
+  child.stdin.on("data", (chunk: string) => {
+    buffer += chunk;
+    const lines = buffer.split(/\r?\n/);
+    buffer = lines.pop() ?? "";
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      const request = JSON.parse(line) as { id: number; method: string };
+      const result =
+        request.method === "account/read"
+          ? { account: { planType: "plus", accountId } }
+          : request.method === "account/rateLimits/read"
+            ? {
+                rateLimits: {
+                  primary: { usedPercent, windowDurationMins: 10_080 },
+                },
+              }
+            : {};
+      queueMicrotask(() => {
+        child.stdout.write(`${JSON.stringify({ id: request.id, result })}\n`);
+      });
+    }
+  });
+  return child;
 }

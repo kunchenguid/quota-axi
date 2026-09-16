@@ -372,6 +372,8 @@ A key whose identity cannot be compared is left as its own lane so the uncertain
 When only the built-in Pi entry (or none) is present, Codex keeps its existing single-winner path: native `$CODEX_HOME/auth.json`, then `openai-codex`, then the CLI fallback.
 When siblings are present and a native `$CODEX_HOME/auth.json` exists, that login stays first as its own `codex-home` lane, read from `auth.json` and then the CLI fallback.
 A Pi key whose stored `accountId` matches the native login is not a separate lane; the built-in `openai-codex` copy of that account stays the native lane's fallback, as it was before.
+Without a native `auth.json`, the `codex-home` lane opens only when the Codex CLI fallback is installed, and it is listed after the Pi lanes.
+If that CLI login reports an `accountId` a Pi lane already reported fresh, the lane is `unavailable` with no windows rather than a second copy of that account.
 `--profile-only` still reads one native Codex file and never opens Pi auth.
 
 ### Account keys and compatibility
