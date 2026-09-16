@@ -25,6 +25,7 @@ const originalAgyProvider = PROVIDERS.agy;
 const originalAlibabaProvider = PROVIDERS.alibaba;
 const originalOpenCodeGoProvider = PROVIDERS["opencode-go"];
 const originalCommandCodeProvider = PROVIDERS.commandcode;
+const originalKiroProvider = PROVIDERS.kiro;
 const originalXdgCacheHome = process.env.XDG_CACHE_HOME;
 const originalClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
 const originalCodexHome = process.env.CODEX_HOME;
@@ -42,6 +43,7 @@ afterEach(() => {
   PROVIDERS.alibaba = originalAlibabaProvider;
   PROVIDERS["opencode-go"] = originalOpenCodeGoProvider;
   PROVIDERS.commandcode = originalCommandCodeProvider;
+  PROVIDERS.kiro = originalKiroProvider;
   if (originalXdgCacheHome === undefined) delete process.env.XDG_CACHE_HOME;
   else process.env.XDG_CACHE_HOME = originalXdgCacheHome;
   if (originalClaudeConfigDir === undefined)
@@ -69,6 +71,7 @@ describe("CLI flag parsing", () => {
       "alibaba",
       "opencode-go",
       "commandcode",
+      "kiro",
     ]);
   });
 
@@ -107,6 +110,7 @@ describe("CLI flag parsing", () => {
           "alibaba",
           "opencode-go",
           "commandcode",
+          "kiro",
         ],
         json: true,
         full: true,
@@ -488,7 +492,7 @@ describe("CLI quota rendering", () => {
     const codex = output.providers.find(
       (provider) => provider.provider === "codex",
     );
-    expect(output.schemaVersion).toBe(5);
+    expect(output.schemaVersion).toBe(6);
     expect(claude?.state.reason).toBe("keychain_access_required");
     expect(claude?.state.remedyCommand).toBe(
       "quota-axi --allow-keychain-prompt",
@@ -793,7 +797,7 @@ describe("CLI quota rendering", () => {
     const json = JSON.parse(
       await capture(["--provider", "kimi", "--json"]),
     ) as QuotaAxiResponse;
-    expect(json.schemaVersion).toBe(5);
+    expect(json.schemaVersion).toBe(6);
     expect(json.providers).toEqual([
       expect.objectContaining({
         provider: "kimi",
@@ -906,6 +910,7 @@ describe("default TOON decision blocks", () => {
       "cursor",
       "grok",
       "kimi",
+      "kiro",
       "opencode-go",
       "zai",
     ]);
@@ -1238,7 +1243,7 @@ describe("--json tiering", () => {
     ) as QuotaAxiResponse;
     const [claude, cursor, grok, kimi] = json.providers;
 
-    expect(json.schemaVersion).toBe(5);
+    expect(json.schemaVersion).toBe(6);
     expect(claude?.state).toMatchObject({
       status: "stale",
       stale: true,
@@ -1342,7 +1347,7 @@ describe("response redaction", () => {
   it("hides account identity and attempts unless --full is set", () => {
     const response: QuotaAxiResponse = {
       generatedAt: "2026-07-06T18:10:00Z",
-      schemaVersion: 5,
+      schemaVersion: 6,
       providers: [
         {
           provider: "claude",

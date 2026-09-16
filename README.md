@@ -15,7 +15,7 @@ Quota CLI for agents - designed with [AXI](https://axi.md) (Agent eXperience Int
 Agents need quota state before they choose where work can safely run.
 Vendor dashboards are not shaped for shell automation, and local CLIs expose different windows, resets, and auth sources.
 
-quota-axi reports local Claude, Codex, Cursor, GitHub Copilot, Grok, Kimi, Z.AI, Alibaba, OpenCode Go, Antigravity (`agy`), and Command Code quota windows in one [AXI](https://axi.md)-shaped call.
+quota-axi reports local Claude, Codex, Cursor, GitHub Copilot, Grok, Kimi, Kiro, Z.AI, Alibaba, OpenCode Go, Antigravity (`agy`), and Command Code quota windows in one [AXI](https://axi.md)-shaped call.
 It is data only: it never routes, recommends a provider, model, harness, credential, or route, proxies, intercepts, logs in, imports browser cookies, or mints or rotates a credential. When the same stored access token is expired, carries a refresh token, and is definitively rejected, quota-axi may delegate renewal to that vendor's own non-interactive CLI command and re-read the result ([Delegated credential refresh](#delegated-credential-refresh)). Default output has no ordering preference. The opt-in `models --sort runway` surface applies only its documented deterministic comparator to quota evidence, preserves all evidence and explicit ties, and is not a recommendation. It publishes one derived per-scope comparative selection signal, [`selection`](#per-scope-selection-signal), as data computed from figures it already reports; the consumer, not quota-axi, does any routing or ranking with it.
 
 - **Official sources** - quota-axi reads local provider auth sources and calls first-party quota, usage, billing, entitlement, local loopback, or read-only credential-liveness endpoints used by the local agents, with read-only CLI probes for Alibaba and Codex where applicable. The only other vendor commands it runs are the declared credential-refresh delegates.
@@ -72,7 +72,7 @@ Default TOON is decision-shaped: `quota[]` carries one fully populated row per m
 $ quota-axi --provider claude --json
 {
   "generatedAt": "2026-03-15T16:42:00.000Z",
-  "schemaVersion": 5,
+  "schemaVersion": 6,
   "providers": [
     {
       "provider": "claude",
@@ -306,21 +306,21 @@ It is generated from `src/skill.ts`; update it with `pnpm run build:skill` and v
 
 ### Flags
 
-| Flag                                                                                       | Description                                                               |
-| ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------- |
-| `--provider claude,codex,cursor,copilot,grok,kimi,zai,agy,alibaba,opencode-go,commandcode` | Scope providers                                                           |
-| `--json`                                                                                   | Emit normalized JSON instead of TOON for quota, auth, or models           |
-| `--full`                                                                                   | Include audit and derivation details                                      |
-| `--tui`                                                                                    | Render the live human terminal report instead of TOON (quota only)        |
-| `--refresh 30s\|5m\|1h`                                                                    | Live `--tui` refresh interval, default 5m (30s-24h)                       |
-| `--once`                                                                                   | Render one `--tui` frame and exit instead of staying live                 |
-| `--allow-keychain-prompt`                                                                  | Permit macOS provider Keychain access that could prompt                   |
-| `--no-credential-refresh`                                                                  | Never run a vendor CLI's own non-interactive credential refresh           |
-| `--profile-only`                                                                           | Read one explicitly selected Claude or Codex credential file (quota only) |
-| `--intelligence high\|medium\|low`                                                         | Filter `models` by editorial intelligence bucket                          |
-| `--sort runway`                                                                            | Explicitly sort `models` by documented usable-runway evidence             |
-| `-h`, `--help`                                                                             | Print terse [AXI](https://axi.md) help                                    |
-| `-v`, `-V`, `--version`                                                                    | Print version                                                             |
+| Flag                                                                                             | Description                                                               |
+| ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------- |
+| `--provider claude,codex,cursor,copilot,grok,kimi,zai,agy,alibaba,opencode-go,kiro,commandcode` | Scope providers                                                           |
+| `--json`                                                                                         | Emit normalized JSON instead of TOON for quota, auth, or models           |
+| `--full`                                                                                         | Include audit and derivation details                                      |
+| `--tui`                                                                                          | Render the live human terminal report instead of TOON (quota only)        |
+| `--refresh 30s\|5m\|1h`                                                                          | Live `--tui` refresh interval, default 5m (30s-24h)                       |
+| `--once`                                                                                         | Render one `--tui` frame and exit instead of staying live                 |
+| `--allow-keychain-prompt`                                                                        | Permit macOS provider Keychain access that could prompt                   |
+| `--no-credential-refresh`                                                                        | Never run a vendor CLI's own non-interactive credential refresh           |
+| `--profile-only`                                                                                 | Read one explicitly selected Claude or Codex credential file (quota only) |
+| `--intelligence high\|medium\|low`                                                               | Filter `models` by editorial intelligence bucket                          |
+| `--sort runway`                                                                                  | Explicitly sort `models` by documented usable-runway evidence             |
+| `-h`, `--help`                                                                                   | Print terse [AXI](https://axi.md) help                                    |
+| `-v`, `-V`, `--version`                                                                          | Print version                                                             |
 
 ### Profile-only quota reads
 
@@ -413,13 +413,13 @@ Other adapters retain their existing source-selection behavior.
 
 ## Output Model
 
-The `quota` command's `--json` emits `schemaVersion: 5`, or `6` when a provider expands to multiple accounts.
+The `quota` command's `--json` emits `schemaVersion: 6`.
 
 ### Normalized schema contract
 
 The package publishes TypeScript declarations from its package root, so consumers can use `import type { QuotaAxiResponse, ModelsResponse } from "quota-axi"`. The adapter contract is `ProviderAdapter` in and normalized `ProviderQuota` out: adapters report observed quota data, never rank, mint credentials, or retain raw responses. The narrowly bounded vendor-owned renewal path is documented under [Delegated credential refresh](#delegated-credential-refresh).
 
-`schemaVersion` is command-specific. Additive optional fields do not bump it. A semantic or incompatible shape change does. The legacy single-account `quota` report is version 5, `auth` is version 1, and `models` is version 1. When account discovery expands a provider, those versions are 6, 2, and 2 respectively.
+`schemaVersion` is command-specific. Published quota shape changes are versioned deliberately. The `quota` report is version 6, `auth` is version 1, and `models` is version 1.
 
 ### Default report blocks
 
@@ -672,6 +672,7 @@ Source attempts can include `credentialPresent` when a source is not genuinely a
 | Z.AI                   | Can report the Coding Plan `five_hour` and `weekly` usage windows (with trusted 18,000s and 604,800s durations) plus the `mcp_month` tool window, whose duration is not invented. Token and credit limits are both identified by the endpoint's own `unit`/`number` magic values (`3`/`5` and `6`/`1`) rather than array position; any other limit, or a repeat of an already reported one, degrades to an untrusted `limit:<index>` unknown window named in `state.untrustedWindowIds`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | Antigravity (`agy`)    | On macOS and Linux, can report `gemini_5h`, `gemini_weekly`, `claude_gpt_5h`, and `claude_gpt_weekly` from the installed CLI's structured `agy -p "/quota" --output-format json` response (a bounded read, not an agent session), falling back to an already-running Antigravity app or `agy` loopback quota summary when the CLI is unavailable. If only model config quota is exposed, quota-axi reports model-scoped `model:<slug>` windows instead of inventing grouped windows. Antigravity v1 snapshots do not expose enough history for honest burn-rate pace, so pace stays `unknown`.                                                                                                                                                                                                                                                                                                                                                                                    |
 | Alibaba                | Reads the local `bl` CLI's Alibaba Coding Plan Token Plan usage; reports the plan name and weekly remaining percentage and reset time from the CLI's JSON output, plus any named model limits as separate `model:<name>` windows. Repeated limits for the same model remain separate with suffixed IDs such as `model:<name>:2`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| Kiro                   | Reads first-party `Get-Usage-Limits` using local Pi, Kiro CLI, or IDE credentials. Preserves usage, limit, unit, overage, reset, and provider-supplied billing fields; percentages are derived only from numeric usage and limit. Kiro windows remain independently reported because no combined bound is assumed.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | OpenCode Go            | Reads `opencode-go` (falling back to `opencode`) from OpenCode's `auth.json` and reports the provider's rolling, weekly, and monthly usage windows as stacked plan caps that jointly bound Go-plan usage at `all_models` scope. It uses only cycle durations present in the payload; absent durations remain absent, so pace, runway, and selection stay unknown until the vendor reports a cycle. A zeroed plan window blocks Go-plan requests, but the vendor's free-model fallback or an opted-in Zen balance may still serve past it.                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | Command Code           | Reads local Command Code API keys and reports the exact aggregate credit balance (`monthlyCredits` + `purchasedCredits` + `freeCredits`, unit `credits`) plus `five_hour` and `weekly` rolling windows from Command Code's undocumented first-party `GET /alpha/whoami?limits=1` and `GET /alpha/billing/credits` endpoints. Those windows use trusted 18,000s and 604,800s durations and jointly bound the `included_credits` scope, not `all_models`, only when both are present and trusted. `limited:false` omits leftover rolling fields so the report stays credit-only with empty `windows`. No monthly percentage or 30-day reset is invented. Pay-as-you-go/Enterprise-style responses with no rolling windows stay fresh and auth-usable with empty `windows`, and their balance is surfaced as a `credits` attention row rather than `no_quota`. The `/alpha` account endpoints are not a documented public API; unrecognized limits fail closed as untrusted/partial. |
 
@@ -721,6 +722,12 @@ Auth source entries can include `credentialPresent` when a source is not genuine
 The Claude and Codex rows describe default discovery; [`--profile-only`](#profile-only-quota-reads) narrows each to the one selected credential file.
 
 ### Provider notes
+
+**Kiro**
+
+Kiro quota is read from the first-party `Get-Usage-Limits` management endpoint. Credential discovery is read-only and tries Pi's `kiro` entry, the Kiro CLI SQLite database, and the Kiro IDE token file. Set `KIRO_CLI_DB` to override the CLI database path or `KIRO_PROFILE_ARN` when the profile ARN is not stored with the credential. Kiro does not have a delegated refresh path in quota-axi.
+
+The adapter preserves provider-native usage fields (`usage`, `limit`, `unit`, `overage`, `overageCharges`, `currency`, `overageRate`, `overageCap`) and derives percentages only when numeric usage and limit are available. Kiro windows remain independently reported: the TUI shows per-window usage and `no combined bound` rather than inventing an aggregate percentage.
 
 **Claude**
 
@@ -845,12 +852,12 @@ quota-axi reports quota; it is not an auth app. It never mints a credential, nev
 
 Instead, when the same stored access token is expired, carries a refresh token, **and** is definitively rejected, quota-axi may run the vendor CLI's own smallest non-interactive command that already owns rotation, then re-read the store that CLI rewrote and retry the same read-only quota request once. Rotation is always the vendor's; quota-axi only reads the result.
 
-| Provider                                                                            | Vendor-owned recovery path        | Store the vendor rewrites                             |
-| ----------------------------------------------------------------------------------- | --------------------------------- | ----------------------------------------------------- |
-| Claude                                                                              | `claude doctor` delegate          | the Claude Code Keychain item, or `.credentials.json` |
-| Codex                                                                               | existing `app-server` quota probe | `$CODEX_HOME/auth.json`                               |
-| Grok                                                                                | `grok models` delegate            | `$GROK_HOME/auth.json`                                |
-| Cursor, GitHub Copilot, Kimi, Z.AI, Alibaba, OpenCode Go, Antigravity, Command Code | none                              | read-only; see the per-provider notes below           |
+| Provider                                                                                  | Vendor-owned recovery path        | Store the vendor rewrites                             |
+| ----------------------------------------------------------------------------------------- | --------------------------------- | ----------------------------------------------------- |
+| Claude                                                                                    | `claude doctor` delegate          | the Claude Code Keychain item, or `.credentials.json` |
+| Codex                                                                                     | existing `app-server` quota probe | `$CODEX_HOME/auth.json`                               |
+| Grok                                                                                      | `grok models` delegate            | `$GROK_HOME/auth.json`                                |
+| Cursor, GitHub Copilot, Kimi, Kiro, Z.AI, Alibaba, OpenCode Go, Antigravity, Command Code | none                              | read-only; see the per-provider notes below           |
 
 The Claude and Grok delegated runs are bounded the same way:
 
