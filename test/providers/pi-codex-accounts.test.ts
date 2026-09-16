@@ -724,6 +724,62 @@ describe("Codex Pi sibling account lanes", () => {
     });
   });
 
+  it("never revives a cached CLI account after a confirmed logout", async () => {
+    await writeCodexHomeSnapshot(42);
+    writePiAuth({
+      "openai-codex-work": piOauthEntry({
+        access: "work-access-token",
+        accountId: "acct-work",
+      }),
+    });
+    stubUsageByToken({
+      "work-access-token": usage(80, "work@example.invalid", "acct-work"),
+    });
+
+    mockCodexCli("signed-out");
+    const signedOut = await readCodexLanes();
+    expect(signedOut.map((report) => report.accountKey)).toEqual([
+      "openai-codex-work",
+    ]);
+
+    mockCodexCli("unreachable");
+    const unreachable = await readCodexLanes();
+    expect(unreachable.map((report) => report.accountKey)).toEqual([
+      "openai-codex-work",
+    ]);
+    expect(
+      unreachable.some((report) => report.windows[0]?.percentUsed === 42),
+    ).toBe(false);
+  });
+
+  it("never revives a cached CLI account after it coalesces into a Pi lane", async () => {
+    await writeCodexHomeSnapshot(42);
+    writePiAuth({
+      "openai-codex-work": piOauthEntry({
+        access: "work-access-token",
+        accountId: "acct-work",
+      }),
+    });
+    stubUsageByToken({
+      "work-access-token": usage(80, "work@example.invalid", "acct-work"),
+    });
+
+    mockCodexCli({ accountId: "acct-work", usedPercent: 80 });
+    const coalesced = await readCodexLanes();
+    expect(coalesced.map((report) => report.accountKey)).toEqual([
+      "openai-codex-work",
+    ]);
+
+    mockCodexCli("unreachable");
+    const unreachable = await readCodexLanes();
+    expect(unreachable.map((report) => report.accountKey)).toEqual([
+      "openai-codex-work",
+    ]);
+    expect(
+      unreachable.some((report) => report.windows[0]?.percentUsed === 42),
+    ).toBe(false);
+  });
+
   it("adds no CLI lane when the probe fails before any account evidence", async () => {
     writePiAuth({
       "openai-codex-work": piOauthEntry({
@@ -1023,6 +1079,36 @@ function writePiAuth(store: Record<string, unknown>): void {
     JSON.stringify(store),
     { mode: 0o600 },
   );
+}
+
+async function writeCodexHomeSnapshot(percentUsed: number): Promise<void> {
+  const { writeCachedProviders } = await import("../../src/cache.js");
+  writeCachedProviders([
+    {
+      provider: "codex",
+      accountKey: "codex-home",
+      label: "Codex",
+      source: "cli-rpc",
+      windows: [
+        {
+          id: "weekly",
+          label: "week",
+          kind: "weekly",
+          percentUsed,
+          windowSeconds: 604_800,
+        },
+      ],
+      state: { status: "fresh", stale: false, sourcesTried: ["cli-rpc"] },
+    },
+  ]);
+}
+
+async function readCodexLanes() {
+  vi.resetModules();
+  const adapter = (
+    await import("../../src/providers/codex.js")
+  ).createCodexAdapter();
+  return fetchAccountQuotas(adapter, OPTIONS);
 }
 
 function writeNativeAuth(accessToken: string, accountId: string): void {

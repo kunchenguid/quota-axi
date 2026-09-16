@@ -1,7 +1,7 @@
 import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { spawn } from "node:child_process";
-import { readCachedProvider } from "../cache.js";
+import { deleteCachedProvider, readCachedProvider } from "../cache.js";
 import { readJsonFileResult, type JsonFileReadResult } from "../lib/fs.js";
 import { providerFetch } from "../lib/http.js";
 import { findCommandPath, terminateChild } from "../lib/process.js";
@@ -203,9 +203,11 @@ async function discoverCodexAccounts(
           reading?.state.status === "fresh"
             ? reading.account?.accountId
             : undefined;
-        return readingAccountId && piLaneAccountIds.has(readingAccountId)
-          ? undefined
-          : reading;
+        if (readingAccountId && piLaneAccountIds.has(readingAccountId)) {
+          deleteCachedProvider("codex", CODEX_HOME_ACCOUNT_KEY);
+          return undefined;
+        }
+        return reading;
       },
       inspectAuth: () =>
         inspectAuthWithDependencies(dependencies, nativeAccount),
@@ -276,10 +278,13 @@ async function fetchCliAccountQuota(): Promise<ProviderQuota | undefined> {
       { source: "cli-rpc", status: "success" },
     ]);
   } catch (error) {
+    if (error instanceof CodexCliSignedOutError) {
+      deleteCachedProvider("codex", CODEX_HOME_ACCOUNT_KEY);
+      return undefined;
+    }
     if (
-      error instanceof CodexCliSignedOutError ||
-      (!(error instanceof CodexCliAccountReadingError) &&
-        !readCachedProvider("codex", CODEX_HOME_ACCOUNT_KEY))
+      !(error instanceof CodexCliAccountReadingError) &&
+      !readCachedProvider("codex", CODEX_HOME_ACCOUNT_KEY)
     ) {
       return undefined;
     }

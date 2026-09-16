@@ -376,6 +376,7 @@ Without a native `auth.json`, an installed Codex CLI fallback is probed once as 
 The lane is left out only when the app-server's `account/read` positively reports no ChatGPT login (`account: null` or a non-ChatGPT account).
 A reading without the optional `accountId` stays its own lane with no identity.
 A failed CLI reading is shown as stale or unavailable only when `account/read` confirmed a ChatGPT login or a `codex-home` snapshot is cached; a probe that fails before that evidence adds no lane, and `auth` still shows the `cli-rpc` source.
+A proven sign-out, or a CLI login that coalesces into a Pi lane, removes the cached `codex-home` snapshot so a later failed probe cannot bring that account back.
 A CLI login for the same `accountId` as a Pi lane is not a second lane: that Pi lane keeps its own reading when fresh, and shows the CLI reading when its own is expired, rejected, or stale.
 `--profile-only` still reads one native Codex file and never opens Pi auth.
 
