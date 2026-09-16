@@ -1,8 +1,9 @@
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
-import { join } from "node:path";
-import { deleteCachedProvider, readCachedProvider } from "../cache.js";
+import { join, resolve } from "node:path";
+import { deleteCachedProvider, readCachedProviderInContext } from "../cache.js";
 import { collapseHome } from "../lib/fs.js";
 import { providerFetch } from "../lib/http.js";
 import {
@@ -30,6 +31,7 @@ import {
   statusFromError,
   successProvider,
 } from "./common.js";
+import { withKiroReadingContext } from "./kiro-cache-context.js";
 
 const KIRO_DB_ENV = "KIRO_CLI_DB";
 const KIRO_REGION_ENV = "KIRO_REGION";
@@ -118,7 +120,22 @@ async function fetchQuotaWith(
   readCredentials: () => KiroCredentialState,
 ): Promise<ProviderQuota> {
   const attempts: SourceAttempt[] = [];
+  const databasePath = process.env[KIRO_DB_ENV] || KIRO_DB_DEFAULT;
+  const profileArn = process.env[KIRO_PROFILE_ARN_ENV]?.trim() || undefined;
+  const configuredRegion = stringValue(process.env[KIRO_REGION_ENV]);
   const credentialState = readCredentials();
+  const region =
+    configuredRegion ??
+    ("credentials" in credentialState
+      ? credentialState.credentials.region
+      : undefined);
+  const contextId = region
+    ? createHash("sha256")
+        .update(
+          JSON.stringify([resolve(databasePath), region, profileArn ?? null]),
+        )
+        .digest("hex")
+    : undefined;
   const credentialPresent =
     credentialState.status !== "missing" && credentialState.status !== "error";
 
@@ -138,28 +155,36 @@ async function fetchQuotaWith(
         ? { error: "Kiro credential store unavailable", status: "error" }
         : { error: "Kiro sign-in required", status: "auth_required" },
       attempts,
+      contextId,
     );
   }
 
   attempts.push({ source: KIRO_SOURCE, status: "failed", credentialPresent });
   try {
-    const quota = await fetchKiroUsage(credentialState.credentials, request);
+    const quota = await fetchKiroUsage(
+      credentialState.credentials,
+      request,
+      profileArn,
+    );
     attempts[attempts.length - 1] = {
       source: KIRO_SOURCE,
       status: "success",
       credentialPresent,
     };
-    return successProvider({
-      provider: "kiro",
-      label: "Kiro",
-      source: "api",
-      plan: quota.plan,
-      windows: quota.windows,
-      credits: quota.credits,
-      refreshedAt: quota.refreshedAt,
-      sourcesTried: sourceNames(attempts),
-      attempts,
-    });
+    return withKiroReadingContext(
+      successProvider({
+        provider: "kiro",
+        label: "Kiro",
+        source: "api",
+        plan: quota.plan,
+        windows: quota.windows,
+        credits: quota.credits,
+        refreshedAt: quota.refreshedAt,
+        sourcesTried: sourceNames(attempts),
+        attempts,
+      }),
+      contextId,
+    );
   } catch (error) {
     const failure = classifyFailure(error, credentialState.credentials);
     attempts[attempts.length - 1] = {
@@ -168,7 +193,7 @@ async function fetchQuotaWith(
       error: failure.error,
       credentialPresent,
     };
-    return unavailableReport(failure, attempts);
+    return unavailableReport(failure, attempts, contextId);
   }
 }
 
@@ -211,10 +236,14 @@ function classifyFailure(
 function unavailableReport(
   failure: KiroFailure,
   attempts: SourceAttempt[],
+  contextId: string | undefined,
 ): ProviderQuota {
   const definitiveAuthFailure = failure.status === "auth_required";
-  if (definitiveAuthFailure) deleteCachedProvider("kiro");
-  const cached = definitiveAuthFailure ? undefined : readCachedProvider("kiro");
+  if (definitiveAuthFailure && contextId) retireCache(contextId);
+  const cached =
+    definitiveAuthFailure || !contextId
+      ? undefined
+      : readCachedProviderInContext("kiro", contextId);
   if (cached) {
     const stale = staleFromCache(
       cached,
@@ -222,9 +251,14 @@ function unavailableReport(
       sourceNames(attempts),
       attempts,
     );
-    return failure.authStatus
-      ? { ...stale, state: { ...stale.state, authStatus: failure.authStatus } }
-      : stale;
+    return {
+      ...stale,
+      state: {
+        ...stale.state,
+        ...(failure.authStatus ? { authStatus: failure.authStatus } : {}),
+        ...(failure.retryAfter ? { retryAfter: failure.retryAfter } : {}),
+      },
+    };
   }
   const report = failedProvider({
     provider: "kiro",
@@ -240,6 +274,14 @@ function unavailableReport(
     : report;
 }
 
+function retireCache(contextId: string): void {
+  try {
+    deleteCachedProvider("kiro", contextId);
+  } catch {
+    return;
+  }
+}
+
 export function normalizeKiroUsage(raw: unknown):
   | {
       plan?: string;
@@ -250,19 +292,18 @@ export function normalizeKiroUsage(raw: unknown):
   | undefined {
   const data = objectValue(raw);
   if (!data) return undefined;
-  const resetAt = parseEpochOrIso(data.nextDateReset ?? data.next_date_reset);
-  const breakdowns = arrayValue(
-    data.usageBreakdownList ?? data.usage_breakdown_list,
-  );
-  const windows = normalizeBreakdowns(breakdowns, resetAt);
-  const subscription = objectValue(
-    data.subscriptionInfo ?? data.subscription_info,
-  );
+  const resetAt = parseEpochOrIso(data.nextDateReset);
+  const breakdowns = arrayValue(data.usageBreakdownList);
+  const normalized = normalizeBreakdowns(breakdowns, resetAt);
+  const windows = normalized.map(({ window }) => window);
+  const subscription = objectValue(data.subscriptionInfo);
   const plan =
     stringValue(subscription?.subscriptionTitle) ??
     stringValue(subscription?.type);
   if (windows.length === 0 && !plan && !subscription) return undefined;
-  const balance = creditBalance(breakdowns);
+  const balance = normalized.find(
+    ({ window }) => window.id === "credit",
+  )?.remaining;
   return {
     plan,
     windows,
@@ -277,6 +318,7 @@ export function normalizeKiroUsage(raw: unknown):
 async function fetchKiroUsage(
   credentials: KiroCredentials,
   request: typeof fetch,
+  profileArn: string | undefined,
 ): Promise<{
   plan?: string;
   windows: QuotaWindow[];
@@ -287,7 +329,6 @@ async function fetchKiroUsage(
   const timer = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
   try {
     const body: Record<string, unknown> = {};
-    const profileArn = process.env[KIRO_PROFILE_ARN_ENV]?.trim();
     if (profileArn) body.profileArn = profileArn;
     const response = await request(
       `https://codewhisperer.${credentials.region}.amazonaws.com/`,
@@ -396,69 +437,64 @@ export function readCredentialState(
   return { status: "available", credentials, source: report("available") };
 }
 
-function creditBalance(values: unknown[]): number | undefined {
-  for (const value of values) {
-    const item = objectValue(value);
-    if (!item) continue;
-    const used =
-      numberValue(item.currentUsageWithPrecision) ??
-      numberValue(item.current_usage_with_precision) ??
-      numberValue(item.currentUsage) ??
-      numberValue(item.current_usage);
-    const limit =
-      numberValue(item.usageLimitWithPrecision) ??
-      numberValue(item.usage_limit_with_precision) ??
-      numberValue(item.usageLimit) ??
-      numberValue(item.usage_limit);
-    if (used !== undefined && limit !== undefined && limit > 0)
-      return Math.max(0, limit - used);
-  }
-  return undefined;
+function creditPool(
+  item: Record<string, unknown>,
+): { used: number; limit: number } | undefined {
+  const used =
+    numberValue(item.currentUsageWithPrecision) ??
+    numberValue(item.currentUsage);
+  const limit =
+    numberValue(item.usageLimitWithPrecision) ?? numberValue(item.usageLimit);
+  if (used === undefined || limit === undefined || used < 0 || limit < 0)
+    return undefined;
+  return { used: Math.min(used, limit), limit };
 }
 
 function normalizeBreakdowns(
   values: unknown[],
   fallbackReset: string | undefined,
-): QuotaWindow[] {
-  return values
-    .map((value, index): QuotaWindow | undefined => {
-      const item = objectValue(value);
-      if (!item) return undefined;
-      const used =
-        numberValue(item.currentUsageWithPrecision) ??
-        numberValue(item.current_usage_with_precision) ??
-        numberValue(item.currentUsage) ??
-        numberValue(item.current_usage);
-      const limit =
-        numberValue(item.usageLimitWithPrecision) ??
-        numberValue(item.usage_limit_with_precision) ??
-        numberValue(item.usageLimit) ??
-        numberValue(item.usage_limit);
-      if (used === undefined || limit === undefined || limit <= 0)
-        return undefined;
-      const percentUsed = clampPercent((used / limit) * 100);
-      const resource =
-        stringValue(item.resourceType) ??
-        stringValue(item.resource_type) ??
-        stringValue(item.displayName) ??
-        `credit_${index + 1}`;
-      const label =
-        stringValue(item.displayNamePlural) ??
-        stringValue(item.display_name_plural) ??
-        stringValue(item.displayName) ??
-        "Credits";
-      return {
-        id: slug(resource, index),
-        label,
-        kind: "credits" as const,
-        percentUsed,
-        percentRemaining: percentRemaining(percentUsed),
-        resetsAt:
-          parseEpochOrIso(item.nextDateReset ?? item.next_date_reset) ??
-          fallbackReset,
-      };
-    })
-    .filter((window): window is QuotaWindow => Boolean(window));
+): { window: QuotaWindow; remaining: number }[] {
+  return values.flatMap((value, index) => {
+    const item = objectValue(value);
+    if (!item) return [];
+    const base = creditPool(item);
+    if (!base) return [];
+    let { used, limit } = base;
+    const trial = objectValue(item.freeTrialInfo);
+    const trialExpiry = parseEpochOrIso(trial?.freeTrialExpiry);
+    if (
+      trial?.freeTrialStatus === "ACTIVE" &&
+      (!trialExpiry || Date.parse(trialExpiry) > Date.now())
+    ) {
+      const pool = creditPool(trial);
+      if (!pool) return [];
+      used += pool.used;
+      limit += pool.limit;
+    }
+    if (limit <= 0) return [];
+    const percentUsed = clampPercent((used / limit) * 100);
+    const resource =
+      stringValue(item.resourceType) ??
+      stringValue(item.displayName) ??
+      `credit_${index + 1}`;
+    const label =
+      stringValue(item.displayNamePlural) ??
+      stringValue(item.displayName) ??
+      "Credits";
+    return [
+      {
+        remaining: Math.max(0, limit - used),
+        window: {
+          id: slug(resource, index),
+          label,
+          kind: "credits" as const,
+          percentUsed,
+          percentRemaining: percentRemaining(percentUsed),
+          resetsAt: parseEpochOrIso(item.nextDateReset) ?? fallbackReset,
+        },
+      },
+    ];
+  });
 }
 
 function slug(value: string, index: number): string {

@@ -5,6 +5,7 @@ import {
   ensurePrivateParent,
   readJsonFile,
 } from "./lib/fs.js";
+import { kiroReadingContextId } from "./providers/kiro-cache-context.js";
 import { kimiReadingContextId } from "./providers/kimi-cache-context.js";
 import type {
   ProviderId,
@@ -62,10 +63,11 @@ const CREDENTIAL_CONTEXT_ID = /^[a-f0-9]{64}$/;
  * its reading.
  */
 const CONTEXT_SCOPED_PROVIDERS: Partial<
-  Record<ProviderId, () => string | undefined>
+  Record<ProviderId, (provider: ProviderQuota) => string | undefined>
 > = {
   claude: claudeCredentialContextId,
   kimi: kimiReadingContextId,
+  kiro: kiroReadingContextId,
 };
 
 type CachedProvider = {
@@ -103,7 +105,7 @@ export function readCachedKimiProvider(
   return readCachedProviderInContext("kimi", contextId);
 }
 
-function readCachedProviderInContext(
+export function readCachedProviderInContext(
   provider: ProviderId,
   contextId: string,
 ): ProviderQuota | undefined {
@@ -116,13 +118,16 @@ function readCachedProviderInContext(
 }
 
 export function writeCachedProviders(providers: ProviderQuota[]): void {
-  const clearProviders = new Set(
+  const clearProviders = new Map(
     providers
       .filter(
         (provider) =>
           provider.state.status === "fresh" && provider.windows.length === 0,
       )
-      .map((provider) => provider.provider),
+      .map((provider) => [
+        provider.provider,
+        CONTEXT_SCOPED_PROVIDERS[provider.provider]?.(provider),
+      ]),
   );
   const cacheable = providers
     .map(toCacheProvider)
@@ -132,7 +137,13 @@ export function writeCachedProviders(providers: ProviderQuota[]): void {
   const byProvider = new Map<ProviderId, CachedProvider>();
   let clearedExisting = false;
   for (const provider of readCacheProviders()) {
-    if (clearProviders.has(provider.snapshot.provider)) {
+    if (
+      clearProviders.has(provider.snapshot.provider) &&
+      (!(provider.snapshot.provider in CONTEXT_SCOPED_PROVIDERS) ||
+        (clearProviders.get(provider.snapshot.provider) !== undefined &&
+          clearProviders.get(provider.snapshot.provider) ===
+            provider.credentialContextId))
+    ) {
       clearedExisting = true;
       continue;
     }
@@ -148,12 +159,18 @@ export function writeCachedProviders(providers: ProviderQuota[]): void {
   writeCacheFile(file, merged);
 }
 
-export function deleteCachedProvider(provider: ProviderId): void {
+export function deleteCachedProvider(
+  provider: ProviderId,
+  contextId?: string,
+): void {
   const existing = readCacheProviders();
-  if (!existing.some((item) => item.snapshot.provider === provider)) return;
+  const matches = (item: CachedProvider) =>
+    item.snapshot.provider === provider &&
+    (contextId === undefined || item.credentialContextId === contextId);
+  if (!existing.some(matches)) return;
   writeCacheFile(
     cacheFilePath(),
-    existing.filter((item) => item.snapshot.provider !== provider),
+    existing.filter((item) => !matches(item)),
   );
 }
 
@@ -215,7 +232,7 @@ function toCacheProvider(provider: ProviderQuota): CachedProvider | undefined {
     CACHE_SCHEMA_VERSION,
   )?.snapshot;
   if (!snapshot) return undefined;
-  const contextId = CONTEXT_SCOPED_PROVIDERS[provider.provider]?.();
+  const contextId = CONTEXT_SCOPED_PROVIDERS[provider.provider]?.(provider);
   return {
     snapshot,
     ...(contextId ? { credentialContextId: contextId } : {}),

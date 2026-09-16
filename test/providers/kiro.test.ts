@@ -1,8 +1,15 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { withQuotaSemantics } from "../../src/interpretation.js";
 import { readCachedProvider, writeCachedProviders } from "../../src/cache.js";
 import {
   createKiroAdapter,
@@ -11,6 +18,11 @@ import {
   type KiroCredentialState,
 } from "../../src/providers/kiro.js";
 
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return { ...actual, writeFileSync: vi.fn(actual.writeFileSync) };
+});
+
 const OPTIONS = { allowKeychainPrompt: false, refreshCredentials: false };
 const ORIGINAL_CACHE_HOME = process.env.XDG_CACHE_HOME;
 let tempDir: string;
@@ -18,9 +30,13 @@ let tempDir: string;
 beforeEach(() => {
   tempDir = mkdtempSync(join(tmpdir(), "quota-axi-kiro-"));
   process.env.XDG_CACHE_HOME = join(tempDir, "cache");
+  vi.stubEnv("KIRO_CLI_DB", join(tempDir, "kiro-cli", "data.sqlite3"));
+  vi.stubEnv("KIRO_REGION", "us-east-1");
+  vi.stubEnv("KIRO_PROFILE_ARN", "");
 });
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   if (ORIGINAL_CACHE_HOME === undefined) delete process.env.XDG_CACHE_HOME;
   else process.env.XDG_CACHE_HOME = ORIGINAL_CACHE_HOME;
   rmSync(tempDir, { recursive: true, force: true });
@@ -144,6 +160,143 @@ describe("Kiro quota normalization", () => {
     });
   });
 
+  it("includes active trial credits in the balance and all_models bound", async () => {
+    const report = await adapterWith(CREDENTIALS, async () =>
+      jsonResponse({
+        ...USAGE_PAYLOAD,
+        usageBreakdownList: [
+          {
+            resourceType: "CREDIT",
+            currentUsage: 0,
+            usageLimit: 50,
+            freeTrialInfo: {
+              freeTrialStatus: "ACTIVE",
+              freeTrialExpiry: "2099-10-01T00:00:00.000Z",
+              currentUsage: 999,
+              currentUsageWithPrecision: 100,
+              usageLimit: 999,
+              usageLimitWithPrecision: 500,
+            },
+          },
+        ],
+      }),
+    ).fetchQuota(OPTIONS);
+    expect(report.credits).toEqual({ remaining: 450, unit: "credits" });
+    expect(report.windows[0].percentRemaining).toBe(82);
+    const interpreted = withQuotaSemantics(report, new Date().toISOString());
+    expect(interpreted.quotaSemantics?.effectiveAvailability[0]).toMatchObject({
+      scope: "all_models",
+      limitingWindowIds: ["credit"],
+    });
+    expect(
+      interpreted.quotaSemantics?.effectiveAvailability[0]
+        .effectivePercentRemaining,
+    ).toBe(82);
+  });
+
+  it.each([
+    ["EXPIRED", "2099-10-01T00:00:00.000Z"],
+    ["ACTIVE", "2000-01-01T00:00:00.000Z"],
+  ])("excludes an inapplicable trial (%s, %s)", (status, expiry) => {
+    expect(
+      normalizeKiroUsage({
+        ...USAGE_PAYLOAD,
+        usageBreakdownList: [
+          {
+            resourceType: "CREDIT",
+            currentUsage: 0,
+            usageLimit: 50,
+            freeTrialInfo: {
+              freeTrialStatus: status,
+              freeTrialExpiry: expiry,
+              currentUsage: 100,
+              usageLimit: 500,
+            },
+          },
+        ],
+      })?.credits?.remaining,
+    ).toBe(50);
+  });
+
+  it("retains a trial when the base allowance is zero", () => {
+    expect(
+      normalizeKiroUsage({
+        usageBreakdownList: [
+          {
+            resourceType: "CREDIT",
+            currentUsage: 0,
+            usageLimit: 0,
+            freeTrialInfo: {
+              freeTrialStatus: "ACTIVE",
+              currentUsage: 100,
+              usageLimit: 500,
+            },
+          },
+        ],
+      }),
+    ).toMatchObject({
+      credits: { remaining: 400 },
+      windows: [{ percentRemaining: 80 }],
+    });
+  });
+
+  it("withholds an incomplete active trial instead of reporting only the base", () => {
+    expect(
+      normalizeKiroUsage({
+        subscriptionInfo: USAGE_PAYLOAD.subscriptionInfo,
+        usageBreakdownList: [
+          {
+            resourceType: "CREDIT",
+            currentUsage: 0,
+            usageLimit: 50,
+            freeTrialInfo: { freeTrialStatus: "ACTIVE", usageLimit: 500 },
+          },
+        ],
+      }),
+    ).toMatchObject({ windows: [], credits: undefined });
+  });
+
+  it("accepts canonical camelCase fields without snake_case aliases", () => {
+    expect(
+      normalizeKiroUsage({
+        usage_breakdown_list: [{ current_usage: 0, usage_limit: 50 }],
+        subscription_info: { type: "ignored" },
+        next_date_reset: 1_788_220_800,
+      }),
+    ).toBeUndefined();
+    expect(
+      normalizeKiroUsage({
+        subscriptionInfo: USAGE_PAYLOAD.subscriptionInfo,
+        usageBreakdownList: [
+          {
+            resourceType: "CREDIT",
+            current_usage_with_precision: 10,
+            usage_limit_with_precision: 50,
+          },
+        ],
+      }),
+    ).toMatchObject({ windows: [], credits: undefined });
+    const quota = normalizeKiroUsage({
+      usageBreakdownList: [
+        {
+          resourceType: "CREDIT",
+          currentUsage: 10,
+          usageLimit: 50,
+          current_usage_with_precision: 49,
+          usage_limit_with_precision: 100,
+          display_name_plural: "Ignored",
+          next_date_reset: 1_788_220_800,
+        },
+      ],
+      next_date_reset: 1_788_220_800,
+    });
+    expect(quota).toMatchObject({
+      credits: { remaining: 40 },
+      windows: [{ id: "credit", label: "Credits", percentRemaining: 80 }],
+    });
+    expect(quota?.windows[0].resetsAt).toBeUndefined();
+  });
+
   it("rejects empty responses instead of inventing quota", () => {
     expect(normalizeKiroUsage({})).toBeUndefined();
     expect(normalizeKiroUsage(null)).toBeUndefined();
@@ -252,6 +405,7 @@ describe("Kiro credential store reader", () => {
   });
 
   it("reads a live token with its stored region", () => {
+    vi.stubEnv("KIRO_REGION", "");
     writeKiroStore(storePath(), { token: liveToken() });
     expect(readCredentialState(storePath())).toMatchObject({
       status: "available",
@@ -460,32 +614,211 @@ describe("Kiro quota transport", () => {
   });
 
   describe("with a cached fresh reading", () => {
-    const cachedKiro = () => ({
-      provider: "kiro" as const,
-      label: "Kiro",
-      source: "api" as const,
-      plan: "KIRO PRO+",
-      windows: [
-        {
-          id: "credit",
-          label: "Credits",
-          kind: "credits" as const,
-          percentUsed: 25,
-          percentRemaining: 75,
-          resetsAt: "2099-09-01T00:00:00.000Z",
-        },
-      ],
-      state: {
-        status: "fresh" as const,
-        stale: false,
-        refreshedAt: "2026-08-01T00:00:00.000Z",
-        sourcesTried: ["kiro-sqlite"],
-      },
+    beforeEach(async () => {
+      const fresh = await adapterWith(CREDENTIALS, async () =>
+        jsonResponse(USAGE_PAYLOAD),
+      ).fetchQuota(OPTIONS);
+      writeCachedProviders([fresh]);
+      expect(readCachedProvider("kiro")).toBeDefined();
     });
 
-    beforeEach(() => {
-      writeCachedProviders([cachedKiro()]);
+    it.each(["logout", "rejection"])(
+      "withholds stale quota if %s cache retirement cannot write",
+      async (failure) => {
+        vi.mocked(writeFileSync).mockImplementationOnce(() => {
+          throw Object.assign(new Error("read-only filesystem"), {
+            code: "EROFS",
+          });
+        });
+        const report = await adapterWith(
+          failure === "logout"
+            ? { status: "missing", source: { ...SOURCE, status: "missing" } }
+            : CREDENTIALS,
+          async () => new Response(null, { status: 401 }),
+        ).fetchQuota(OPTIONS);
+        expect(report).toMatchObject({
+          source: "unavailable",
+          windows: [],
+          state: { status: "auth_required" },
+        });
+        expect(readCachedProvider("kiro")).toBeDefined();
+        expect(vi.mocked(writeFileSync).mock.results.at(-1)?.type).toBe(
+          "throw",
+        );
+      },
+    );
+
+    it("preserves retry-after on a stale rate-limited reading", async () => {
+      const report = await adapterWith(
+        CREDENTIALS,
+        async () =>
+          new Response(null, {
+            status: 429,
+            headers: { "retry-after": "Thu, 01 Jan 2099 00:00:00 GMT" },
+          }),
+      ).fetchQuota(OPTIONS);
+      expect(report.state).toMatchObject({
+        status: "stale",
+        retryAfter: "2099-01-01T00:00:00.000Z",
+      });
+    });
+
+    it.each(["KIRO_CLI_DB", "KIRO_REGION", "KIRO_PROFILE_ARN"])(
+      "isolates fallback and retirement when %s selects another context",
+      async (key) => {
+        const original = process.env[key]!;
+        vi.stubEnv(
+          key,
+          key === "KIRO_REGION" ? "eu-west-1" : "synthetic-other-context",
+        );
+        const state =
+          key === "KIRO_REGION"
+            ? {
+                ...CREDENTIALS,
+                credentials: {
+                  ...CREDENTIALS.credentials,
+                  region: "eu-west-1",
+                },
+              }
+            : CREDENTIALS;
+        const transient = await adapterWith(state, async () => {
+          throw new Error("timeout");
+        }).fetchQuota(OPTIONS);
+        expect(transient).toMatchObject({ source: "unavailable", windows: [] });
+        expect(transient.plan).toBeUndefined();
+        const rejected = await adapterWith(
+          state,
+          async () => new Response(null, { status: 401 }),
+        ).fetchQuota(OPTIONS);
+        expect(rejected.state.status).toBe("auth_required");
+        expect(readCachedProvider("kiro")).toBeDefined();
+        const empty = await adapterWith(state, async () =>
+          jsonResponse({ subscriptionInfo: { type: "new account" } }),
+        ).fetchQuota(OPTIONS);
+        writeCachedProviders([empty]);
+        expect(readCachedProvider("kiro")).toBeDefined();
+        vi.stubEnv(key, original);
+        const restored = await adapterWith(CREDENTIALS, async () => {
+          throw new Error("timeout");
+        }).fetchQuota(OPTIONS);
+        expect(restored).toMatchObject({
+          source: "cache",
+          plan: "KIRO PRO+",
+          windows: [{ percentRemaining: 75 }],
+        });
+      },
+    );
+
+    it("withholds cache when an unreadable store leaves the region unconfirmed", async () => {
+      vi.stubEnv("KIRO_REGION", "");
+      const report = await adapterWith(
+        {
+          status: "error",
+          source: { ...SOURCE, status: "error", error: "database_busy" },
+        },
+        vi.fn(),
+      ).fetchQuota(OPTIONS);
+      expect(report).toMatchObject({
+        source: "unavailable",
+        windows: [],
+        state: { status: "error" },
+      });
       expect(readCachedProvider("kiro")).toBeDefined();
+    });
+
+    it("isolates a changed stored region without an environment override", async () => {
+      vi.stubEnv("KIRO_REGION", "");
+      const state = {
+        ...CREDENTIALS,
+        credentials: { ...CREDENTIALS.credentials, region: "eu-west-1" },
+      };
+      const report = await adapterWith(state, async () => {
+        throw new Error("timeout");
+      }).fetchQuota(OPTIONS);
+      expect(report).toMatchObject({ source: "unavailable", windows: [] });
+      await adapterWith(
+        state,
+        async () => new Response(null, { status: 401 }),
+      ).fetchQuota(OPTIONS);
+      expect(readCachedProvider("kiro")).toBeDefined();
+    });
+
+    it("does not reuse or retire an unscoped legacy snapshot", async () => {
+      const path = join(
+        process.env.XDG_CACHE_HOME!,
+        "quota-axi",
+        "quotas.json",
+      );
+      const saved = JSON.parse(readFileSync(path, "utf8"));
+      delete saved.providers[0].credentialContext;
+      writeFileSync(path, JSON.stringify(saved));
+      const report = await adapterWith(CREDENTIALS, async () => {
+        throw new Error("timeout");
+      }).fetchQuota(OPTIONS);
+      expect(report).toMatchObject({ source: "unavailable", windows: [] });
+      await adapterWith(
+        CREDENTIALS,
+        async () => new Response(null, { status: 401 }),
+      ).fetchQuota(OPTIONS);
+      expect(readCachedProvider("kiro")).toBeDefined();
+    });
+
+    it("keeps each reading bound to its context across interleaved successful reads", async () => {
+      const original = await adapterWith(CREDENTIALS, async () =>
+        jsonResponse(USAGE_PAYLOAD),
+      ).fetchQuota(OPTIONS);
+      vi.stubEnv("KIRO_PROFILE_ARN", "synthetic-other-profile");
+      await adapterWith(CREDENTIALS, async () =>
+        jsonResponse(USAGE_PAYLOAD),
+      ).fetchQuota(OPTIONS);
+      writeCachedProviders([
+        withQuotaSemantics(original, new Date().toISOString()),
+      ]);
+      const other = await adapterWith(CREDENTIALS, async () => {
+        throw new Error("timeout");
+      }).fetchQuota(OPTIONS);
+      expect(other).toMatchObject({ source: "unavailable", windows: [] });
+      vi.stubEnv("KIRO_PROFILE_ARN", "");
+      const restored = await adapterWith(CREDENTIALS, async () => {
+        throw new Error("timeout");
+      }).fetchQuota(OPTIONS);
+      expect(restored.source).toBe("cache");
+    });
+
+    it("clears a matching context after a fresh response with no windows", async () => {
+      const empty = await adapterWith(CREDENTIALS, async () =>
+        jsonResponse({ subscriptionInfo: { type: "KIRO FREE" } }),
+      ).fetchQuota(OPTIONS);
+      writeCachedProviders([empty]);
+      expect(readCachedProvider("kiro")).toBeUndefined();
+    });
+
+    it("stamps the context used for the request even if configuration changes before caching", async () => {
+      const fresh = await adapterWith(CREDENTIALS, async () => {
+        vi.stubEnv("KIRO_PROFILE_ARN", "synthetic-new-profile");
+        return jsonResponse(USAGE_PAYLOAD);
+      }).fetchQuota(OPTIONS);
+      writeCachedProviders([
+        withQuotaSemantics(fresh, new Date().toISOString()),
+      ]);
+      const path = join(
+        process.env.XDG_CACHE_HOME!,
+        "quota-axi",
+        "quotas.json",
+      );
+      const saved = JSON.parse(readFileSync(path, "utf8"));
+      expect(saved.providers[0].credentialContext).toMatch(/^[a-f0-9]{64}$/);
+      expect(JSON.stringify(saved)).not.toContain("synthetic-new-profile");
+      expect(JSON.stringify(saved)).not.toContain(ACCESS_TOKEN);
+      const other = await adapterWith(CREDENTIALS, async () => {
+        throw new Error("timeout");
+      }).fetchQuota(OPTIONS);
+      expect(other.windows).toEqual([]);
+      vi.stubEnv("KIRO_PROFILE_ARN", "");
+      const original = await adapterWith(CREDENTIALS, async () => {
+        throw new Error("timeout");
+      }).fetchQuota(OPTIONS);
+      expect(original.source).toBe("cache");
     });
 
     it("retires the cache after logout instead of serving stale credit", async () => {
