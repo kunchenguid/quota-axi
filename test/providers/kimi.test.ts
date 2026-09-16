@@ -905,6 +905,12 @@ describe("Kimi payload normalization", () => {
         usages: { limit_7d: { used_ratio: 0.571 } },
       }).windows[0],
     ).toMatchObject({ percentUsed: 57.1, percentRemaining: 42.9 });
+
+    expect(
+      normalizeKimiPayload({
+        usages: { limit_7d: { used_ratio: 0.873 } },
+      }).windows[0],
+    ).toMatchObject({ percentUsed: 87.3, percentRemaining: 12.7 });
   });
 
   it("keeps monthly total and code as distinct windows and omits a monthly duration", () => {

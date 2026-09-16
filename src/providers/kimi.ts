@@ -1223,7 +1223,7 @@ function normalizeRatioDetail(value: unknown): NormalizedDetail | undefined {
   const resetsAt = normalizedReset(detail);
   return {
     percentUsed,
-    percentRemaining: clampPercent(100 - percentUsed),
+    percentRemaining: clampPercent(Number((100 - percentUsed).toFixed(10))),
     ...(resetsAt ? { resetsAt } : {}),
   };
 }
