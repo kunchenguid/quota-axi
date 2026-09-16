@@ -43,7 +43,12 @@ process.stdin.on("data", (chunk) => {
     if (!line.trim()) continue;
     const request = JSON.parse(line);
     let result = {};
-    if (request.method === "account/read") result = { account: null };
+    if (request.method === "account/read") {
+      result = {
+        account: { type: "chatgpt", email: "cli@example.invalid", planType: "plus" },
+        requiresOpenaiAuth: true
+      };
+    }
     if (request.method === "account/rateLimits/read") {
       result = {
         rateLimits: {
