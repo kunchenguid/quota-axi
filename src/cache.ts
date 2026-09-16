@@ -6,6 +6,7 @@ import {
   readJsonFile,
 } from "./lib/fs.js";
 import { kimiReadingContextId } from "./providers/kimi-cache-context.js";
+import { isPiCodexSource } from "./providers/pi-codex-credential.js";
 import type {
   ProviderId,
   ProviderQuota,
@@ -41,7 +42,7 @@ const WINDOW_KINDS = [
   "credits",
   "unknown",
 ] as const satisfies readonly QuotaWindow["kind"][];
-const CACHE_SCHEMA_VERSION = 2;
+const CACHE_SCHEMA_VERSION = 3;
 const CREDENTIAL_CONTEXT_ID = /^[a-f0-9]{64}$/;
 
 /**
@@ -75,9 +76,12 @@ type CachedProvider = {
 
 export function readCachedProvider(
   provider: ProviderId,
+  accountKey?: string,
 ): ProviderQuota | undefined {
   return readCacheProviders().find(
-    (item) => item.snapshot.provider === provider,
+    (item) =>
+      item.snapshot.provider === provider &&
+      (item.snapshot.accountKey ?? "default") === (accountKey ?? "default"),
   )?.snapshot;
 }
 
@@ -122,39 +126,68 @@ export function writeCachedProviders(providers: ProviderQuota[]): void {
         (provider) =>
           provider.state.status === "fresh" && provider.windows.length === 0,
       )
-      .map((provider) => provider.provider),
+      .map((provider) => cacheIdentity(provider, providerContextId(provider))),
   );
   const cacheable = providers
     .map(toCacheProvider)
     .filter((provider): provider is CachedProvider => Boolean(provider));
 
   const file = cacheFilePath();
-  const byProvider = new Map<ProviderId, CachedProvider>();
+  const byProvider = new Map<string, CachedProvider>();
   let clearedExisting = false;
   for (const provider of readCacheProviders()) {
-    if (clearProviders.has(provider.snapshot.provider)) {
+    if (
+      clearProviders.has(
+        cacheIdentity(provider.snapshot, provider.credentialContextId),
+      )
+    ) {
       clearedExisting = true;
       continue;
     }
-    byProvider.set(provider.snapshot.provider, provider);
+    byProvider.set(
+      cacheIdentity(provider.snapshot, provider.credentialContextId),
+      provider,
+    );
   }
   if (cacheable.length === 0 && !clearedExisting) return;
   for (const provider of cacheable)
-    byProvider.set(provider.snapshot.provider, provider);
-  const merged = PROVIDER_IDS.map((provider) =>
-    byProvider.get(provider),
-  ).filter((provider): provider is CachedProvider => Boolean(provider));
+    byProvider.set(
+      cacheIdentity(provider.snapshot, provider.credentialContextId),
+      provider,
+    );
+  const merged = [...byProvider.values()].sort(
+    (a, b) =>
+      PROVIDER_IDS.indexOf(a.snapshot.provider) -
+        PROVIDER_IDS.indexOf(b.snapshot.provider) ||
+      (a.snapshot.accountKey ?? "default").localeCompare(
+        b.snapshot.accountKey ?? "default",
+      ),
+  );
 
   writeCacheFile(file, merged);
 }
 
-export function deleteCachedProvider(provider: ProviderId): void {
+function providerContextId(provider: ProviderQuota): string | undefined {
+  return CONTEXT_SCOPED_PROVIDERS[provider.provider]?.();
+}
+
+function cacheIdentity(provider: ProviderQuota, contextId?: string): string {
+  return `${provider.provider}/${contextId ?? provider.accountKey ?? "default"}`;
+}
+
+export function deleteCachedProvider(
+  provider: ProviderId,
+  accountKey?: string,
+): void {
   const existing = readCacheProviders();
-  if (!existing.some((item) => item.snapshot.provider === provider)) return;
-  writeCacheFile(
-    cacheFilePath(),
-    existing.filter((item) => item.snapshot.provider !== provider),
+  const remaining = existing.filter((item) =>
+    item.snapshot.provider !== provider
+      ? true
+      : accountKey !== undefined &&
+        (item.snapshot.accountKey ?? "default") !== accountKey,
   );
+  if (remaining.length === existing.length) return;
+  writeCacheFile(cacheFilePath(), remaining);
 }
 
 function writeCacheFile(file: string, providers: CachedProvider[]): void {
@@ -184,7 +217,9 @@ function readCacheProviders(): CachedProvider[] {
   const schemaVersion = numberValue(payload?.schemaVersion);
   if (
     !payload ||
-    (schemaVersion !== 1 && schemaVersion !== CACHE_SCHEMA_VERSION) ||
+    (schemaVersion !== 1 &&
+      schemaVersion !== 2 &&
+      schemaVersion !== CACHE_SCHEMA_VERSION) ||
     !Array.isArray(payload.providers)
   )
     return [];
@@ -199,6 +234,7 @@ function toCacheProvider(provider: ProviderQuota): CachedProvider | undefined {
   const snapshot = normalizeCachedProvider(
     {
       provider: provider.provider,
+      accountKey: provider.accountKey,
       label: provider.label,
       source: provider.source,
       plan: provider.plan,
@@ -241,7 +277,7 @@ function normalizeCachedProvider(
   if (!data) return undefined;
   const provider = literalValue(data.provider, PROVIDER_IDS);
   const label = stringValue(data.label);
-  const source = literalValue(data.source, PROVIDER_SOURCES);
+  const source = cachedSource(data.source);
   const state = objectValue(data.state);
   const status = literalValue(state?.status, PROVIDER_STATUSES);
   const sourcesTried = stringArrayValue(state?.sourcesTried);
@@ -262,8 +298,17 @@ function normalizeCachedProvider(
   )
     return undefined;
 
+  const accountKey = stringValue(data.accountKey);
+  if (
+    data.accountKey !== undefined &&
+    (schemaVersion < 3 ||
+      !accountKey ||
+      !/^[a-z0-9][a-z0-9:_-]{0,95}$/.test(accountKey))
+  )
+    return undefined;
   const snapshot: ProviderQuota = {
     provider,
+    ...(accountKey ? { accountKey } : {}),
     label,
     source,
     windows,
@@ -285,7 +330,7 @@ function normalizeCachedProvider(
   const credentialContext = stringValue(data.credentialContext);
   return {
     snapshot,
-    ...(schemaVersion === CACHE_SCHEMA_VERSION &&
+    ...(schemaVersion >= 2 &&
     snapshot.provider in CONTEXT_SCOPED_PROVIDERS &&
     credentialContext &&
     CREDENTIAL_CONTEXT_ID.test(credentialContext)
@@ -505,6 +550,15 @@ function stringArrayValue(value: unknown): string[] | undefined {
   return Array.isArray(value) && value.every((item) => typeof item === "string")
     ? value
     : undefined;
+}
+
+function cachedSource(value: unknown): ProviderSource | undefined {
+  const source = stringValue(value);
+  if (!source) return undefined;
+  if ((PROVIDER_SOURCES as readonly string[]).includes(source)) {
+    return source as ProviderSource;
+  }
+  return isPiCodexSource(source) ? (source as ProviderSource) : undefined;
 }
 
 function literalValue<const T extends readonly string[]>(

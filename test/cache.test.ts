@@ -113,6 +113,36 @@ describe("quota cache", () => {
     });
   });
 
+  it("isolates Codex Pi sibling snapshots by account key", () => {
+    useTempCache();
+    const personal = quota("codex", 20);
+    personal.accountKey = "openai-codex";
+    personal.source = "pi:openai-codex";
+    personal.state.sourcesTried = ["pi:openai-codex"];
+    const work = quota("codex", 80);
+    work.accountKey = "openai-codex-work";
+    work.source = "pi:openai-codex-work";
+    work.state.sourcesTried = ["pi:openai-codex-work"];
+
+    writeCachedProviders([personal, work]);
+
+    expect(readCachedProvider("codex")).toBeUndefined();
+    expect(readCachedProvider("codex", "openai-codex")).toMatchObject({
+      accountKey: "openai-codex",
+      source: "pi:openai-codex",
+      windows: [{ percentUsed: 20 }],
+    });
+    expect(readCachedProvider("codex", "openai-codex-work")).toMatchObject({
+      accountKey: "openai-codex-work",
+      source: "pi:openai-codex-work",
+      windows: [{ percentUsed: 80 }],
+    });
+    const payload = JSON.parse(readFileSync(cacheFilePath(), "utf8")) as {
+      schemaVersion: number;
+    };
+    expect(payload.schemaVersion).toBe(3);
+  });
+
   it("retains exact known and unfamiliar Codex cache identities", () => {
     useTempCache();
     const codex = quota("codex", 20);
@@ -204,7 +234,7 @@ describe("quota cache", () => {
       providers: Array<{ credentialContext?: string }>;
     };
     const contextId = payload.providers[0]?.credentialContext;
-    expect(payload.schemaVersion).toBe(2);
+    expect(payload.schemaVersion).toBe(3);
     expect(contextId).toMatch(/^[a-f0-9]{64}$/);
     expect(JSON.stringify(payload)).not.toContain(contextDir);
     expect(readCachedClaudeProvider(claudeCredentialContextId())).toBeDefined();

@@ -5,6 +5,10 @@ import { writeCachedProviders } from "./cache.js";
 import { withQuotaSemantics } from "./interpretation.js";
 import { createModelsResponse, MODEL_CATALOG_PROVIDER_IDS } from "./models.js";
 import { nowIso } from "./lib/time.js";
+import {
+  fetchAccountQuotas,
+  inspectAccountAuth,
+} from "./providers/accounts.js";
 import { PROVIDERS } from "./providers/index.js";
 import {
   quotaJsonReport,
@@ -205,7 +209,11 @@ export async function authCommand(
   const reports = await inspectAuth(flags.providers, options);
   return flags.json
     ? JSON.stringify(
-        { generatedAt: nowIso(), schemaVersion: 1, auth: reports },
+        {
+          generatedAt: nowIso(),
+          schemaVersion: reports.some((report) => report.accountKey) ? 2 : 1,
+          auth: reports,
+        },
         null,
         2,
       )
@@ -219,9 +227,13 @@ export async function fetchQuota(
   const generatedAt = nowIso();
   const results = (
     await Promise.all(
-      providers.map((provider) => PROVIDERS[provider].fetchQuota(options)),
+      providers.map((provider) =>
+        fetchAccountQuotas(PROVIDERS[provider], options),
+      ),
     )
-  ).map((provider) => withQuotaSemantics(provider, generatedAt));
+  )
+    .flat()
+    .map((provider) => withQuotaSemantics(provider, generatedAt));
   return annotateQuotaAdvice({
     generatedAt,
     providers: results,
@@ -232,9 +244,19 @@ async function inspectAuth(
   providers: ProviderId[],
   options: ProviderOptions,
 ): Promise<AuthProviderReport[]> {
-  return Promise.all(
-    providers.map((provider) => PROVIDERS[provider].inspectAuth(options)),
-  );
+  const reports = (
+    await Promise.all(
+      providers.map((provider) =>
+        inspectAccountAuth(PROVIDERS[provider], options),
+      ),
+    )
+  ).flat();
+  return reports.some((report) => report.accountKey)
+    ? reports.map((report) => ({
+        ...report,
+        accountKey: report.accountKey ?? "default",
+      }))
+    : reports;
 }
 
 function isFailed(provider: ProviderQuota): boolean {

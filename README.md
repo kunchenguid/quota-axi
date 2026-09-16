@@ -346,31 +346,74 @@ CODEX_HOME=/path/to/codex-profile quota-axi --provider codex --profile-only --fu
 - The bar fill is current headroom; the `┃` marker sits at the binding window's `pace.timeRemainingPercent`, the fill position of exactly linear burn. The headline marker therefore matches the corresponding `limitingWindowIds` sub-bar even when another window supplies the finite-runway `empty in` verdict. Fill ending left of the marker means burning faster than the reset clock. The marker is omitted when that window's pace is unknown.
 - Pace is shown by the bar and marker alone, never as a numeric burn multiple. The runway verdict on the headline reads `on pace ✓` for `through_reset` and `empty in 7h 21m` for `projected_exhaustion`. Two-up rows keep both card bottoms aligned by padding the shorter card inside its border. The TUI does not display the per-scope selection signal; that signal remains on the JSON and TOON machine surfaces. Those surfaces also keep the `through_reset` vocabulary, while `--full --json` exposes the complete `pace` object. The TUI renders from the complete in-memory model, so `--json` tiering never removes anything it draws.
 - A provider whose window relationships are wholly unknown (Copilot or Antigravity, with every window unresolved) has no combined effective percentage, pace, or runway to show, so its card replaces the headline block with a single `per-window usage · no combined bound` line and leads straight into its real per-window rows. Partially understood providers keep the effective-unknown headline. No combined headroom, pace, or runway number is invented.
-- Signed-out and failed providers stay visible as dimmed cards and are excluded from the fleet totals in the header.
+- Signed-out and failed provider/account lanes stay visible as dimmed cards and are excluded from the fleet totals in the header.
 - Width comes from the terminal, clamped to 80-120 columns; below the two-up width the grid reflows to one column. Color honors `NO_COLOR`, `TERM=dumb`, and non-TTY stdout (the glyph skeleton is kept), re-enables with `FORCE_COLOR`, and uses truecolor when `COLORTERM` advertises it, falling back to 256-color then ANSI-16.
-- `--tui` composes with `--provider` scoping and `--full` (account identity and source-attempt footers). It is mutually exclusive with `--json` and only supported by the `quota` command.
+- `--tui` composes with `--provider` scoping and `--full` (account locator, identity, and source-attempt footers). It is mutually exclusive with `--json` and only supported by the `quota` command.
+
+## Multiple accounts
+
+A normal invocation reports every Codex ChatGPT subscription it can discover from sibling entries in one Pi `auth.json`.
+It keeps each account's quota windows, resets, plan, effective availability, runway, and `spendPriority` separate.
+Each account gets its own TUI card, including accounts whose quota cannot be read.
+
+```sh
+quota-axi --provider codex --json
+quota-axi --provider codex --tui --no-credential-refresh
+quota-axi --provider codex --full --json  # includes the local Pi selector for each key
+```
+
+Pi's built-in provider id is `openai-codex`.
+`pi-codex-accounts` stores additional logins under ids such as `openai-codex-work` in the same file.
+quota-axi enrolls those already-present keys; it does not read `codex-accounts.json`, copy tokens, launch Pi, or change the active account.
+Discovery order is the built-in `openai-codex` entry, then other `openai-codex-*` keys in lexical order.
+Two keys that carry the same stored `accountId` are the same ChatGPT account and are not reported as extra capacity.
+A key whose identity cannot be compared is left as its own lane so the uncertainty stays visible.
+
+When only the built-in Pi entry (or none) is present, Codex keeps its existing single-winner path: native `$CODEX_HOME/auth.json`, then `openai-codex`, then the CLI fallback.
+`--profile-only` still reads one native Codex file and never opens Pi auth.
+
+### Account keys and compatibility
+
+When a provider expands to multiple accounts, the report uses quota `schemaVersion: 6` (auth and models use version 2).
+Every provider record then has an `accountKey`; providers still using one selected account use the literal `default`.
+Every flat TOON block adds `accountKey` immediately after `provider`, and the quota/exhaustion/attention join becomes **`provider` + `accountKey` + `scope`**.
+Models and model sort ties use **`provider` + `accountKey` + `id`**.
+Declaration order remains non-preferential; quotas are never combined across accounts.
+
+A Codex Pi lane's key is the auth.json provider id (`openai-codex`, `openai-codex-work`).
+It is stable across refreshes and discovery order and contains no token, email, or path.
+`--full` adds `accountLocator` (`kind: pi-auth`, `path`, and `entry`) plus the vendor identity the usage endpoint supplied, when any.
+
+If no provider expands, output stays byte-compatible in shape and field order: quota schema 5, auth/models schema 1, and no account column.
+A sole discovered Pi sibling uses that legacy representation.
+Consumers must honor the schema version; a legacy keyless row means the single selected lane, and keys must never be inferred from row position.
+
+Account collection is shared in `src/providers/accounts.ts`.
+Adapters can implement `ProviderAdapter.discoverAccounts` with stable keys and bound quota/auth readers; collection preserves each account's success or failure.
+Codex Pi sibling entries are the first discovery implementation on this tree.
+Other adapters retain their existing source-selection behavior.
 
 ## Output Model
 
-The `quota` command's `--json` emits `schemaVersion: 5`.
+The `quota` command's `--json` emits `schemaVersion: 5`, or `6` when a provider expands to multiple accounts.
 
 ### Normalized schema contract
 
 The package publishes TypeScript declarations from its package root, so consumers can use `import type { QuotaAxiResponse, ModelsResponse } from "quota-axi"`. The adapter contract is `ProviderAdapter` in and normalized `ProviderQuota` out: adapters report observed quota data, never rank, mint credentials, or retain raw responses. The narrowly bounded vendor-owned renewal path is documented under [Delegated credential refresh](#delegated-credential-refresh).
 
-`schemaVersion` is command-specific. Additive optional fields do not bump it. A semantic or incompatible shape change does. The `quota` report is version 5, `auth` is version 1, and `models` is version 1.
+`schemaVersion` is command-specific. Additive optional fields do not bump it. A semantic or incompatible shape change does. The legacy single-account `quota` report is version 5, `auth` is version 1, and `models` is version 1. When account discovery expands a provider, those versions are 6, 2, and 2 respectively.
 
 ### Default report blocks
 
 Default TOON is organized by the reading agent's decision rather than by quota-axi's data structures:
 
-| Block          | Rows                                                                                                                                                                                                                                                                                             |
-| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `quota[]`      | One row per **measurable** scope: `provider`, `scope`, `effectivePercentRemaining`, `spendPriority`, `runway`, `confidence`, `limitedBy`, `resetsAt`. Every column is populated on every row. `limitedBy` is the scope's `limitingWindowIds`, and `resetsAt` is that binding window's own reset. |
-| `exhaustion[]` | **Sparse.** One row per scope with a finite exhaustion point: `usableRunwaySeconds`, `projectedExhaustedAt`, `limitingWindowId`. `exhaustion[0]:` means nothing is projected to run out.                                                                                                         |
-| `attention[]`  | **Sparse.** Every non-nominal fact: `provider`, `scope`, `kind`, `detail`, `remedy`.                                                                                                                                                                                                             |
+| Block          | Rows                                                                                                                                                                                                                                                                                                                    |
+| -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `quota[]`      | One row per **measurable** scope: `provider`, optional `accountKey`, `scope`, `effectivePercentRemaining`, `spendPriority`, `runway`, `confidence`, `limitedBy`, `resetsAt`. Every column is populated on every row. `limitedBy` is the scope's `limitingWindowIds`, and `resetsAt` is that binding window's own reset. |
+| `exhaustion[]` | **Sparse.** One row per scope with a finite exhaustion point: `usableRunwaySeconds`, `projectedExhaustedAt`, `limitingWindowId`. `exhaustion[0]:` means nothing is projected to run out.                                                                                                                                |
+| `attention[]`  | **Sparse.** Every non-nominal fact: `provider`, optional `accountKey`, `scope`, `kind`, `detail`, `remedy`.                                                                                                                                                                                                             |
 
-A `quota[]` row whose `runway` is `projected_exhaustion` or `exhausted_now` has exactly one matching `exhaustion[]` row, joined on `provider` + `scope`. A row with `through_reset` or `unknown` has none, by definition: `through_reset` deliberately has no deadline and `unknown` has none to state.
+A `quota[]` row whose `runway` is `projected_exhaustion` or `exhausted_now` has exactly one matching `exhaustion[]` row, joined on `provider` + `scope` (plus `accountKey` in an account-expanded report). A row with `through_reset` or `unknown` has none, by definition: `through_reset` deliberately has no deadline and `unknown` has none to state.
 
 `attention[]` kinds:
 
@@ -415,12 +458,12 @@ Everything a consumer branches on stays in the default tier: `state.status`, `st
 
 ### Quota report shape
 
-| Object                        | Fields                                                                                    |
-| ----------------------------- | ----------------------------------------------------------------------------------------- |
-| Quota report                  | `providers`                                                                               |
-| Provider report               | `provider`, `windows`, `quotaSemantics`, `state`, optional `plan`, and optional `credits` |
-| Provider report with `--full` | Also `label`, `source`, optional `account` identity, and per-source `attempts`            |
-| Account identity (`--full`)   | Optional `email`, `organization`, `accountId`, and `identityStatus`                       |
+| Object                        | Fields                                                                                                           |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| Quota report                  | `providers`                                                                                                      |
+| Provider report               | `provider`, optional `accountKey`, `windows`, `quotaSemantics`, `state`, optional `plan`, and optional `credits` |
+| Provider report with `--full` | Also `label`, `source`, optional `accountLocator`, optional `account` identity, and per-source `attempts`        |
+| Account identity (`--full`)   | Optional `email`, `organization`, `accountId`, and `identityStatus`                                              |
 
 Account identity and per-source `attempts` are omitted unless `--full` is passed.
 Claude `identityStatus` is `verified` only when Anthropic returns an authoritative account identifier; `email` and `organization` are display-only and must not be used for duplicate detection.
@@ -624,18 +667,18 @@ Default model order is deterministic and non-preferential: provider, then model 
 
 ### `auth --json` shape
 
-| Object               | Fields                                                    |
-| -------------------- | --------------------------------------------------------- |
-| Auth report          | `generatedAt`, `schemaVersion: 1`, and `auth`             |
-| Provider auth report | `provider` and `sources`                                  |
-| Auth source entry    | `source`, optional `path`, `status`, and optional `error` |
+| Object               | Fields                                                                         |
+| -------------------- | ------------------------------------------------------------------------------ |
+| Auth report          | `generatedAt`, `schemaVersion` (`1`, or `2` when account-expanded), and `auth` |
+| Provider auth report | `provider`, optional `accountKey`, and `sources`                               |
+| Auth source entry    | `source`, optional `path`, `status`, and optional `error`                      |
 
 Auth source entries can include `credentialPresent` when a source is not genuinely absent, including when a read failure prevents a more precise classification.
 
-| Name                 | Values                                                                                                                                                                                                                                                             |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Auth source statuses | `available`, `missing`, `invalid`, `expired`, `skipped`, or `error`                                                                                                                                                                                                |
-| Auth source names    | `oauth-file`, `keychain`, `auth-json`, `auth-env`, `apps-json`, `gh:hosts.yml`, `state-vscdb`, `cli-keychain`, `cli-authfile`, `cli-rpc`, `pi:openai-codex`, `pi:kimi-coding`, `pi:xai`, `pi:zai`, `kimi-code-cli`, `opencode:auth.json`, `bl-cli`, and `loopback` |
+| Name                 | Values                                                                                                                                                                                                                                                                                               |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Auth source statuses | `available`, `missing`, `invalid`, `expired`, `skipped`, or `error`                                                                                                                                                                                                                                  |
+| Auth source names    | `oauth-file`, `keychain`, `auth-json`, `auth-env`, `apps-json`, `gh:hosts.yml`, `state-vscdb`, `cli-keychain`, `cli-authfile`, `cli-rpc`, `pi:openai-codex`, `pi:openai-codex-*` sibling keys, `pi:kimi-coding`, `pi:xai`, `pi:zai`, `kimi-code-cli`, `opencode:auth.json`, `bl-cli`, and `loopback` |
 
 ## Security Posture
 
@@ -644,7 +687,7 @@ Auth source entries can include `credentialPresent` when a source is not genuine
 | Provider       | Credential sources read                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Claude         | `CLAUDE_CODE_OAUTH_TOKEN` when it is set to a usable literal token; `$CLAUDE_CONFIG_DIR/.credentials.json` or `~/.claude/.credentials.json` (on macOS, not read when a nonempty secure-storage selector is set); on macOS, the discovered Claude Code Keychain value for the selected profile, pinned to Claude Code's validated current-user account, with `--allow-keychain-prompt` or, after a service-and-account-scoped non-secret access marker exists, on plain calls |
-| Codex          | `$CODEX_HOME/auth.json` or `~/.codex/auth.json`, then Pi's `$PI_CODING_AGENT_DIR/auth.json` `openai-codex` subscription OAuth entry (default `~/.pi/agent/auth.json`), before the read-only CLI fallback; `$QUOTA_AXI_CODEX_BINARY` can pin that fallback to an absolute executable path                                                                                                                                                                                     |
+| Codex          | `$CODEX_HOME/auth.json` or `~/.codex/auth.json`, then Pi's `$PI_CODING_AGENT_DIR/auth.json` `openai-codex` subscription OAuth entry and any sibling `openai-codex-*` entries in that same file (default `~/.pi/agent/auth.json`), before the read-only CLI fallback; `$QUOTA_AXI_CODEX_BINARY` can pin that fallback to an absolute executable path                                                                                                                          |
 | Cursor         | Cursor editor: `$CURSOR_STATE_DB` when set or the platform Cursor state database path. Cursor CLI (`cursor-agent`), macOS: identity from `$CURSOR_CLI_CONFIG` or `~/.cursor/cli-config.json` plus the `cursor-access-token` / `cursor-user` Keychain value with `--allow-keychain-prompt` or an account-scoped marker; Linux: only `accessToken` from `$CURSOR_CLI_CONFIG` or `${XDG_CONFIG_HOME:-~/.config}/cursor/auth.json`                                               |
 | GitHub Copilot | `$GITHUB_COPILOT_APPS_JSON` when set or the local Copilot apps auth file, then only the `github.com` host `oauth_token` from the GitHub CLI's `hosts.yml` (`$GH_CONFIG_DIR`, else `$XDG_CONFIG_HOME/gh`, else `%AppData%\GitHub CLI` on Windows, else `~/.config/gh`)                                                                                                                                                                                                        |
 | Grok           | Grok CLI session auth from `$GROK_AUTH_JSON`, inline `$GROK_AUTH`, `$GROK_AUTH_PATH`, or `$GROK_HOME/auth.json` / `~/.grok/auth.json`, plus Pi's independent `$PI_CODING_AGENT_DIR/auth.json` `xai` entry (default `~/.pi/agent/auth.json`) for OAuth or literal API-key model auth                                                                                                                                                                                          |
@@ -679,8 +722,12 @@ The Claude and Codex rows describe default discovery; [`--profile-only`](#profil
 **Codex**
 
 - Codex checks native `$CODEX_HOME/auth.json` or `~/.codex/auth.json` OAuth first.
-  If that does not return quota, it checks the exact `openai-codex` entry in Pi's `$PI_CODING_AGENT_DIR/auth.json` (default `~/.pi/agent/auth.json`) before the CLI fallback.
-  A successful Pi-backed probe reports source `pi:openai-codex`.
+  If that does not return quota, it checks Pi ChatGPT subscription OAuth entries in `$PI_CODING_AGENT_DIR/auth.json` (default `~/.pi/agent/auth.json`) before the CLI fallback.
+  The built-in key is `openai-codex`.
+  Sibling keys such as `openai-codex-work` from `pi-codex-accounts` are enrolled from that same file when they are already present.
+  Two or more distinct Pi entries become independent Codex account lanes; one account's failure or exhaustion does not hide or substitute another.
+  A successful Pi-backed probe reports source `pi:<provider-id>` (`pi:openai-codex`, `pi:openai-codex-work`, …).
+  quota-axi never reads `codex-accounts.json`, copies tokens, or changes Pi's active account.
 - Native Codex `auth.json` support is OAuth-token only; API key values such as `OPENAI_API_KEY` are treated as invalid for quota usage calls and are not sent to ChatGPT usage endpoints.
 - Access-token JWT usability is authoritative for the native OAuth bearer probe.
   An expired `id_token` alone does not mark `auth-json` expired or skip OAuth; identity-token expiry is diagnostic metadata only.
@@ -821,8 +868,8 @@ Providers with no established non-interactive rotation command stay read-only on
 | Quota cache contents                   | Stores normalized non-secret snapshots only.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | Claude Keychain access marker          | Lives alongside the quota cache as `claude-keychain-access-granted-<service-hash>-account-<account-hash>`, where the service hash is eight hexadecimal characters and the account hash is sixteen. It uses `0600` file permissions, contains no credential material, raw account name, or raw service name, and markers written by earlier versions are ignored rather than deleted.                                                                                                                                                                                         |
 | Cursor CLI Keychain access marker      | Lives alongside the quota cache as `cursor-cli-keychain-access-granted-account-<account-hash>`, where the account hash is sixteen hexadecimal characters. It uses `0600` file permissions and contains no credential material or raw account identity.                                                                                                                                                                                                                                                                                                                       |
-| Cached reports                         | Only fresh provider snapshots with windows are cached.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| Fresh provider reports with no windows | Clear any cached snapshot for that provider, so entitlement-only reports do not leave stale quota windows behind.                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| Cached reports                         | Only fresh provider snapshots with windows are cached. Cache schema 3 stores one snapshot per `provider` plus `accountKey` (or `default` for the legacy single lane). Stale fallback never substitutes another account's windows. Schema 1 and 2 files without `accountKey` remain readable.                                                                                                                                                                                                                                                                                 |
+| Fresh provider reports with no windows | Clear any cached snapshot for that provider/account lane, so entitlement-only reports do not leave stale quota windows behind.                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | Reports and details not cached         | Failed providers, stale providers, account identity, and source attempts are not cached.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | Claude cache fallback                  | Follows the [Claude provider rules](#provider-notes), including the denied-Keychain exception. Eligible fallback uses a formerly fresh snapshot from the same selected Claude configuration context, with a seven-day provider bound plus reset and resetless-window pruning. Its opaque SHA-256 context identifier includes the configuration directory and the selected Keychain service, which already encodes any secure-storage selector. Legacy context-less records and snapshots from the earlier broad suffix-discovery context are withheld without deleting them. |
 | Codex cache identities                 | Cached Codex windows are accepted only when ID, label, kind, duration, and duplicate suffix order agree; stale snapshots with mismatched identities are rejected.                                                                                                                                                                                                                                                                                                                                                                                                            |

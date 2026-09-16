@@ -67,6 +67,59 @@ describe("Pi Codex credential broker", () => {
     expectSnapshotEqual(authPath, before);
   });
 
+  it("lists sibling openai-codex keys without selecting a winner", async () => {
+    const fixture = authFixture({
+      "openai-codex-work": oauthEntry({
+        access: "fixture-work-access-token",
+        accountId: "acct-fixture-work",
+      }),
+      "openai-codex": oauthEntry(),
+      unrelated: { type: "oauth", access: "must-not-be-used" },
+    });
+    const broker = brokerFor(fixture);
+
+    await expect(broker.listProviderIds()).resolves.toEqual([
+      "openai-codex",
+      "openai-codex-work",
+    ]);
+    await expect(broker.resolve()).resolves.toMatchObject({
+      status: "available",
+      credentials: { accountId: "acct-fixture-codex" },
+    });
+    await expect(broker.resolveEntry("openai-codex-work")).resolves.toEqual({
+      status: "available",
+      credentials: {
+        accessToken: "fixture-work-access-token",
+        accountId: "acct-fixture-work",
+        expiresAtMs: FUTURE,
+      },
+    });
+    const work = await broker.inspectEntry("openai-codex-work");
+    expect(work).toMatchObject({ status: "available" });
+    expect(JSON.stringify(work)).not.toContain("fixture-work-access-token");
+  });
+
+  it("treats a work-only store as present under its own key, not missing", async () => {
+    const fixture = authFixture({
+      "openai-codex-work": oauthEntry({
+        access: "fixture-work-access-token",
+        accountId: "acct-fixture-work",
+      }),
+    });
+    const broker = brokerFor(fixture);
+
+    await expect(broker.resolve()).resolves.toEqual({ status: "missing" });
+    await expect(
+      broker.resolveEntry("openai-codex-work"),
+    ).resolves.toMatchObject({
+      status: "available",
+      credentials: { accountId: "acct-fixture-work" },
+    });
+    await expect(broker.listProviderIds()).resolves.toEqual([
+      "openai-codex-work",
+    ]);
+  });
+
   it("distinguishes a missing file and a missing provider entry", async () => {
     const home = temporaryDirectory();
     const agentDirectory = join(home, ".pi", "agent");

@@ -217,6 +217,7 @@ function buildLiveCard(provider: ProviderQuota, generatedAtMs: number): Card {
       rightTitle,
       "border",
     ),
+    ...accountCardLines(provider, "border"),
     interior([], "border"),
   ];
 
@@ -367,6 +368,7 @@ function buildFailedCard(provider: ProviderQuota): Card {
       rightTitle,
       "borderDim",
     ),
+    ...accountCardLines(provider, "borderDim"),
     interior([], "borderDim"),
   ];
   const message =
@@ -697,7 +699,11 @@ function formatHeaderTime(iso: string, timeZone?: string): string {
 }
 
 function fullFooterLines(provider: ProviderQuota, width: number): string[] {
-  const accountParts: string[] = [provider.provider];
+  const accountParts: string[] = [
+    provider.provider,
+    ...(provider.accountKey ? [provider.accountKey] : []),
+  ];
+  if (provider.accountLocator) accountParts.push(provider.accountLocator.path);
   const protectedAccountParts = new Set([0]);
   if (provider.account?.email) accountParts.push(provider.account.email);
   if (provider.account?.organization) {
@@ -864,6 +870,24 @@ function boldHealthStyle(pct: number): "okBold" | "warnBold" | "critBold" {
 
 function humanize(text: string): string {
   return text.replace(/_/g, " ");
+}
+
+function accountCardLines(
+  provider: ProviderQuota,
+  border: "border" | "borderDim",
+): Line[] {
+  if (!provider.accountKey || provider.accountKey === "default") return [];
+  return [
+    interior(
+      [
+        {
+          text: truncate(`   account ${provider.accountKey}`, CARD_INTERIOR),
+          style: "dim",
+        },
+      ],
+      border,
+    ),
+  ];
 }
 
 function truncate(text: string, width: number): string {
