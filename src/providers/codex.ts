@@ -276,7 +276,13 @@ async function fetchCliAccountQuota(): Promise<ProviderQuota | undefined> {
       { source: "cli-rpc", status: "success" },
     ]);
   } catch (error) {
-    if (error instanceof CodexCliSignedOutError) return undefined;
+    if (
+      error instanceof CodexCliSignedOutError ||
+      (!(error instanceof CodexCliAccountReadingError) &&
+        !readCachedProvider("codex", CODEX_HOME_ACCOUNT_KEY))
+    ) {
+      return undefined;
+    }
     const message = errorMessage(error);
     return codexFailureReport(
       message,
@@ -1365,9 +1371,17 @@ async function probeCodexCli(): Promise<{
 
     const limitsId = nextId++;
     sendRpc(child, limitsId, "account/rateLimits/read");
-    const limits = await waitFor(limitsId, RPC_TIMEOUT_MS);
+    const limits = await waitFor(limitsId, RPC_TIMEOUT_MS).catch((error) => {
+      throw isChatgptAccountRead(account)
+        ? new CodexCliAccountReadingError(errorMessage(error))
+        : error;
+    });
     const quota = normalizeCodexUsage(mergeAccountAndLimits(account, limits));
-    if (!quota) throw new Error("Codex quota unavailable");
+    if (!quota) {
+      throw isChatgptAccountRead(account)
+        ? new CodexCliAccountReadingError("Codex quota unavailable")
+        : new Error("Codex quota unavailable");
+    }
     return quota;
   } finally {
     terminateChild(child);
@@ -1548,6 +1562,12 @@ class CodexAuthRejectedError extends Error {}
 class CodexCliUnavailableError extends Error {}
 
 class CodexCliSignedOutError extends Error {}
+
+class CodexCliAccountReadingError extends Error {}
+
+function isChatgptAccountRead(value: unknown): boolean {
+  return objectValue(objectValue(value)?.account)?.type === "chatgpt";
+}
 
 function isSignedOutAccountRead(value: unknown): boolean {
   const data = objectValue(value);

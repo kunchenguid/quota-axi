@@ -724,7 +724,7 @@ describe("Codex Pi sibling account lanes", () => {
     });
   });
 
-  it("discloses an unreadable CLI instead of dropping its lane", async () => {
+  it("adds no CLI lane when the probe fails before any account evidence", async () => {
     writePiAuth({
       "openai-codex-work": piOauthEntry({
         access: "work-access-token",
@@ -734,7 +734,36 @@ describe("Codex Pi sibling account lanes", () => {
     stubUsageByToken({
       "work-access-token": usage(80, "work@example.invalid", "acct-work"),
     });
-    mockCodexCli("unreachable");
+    const spawn = mockCodexCli("unreachable");
+
+    const adapter = (
+      await import("../../src/providers/codex.js")
+    ).createCodexAdapter();
+    const reports = await fetchAccountQuotas(adapter, OPTIONS);
+    expect(spawn).toHaveBeenCalledOnce();
+    expect(reports).toHaveLength(1);
+    expect(reports[0]).toMatchObject({
+      accountKey: "openai-codex-work",
+      windows: [{ percentUsed: 80 }],
+    });
+
+    const auth = await inspectAccountAuth(adapter, OPTIONS);
+    expect(
+      auth[0]?.sources.find((source) => source.source === "cli-rpc"),
+    ).toMatchObject({ status: "available" });
+  });
+
+  it("discloses a confirmed CLI login whose quota read fails", async () => {
+    writePiAuth({
+      "openai-codex-work": piOauthEntry({
+        access: "work-access-token",
+        accountId: "acct-work",
+      }),
+    });
+    stubUsageByToken({
+      "work-access-token": usage(80, "work@example.invalid", "acct-work"),
+    });
+    mockCodexCli("limits-fail");
 
     const adapter = (
       await import("../../src/providers/codex.js")
@@ -1068,6 +1097,7 @@ function stubUsageByToken(responses: Record<string, Response>): void {
 type CodexCliFixture =
   | { accountId?: string; usedPercent: number }
   | "signed-out"
+  | "limits-fail"
   | "unreachable";
 
 function mockCodexCli(fixture: CodexCliFixture) {
@@ -1132,19 +1162,21 @@ function codexCliChild(
         reply =
           fixture === "signed-out"
             ? { error: { code: -32600, message: "not signed in" } }
-            : {
-                result: {
-                  ...(fixture.accountId
-                    ? { accountId: fixture.accountId }
-                    : {}),
-                  rateLimits: {
-                    primary: {
-                      usedPercent: fixture.usedPercent,
-                      windowDurationMins: 10_080,
+            : fixture === "limits-fail"
+              ? { error: { code: -32603, message: "usage unavailable" } }
+              : {
+                  result: {
+                    ...(fixture.accountId
+                      ? { accountId: fixture.accountId }
+                      : {}),
+                    rateLimits: {
+                      primary: {
+                        usedPercent: fixture.usedPercent,
+                        windowDurationMins: 10_080,
+                      },
                     },
                   },
-                },
-              };
+                };
       }
       queueMicrotask(() => {
         child.stdout.write(`${JSON.stringify({ id: request.id, ...reply })}\n`);
