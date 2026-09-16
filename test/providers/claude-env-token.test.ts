@@ -213,10 +213,9 @@ describe("Claude CLAUDE_CODE_OAUTH_TOKEN credential source", () => {
       if (bearer === `Bearer ${ENV_TOKEN}`) {
         return new Response("{}", { status: 403 });
       }
-      return new Response(
-        JSON.stringify({ five_hour: { utilization: 12 } }),
-        { status: 200 },
-      );
+      return new Response(JSON.stringify({ five_hour: { utilization: 12 } }), {
+        status: 200,
+      });
     });
     const { fetchQuota } = await import("../../src/providers/claude.js");
     const report = await fetchQuota(options);
@@ -254,9 +253,8 @@ describe("Claude CLAUDE_CODE_OAUTH_TOKEN credential source", () => {
   it("purges the cache when a stored credential is definitively rejected after a transient env failure", async () => {
     mockStore({ accessToken: STORED_TOKEN });
     const { fetchQuota } = await import("../../src/providers/claude.js");
-    const { writeCachedProviders, readCachedProvider } = await import(
-      "../../src/cache.js"
-    );
+    const { writeCachedProviders, readCachedProvider } =
+      await import("../../src/cache.js");
     const fresh = await fetchQuota(options);
     expect(fresh.state.status).toBe("fresh");
     writeCachedProviders([fresh]);
