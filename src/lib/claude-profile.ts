@@ -1,8 +1,28 @@
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { usableLiteralSecret } from "./secret.js";
 
 export const CLAUDE_KEYCHAIN_SERVICE = "Claude Code-credentials";
+
+/**
+ * The environment credential Claude Code itself resolves before it consults any
+ * stored credential, so an explicit token here names the account a session is
+ * actually using.
+ */
+export const CLAUDE_OAUTH_TOKEN_ENV = "CLAUDE_CODE_OAUTH_TOKEN";
+
+/**
+ * The explicitly supplied environment access token, when one is usable as a
+ * literal bearer. Absent, empty, and unusable values all resolve to
+ * `undefined`, which leaves discovery of the stored credential untouched. The
+ * value is returned for request use only and is never logged or persisted.
+ *
+ * @returns the literal token, or undefined when none is supplied
+ */
+export function claudeEnvOauthToken(): string | undefined {
+  return usableLiteralSecret(process.env[CLAUDE_OAUTH_TOKEN_ENV]);
+}
 
 /**
  * Mirrors Claude Code's configuration and secure-storage selectors. The

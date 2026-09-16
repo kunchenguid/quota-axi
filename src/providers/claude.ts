@@ -12,6 +12,8 @@ import {
 import { providerFetch } from "../lib/http.js";
 import {
   CLAUDE_KEYCHAIN_SERVICE,
+  CLAUDE_OAUTH_TOKEN_ENV,
+  claudeEnvOauthToken,
   isOpaqueSuffixedKeychainService,
   claudeProfileLocations,
 } from "../lib/claude-profile.js";
@@ -63,7 +65,7 @@ const FIVE_HOURS_SECONDS = 18_000;
 const SEVEN_DAYS_SECONDS = 604_800;
 
 type ClaudeCredentials = {
-  source: "oauth-file" | "keychain";
+  source: "env" | "oauth-file" | "keychain";
   accessToken: string;
   plan?: string;
   expiresAt?: number;
@@ -499,6 +501,13 @@ async function attemptClaudeQuota(
         state.status === "available" || state.status === "expired",
     )
     .sort((a, b) => {
+      // The vendor resolves this token before any stored credential, so it names
+      // the account a live session is actually using. Ordering it first keeps
+      // quota-axi reading the same account rather than a bystander store.
+      if (a.credentials.source === "env" && b.credentials.source !== "env")
+        return -1;
+      if (b.credentials.source === "env" && a.credentials.source !== "env")
+        return 1;
       if (process.platform === "darwin") {
         if (
           a.credentials.source === "keychain" &&
@@ -907,11 +916,49 @@ function slugify(value: string): string {
     .replace(/^_+|_+$/g, "");
 }
 
+/**
+ * Resolve the explicitly supplied environment credential.
+ *
+ * Claude Code checks this variable before it opens any credential store, so a
+ * token here is the account a live session is using and takes precedence over
+ * anything discovery finds. It is an access token alone: it carries no
+ * `expiresAt` to order it by and no refresh token, so it is never advisory-
+ * expired and never eligible for the delegated refresh, and quota-axi never
+ * writes it to a store or a cache.
+ *
+ * An absent, empty, or whitespace-only variable resolves to `undefined` and
+ * reports nothing at all, leaving the stored-credential path exactly as it was.
+ * A non-blank value that is still unusable as a literal bearer is a real
+ * credential problem and is reported as such rather than silently dropped.
+ *
+ * @returns the credential state, or undefined when no token is supplied
+ */
+function readEnvCredentialState(): CredentialState | undefined {
+  const accessToken = claudeEnvOauthToken();
+  if (accessToken !== undefined)
+    return { status: "available", credentials: { source: "env", accessToken } };
+  // Blank is how an exported-but-unset variable reads, so it selects nothing
+  // rather than standing in as a broken credential.
+  if (process.env[CLAUDE_OAUTH_TOKEN_ENV]?.trim())
+    return {
+      status: "invalid",
+      source: {
+        source: "env",
+        status: "invalid",
+        credentialPresent: true,
+      },
+    };
+  return undefined;
+}
+
 async function readCredentialStates(
   options: ProviderOptions,
   locations = resolveClaudeProfileLocations(),
 ): Promise<CredentialState[]> {
   const states: CredentialState[] = [];
+
+  const envState = readEnvCredentialState();
+  if (envState) states.push(envState);
 
   if (locations.credentialFile !== undefined)
     states.push(

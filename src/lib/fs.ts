@@ -2,7 +2,10 @@ import { mkdirSync, readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { claudeProfileLocations } from "./claude-profile.js";
+import {
+  claudeEnvOauthToken,
+  claudeProfileLocations,
+} from "./claude-profile.js";
 
 export type JsonFileReadResult =
   | { status: "success"; value: unknown }
@@ -58,12 +61,21 @@ export function claudeCredentialContextId(): string {
   // Include the exact service: it already encodes the secure-storage selector,
   // including a relative raw path hash.
   // Version the identity to withhold snapshots from earlier opaque discovery.
+  //
+  // An explicit environment token selects an account the profile path and
+  // Keychain service do not describe, so it earns its own identity: a snapshot
+  // taken with one must never be served as stale once it is gone. The marker is
+  // appended only when such a token is supplied, so every existing profile
+  // keeps the identity it already cached under. It is a presence marker, never
+  // any part of the token.
+  const envSelected = claudeEnvOauthToken() !== undefined;
   return createHash("sha256")
     .update(
       JSON.stringify([
         "claude-profile-v2",
         resolve(configDir),
         keychainService,
+        ...(envSelected ? ["env-token"] : []),
       ]),
     )
     .digest("hex");
