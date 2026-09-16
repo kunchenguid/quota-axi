@@ -630,14 +630,17 @@ async function attemptClaudeQuota(
           if (credential.source === "env") break;
         } else if (
           state.status === "expired" &&
-          failure.status === "rate_limited"
+          failure.status === "rate_limited" &&
+          (await fetchOauthProfile(credential)).error ===
+            "identity_profile_http_401"
         ) {
-          // The vendor's usage endpoint answers an *expired* OAuth token with
-          // 429 while an *invalid* one gets 401, so a non-definitive rejection
-          // of a credential this store already records as expired is expiry,
-          // not a rate limit. Stored expiry stays advisory: it only reclassifies
-          // a rejection that already happened, never asserts a sign-out, and
-          // keeps the cache (`staleEligible`).
+          // Stored expiry is advisory only - a stored-expired credential can
+          // still be live vendor-side, so a 429 here might be a genuine rate
+          // limit whose Retry-After should not be discarded. Confirm real
+          // expiry against /api/oauth/profile, the same call the vendor
+          // answers with an explicit "access token has expired" 401, before
+          // reclassifying. Any other outcome (live, transient, or unclear)
+          // leaves the original rate-limited failure untouched.
           transientFailure = new ClaudeFailure("Claude credential expired", {
             status: "unavailable",
             staleEligible: true,

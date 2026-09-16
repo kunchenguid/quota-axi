@@ -1342,7 +1342,7 @@ describe("Claude credential-state reporting", () => {
     }
   });
 
-  it("reclassifies a 429 against a stored-expired credential as expired, not rate limited", async () => {
+  it("reclassifies a 429 against a stored-expired credential as expired once /profile confirms it", async () => {
     const home = useTempHome();
     writeClaudeCredential(home, {
       accessToken: "advisory-expired-token",
@@ -1350,12 +1350,13 @@ describe("Claude credential-state reporting", () => {
     });
     vi.stubGlobal(
       "fetch",
-      vi.fn(
-        async () =>
-          new Response(null, {
-            status: 429,
-            headers: { "retry-after": "2864" },
-          }),
+      vi.fn(async (url: string) =>
+        url.includes("/oauth/profile")
+          ? new Response(null, { status: 401 })
+          : new Response(null, {
+              status: 429,
+              headers: { "retry-after": "2864" },
+            }),
       ),
     );
 
@@ -1381,14 +1382,42 @@ describe("Claude credential-state reporting", () => {
       accessToken: "live-token",
       expiresAt: "2035-01-01T00:00:00.000Z",
     });
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(null, {
+          status: 429,
+          headers: { "retry-after": "60" },
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { fetchQuota } = await import("../../src/providers/claude.js");
+    const result = await fetchQuota({
+      allowKeychainPrompt: false,
+      refreshCredentials: false,
+    });
+
+    expect(result.state.status).toBe("rate_limited");
+    expect(result.state.error).toBe("Claude quota endpoint rate limited");
+    // A live credential never needs the /profile confirmation round trip.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not reclassify a 429 against a stored-expired credential that is still live vendor-side", async () => {
+    const home = useTempHome();
+    writeClaudeCredential(home, {
+      accessToken: "advisory-expired-but-still-live-token",
+      expiresAt: "2000-01-01T00:00:00.000Z",
+    });
     vi.stubGlobal(
       "fetch",
-      vi.fn(
-        async () =>
-          new Response(null, {
-            status: 429,
-            headers: { "retry-after": "60" },
-          }),
+      vi.fn(async (url: string) =>
+        url.includes("/oauth/profile")
+          ? new Response(JSON.stringify({}), { status: 200 })
+          : new Response(null, {
+              status: 429,
+              headers: { "retry-after": "60" },
+            }),
       ),
     );
 
@@ -1400,6 +1429,7 @@ describe("Claude credential-state reporting", () => {
 
     expect(result.state.status).toBe("rate_limited");
     expect(result.state.error).toBe("Claude quota endpoint rate limited");
+    expect(result.state.retryAfter).toBeTruthy();
   });
 
   it.each(["5xx", "timeout"])(
