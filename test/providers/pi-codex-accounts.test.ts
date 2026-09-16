@@ -577,14 +577,14 @@ describe("Codex Pi sibling account lanes", () => {
         report.windows[0]?.percentUsed,
       ]),
     ).toEqual([
-      ["openai-codex-work", "pi:openai-codex-work", "fresh", 80],
       ["codex-home", "cli-rpc", "fresh", 15],
+      ["openai-codex-work", "pi:openai-codex-work", "fresh", 80],
     ]);
     expect(spawn).toHaveBeenCalledOnce();
 
     const auth = await inspectAccountAuth(adapter, OPTIONS);
     expect(
-      auth[1]?.sources.map((source) => [source.source, source.status]),
+      auth[0]?.sources.map((source) => [source.source, source.status]),
     ).toEqual([
       ["auth-json", "missing"],
       ["cli-rpc", "available"],
@@ -616,7 +616,41 @@ describe("Codex Pi sibling account lanes", () => {
     expect(spawn).not.toHaveBeenCalled();
   });
 
-  it("does not count a CLI-only login already reported by a Pi lane as extra capacity", async () => {
+  it("renders no lane for an installed but logged-out Codex CLI", async () => {
+    writePiAuth({
+      "openai-codex": piOauthEntry({
+        access: "personal-access-token",
+        accountId: "acct-personal",
+      }),
+      "openai-codex-work": piOauthEntry({
+        access: "work-access-token",
+        accountId: "acct-work",
+      }),
+    });
+    stubUsageByToken({
+      "personal-access-token": usage(
+        20,
+        "personal@example.invalid",
+        "acct-personal",
+      ),
+      "work-access-token": usage(80, "work@example.invalid", "acct-work"),
+    });
+    const spawn = mockCodexCli(undefined, 0);
+
+    const adapter = (
+      await import("../../src/providers/codex.js")
+    ).createCodexAdapter();
+    const reports = await fetchAccountQuotas(adapter, OPTIONS);
+    expect(spawn).toHaveBeenCalledOnce();
+    expect(
+      reports.map((report) => [report.accountKey, report.state.status]),
+    ).toEqual([
+      ["openai-codex", "fresh"],
+      ["openai-codex-work", "fresh"],
+    ]);
+  });
+
+  it("coalesces a CLI login with the fresh Pi lane for the same account", async () => {
     writePiAuth({
       "openai-codex": piOauthEntry({
         access: "personal-access-token",
@@ -641,15 +675,113 @@ describe("Codex Pi sibling account lanes", () => {
       await import("../../src/providers/codex.js")
     ).createCodexAdapter();
     const reports = await fetchAccountQuotas(adapter, OPTIONS);
+    expect(
+      reports.map((report) => [
+        report.accountKey,
+        report.source,
+        report.state.status,
+      ]),
+    ).toEqual([
+      ["openai-codex", "pi:openai-codex", "fresh"],
+      ["openai-codex-work", "pi:openai-codex-work", "fresh"],
+    ]);
+  });
+
+  it("keeps the usable CLI reading when the same account's Pi copy is expired", async () => {
+    writePiAuth({
+      "openai-codex": piOauthEntry({
+        access: "personal-access-token",
+        accountId: "acct-personal",
+      }),
+      "openai-codex-work": piOauthEntry({
+        access: "expired-work-access-token",
+        accountId: "acct-work",
+        expires: Date.now() - 3_600_000,
+      }),
+    });
+    stubUsageByToken({
+      "personal-access-token": usage(
+        20,
+        "personal@example.invalid",
+        "acct-personal",
+      ),
+      "expired-work-access-token": new Response("unauthorized", {
+        status: 401,
+      }),
+    });
+    mockCodexCli("acct-work", 35);
+
+    const adapter = (
+      await import("../../src/providers/codex.js")
+    ).createCodexAdapter();
+    const reports = await fetchAccountQuotas(adapter, OPTIONS);
     expect(reports.map((report) => report.accountKey)).toEqual([
       "openai-codex",
       "openai-codex-work",
-      "codex-home",
     ]);
-    expect(reports[2]).toMatchObject({
+    expect(reports[1]).toMatchObject({
       source: "cli-rpc",
-      windows: [],
-      state: { status: "unavailable" },
+      windows: [{ percentUsed: 35 }],
+      state: { status: "fresh" },
+    });
+    expect(reports[1]?.state.sourcesTried).toContain("pi:openai-codex-work");
+  });
+
+  it("keeps the usable CLI reading when the same account's Pi lane is stale", async () => {
+    const { writeCachedProviders } = await import("../../src/cache.js");
+    writeCachedProviders([
+      {
+        provider: "codex",
+        accountKey: "openai-codex-work",
+        label: "Codex",
+        source: "pi:openai-codex-work",
+        windows: [
+          {
+            id: "weekly",
+            label: "week",
+            kind: "weekly",
+            percentUsed: 90,
+            windowSeconds: 604_800,
+          },
+        ],
+        state: {
+          status: "fresh",
+          stale: false,
+          sourcesTried: ["pi:openai-codex-work"],
+        },
+      },
+    ]);
+    writePiAuth({
+      "openai-codex": piOauthEntry({
+        access: "personal-access-token",
+        accountId: "acct-personal",
+      }),
+      "openai-codex-work": piOauthEntry({
+        access: "work-access-token",
+        accountId: "acct-work",
+      }),
+    });
+    stubUsageByToken({
+      "personal-access-token": usage(
+        20,
+        "personal@example.invalid",
+        "acct-personal",
+      ),
+      "work-access-token": new Response("slow down", { status: 429 }),
+    });
+    mockCodexCli("acct-work", 35);
+
+    vi.resetModules();
+    const adapter = (
+      await import("../../src/providers/codex.js")
+    ).createCodexAdapter();
+    const reports = await fetchAccountQuotas(adapter, OPTIONS);
+    expect(reports).toHaveLength(2);
+    expect(reports[1]).toMatchObject({
+      accountKey: "openai-codex-work",
+      source: "cli-rpc",
+      windows: [{ percentUsed: 35 }],
+      state: { status: "fresh", stale: false },
     });
   });
 
@@ -812,7 +944,7 @@ function stubUsageByToken(responses: Record<string, Response>): void {
   );
 }
 
-function mockCodexCli(accountId: string, usedPercent: number) {
+function mockCodexCli(accountId: string | undefined, usedPercent: number) {
   vi.doMock("../../src/lib/process.js", async (importOriginal) => {
     const actual =
       await importOriginal<typeof import("../../src/lib/process.js")>();
@@ -824,7 +956,12 @@ function mockCodexCli(accountId: string, usedPercent: number) {
       terminateChild: vi.fn(),
     };
   });
-  const spawn = vi.fn(() => codexCliChild(accountId, usedPercent));
+  const spawn = vi.fn(() => {
+    if (accountId) return codexCliChild(accountId, usedPercent);
+    const child = codexCliChild("unused", usedPercent);
+    queueMicrotask(() => child.emit("close", 1));
+    return child;
+  });
   vi.doMock("node:child_process", () => ({ spawn }));
   return spawn;
 }

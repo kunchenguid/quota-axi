@@ -152,7 +152,6 @@ type CodexAccountContext =
       kind: "native";
       accountKey: string;
       includesBuiltinPi: boolean;
-      reportedAccountIds?: ReadonlySet<string>;
     }
   | { kind: "pi"; piProviderId: string; accountKey: string };
 
@@ -169,26 +168,53 @@ async function discoverCodexAccounts(
 
   const accounts: ProviderAccount[] = [];
   const seenAccountIds = new Set<string>();
-  const reportedAccountIds = new Set<string>();
+  const piLaneAccountIds = new Set<string>();
   const nativeState = readCredentialState();
   const nativeAccount: Extract<CodexAccountContext, { kind: "native" }> = {
     kind: "native",
     accountKey: CODEX_HOME_ACCOUNT_KEY,
     includesBuiltinPi: false,
   };
-  const nativeLane: ProviderAccount = {
-    accountKey: nativeAccount.accountKey,
-    fetchQuota: (options) =>
-      fetchQuotaWithDependencies(dependencies, options, nativeAccount),
-    inspectAuth: () => inspectAuthWithDependencies(dependencies, nativeAccount),
-  };
+  const cliOnly =
+    nativeState.status === "missing" &&
+    (await resolveCodexBinary()).status === "available";
+  let cliReading: Promise<ProviderQuota | undefined> | undefined;
+  const readCliAccount = (options: ProviderOptions) =>
+    (cliReading ??= fetchQuotaWithDependencies(
+      dependencies,
+      options,
+      nativeAccount,
+    ).then((report) =>
+      report.state.status === "fresh" && report.account?.accountId
+        ? report
+        : undefined,
+    ));
   if (nativeState.status !== "missing") {
     const nativeAccountId =
       nativeState.status === "available" || nativeState.status === "expired"
         ? nativeState.credentials.accountId
         : undefined;
     if (nativeAccountId) seenAccountIds.add(nativeAccountId);
-    accounts.push(nativeLane);
+  }
+  if (nativeState.status !== "missing" || cliOnly) {
+    accounts.push({
+      accountKey: nativeAccount.accountKey,
+      fetchQuota: async (options) => {
+        if (!cliOnly) {
+          return fetchQuotaWithDependencies(
+            dependencies,
+            options,
+            nativeAccount,
+          );
+        }
+        const reading = await readCliAccount(options);
+        return reading && !piLaneAccountIds.has(reading.account!.accountId!)
+          ? reading
+          : undefined;
+      },
+      inspectAuth: () =>
+        inspectAuthWithDependencies(dependencies, nativeAccount),
+    });
   }
   for (const piProviderId of ids) {
     const resolution = await resolvePiEntry(dependencies, piProviderId);
@@ -207,6 +233,7 @@ async function discoverCodexAccounts(
         continue;
       }
       seenAccountIds.add(accountId);
+      piLaneAccountIds.add(accountId);
     }
     const account: CodexAccountContext = {
       kind: "pi",
@@ -222,20 +249,23 @@ async function discoverCodexAccounts(
           options,
           account,
         );
-        if (report.state.status === "fresh" && report.account?.accountId) {
-          reportedAccountIds.add(report.account.accountId);
+        if (report.state.status === "fresh" || !cliOnly || !accountId) {
+          return report;
         }
-        return report;
+        const reading = await readCliAccount(options);
+        if (reading?.account?.accountId !== accountId) return report;
+        const attempts = [
+          ...(report.attempts ?? []),
+          ...(reading.attempts ?? []),
+        ];
+        return {
+          ...reading,
+          attempts,
+          state: { ...reading.state, sourcesTried: sourceNames(attempts) },
+        };
       },
       inspectAuth: () => inspectAuthWithDependencies(dependencies, account),
     });
-  }
-  if (
-    nativeState.status === "missing" &&
-    (await resolveCodexBinary()).status === "available"
-  ) {
-    nativeAccount.reportedAccountIds = reportedAccountIds;
-    accounts.push(nativeLane);
   }
   return accounts.length > 0 ? accounts : undefined;
 }
@@ -510,21 +540,6 @@ async function fetchQuotaWithDependencies(
   try {
     const quota = await probeCodexCli();
     attempts[attempts.length - 1] = { source: "cli-rpc", status: "success" };
-    if (
-      account?.reportedAccountIds &&
-      quota.account?.accountId &&
-      account.reportedAccountIds.has(quota.account.accountId)
-    ) {
-      return failedProvider({
-        provider: "codex",
-        label: "Codex",
-        source: "cli-rpc",
-        status: "unavailable",
-        error: "Codex CLI login is already reported by a Pi account lane",
-        sourcesTried: sourceNames(attempts),
-        attempts,
-      });
-    }
     return successProvider({
       provider: "codex",
       label: "Codex",

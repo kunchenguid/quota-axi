@@ -259,7 +259,8 @@ export type ProviderAccount = {
   /** Opaque local lane identity, stable across refresh and discovery order. */
   accountKey: string;
   locator?: AccountLocator;
-  fetchQuota(options: ProviderOptions): Promise<ProviderQuota>;
+  /** Resolves undefined when the lane establishes no distinct account. */
+  fetchQuota(options: ProviderOptions): Promise<ProviderQuota | undefined>;
   inspectAuth(options: ProviderOptions): Promise<AuthProviderReport>;
 };
 

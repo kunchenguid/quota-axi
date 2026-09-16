@@ -35,9 +35,9 @@ export async function fetchAccountQuotas(
   if (!accounts) return [await adapter.fetchQuota(options)];
   // Keep each adapter's declaration order, including failed accounts. Readers
   // return their own structured failure; no account selects a sibling's token.
-  const reports: ProviderQuota[] = [];
+  const readings: { account: ProviderAccount; report: ProviderQuota }[] = [];
   for (const account of accounts) {
-    let report: ProviderQuota;
+    let report: ProviderQuota | undefined;
     try {
       report = await account.fetchQuota(options);
     } catch {
@@ -55,17 +55,17 @@ export async function fetchAccountQuotas(
         },
       };
     }
-    reports.push(
-      accounts.length === 1
-        ? report
-        : {
-            ...report,
-            accountKey: account.accountKey,
-            ...(account.locator ? { accountLocator: account.locator } : {}),
-          },
-    );
+    if (report) readings.push({ account, report });
   }
-  return reports;
+  return readings.map(({ account, report }) =>
+    readings.length === 1
+      ? report
+      : {
+          ...report,
+          accountKey: account.accountKey,
+          ...(account.locator ? { accountLocator: account.locator } : {}),
+        },
+  );
 }
 
 export async function inspectAccountAuth(
