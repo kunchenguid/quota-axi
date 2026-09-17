@@ -367,6 +367,7 @@ Pi's built-in provider id is `openai-codex`.
 quota-axi enrolls those already-present keys; it does not read `codex-accounts.json`, copy tokens, launch Pi, or change the active account.
 Discovery order is the built-in `openai-codex` entry, then other `openai-codex-*` keys in lexical order.
 Two keys that carry the same stored `accountId` are the same ChatGPT account and are not reported as extra capacity.
+The later key stays a credential fallback until a probe succeeds or every candidate is rejected.
 A key whose identity cannot be compared is left as its own lane so the uncertainty stays visible.
 
 When only the built-in Pi entry (or none) is present, Codex keeps its existing single-winner path: native `$CODEX_HOME/auth.json`, then `openai-codex`, then the CLI fallback.

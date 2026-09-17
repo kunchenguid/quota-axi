@@ -171,6 +171,42 @@ describe("Codex Pi sibling account lanes", () => {
     expect(reports[0]?.source).toBe("pi:openai-codex");
   });
 
+  it("uses a later Pi sibling when the first same-account token is rejected", async () => {
+    writePiAuth({
+      "openai-codex": piOauthEntry({
+        access: "rejected-personal-access-token",
+        accountId: "acct-same",
+      }),
+      "openai-codex-work": piOauthEntry({
+        access: "work-access-token",
+        accountId: "acct-same",
+      }),
+    });
+    stubUsageByToken({
+      "rejected-personal-access-token": new Response("unauthorized", {
+        status: 401,
+      }),
+      "work-access-token": usage(20, "same@example.invalid", "acct-same"),
+    });
+
+    const { fetchQuota } = await import("../../src/commands.js");
+    const response = await fetchQuota(["codex"], OPTIONS);
+    expect(response.providers).toHaveLength(1);
+    expect(response.providers[0]).toMatchObject({
+      source: "pi:openai-codex-work",
+      account: { accountId: "acct-same" },
+      state: { status: "fresh" },
+      windows: [{ percentUsed: 20, percentRemaining: 80 }],
+    });
+    expect(response.providers[0]?.state.status).not.toBe("auth_required");
+    const json = quotaJsonReport(response, true);
+    expect(json.providers.map((provider) => provider.source)).toEqual([
+      "pi:openai-codex-work",
+    ]);
+    const tui = renderQuotaTui(response, { columns: 100 });
+    expect(tui).not.toContain("sign-in required");
+  });
+
   it("surfaces a work-only sibling instead of classifying it as missing", async () => {
     writePiAuth({
       "openai-codex-work": piOauthEntry({

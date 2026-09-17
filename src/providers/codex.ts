@@ -153,7 +153,12 @@ type CodexAccountContext =
       accountKey: string;
       includesBuiltinPi: boolean;
     }
-  | { kind: "pi"; piProviderId: string; accountKey: string };
+  | {
+      kind: "pi";
+      piProviderId: string;
+      accountKey: string;
+      extraPiProviderIds?: string[];
+    };
 
 async function discoverCodexAccounts(
   dependencies: CodexDependencies,
@@ -186,7 +191,7 @@ async function discoverCodexAccounts(
     storedAccountId?: string;
     reading?: Promise<ProviderQuota>;
   }[] = [];
-  const seenAccountIds = new Set<string>();
+  const piLaneByAccountId = new Map<string, (typeof piLanes)[number]>();
   for (const piProviderId of ids) {
     const resolution = await resolvePiEntry(dependencies, piProviderId);
     const storedAccountId =
@@ -202,13 +207,24 @@ async function discoverCodexAccounts(
         nativeAccount.includesBuiltinPi = true;
         continue;
       }
-      if (seenAccountIds.has(storedAccountId)) continue;
-      seenAccountIds.add(storedAccountId);
+      const existing = piLaneByAccountId.get(storedAccountId);
+      if (existing) {
+        (existing.account.extraPiProviderIds ??= []).push(piProviderId);
+        continue;
+      }
     }
-    piLanes.push({
-      account: { kind: "pi", piProviderId, accountKey: piProviderId },
+    const lane = {
+      account: {
+        kind: "pi" as const,
+        piProviderId,
+        accountKey: piProviderId,
+      },
       storedAccountId,
-    });
+    };
+    piLanes.push(lane);
+    if (storedAccountId !== undefined) {
+      piLaneByAccountId.set(storedAccountId, lane);
+    }
   }
 
   // Lanes are read once per collection and reconciled on the vendor account
@@ -401,53 +417,67 @@ async function fetchPiAccountQuota(
   dependencies: CodexDependencies,
   account: Extract<CodexAccountContext, { kind: "pi" }>,
 ): Promise<ProviderQuota> {
-  const source = piCodexSource(account.piProviderId);
   const attempts: SourceAttempt[] = [];
-  const piResolution = await resolvePiEntry(dependencies, account.piProviderId);
   const piCandidates: CredentialCandidate<CodexAttemptCredential>[] = [];
-  if (piResolution.status === "available") {
-    piCandidates.push({
-      source,
-      localState: "valid",
-      credential: {
+  const providerIds = [
+    account.piProviderId,
+    ...(account.extraPiProviderIds ?? []),
+  ];
+  let lastResolution: PiCodexCredentialResolution | undefined;
+  for (const piProviderId of providerIds) {
+    const source = piCodexSource(piProviderId);
+    const piResolution = await resolvePiEntry(dependencies, piProviderId);
+    lastResolution = piResolution;
+    if (piResolution.status === "available") {
+      piCandidates.push({
         source,
-        credentials: piResolution.credentials,
-      },
-    });
-  } else if (
-    piResolution.status === "expired" &&
-    piResolution.credentials !== undefined
-  ) {
-    piCandidates.push({
-      source,
-      localState: "expired",
-      refreshable: piResolution.refreshable,
-      credential: {
+        localState: "valid",
+        credential: {
+          source,
+          credentials: piResolution.credentials,
+        },
+      });
+    } else if (
+      piResolution.status === "expired" &&
+      piResolution.credentials !== undefined
+    ) {
+      piCandidates.push({
         source,
-        credentials: piResolution.credentials,
-      },
-    });
-  } else {
-    attempts.push(piSourceAttempt(piResolution, source));
+        localState: "expired",
+        refreshable: piResolution.refreshable,
+        credential: {
+          source,
+          credentials: piResolution.credentials,
+        },
+      });
+    } else {
+      attempts.push(piSourceAttempt(piResolution, source));
+    }
   }
 
   const piSelection = await selectCredential(piCandidates, (candidate) =>
     attemptCodexCandidate(candidate.credential),
   );
   appendSelectionAttempts(attempts, piSelection);
+  const source = piCodexSource(
+    providerIds.find(
+      (id) => piCodexSource(id) === piSelection.winner?.source,
+    ) ?? account.piProviderId,
+  );
   if (piSelection.outcome === "quota") {
     return codexSuccessReport(piSelection.result!, source, attempts);
   }
+  const piResolution = lastResolution;
   const finalError =
     piSelection.outcome === "transient"
       ? (piSelection.transientError ?? "Codex quota unavailable")
       : piSelection.outcome === "all_rejected"
         ? "Codex sign-in required"
-        : piResolution.status === "error"
+        : piResolution?.status === "error"
           ? "Codex Pi credential resolution failed"
-          : piResolution.status === "expired"
+          : piResolution?.status === "expired"
             ? "Pi Codex access token expired"
-            : piResolution.status === "missing"
+            : piResolution?.status === "missing"
               ? "Codex quota unavailable"
               : "Codex sign-in required";
   return codexFailureReport(
@@ -761,9 +791,26 @@ async function inspectAuthWithDependencies(
         error: "credential_resolution_failed",
       };
     }
+    const sources = [piSource];
+    for (const extraId of account.extraPiProviderIds ?? []) {
+      try {
+        sources.push(
+          piInspectionSource(
+            await inspectPiEntry(dependencies, extraId),
+            piCodexSource(extraId),
+          ),
+        );
+      } catch {
+        sources.push({
+          source: piCodexSource(extraId),
+          status: "error",
+          error: "credential_resolution_failed",
+        });
+      }
+    }
     return {
       provider: "codex",
-      sources: [piSource],
+      sources,
     };
   }
   const authFile = codexAuthFile();
