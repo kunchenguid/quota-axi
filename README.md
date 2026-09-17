@@ -197,7 +197,7 @@ $ quota-axi --provider claude --json
 $ quota-axi auth
 bin: ~/.npm/_npx/.../quota-axi
 description: Inspect local quota auth sources without printing secret values
-auth[31]{provider,source,path,status,error}:
+auth[35]{provider,source,path,status,error}:
   claude,oauth-file,~/.claude/.credentials.json,available,none
   claude,keychain,none,skipped,keychain_prompt_required
   codex,auth-json,~/.codex/auth.json,available,none
@@ -230,6 +230,9 @@ auth[31]{provider,source,path,status,error}:
   deepseek,pi:deepseek,~/.pi/agent/auth.json,available,none
   openrouter,env:OPENROUTER_API_KEY,none,missing,none
   openrouter,pi:openrouter,~/.pi/agent/auth.json,available,none
+  kiro,pi:kiro,~/.pi/agent/auth.json,available,none
+  kiro,kiro-cli,~/.local/share/kiro-cli/data.sqlite3,available,none
+  kiro,kiro-ide,~/.aws/sso/cache/kiro-auth-token.json,available,none
 help[1]:
   Run `quota-axi --allow-keychain-prompt auth` to permit native secure-store access
 ```
