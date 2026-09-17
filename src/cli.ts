@@ -16,11 +16,12 @@ commands[3]:
   (none)=quota, auth, models
 output:
   Default TOON reports local quota evidence. models is a deterministic data join; --sort runway is explicit opt-in ordering. --tui renders a live human terminal report instead (q quits).
+  --tui palette: --theme light|dark|auto, else QUOTA_AXI_THEME, else auto (light when COLORFGBG reports a light background, otherwise dark).
 notes:
   Every quota read, including each --tui refresh, may delegate an expired session's renewal to the vendor CLI that owns it. --no-credential-refresh keeps a read strictly read-only; auth always is.
   --profile-only requires explicit CLAUDE_CONFIG_DIR or CODEX_HOME plus exactly one matching provider. It reads only that credential file: no Keychain, Pi, CLI RPC, fallback, refresh, or cache. With --full --json, non-secret account identity, source, and attempts remain visible; tokens and file contents remain excluded, and ordinary output remains redacted.
-flags[13]:
-  --provider <${PROVIDER_IDS.join(",")}>, --json, --full, --tui, --refresh <30s-24h>, --once, --allow-keychain-prompt, --no-credential-refresh, --profile-only, --intelligence <high|medium|low>, --sort <runway>, --help, -v/--version
+flags[14]:
+  --provider <${PROVIDER_IDS.join(",")}>, --json, --full, --tui, --refresh <30s-24h>, --once, --theme <light|dark|auto>, --allow-keychain-prompt, --no-credential-refresh, --profile-only, --intelligence <high|medium|low>, --sort <runway>, --help, -v/--version
 examples:
   quota-axi
   quota-axi --provider claude
@@ -32,6 +33,7 @@ examples:
   quota-axi --tui
   quota-axi --tui --refresh 1m
   quota-axi --tui --once
+  quota-axi --tui --theme light
   quota-axi --no-credential-refresh
   quota-axi --tui --no-credential-refresh
   quota-axi auth

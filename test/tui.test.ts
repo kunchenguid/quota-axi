@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   detectTuiColorDepth,
+  detectTuiTheme,
   formatCountdown,
   renderQuotaTui,
   renderTuiHintLine,
@@ -910,6 +911,133 @@ describe("color handling", () => {
     expect(exhausted).toContain(
       "\x1b[1;38;2;243;139;168m✗ exhausted now\x1b[0m",
     );
+  });
+
+  const THEME_SGR = {
+    dark: {
+      claude: "\x1b[1;38;2;250;179;135m",
+      ok: "\x1b[1;38;2;166;227;161m72%\x1b[0m",
+      warn: "\x1b[1;38;2;249;226;175mempty in 1h 0m\x1b[0m",
+      crit: "\x1b[1;38;2;243;139;168m✗ exhausted now\x1b[0m",
+    },
+    light: {
+      claude: "\x1b[1;38;2;228;82;0m",
+      ok: "\x1b[1;38;2;52;150;30m72%\x1b[0m",
+      warn: "\x1b[1;38;2;188;108;0mempty in 1h 0m\x1b[0m",
+      crit: "\x1b[1;38;2;200;8;50m✗ exhausted now\x1b[0m",
+    },
+  } as const;
+
+  function projectedResponse(status: "projected_exhaustion" | "exhausted_now") {
+    const response = fixtureResponse();
+    const availability =
+      response.providers[0].quotaSemantics?.effectiveAvailability[0];
+    if (!availability) throw new Error("fixture has no availability");
+    availability.runway = {
+      status,
+      usableRunwaySeconds: status === "exhausted_now" ? 0 : 3600,
+      limitingWindowId: "seven_day",
+      projectionConfidence: "established",
+    };
+    return response;
+  }
+
+  it.each(["dark", "light"] as const)(
+    "renders the %s truecolor palette with the same glyph skeleton",
+    (theme) => {
+      const options = {
+        timeZone: "America/Los_Angeles",
+        colorDepth: "truecolor",
+        theme,
+      } as const;
+      const plain = renderQuotaTui(fixtureResponse(), {
+        timeZone: "America/Los_Angeles",
+      });
+      const colored = renderQuotaTui(fixtureResponse(), options);
+      expect(colored).toContain(THEME_SGR[theme].claude);
+      expect(stripAnsi(colored)).toBe(plain);
+      const projected = renderQuotaTui(
+        projectedResponse("projected_exhaustion"),
+        options,
+      );
+      expect(projected).toContain(THEME_SGR[theme].ok);
+      expect(projected).toContain(THEME_SGR[theme].warn);
+      expect(
+        renderQuotaTui(projectedResponse("exhausted_now"), options),
+      ).toContain(THEME_SGR[theme].crit);
+    },
+  );
+
+  it("defaults to the dark palette when no theme is given", () => {
+    const options = {
+      timeZone: "America/Los_Angeles",
+      colorDepth: "truecolor",
+    } as const;
+    expect(renderQuotaTui(fixtureResponse(), options)).toBe(
+      renderQuotaTui(fixtureResponse(), { ...options, theme: "dark" }),
+    );
+    expect(renderTuiHintLine("hint", options)).toBe(
+      renderTuiHintLine("hint", { ...options, theme: "dark" }),
+    );
+  });
+
+  it("derives the 256-color palette from the selected theme's rgb table", () => {
+    const options = {
+      timeZone: "America/Los_Angeles",
+      colorDepth: "256",
+    } as const;
+    const dark = renderQuotaTui(fixtureResponse(), {
+      ...options,
+      theme: "dark",
+    });
+    const light = renderQuotaTui(fixtureResponse(), {
+      ...options,
+      theme: "light",
+    });
+    // Mocha claude peach (250,179,135) -> 223; Latte peach (228,82,0) -> 202.
+    expect(dark).toContain("\x1b[1;38;5;223m");
+    expect(dark).not.toContain("\x1b[1;38;5;202m");
+    expect(light).toContain("\x1b[1;38;5;202m");
+    expect(light).not.toContain("\x1b[1;38;5;223m");
+    expect(stripAnsi(dark)).toBe(stripAnsi(light));
+  });
+
+  it("keeps the 16-color path identical across themes", () => {
+    const options = {
+      timeZone: "America/Los_Angeles",
+      colorDepth: "16",
+    } as const;
+    expect(
+      renderQuotaTui(fixtureResponse(), { ...options, theme: "light" }),
+    ).toBe(renderQuotaTui(fixtureResponse(), { ...options, theme: "dark" }));
+  });
+
+  it("colors the light-theme hint line with the Latte dim tone", () => {
+    expect(
+      renderTuiHintLine("hint", { colorDepth: "truecolor", theme: "light" }),
+    ).toContain("\x1b[38;2;124;127;147m");
+  });
+
+  it("detects the theme from COLORFGBG only when set to auto", () => {
+    expect(detectTuiTheme("light", { COLORFGBG: "15;0" })).toBe("light");
+    expect(detectTuiTheme("dark", { COLORFGBG: "0;15" })).toBe("dark");
+    expect(detectTuiTheme("auto", {})).toBe("dark");
+    expect(detectTuiTheme("auto", { COLORFGBG: "0;15" })).toBe("light");
+    expect(detectTuiTheme("auto", { COLORFGBG: "0;7" })).toBe("light");
+    expect(detectTuiTheme("auto", { COLORFGBG: "0;default;7" })).toBe("light");
+    expect(detectTuiTheme("auto", { COLORFGBG: "0;8" })).toBe("dark");
+    expect(detectTuiTheme("auto", { COLORFGBG: "0;9" })).toBe("light");
+    expect(detectTuiTheme("auto", { COLORFGBG: "0;15 " })).toBe("light");
+    expect(detectTuiTheme("auto", { COLORFGBG: "0;1;15" })).toBe("light");
+    expect(detectTuiTheme("auto", { COLORFGBG: "15;default" })).toBe("dark");
+    expect(detectTuiTheme("auto", { COLORFGBG: "15;231" })).toBe("dark");
+    expect(detectTuiTheme("auto", { COLORFGBG: "0;-1" })).toBe("dark");
+    expect(detectTuiTheme("auto", { COLORFGBG: "15;0" })).toBe("dark");
+    expect(detectTuiTheme("auto", { COLORFGBG: "7;6" })).toBe("dark");
+    expect(detectTuiTheme("auto", { COLORFGBG: "0;16" })).toBe("dark");
+    expect(detectTuiTheme("auto", { COLORFGBG: "0;default" })).toBe("dark");
+    expect(detectTuiTheme("auto", { COLORFGBG: "15" })).toBe("dark");
+    expect(detectTuiTheme("auto", { COLORFGBG: "" })).toBe("dark");
   });
 
   it("detects color depth from the environment", () => {

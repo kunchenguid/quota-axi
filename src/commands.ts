@@ -1,6 +1,11 @@
 import { AxiError } from "axi-sdk-js";
 import { annotateQuotaAdvice } from "./advice.js";
-import { parseFlags, parseModelsFlags, type QuotaFlags } from "./args.js";
+import {
+  parseFlags,
+  parseModelsFlags,
+  parseThemeValue,
+  type QuotaFlags,
+} from "./args.js";
 import { writeCachedProviders } from "./cache.js";
 import { withQuotaSemantics } from "./interpretation.js";
 import { createModelsResponse, MODEL_CATALOG_PROVIDER_IDS } from "./models.js";
@@ -16,9 +21,11 @@ import {
 import { formatInterval, runLiveTui, type LiveTuiIo } from "./tui-live.js";
 import {
   detectTuiColorDepth,
+  detectTuiTheme,
   renderQuotaTui,
   renderTuiHintLine,
   type TuiColorDepth,
+  type TuiTheme,
 } from "./tui.js";
 import { scrollHint } from "./tui-viewport.js";
 import type {
@@ -69,11 +76,26 @@ async function quotaTuiReport(
   flags: QuotaFlags,
   options: ProviderOptions,
 ): Promise<string> {
-  const terminal = (): { columns?: number; colorDepth: TuiColorDepth } => ({
+  // Precedence: --theme, then QUOTA_AXI_THEME, then auto (COLORFGBG, else dark).
+  // A blank variable selects nothing, matching the project's env conventions.
+  // Resolved once here so a variable edited mid-session can never throw inside
+  // the live loop.
+  const envTheme = process.env.QUOTA_AXI_THEME?.trim();
+  const themeSetting =
+    flags.theme ??
+    (envTheme === undefined || envTheme === ""
+      ? "auto"
+      : parseThemeValue(envTheme, "QUOTA_AXI_THEME"));
+  const terminal = (): {
+    columns?: number;
+    colorDepth: TuiColorDepth;
+    theme: TuiTheme;
+  } => ({
     ...(process.stdout.columns === undefined
       ? {}
       : { columns: process.stdout.columns }),
     colorDepth: detectTuiColorDepth(process.env, process.stdout.isTTY === true),
+    theme: detectTuiTheme(themeSetting, process.env),
   });
   const frame = (response: QuotaAxiResponse): string =>
     renderQuotaTui(redactedResponse(response, flags.full), {

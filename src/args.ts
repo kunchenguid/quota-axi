@@ -1,6 +1,7 @@
 import { AxiError } from "axi-sdk-js";
 import { MODEL_CATALOG_PROVIDER_IDS } from "./models.js";
 import { parseProviders } from "./providers/index.js";
+import { TUI_THEME_SETTINGS, type TuiThemeSetting } from "./tui.js";
 import {
   PROVIDER_IDS,
   type IntelligenceBucket,
@@ -26,6 +27,8 @@ export type QuotaFlags = {
   refreshSeconds?: number;
   /** Render one `--tui` frame and exit instead of staying live. */
   once: boolean;
+  /** `--tui` palette selection; unset defers to `QUOTA_AXI_THEME`, then `auto`. */
+  theme?: TuiThemeSetting;
 };
 
 /** Refresh bounds: fast enough to feel live, slow enough to stay polite. */
@@ -96,6 +99,7 @@ function parseCommonFlags(
   let tui = false;
   let once = false;
   let refreshSeconds: number | undefined;
+  let theme: TuiThemeSetting | undefined;
   let allowKeychainPrompt = false;
   let noCredentialRefresh = false;
   let profileOnly = false;
@@ -130,6 +134,15 @@ function parseCommonFlags(
     }
     if (arg.startsWith("--refresh=")) {
       refreshSeconds = parseRefreshValue(arg.slice("--refresh=".length));
+      continue;
+    }
+    if (arg === "--theme") {
+      theme = parseThemeValue(args[index + 1], "--theme");
+      index++;
+      continue;
+    }
+    if (arg.startsWith("--theme=")) {
+      theme = parseThemeValue(arg.slice("--theme=".length), "--theme");
       continue;
     }
     if (arg === "--allow-keychain-prompt") {
@@ -205,6 +218,13 @@ function parseCommonFlags(
       ["Run `quota-axi --tui --refresh 5m` for the live human report"],
     );
   }
+  if (theme !== undefined && !tui) {
+    throw new AxiError(
+      "--theme is only supported with --tui",
+      "VALIDATION_ERROR",
+      ["Run `quota-axi --tui --theme light` for the human report"],
+    );
+  }
 
   return {
     providers:
@@ -219,6 +239,7 @@ function parseCommonFlags(
     noCredentialRefresh,
     profileOnly,
     ...(refreshSeconds !== undefined ? { refreshSeconds } : {}),
+    ...(theme !== undefined ? { theme } : {}),
     ...(intelligence ? { intelligence } : {}),
     ...(sort ? { sort } : {}),
   };
@@ -233,6 +254,26 @@ function parseIntelligenceValue(
     `${flag} requires high, medium, or low`,
     "VALIDATION_ERROR",
     ["Run `quota-axi models --help` for supported models flags"],
+  );
+}
+
+/**
+ * Validate a `--tui` theme setting from the flag or `QUOTA_AXI_THEME`. An
+ * unrecognised value is a usage error, never a silent fallback.
+ */
+export function parseThemeValue(
+  value: string | undefined,
+  source: "--theme" | "QUOTA_AXI_THEME",
+): TuiThemeSetting {
+  const trimmed = value?.trim() ?? "";
+  const match = TUI_THEME_SETTINGS.find((candidate) => candidate === trimmed);
+  if (match !== undefined) return match;
+  throw new AxiError(
+    `${source} requires light, dark, or auto`,
+    "VALIDATION_ERROR",
+    source === "--theme"
+      ? ["Pass --theme=... if the value begins with --"]
+      : ["Unset QUOTA_AXI_THEME or pass --theme to override it"],
   );
 }
 

@@ -1,7 +1,7 @@
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parseFlags, parseModelsFlags } from "../src/args.js";
 import { main, normalizeArgv } from "../src/cli.js";
 import { authCommand, quotaCommand } from "../src/commands.js";
@@ -27,6 +27,9 @@ const originalOpenCodeGoProvider = PROVIDERS["opencode-go"];
 const originalXdgCacheHome = process.env.XDG_CACHE_HOME;
 const originalClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
 const originalCodexHome = process.env.CODEX_HOME;
+const originalTheme = process.env.QUOTA_AXI_THEME;
+const originalColorFgBg = process.env.COLORFGBG;
+const originalForceColor = process.env.FORCE_COLOR;
 let tempDir: string | undefined;
 
 afterEach(() => {
@@ -47,11 +50,19 @@ afterEach(() => {
   else process.env.CLAUDE_CONFIG_DIR = originalClaudeConfigDir;
   if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
   else process.env.CODEX_HOME = originalCodexHome;
+  restoreEnv("QUOTA_AXI_THEME", originalTheme);
+  restoreEnv("COLORFGBG", originalColorFgBg);
+  restoreEnv("FORCE_COLOR", originalForceColor);
   if (tempDir) rmSync(tempDir, { recursive: true, force: true });
   tempDir = undefined;
   process.exitCode = undefined;
   vi.useRealTimers();
 });
+
+function restoreEnv(name: string, value: string | undefined): void {
+  if (value === undefined) delete process.env[name];
+  else process.env[name] = value;
+}
 
 describe("CLI flag parsing", () => {
   it("defaults to all supported providers", () => {
@@ -136,6 +147,31 @@ describe("CLI flag parsing", () => {
         "--refresh must be between 30s and 24h",
       );
     }
+  });
+
+  it("parses --theme for the human report", () => {
+    expect(parseFlags(["--tui", "--theme", "light"]).theme).toBe("light");
+    expect(parseFlags(["--tui", "--theme=dark"]).theme).toBe("dark");
+    expect(parseFlags(["--tui", "--theme", "auto"]).theme).toBe("auto");
+    expect(parseFlags(["--tui"]).theme).toBeUndefined();
+    for (const value of ["", "Light", "solarized"]) {
+      expect(() => parseFlags(["--tui", "--theme", value])).toThrow(
+        "--theme requires light, dark, or auto",
+      );
+    }
+    expect(() => parseFlags(["--theme", "light"])).toThrow(
+      "--theme is only supported with --tui",
+    );
+    expect(() => parseFlags(["--tui", "--theme"])).toThrow(
+      "--theme requires light, dark, or auto",
+    );
+    expect(() => parseFlags(["--tui", "--theme="])).toThrow(
+      "--theme requires light, dark, or auto",
+    );
+    expect(
+      parseFlags(["--tui", "--theme", "light", "--theme=dark"]).theme,
+    ).toBe("dark");
+    expect(parseFlags(["--tui", "--", "--theme", "auto"]).theme).toBe("auto");
   });
 
   it("rejects live-only flags without --tui", () => {
@@ -865,6 +901,87 @@ describe("CLI quota rendering", () => {
     expect(output).not.toContain("Press q to quit");
     expect(output).not.toContain("\x1b[?1049h");
     expect(process.exitCode).toBeUndefined();
+  });
+});
+
+describe("--tui theme selection", () => {
+  const MOCHA_CODEX = "\x1b[1;38;2;148;226;213m";
+  const LATTE_CODEX = "\x1b[1;38;2;23;146;153m";
+  const tuiOnce = ["--tui", "--once", "--provider", "codex"];
+
+  beforeEach(() => {
+    useTempCache();
+    PROVIDERS.codex = providerWithQuota(freshCodexQuota());
+    process.env.FORCE_COLOR = "3";
+    delete process.env.QUOTA_AXI_THEME;
+    delete process.env.COLORFGBG;
+  });
+
+  it("renders Mocha by default with nothing set", async () => {
+    const output = await capture(tuiOnce);
+    expect(output).toContain(MOCHA_CODEX);
+    expect(output).not.toContain(LATTE_CODEX);
+  });
+
+  it("renders Latte for --theme light and Mocha for --theme dark", async () => {
+    expect(await capture([...tuiOnce, "--theme", "light"])).toContain(
+      LATTE_CODEX,
+    );
+    expect(await capture([...tuiOnce, "--theme", "dark"])).toContain(
+      MOCHA_CODEX,
+    );
+  });
+
+  it("honors QUOTA_AXI_THEME when the flag is absent", async () => {
+    process.env.QUOTA_AXI_THEME = "light";
+    expect(await capture(tuiOnce)).toContain(LATTE_CODEX);
+  });
+
+  it("lets --theme win over QUOTA_AXI_THEME", async () => {
+    process.env.QUOTA_AXI_THEME = "light";
+    expect(await capture([...tuiOnce, "--theme", "dark"])).toContain(
+      MOCHA_CODEX,
+    );
+  });
+
+  it("auto-detects a light background from COLORFGBG and falls back to dark", async () => {
+    process.env.COLORFGBG = "0;15";
+    expect(await capture(tuiOnce)).toContain(LATTE_CODEX);
+    expect(await capture([...tuiOnce, "--theme", "auto"])).toContain(
+      LATTE_CODEX,
+    );
+    process.env.COLORFGBG = "15;0";
+    expect(await capture(tuiOnce)).toContain(MOCHA_CODEX);
+    process.env.COLORFGBG = "default;default";
+    expect(await capture(tuiOnce)).toContain(MOCHA_CODEX);
+  });
+
+  it("treats a blank QUOTA_AXI_THEME as unset", async () => {
+    process.env.COLORFGBG = "0;15";
+    for (const blank of ["", "   "]) {
+      process.env.QUOTA_AXI_THEME = blank;
+      expect(await capture(tuiOnce)).toContain(LATTE_CODEX);
+    }
+    delete process.env.COLORFGBG;
+    process.env.QUOTA_AXI_THEME = "";
+    expect(await capture(tuiOnce)).toContain(MOCHA_CODEX);
+  });
+
+  it("applies the theme to a non-TTY frame when color is forced on", async () => {
+    // FORCE_COLOR=3 is set in beforeEach; stdout here is a capture sink, not a TTY.
+    expect(process.stdout.isTTY).not.toBe(true);
+    expect(await capture([...tuiOnce, "--theme", "light"])).toContain(
+      LATTE_CODEX,
+    );
+  });
+
+  it("rejects an invalid QUOTA_AXI_THEME as a usage error", async () => {
+    process.env.QUOTA_AXI_THEME = "sepia";
+    const output = await capture(tuiOnce);
+    expect(output).toContain("QUOTA_AXI_THEME requires light, dark, or auto");
+    expect(output).toContain("code: VALIDATION_ERROR");
+    expect(output).not.toContain("╭─");
+    expect(process.exitCode).toBe(2);
   });
 });
 
