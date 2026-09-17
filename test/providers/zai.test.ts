@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { jsonResponse } from "./json-response.js";
 import {
   createOpencodeAuthCredentialSource,
   createPiAuthCredentialSource,
@@ -1521,13 +1522,6 @@ function credentialSource(
     resolve: vi.fn(() => resolution),
     inspect: vi.fn(() => inspection),
   };
-}
-
-function jsonResponse(payload: unknown): Response {
-  return new Response(JSON.stringify(payload), {
-    status: 200,
-    headers: { "content-type": "application/json; charset=utf-8" },
-  });
 }
 
 function cachedQuota(

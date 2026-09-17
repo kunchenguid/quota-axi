@@ -50,7 +50,7 @@ describe("models command", () => {
       ]),
     );
     expect(json).toMatchObject({
-      schemaVersion: 1,
+      schemaVersion: 2,
       catalog: { version: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/) },
     });
     expect(json.models).toEqual(
@@ -89,6 +89,15 @@ describe("models command", () => {
     expect(toon).toContain(
       "Default model order is deterministic and non-preferential",
     );
+
+    const emptyToon = await capture([
+      "models",
+      "--provider",
+      "claude",
+      "--intelligence",
+      "low",
+    ]);
+    expect(emptyToon).toContain("models: []");
   });
 
   it("rejects unsupported model filters and comparators as usage errors", async () => {

@@ -294,9 +294,13 @@ export type ProviderQuota = {
   attempts?: SourceAttempt[];
 };
 
+export const QUOTA_RESPONSE_SCHEMA_VERSION = 6;
+export const AUTH_RESPONSE_SCHEMA_VERSION = 2;
+export const MODELS_RESPONSE_SCHEMA_VERSION = 2;
+
 export type QuotaAxiResponse = {
   generatedAt: string;
-  schemaVersion: 5;
+  schemaVersion: typeof QUOTA_RESPONSE_SCHEMA_VERSION;
   providers: ProviderQuota[];
   help?: string[];
 };
@@ -334,6 +338,12 @@ export type AuthSourceReport = {
 export type AuthProviderReport = {
   provider: ProviderId;
   sources: AuthSourceReport[];
+};
+
+export type AuthResponse = {
+  generatedAt: string;
+  schemaVersion: typeof AUTH_RESPONSE_SCHEMA_VERSION;
+  auth: AuthProviderReport[];
 };
 
 /** A coarse editorial classification relative to the current model frontier. */
@@ -389,7 +399,7 @@ export type ModelSortResult = {
 
 export type ModelsResponse = {
   generatedAt: string;
-  schemaVersion: 1;
+  schemaVersion: typeof MODELS_RESPONSE_SCHEMA_VERSION;
   catalog: Pick<ModelCatalog, "version" | "provenance">;
   models: ModelQuotaRecord[];
   /** Provider/model window scopes with no corresponding catalog entry. */

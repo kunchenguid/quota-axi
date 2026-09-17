@@ -8,8 +8,8 @@ importers:
   .:
     dependencies:
       "@toon-format/toon":
-        specifier: 2.1.0
-        version: 2.1.0
+        specifier: 2.3.1
+        version: 2.3.1
       axi-sdk-js:
         specifier: ^0.1.10
         version: 0.1.10
@@ -843,10 +843,10 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  "@toon-format/toon@2.1.0":
+  "@toon-format/toon@2.3.1":
     resolution:
       {
-        integrity: sha512-JwWptdF5eOA0HaQxbKAzkpQtR4wSWTEfDlEy/y3/4okmOAX1qwnpLZMmtEWr+ncAhTTY1raCKH0kteHhSXnQqg==,
+        integrity: sha512-sWqEMeAJGMda9qRrfPKrX3C4c33CO9SJuvJzzrcBEn5sbDB+k6pSLkDsfN0rVnLQwR97MV3sDgVbcxQNsq8xVw==,
       }
 
   "@types/esrecurse@4.3.1":
@@ -2100,7 +2100,7 @@ snapshots:
   "@rollup/rollup-win32-x64-msvc@4.62.2":
     optional: true
 
-  "@toon-format/toon@2.1.0": {}
+  "@toon-format/toon@2.3.1": {}
 
   "@types/esrecurse@4.3.1": {}
 
@@ -2272,7 +2272,7 @@ snapshots:
 
   axi-sdk-js@0.1.10:
     dependencies:
-      "@toon-format/toon": 2.1.0
+      "@toon-format/toon": 2.3.1
 
   balanced-match@4.0.4: {}
 

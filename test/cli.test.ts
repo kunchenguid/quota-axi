@@ -484,7 +484,7 @@ describe("CLI quota rendering", () => {
     const codex = output.providers.find(
       (provider) => provider.provider === "codex",
     );
-    expect(output.schemaVersion).toBe(5);
+    expect(output.schemaVersion).toBe(6);
     expect(claude?.state.reason).toBe("keychain_access_required");
     expect(claude?.state.remedyCommand).toBe(
       "quota-axi --allow-keychain-prompt",
@@ -743,7 +743,7 @@ describe("CLI quota rendering", () => {
     expect(compact).toContain(
       'codex,all_models,258720,"2026-07-18T11:52:00.000Z",weekly',
     );
-    expect(compact).toContain("attention[0]:");
+    expect(compact).toContain("attention: []");
     expect(compact).not.toContain("windows[");
     expect(compact).not.toContain("worstReserve");
 
@@ -789,7 +789,7 @@ describe("CLI quota rendering", () => {
     const json = JSON.parse(
       await capture(["--provider", "kimi", "--json"]),
     ) as QuotaAxiResponse;
-    expect(json.schemaVersion).toBe(5);
+    expect(json.schemaVersion).toBe(6);
     expect(json.providers).toEqual([
       expect.objectContaining({
         provider: "kimi",
@@ -984,7 +984,7 @@ describe("default TOON decision blocks", () => {
 
     const output = await capture(["--provider", "claude"]);
 
-    expect(output).toContain("quota[0]:");
+    expect(output).toContain("quota: []");
     expect(toonRows(output, "attention")).toEqual([
       [
         "claude",
@@ -1006,7 +1006,7 @@ describe("default TOON decision blocks", () => {
     const output = await capture(["--provider", "codex"]);
 
     expect(toonRows(output, "quota")[0]?.[4]).toBe("through_reset");
-    expect(output).toContain("exhaustion[0]:");
+    expect(output).toContain("exhaustion: []");
   });
 
   it("keeps unknown-scope exhaustion in attention without an orphan row", async () => {
@@ -1182,7 +1182,7 @@ describe("--json tiering", () => {
     ) as QuotaAxiResponse;
     const [claude, cursor, grok, kimi] = json.providers;
 
-    expect(json.schemaVersion).toBe(5);
+    expect(json.schemaVersion).toBe(6);
     expect(claude?.state).toMatchObject({
       status: "stale",
       stale: true,
@@ -1222,6 +1222,24 @@ describe("--json tiering", () => {
       status: "rate_limited",
       retryAfter: "2026-07-06T19:10:00Z",
       untrustedWindowIds: ["unparsed_limit_2"],
+    });
+  });
+});
+
+describe("auth response contract", () => {
+  it("versions the TOON 2.3.1 empty auth array", async () => {
+    PROVIDERS.claude = providerWithQuota(freshClaudeQuota());
+
+    const toon = await capture(["auth", "--provider", "claude"]);
+    expect(toon).toContain("auth: []");
+
+    const json = JSON.parse(
+      await capture(["auth", "--provider", "claude", "--json"]),
+    );
+    expect(json).toEqual({
+      generatedAt: expect.any(String),
+      schemaVersion: 2,
+      auth: [{ provider: "claude", sources: [] }],
     });
   });
 });
@@ -1285,7 +1303,7 @@ describe("response redaction", () => {
   it("hides account identity and attempts unless --full is set", () => {
     const response: QuotaAxiResponse = {
       generatedAt: "2026-07-06T18:10:00Z",
-      schemaVersion: 5,
+      schemaVersion: 6,
       providers: [
         {
           provider: "claude",
@@ -1514,7 +1532,10 @@ function freshKimiQuota(): ProviderQuota {
 function toonRows(output: string, block: string): string[][] {
   const lines = output.split("\n");
   const start = lines.findIndex((line) => line.startsWith(`${block}[`));
-  if (start === -1) throw new Error(`missing TOON block: ${block}`);
+  if (start === -1) {
+    if (lines.includes(`${block}: []`)) return [];
+    throw new Error(`missing TOON block: ${block}`);
+  }
   const rows: string[][] = [];
   for (const line of lines.slice(start + 1)) {
     if (!line.startsWith("  ")) break;
