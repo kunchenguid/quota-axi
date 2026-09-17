@@ -248,17 +248,9 @@ export type DegradedSource = {
   error?: string;
 };
 
-export type AccountLocator = {
-  /** Local credential selector, never a credential or a verified user identity. */
-  kind: "pi-auth";
-  path: string;
-  entry: string;
-};
-
 export type ProviderAccount = {
   /** Opaque local lane identity, stable across refresh and discovery order. */
   accountKey: string;
-  locator?: AccountLocator;
   /** Resolves undefined when the lane establishes no distinct account. */
   fetchQuota(options: ProviderOptions): Promise<ProviderQuota | undefined>;
   inspectAuth(options: ProviderOptions): Promise<AuthProviderReport>;
@@ -268,8 +260,6 @@ export type ProviderQuota = {
   provider: ProviderId;
   /** Present in account-expanded reports; absent for the legacy single lane. */
   accountKey?: string;
-  /** Exact local selector evidence. Only published by --full. */
-  accountLocator?: AccountLocator;
   /** Display name. Omitted from default `--json`; see `--full`. */
   label?: string;
   /** Report provenance. Omitted from default `--json`; see `--full`. */

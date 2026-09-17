@@ -547,7 +547,6 @@ export function redactedResponse(
     providers: response.providers.map((provider) => ({
       ...provider,
       account: undefined,
-      accountLocator: undefined,
       attempts: undefined,
     })),
   };

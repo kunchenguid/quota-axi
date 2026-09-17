@@ -703,7 +703,6 @@ function fullFooterLines(provider: ProviderQuota, width: number): string[] {
     provider.provider,
     ...(provider.accountKey ? [provider.accountKey] : []),
   ];
-  if (provider.accountLocator) accountParts.push(provider.accountLocator.path);
   const protectedAccountParts = new Set([0]);
   if (provider.account?.email) accountParts.push(provider.account.email);
   if (provider.account?.organization) {

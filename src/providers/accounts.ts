@@ -6,25 +6,33 @@ import type {
   ProviderQuota,
 } from "../types.js";
 
-/** Discovery belongs to the adapter; collection never interprets credentials. */
+/**
+ * Discovery belongs to the adapter; collection never interprets credentials.
+ *
+ * A key is user-editable configuration, so a malformed or repeated one - which
+ * would land in cache slots and output join columns - only costs the expansion:
+ * discovery is abandoned for the adapter's single selected account rather than
+ * failing a read every other provider would have answered.
+ */
 async function accountsFor(
   adapter: ProviderAdapter,
   options: ProviderOptions,
 ): Promise<ProviderAccount[] | undefined> {
   if (options.credentialMode === "profile-only") return undefined;
-  const accounts = await adapter.discoverAccounts?.();
-  if (!accounts?.length) return undefined;
-  const keys = new Set<string>();
-  for (const account of accounts) {
-    if (
-      !/^[a-z0-9][a-z0-9:_-]{0,95}$/.test(account.accountKey) ||
-      keys.has(account.accountKey)
-    ) {
-      throw new Error(`invalid or duplicate ${adapter.id} account key`);
-    }
-    keys.add(account.accountKey);
+  let accounts: ProviderAccount[] | undefined;
+  try {
+    accounts = await adapter.discoverAccounts?.();
+  } catch {
+    return undefined;
   }
-  return accounts;
+  if (!accounts?.length) return undefined;
+  const keys = new Set(accounts.map((account) => account.accountKey));
+  const usable =
+    keys.size === accounts.length &&
+    accounts.every((account) =>
+      /^[a-z0-9][a-z0-9:_-]{0,95}$/.test(account.accountKey),
+    );
+  return usable ? accounts : undefined;
 }
 
 export async function fetchAccountQuotas(
@@ -63,7 +71,6 @@ export async function fetchAccountQuotas(
       : {
           ...report,
           accountKey: account.accountKey,
-          ...(account.locator ? { accountLocator: account.locator } : {}),
         },
   );
 }

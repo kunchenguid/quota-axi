@@ -348,7 +348,7 @@ CODEX_HOME=/path/to/codex-profile quota-axi --provider codex --profile-only --fu
 - A provider whose window relationships are wholly unknown (Copilot or Antigravity, with every window unresolved) has no combined effective percentage, pace, or runway to show, so its card replaces the headline block with a single `per-window usage · no combined bound` line and leads straight into its real per-window rows. Partially understood providers keep the effective-unknown headline. No combined headroom, pace, or runway number is invented.
 - Signed-out and failed provider/account lanes stay visible as dimmed cards and are excluded from the fleet totals in the header.
 - Width comes from the terminal, clamped to 80-120 columns; below the two-up width the grid reflows to one column. Color honors `NO_COLOR`, `TERM=dumb`, and non-TTY stdout (the glyph skeleton is kept), re-enables with `FORCE_COLOR`, and uses truecolor when `COLORTERM` advertises it, falling back to 256-color then ANSI-16.
-- `--tui` composes with `--provider` scoping and `--full` (account locator, identity, and source-attempt footers). It is mutually exclusive with `--json` and only supported by the `quota` command.
+- `--tui` composes with `--provider` scoping and `--full` (account identity and source-attempt footers). It is mutually exclusive with `--json` and only supported by the `quota` command.
 
 ## Multiple accounts
 
@@ -359,7 +359,7 @@ Each account gets its own TUI card, including accounts whose quota cannot be rea
 ```sh
 quota-axi --provider codex --json
 quota-axi --provider codex --tui --no-credential-refresh
-quota-axi --provider codex --full --json  # includes the local Pi selector for each key
+quota-axi --provider codex --full --json  # adds vendor identity and source attempts per key
 ```
 
 Pi's built-in provider id is `openai-codex`.
@@ -368,7 +368,7 @@ quota-axi enrolls those already-present keys; it does not read `codex-accounts.j
 Discovery order is the built-in `openai-codex` entry, then other `openai-codex-*` keys in lexical order.
 Two keys that carry the same stored `accountId` are the same ChatGPT account and are not reported as extra capacity.
 The later key stays a credential fallback until a probe succeeds or every candidate is rejected.
-The lane keeps the first key as its `accountKey` and `accountLocator` entry, while `source` names the key that answered.
+The lane keeps the first key as its `accountKey`, while `source` names the key that answered.
 A key whose identity cannot be compared is left as its own lane so the uncertainty stays visible.
 
 When only the built-in Pi entry (or none) is present, Codex keeps its existing single-winner path: native `$CODEX_HOME/auth.json`, then `openai-codex`, then the CLI fallback.
@@ -392,10 +392,10 @@ Every flat TOON block adds `accountKey` immediately after `provider`, and the qu
 Models and model sort ties use **`provider` + `accountKey` + `id`**.
 Declaration order remains non-preferential; quotas are never combined across accounts.
 
-A Codex Pi lane's key is the auth.json provider id (`openai-codex`, `openai-codex-work`).
-The native Codex lane's key is `codex-home` and has no `accountLocator`.
-It is stable across refreshes and discovery order and contains no token, email, or path.
-`--full` adds `accountLocator` (`kind: pi-auth`, `path`, and `entry`) plus the vendor identity the usage endpoint supplied, when any.
+A Codex Pi lane's key is the auth.json provider id (`openai-codex`, `openai-codex-work`); the native Codex lane's key is `codex-home`.
+It is stable across refreshes and discovery order and contains no token, email, or path, and it also names the account's cache slot, so a lane only ever reuses its own snapshot.
+A key the report cannot publish (malformed or repeated) costs the expansion, not the read: the provider falls back to its single selected account.
+`--full` adds the vendor identity the usage endpoint supplied, when any.
 
 If no provider expands, output stays byte-compatible in shape and field order: quota schema 5, auth/models schema 1, and no account column.
 A sole discovered Pi sibling uses that legacy representation.
@@ -475,7 +475,7 @@ Everything a consumer branches on stays in the default tier: `state.status`, `st
 | ----------------------------- | ---------------------------------------------------------------------------------------------------------------- |
 | Quota report                  | `providers`                                                                                                      |
 | Provider report               | `provider`, optional `accountKey`, `windows`, `quotaSemantics`, `state`, optional `plan`, and optional `credits` |
-| Provider report with `--full` | Also `label`, `source`, optional `accountLocator`, optional `account` identity, and per-source `attempts`        |
+| Provider report with `--full` | Also `label`, `source`, optional `account` identity, and per-source `attempts`                                   |
 | Account identity (`--full`)   | Optional `email`, `organization`, `accountId`, and `identityStatus`                                              |
 
 Account identity and per-source `attempts` are omitted unless `--full` is passed.

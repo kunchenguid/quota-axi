@@ -13,7 +13,6 @@ import {
   retryAfterToIso,
 } from "../lib/time.js";
 import type {
-  AccountLocator,
   AuthProviderReport,
   AuthSourceReport,
   ProviderAccount,
@@ -147,16 +146,21 @@ export async function fetchQuota(
 
 const CODEX_HOME_ACCOUNT_KEY = "codex-home";
 
+/**
+ * `cacheKey` is the lane's cache slot and must be the key the collection will
+ * publish: it stays absent on the legacy single-winner path and on a lone
+ * discovered lane, both of which are cached under the provider's default slot.
+ */
 type CodexAccountContext =
   | {
       kind: "native";
-      accountKey: string;
+      cacheKey?: string;
       includesBuiltinPi: boolean;
     }
   | {
       kind: "pi";
       piProviderId: string;
-      accountKey: string;
+      cacheKey?: string;
       extraPiProviderIds?: string[];
     };
 
@@ -178,7 +182,6 @@ async function discoverCodexAccounts(
       : undefined;
   const nativeAccount: Extract<CodexAccountContext, { kind: "native" }> = {
     kind: "native",
-    accountKey: CODEX_HOME_ACCOUNT_KEY,
     includesBuiltinPi: false,
   };
   const cliOnly =
@@ -217,13 +220,19 @@ async function discoverCodexAccounts(
       account: {
         kind: "pi" as const,
         piProviderId,
-        accountKey: piProviderId,
       },
       storedAccountId,
     };
     piLanes.push(lane);
     if (storedAccountId !== undefined) {
       piLaneByAccountId.set(storedAccountId, lane);
+    }
+  }
+
+  if ((hasNativeLane ? 1 : 0) + piLanes.length > 1) {
+    nativeAccount.cacheKey = CODEX_HOME_ACCOUNT_KEY;
+    for (const lane of piLanes) {
+      lane.account.cacheKey = lane.account.piProviderId;
     }
   }
 
@@ -245,7 +254,7 @@ async function discoverCodexAccounts(
   const accounts: ProviderAccount[] = [];
   if (hasNativeLane) {
     accounts.push({
-      accountKey: nativeAccount.accountKey,
+      accountKey: CODEX_HOME_ACCOUNT_KEY,
       fetchQuota: async (options) => {
         const reading = await readNative(options);
         const accountId =
@@ -272,8 +281,7 @@ async function discoverCodexAccounts(
   }
   for (const lane of piLanes) {
     accounts.push({
-      accountKey: lane.account.accountKey,
-      locator: await piAccountLocator(dependencies, lane.account.piProviderId),
+      accountKey: lane.account.piProviderId,
       fetchQuota: async (options) => {
         const report = await readPi(lane, options);
         const accountId = laneIdentity(report, lane.storedAccountId);
@@ -401,18 +409,6 @@ async function inspectPiEntry(
   }
 }
 
-async function piAccountLocator(
-  dependencies: CodexDependencies,
-  providerId: string,
-): Promise<AccountLocator> {
-  const inspection = await inspectPiEntry(dependencies, providerId);
-  return {
-    kind: "pi-auth",
-    path: inspection.path,
-    entry: providerId,
-  };
-}
-
 async function fetchPiAccountQuota(
   dependencies: CodexDependencies,
   account: Extract<CodexAccountContext, { kind: "pi" }>,
@@ -485,7 +481,7 @@ async function fetchPiAccountQuota(
     piSelection.outcome === "transient" ? piSelection.retryAfter : undefined,
     attempts,
     source,
-    account.accountKey,
+    account.cacheKey,
   );
 }
 
@@ -547,7 +543,7 @@ async function fetchQuotaWithDependencies(
       oauthSelection.retryAfter,
       attempts,
       "oauth",
-      account?.accountKey,
+      account?.cacheKey,
     );
   }
   if (oauthSelection.outcome === "all_rejected") {
@@ -622,6 +618,7 @@ async function fetchQuotaWithDependencies(
         piSelection.retryAfter,
         attempts,
         PI_CODEX_CREDENTIAL_SOURCE,
+        account?.cacheKey,
       );
     }
     if (piSelection.outcome === "all_rejected") {
@@ -665,7 +662,7 @@ async function fetchQuotaWithDependencies(
     undefined,
     attempts,
     undefined,
-    account?.accountKey,
+    account?.cacheKey,
   );
 }
 
