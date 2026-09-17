@@ -196,7 +196,7 @@ $ quota-axi --provider claude --json
 $ quota-axi auth
 bin: ~/.npm/_npx/.../quota-axi
 description: Inspect local quota auth sources without printing secret values
-auth[17]{provider,source,path,status,error}:
+auth[18]{provider,source,path,status,error}:
   claude,oauth-file,~/.claude/.credentials.json,available,none
   claude,keychain,none,skipped,keychain_prompt_required
   codex,auth-json,~/.codex/auth.json,available,none
@@ -214,6 +214,7 @@ auth[17]{provider,source,path,status,error}:
   agy,loopback,none,available,none
   alibaba,bl-cli,none,available,none
   opencode-go,opencode:auth.json,~/.local/share/opencode/auth.json,available,none
+  kiro,kiro-sqlite,~/.local/share/kiro-cli/data.sqlite3,available,none
 help[1]:
   Run `quota-axi --allow-keychain-prompt auth` to permit macOS Keychain access
 ```
@@ -611,11 +612,11 @@ Source attempts can include `credentialPresent` when a source is not genuinely a
 | Antigravity (`agy`)    | On macOS and Linux, can report `gemini_5h`, `gemini_weekly`, `claude_gpt_5h`, and `claude_gpt_weekly` from the installed CLI's structured `agy -p "/quota" --output-format json` response (a bounded read, not an agent session), falling back to an already-running Antigravity app or `agy` loopback quota summary when the CLI is unavailable. If only model config quota is exposed, quota-axi reports model-scoped `model:<slug>` windows instead of inventing grouped windows. Antigravity v1 snapshots do not expose enough history for honest burn-rate pace, so pace stays `unknown`.                                                                                                                                                                                                                                                                                                                                                                                    |
 | Alibaba                | Reads the local `bl` CLI's Alibaba Coding Plan Token Plan usage; reports the plan name and weekly remaining percentage and reset time from the CLI's JSON output, plus any named model limits as separate `model:<name>` windows. Repeated limits for the same model remain separate with suffixed IDs such as `model:<name>:2`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | OpenCode Go            | Reads `opencode-go` (falling back to `opencode`) from OpenCode's `auth.json` and reports the provider's rolling, weekly, and monthly usage windows as stacked plan caps that jointly bound Go-plan usage at `all_models` scope. It uses only cycle durations present in the payload; absent durations remain absent, so pace, runway, and selection stay unknown until the vendor reports a cycle. A zeroed plan window blocks Go-plan requests, but the vendor's free-model fallback or an opted-in Zen balance may still serve past it.                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| Kiro                   | Reports credit usage, current plan, credits remaining, and reset time from the first-party `GetUsageLimits` response. See [Quota windows](#quota-windows) for aggregation and interpretation, and [Provider credential sources](#provider-credential-sources) for local configuration. |
+| Kiro                   | Reports credit usage, current plan, credits remaining, and reset time from the first-party `GetUsageLimits` response. See [Quota windows](#quota-windows) for aggregation and interpretation, and [Provider credential sources](#provider-credential-sources) for local configuration.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 
 ### Model catalog and `models`
 
-`quota-axi models [--intelligence high|medium|low] [--sort runway] [--provider ...] [--json|--full]` joins a reviewed catalog of native Claude, Codex, Grok, and Kimi models to the provider's effective quota evidence. It queries those four catalog-backed providers by default and accepts only those providers in an explicit models scope. Cursor and Copilot are excluded from this first catalog because their hosted model availability is plan-dependent; Copilot's quota relationships are also currently unknown. Z.AI, Alibaba, OpenCode Go, and Antigravity report quota but have no reviewed catalog entries yet, so they are not `models` providers either.
+`quota-axi models [--intelligence high|medium|low] [--sort runway] [--provider ...] [--json|--full]` joins a reviewed catalog of native Claude, Codex, Grok, and Kimi models to the provider's effective quota evidence. It queries those four catalog-backed providers by default and accepts only those providers in an explicit models scope. Cursor and Copilot are excluded from this first catalog because their hosted model availability is plan-dependent; Copilot's quota relationships are also currently unknown. Z.AI, Alibaba, OpenCode Go, Antigravity, and Kiro report quota but have no reviewed catalog entries yet, so they are not `models` providers either.
 
 Catalog buckets are coarse editorial classifications relative to the current frontier, not scores. They are curated from public provider material and public leaderboards, including [Artificial Analysis](https://artificialanalysis.ai/) as an informing source. quota-axi does not reproduce Artificial Analysis scores, has no runtime Artificial Analysis dependency, and never commits an Artificial Analysis key. `scripts/refresh-model-kb.ts` is a maintainer-only review aid: it may use a private `AA_API_KEY` to suggest changes, but it never writes the catalog.
 
@@ -633,9 +634,9 @@ Default model order is deterministic and non-preferential: provider, then model 
 
 Auth source entries can include `credentialPresent` when a source is not genuinely absent, including when a read failure prevents a more precise classification.
 
-| Name                 | Values                                                                                                                                                                                                                                                             |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Auth source statuses | `available`, `missing`, `invalid`, `expired`, `skipped`, or `error`                                                                                                                                                                                                |
+| Name                 | Values                                                                                                                                                                                                                                                                            |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Auth source statuses | `available`, `missing`, `invalid`, `expired`, `skipped`, or `error`                                                                                                                                                                                                               |
 | Auth source names    | `oauth-file`, `keychain`, `auth-json`, `auth-env`, `apps-json`, `gh:hosts.yml`, `state-vscdb`, `cli-keychain`, `cli-authfile`, `cli-rpc`, `pi:openai-codex`, `pi:kimi-coding`, `pi:xai`, `pi:zai`, `kimi-code-cli`, `opencode:auth.json`, `bl-cli`, `kiro-sqlite`, and `loopback` |
 
 ## Security Posture
@@ -777,12 +778,12 @@ quota-axi reports quota; it is not an auth app. It never mints a credential, nev
 
 Instead, when the same stored access token is expired, carries a refresh token, **and** is definitively rejected, quota-axi may run the vendor CLI's own smallest non-interactive command that already owns rotation, then re-read the store that CLI rewrote and retry the same read-only quota request once. Rotation is always the vendor's; quota-axi only reads the result.
 
-| Provider                                                              | Vendor-owned recovery path        | Store the vendor rewrites                             |
-| --------------------------------------------------------------------- | --------------------------------- | ----------------------------------------------------- |
-| Claude                                                                | `claude doctor` delegate          | the Claude Code Keychain item, or `.credentials.json` |
-| Codex                                                                 | existing `app-server` quota probe | `$CODEX_HOME/auth.json`                               |
-| Grok                                                                  | `grok models` delegate            | `$GROK_HOME/auth.json`                                |
-| Cursor, GitHub Copilot, Kimi, Z.AI, Alibaba, OpenCode Go, Antigravity | none                              | read-only; see the per-provider notes below           |
+| Provider                                                                    | Vendor-owned recovery path        | Store the vendor rewrites                             |
+| --------------------------------------------------------------------------- | --------------------------------- | ----------------------------------------------------- |
+| Claude                                                                      | `claude doctor` delegate          | the Claude Code Keychain item, or `.credentials.json` |
+| Codex                                                                       | existing `app-server` quota probe | `$CODEX_HOME/auth.json`                               |
+| Grok                                                                        | `grok models` delegate            | `$GROK_HOME/auth.json`                                |
+| Cursor, GitHub Copilot, Kimi, Z.AI, Alibaba, OpenCode Go, Antigravity, Kiro | none                              | read-only; see the per-provider notes below           |
 
 The Claude and Grok delegated runs are bounded the same way:
 
