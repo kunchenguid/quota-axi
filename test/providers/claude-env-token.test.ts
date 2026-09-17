@@ -405,6 +405,56 @@ describe("Claude CLAUDE_CODE_OAUTH_TOKEN credential source", () => {
     expect(readCachedProvider("claude")).toBeDefined();
   });
 
+  it("still offers the Keychain remedy when only the identity probe answered", async () => {
+    // The Keychain holds the credential but its value read is gated, the env
+    // token is rejected non-definitively, and the stored-expired sidecar is
+    // merely rate limited. Nothing read a credential, so the one actionable
+    // remedy is the Keychain grant - the identity probe answering live must
+    // not read as a source that produced a reading.
+    vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", ENV_TOKEN);
+    writeOauthFile(OAUTH_FILE_TOKEN, Date.now() - 60_000);
+    mockStore({ accessToken: STORED_TOKEN });
+    fetchMock.mockImplementation(async (url: string, init: unknown) => {
+      const bearer = (init as { headers: Record<string, string> }).headers
+        .authorization;
+      if (bearer === `Bearer ${ENV_TOKEN}`)
+        return new Response("{}", { status: 403 });
+      return String(url).includes("/oauth/profile")
+        ? Response.json({ account: { uuid: "account-uuid-fixture" } })
+        : new Response("{}", {
+            status: 429,
+            headers: { "retry-after": "60" },
+          });
+    });
+
+    const { fetchQuota } = await import("../../src/providers/claude.js");
+    const { annotateQuotaAdvice, KEYCHAIN_ACCESS_REASON } =
+      await import("../../src/advice.js");
+    const report = await fetchQuota({
+      allowKeychainPrompt: false,
+      refreshCredentials: false,
+    });
+    const annotated = annotateQuotaAdvice({
+      generatedAt: "2026-09-18T00:00:00.000Z",
+      providers: [report],
+    });
+
+    expect(report.attempts).toContainEqual({
+      source: "keychain",
+      status: "skipped",
+      error: "keychain_prompt_required",
+      credentialPresent: true,
+    });
+    expect(report.attempts).toContainEqual({
+      source: "oauth-profile",
+      status: "success",
+    });
+    expect(annotated.providers[0]?.state.reason).toBe(KEYCHAIN_ACCESS_REASON);
+    expect(annotated.help?.join("\n") ?? "").toContain(
+      "--allow-keychain-prompt",
+    );
+  });
+
   it("trims surrounding whitespace on the environment token before sending it", async () => {
     vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", `  ${ENV_TOKEN}\n`);
     mockStore();
