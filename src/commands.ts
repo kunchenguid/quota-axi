@@ -33,7 +33,7 @@ export type QuotaContext = {
   binPath: string;
 };
 
-const DEFAULT_REFRESH_SECONDS = 300;
+const DEFAULT_REFRESH_SECONDS = 120;
 
 export async function quotaCommand(
   args: string[],

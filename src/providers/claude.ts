@@ -457,8 +457,8 @@ function shouldDelegateClaudeRefresh(
  * unlistable process table (Windows, no effective uid, no `ps`) stays read-only
  * rather than guessing. The check and spawn are not atomic: a Claude Code
  * session starting after the check or another concurrent quota-axi read can
- * still overlap the delegate. This narrows the common repeated five-minute
- * `--tui` versus live-session collision and, together with never signaling the
+ * still overlap the delegate. This narrows the common repeated `--tui` versus
+ * live-session collision and, together with never signaling the
  * delegate, is strictly safer than force-killing without adding a failure mode
  * beyond the pre-existing vendor-owned race. The skipped reason is recorded so
  * `--full` shows why no refresh happened.

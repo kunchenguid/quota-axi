@@ -954,9 +954,8 @@ describe.skipIf(process.platform === "win32")(
 );
 
 /**
- * Drive the live report the way `--tui` does: one load per refresh cycle on
- * the same 5-minute interval the command uses, with every terminal effect
- * injected. Returns each cycle's snapshot.
+ * Drive the live report the way `--tui` does: one load per refresh cycle, with
+ * every terminal effect injected. Returns each cycle's snapshot.
  */
 async function runLiveReportCycles<T>(
   cycles: number,

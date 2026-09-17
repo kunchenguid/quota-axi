@@ -26,8 +26,9 @@ export function execFileText(
         maxBuffer: 16 * 1024 * 1024,
         ...(invocation.environment ? { env: invocation.environment } : {}),
       },
-      (error, stdout) => {
+      (error, stdout, stderr) => {
         if (error) {
+          attachChildOutput(error, stdout, stderr);
           reject(error);
           return;
         }
@@ -35,6 +36,26 @@ export function execFileText(
       },
     );
   });
+}
+
+/**
+ * Node's `execFile` error carries only the command and stderr in its message,
+ * so a vendor that reports its own verdict on stdout loses it. Keep both
+ * streams attached for the caller to classify; nothing logs or caches them.
+ */
+export type ChildOutputError = Error & {
+  stdout?: string;
+  stderr?: string;
+};
+
+function attachChildOutput(
+  error: Error,
+  stdout: string | Buffer | undefined,
+  stderr: string | Buffer | undefined,
+): void {
+  const target = error as ChildOutputError;
+  if (typeof target.stdout !== "string") target.stdout = String(stdout ?? "");
+  if (typeof target.stderr !== "string") target.stderr = String(stderr ?? "");
 }
 
 function shimInvocation(

@@ -8,6 +8,7 @@ import {
   currentUserProcessListArgs,
   execFileText,
   terminateChild,
+  type ChildOutputError,
 } from "../../src/lib/process.js";
 
 const originalPath = process.env.PATH;
@@ -42,6 +43,26 @@ describe("commandExists", () => {
     expect(await commandExists(command)).toBe(true);
     expect(await commandExists("quota-axi-missing")).toBe(false);
   });
+});
+
+describe("execFileText", () => {
+  it.skipIf(process.platform === "win32")(
+    "keeps a failed child's stdout and stderr on the error",
+    async () => {
+      const error = await execFileText(
+        process.execPath,
+        [
+          "-e",
+          "process.stdout.write('{}'); process.stderr.write('auth failed'); process.exitCode = 3;",
+        ],
+        5_000,
+      ).catch((reason: unknown) => reason as ChildOutputError);
+
+      expect(error).toBeInstanceOf(Error);
+      expect(error.stdout).toBe("{}");
+      expect(error.stderr).toBe("auth failed");
+    },
+  );
 });
 
 describe("terminateChild", () => {
