@@ -632,6 +632,150 @@ describe("Antigravity provider", () => {
     expect(JSON.stringify(result)).not.toContain("private-account");
   });
 
+  it("reports a signed-out agy CLI as sign-in required instead of a malformed read", async () => {
+    writeCachedProviders([cachedAgyQuota()]);
+    const stderr = [
+      "Error: authentication required. Run 'agy' to log in, then retry.",
+      "error: authentication failed or timed out",
+      "",
+    ].join("\n");
+    const stdout = JSON.stringify({
+      conversation_id: "",
+      status: "ERROR",
+      response: "",
+      error: "authentication failed or timed out",
+      duration_seconds: 0,
+      num_turns: 0,
+      usage: {},
+    });
+
+    const result = await fetchQuotaWithRuntime(
+      runtimeWith({
+        ps: "",
+        agyPath: "/Users/test/.local/bin/agy",
+        agyError: Object.assign(
+          new Error(
+            `Command failed: /Users/test/.local/bin/agy -p /quota --output-format json\n${stderr}`,
+          ),
+          { code: 1, killed: false, stdout, stderr },
+        ),
+      }),
+    );
+
+    expect(result.state).toMatchObject({
+      status: "auth_required",
+      error: "Antigravity sign-in required",
+    });
+    expect(result.windows).toEqual([]);
+    // A definitive sign-out is the only thing the CLI can prove, so it retires
+    // the cached record, and the vendor's live OAuth URL never reaches output.
+    expect(readCachedProvider("agy")).toBeUndefined();
+    expect(JSON.stringify(result)).not.toContain("accounts.google.com");
+    expect(JSON.stringify(result)).not.toContain("log in");
+  });
+
+  it("classifies a zero-exit agy error envelope instead of a malformed read", async () => {
+    const result = await fetchQuotaWithRuntime(
+      runtimeWith({
+        ps: "",
+        agyPath: "/Users/test/.local/bin/agy",
+        agyOutput: JSON.stringify({
+          conversation_id: "",
+          status: "ERROR",
+          response: "",
+          error: "authentication failed or timed out",
+          duration_seconds: 0,
+          num_turns: 0,
+          usage: {},
+        }),
+      }),
+    );
+
+    expect(result.state).toMatchObject({
+      status: "auth_required",
+      error: "Antigravity sign-in required",
+    });
+  });
+
+  it("classifies an agy CLI rate limit from the vendor's own envelope", async () => {
+    const result = await fetchQuotaWithRuntime(
+      runtimeWith({
+        ps: "",
+        agyPath: "/Users/test/.local/bin/agy",
+        agyOutput: JSON.stringify({
+          conversation_id: "",
+          status: "ERROR",
+          response: "",
+          error: "rate limit exceeded, try again later",
+        }),
+      }),
+    );
+
+    expect(result.state).toMatchObject({
+      status: "rate_limited",
+      error: "Antigravity quota endpoint rate limited",
+    });
+  });
+
+  it("keeps reporting fresh CLI quota when a live agy session's loopback is CSRF-protected", async () => {
+    const port = await startServer((response) => {
+      response.writeHead(401, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          code: "unauthenticated",
+          message: "missing CSRF token",
+        }),
+      );
+    });
+
+    const result = await fetchQuotaWithRuntime(
+      runtimeWith({
+        ps: "123 /Users/test/.local/bin/agy\n",
+        lsof: lsofFor(123, port),
+        agyPath: "/Users/test/.local/bin/agy",
+        agyOutput: JSON.stringify(fixture("usage-print-v1.2.2.json")),
+        requestJson: requestLoopbackJson,
+      }),
+    );
+
+    expect(result.state.status).toBe("fresh");
+    expect(result.source).toBe("cli");
+    expect(result.windows.map((window) => window.id)).toEqual([
+      "gemini_5h",
+      "gemini_weekly",
+      "claude_gpt_5h",
+      "claude_gpt_weekly",
+    ]);
+  });
+
+  it("treats any CSRF-named loopback rejection as unavailable, not a sign-out", async () => {
+    writeCachedProviders([cachedAgyQuota()]);
+    const port = await startServer((response) => {
+      response.writeHead(401, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          code: "unauthenticated",
+          message: "CSRF token missing",
+        }),
+      );
+    });
+
+    const result = await fetchQuotaWithRuntime(
+      runtimeWith({
+        ps: "123 /Users/test/.local/bin/agy\n",
+        lsof: lsofFor(123, port),
+        requestJson: requestLoopbackJson,
+      }),
+    );
+
+    expect(result.state).toMatchObject({
+      status: "unavailable",
+      error:
+        "Antigravity CLI quota unavailable because its runtime CSRF token is not exposed; use Antigravity /quota",
+    });
+    expect(readCachedProvider("agy")).toBeDefined();
+  });
+
   it("sends the CLI 1.2.2 read-only request envelope without a token", async () => {
     let receivedBody: unknown;
     let receivedCsrfToken: string | undefined;

@@ -253,7 +253,10 @@ async function fetchCliQuota(runtime: AgyProbeRuntime): Promise<{
   }
   const summary = normalizeAgyPrintUsage(parsed);
   if (!summary || summary.windows.length === 0) {
-    throw new AgyMalformedResponseError("agy /quota quota summary malformed");
+    throw (
+      cliEnvelopeVerdict(parsed) ??
+      new AgyMalformedResponseError("agy /quota quota summary malformed")
+    );
   }
   return summary;
 }
@@ -1067,6 +1070,44 @@ function sanitizeTransportError(error: Error): Error {
   return new AgyUnavailableError("Antigravity loopback unavailable");
 }
 
+/**
+ * The agy CLI publishes its own verdict even when the read produces no quota:
+ * a structured `status`/`error` envelope on stdout and a one-line reason on
+ * stderr. That verdict is the only evidence distinguishing a signed-out session
+ * from a broken read, but its raw text is never reported - a signed-out CLI
+ * prints a live OAuth URL - so only a fixed message ever leaves here.
+ */
+function cliFailureVerdict(text: string): Error | undefined {
+  if (text.length === 0) return undefined;
+  if (
+    /authenticat|sign[- ]?in|log[- ]?in|unauthori[sz]ed|invalid_grant/i.test(
+      text,
+    )
+  )
+    return new Error("Antigravity sign-in required");
+  if (/rate.?limit|too many requests|HTTP 429/i.test(text))
+    return new Error("Antigravity quota endpoint rate limited");
+  return undefined;
+}
+
+function cliFailureText(error: unknown): string {
+  const details = objectValue(error);
+  return [details?.stdout, details?.stderr, details?.message]
+    .filter((value): value is string => typeof value === "string")
+    .join("\n");
+}
+
+function cliEnvelopeVerdict(raw: unknown): Error | undefined {
+  const root = objectValue(raw);
+  const status = stringValue(root?.status);
+  if (!status || status.toUpperCase() === "SUCCESS") return undefined;
+  return cliFailureVerdict(
+    [stringValue(root?.error), stringValue(root?.response)]
+      .filter((value): value is string => Boolean(value))
+      .join("\n"),
+  );
+}
+
 function sanitizeCliError(error: unknown): Error {
   const details = objectValue(error);
   const code = stringValue(details?.code);
@@ -1078,7 +1119,10 @@ function sanitizeCliError(error: unknown): Error {
     return new AgyMalformedResponseError(
       "Antigravity CLI /quota response too large",
     );
-  return new Error("Antigravity CLI /quota failed");
+  return (
+    cliFailureVerdict(cliFailureText(error)) ??
+    new Error("Antigravity CLI /quota failed")
+  );
 }
 
 function strongerFailure(current: unknown, candidate: unknown): unknown {
@@ -1166,15 +1210,14 @@ function httpResponseError(status: number, body: string): Error {
   return new AgyHttpError(status);
 }
 
+/**
+ * The loopback's runtime CSRF guard rejects before it evaluates any sign-in
+ * state, so a 401/403 that names CSRF says nothing about whether the account is
+ * signed out - a live session is not a sign-out and must never retire the
+ * cache. The guard's exact phrasing is not stable, so any mention counts.
+ */
 function isCsrfRejection(body: string): boolean {
-  if (/missing\s+CSRF\s+token/i.test(body)) return true;
-  try {
-    const payload = objectValue(JSON.parse(body) as unknown);
-    const message = stringValue(payload?.message);
-    return /^(?:missing|invalid) CSRF token$/i.test(message ?? "");
-  } catch {
-    return false;
-  }
+  return /csrf/i.test(body);
 }
 
 function httpErrorMessage(status: number): string {
