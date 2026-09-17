@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.1.46](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.45...quota-axi-v0.1.46) (2026-09-17)
+
+
+### Bug Fixes
+
+* **agy:** detect spaced Antigravity app bundle paths ([#194](https://github.com/kunchenguid/quota-axi/issues/194)) ([4915014](https://github.com/kunchenguid/quota-axi/commit/491501448bdc81b3bdff272a4bee321b81204729))
+* **kimi:** read the current /usages response map alongside the legacy usage shape ([#201](https://github.com/kunchenguid/quota-axi/issues/201)) ([4a7d3f7](https://github.com/kunchenguid/quota-axi/commit/4a7d3f72dd75fd4547d0ff15325f2a096e7b33e5))
+* **providers:** read Copilot quota from the GitHub CLI login when apps.json cannot answer ([#199](https://github.com/kunchenguid/quota-axi/issues/199)) ([30feb5a](https://github.com/kunchenguid/quota-axi/commit/30feb5af65d8d972479968186abd749e4a427b59))
+* **providers:** use Copilot top-level reset date when snapshot reset is zero ([#200](https://github.com/kunchenguid/quota-axi/issues/200)) ([818654c](https://github.com/kunchenguid/quota-axi/commit/818654ce12b2e5585d3c73cf9135536d3c7b9068))
+
 ## [0.1.45](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.44...quota-axi-v0.1.45) (2026-09-16)
 
 
