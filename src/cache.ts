@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { chmodSync, renameSync, writeFileSync } from "node:fs";
 import {
   cacheFilePath,
@@ -52,13 +53,15 @@ const DEFAULT_ACCOUNT_KEY = "default";
 const CREDENTIAL_CONTEXT_ID = /^[a-f0-9]{64}$/;
 
 /**
- * Providers whose local configuration decides which account a reading belongs
- * to: a Claude profile selects the credential store, and a Kimi Code
- * `config.toml` selects the deployment. A snapshot from one such context says
- * nothing about another, so each is stamped on write and required to match on
- * stale reuse.
+ * Providers whose snapshots record which account they belong to, because the
+ * cache slot alone does not say: a Claude profile selects the credential store,
+ * a Kimi Code `config.toml` selects the deployment, and a Codex slot can be
+ * signed in to another ChatGPT account. A snapshot from one such context says
+ * nothing about another, so each is stamped on write and checked on stale
+ * reuse - strictly for Claude and Kimi, whose identity a reading always has,
+ * and on proven mismatch for Codex, whose vendor account id is optional.
  *
- * How that stamp is obtained is not the same question for both. A Claude
+ * How that stamp is obtained is not the same question for each. A Claude
  * profile is fixed by this process's own environment, so deriving it here reads
  * the same selection the reading used. Kimi's is not derivable here at all.
  * Kimi Code rewrites `config.toml` on login, so a read taken after the quota
@@ -66,14 +69,25 @@ const CREDENTIAL_CONTEXT_ID = /^[a-f0-9]{64}$/;
  * and a Kimi reading need not come from that configuration in the first place,
  * because Pi brokers a credential for the default endpoint while naming no
  * deployment. Kimi therefore reports the identity of whatever actually produced
- * its reading.
+ * its reading. Codex's account is not local configuration at all, so the stamp
+ * is the account the vendor itself attributed the reading to, hashed because
+ * the cache holds no account identity in the clear.
  */
 const CONTEXT_SCOPED_PROVIDERS: Partial<
-  Record<ProviderId, () => string | undefined>
+  Record<ProviderId, (provider: ProviderQuota) => string | undefined>
 > = {
   claude: claudeCredentialContextId,
   kimi: kimiReadingContextId,
+  codex: (provider) => codexAccountContextId(provider.account?.accountId),
 };
+
+function codexAccountContextId(accountId?: string): string | undefined {
+  return accountId
+    ? createHash("sha256")
+        .update(JSON.stringify(["codex-account-v1", accountId]))
+        .digest("hex")
+    : undefined;
+}
 
 type CachedProvider = {
   snapshot: ProviderQuota;
@@ -84,12 +98,43 @@ export function readCachedProvider(
   provider: ProviderId,
   accountKey?: string,
 ): ProviderQuota | undefined {
+  return readCachedRecord(provider, accountKey)?.snapshot;
+}
+
+function readCachedRecord(
+  provider: ProviderId,
+  accountKey?: string,
+): CachedProvider | undefined {
   return readCacheProviders().find(
     (item) =>
       item.snapshot.provider === provider &&
       (item.snapshot.accountKey ?? DEFAULT_ACCOUNT_KEY) ===
         (accountKey ?? DEFAULT_ACCOUNT_KEY),
-  )?.snapshot;
+  );
+}
+
+/**
+ * Codex stale quota, withheld when the snapshot names a ChatGPT account none of
+ * the credentials this run could have read names. A Codex slot is not tied to
+ * one account by its name: the keyless slot is shared by a sole discovered lane
+ * and the single-account path, and a stable Pi entry key can be signed in to a
+ * different account, so the slot alone cannot say whose windows it holds.
+ *
+ * An unstamped snapshot, or a run whose credentials name no account, proves
+ * nothing either way and is served as before - a reading the vendor never
+ * attributed is not evidence of a different account.
+ */
+export function readCachedCodexProvider(
+  accountKey: string | undefined,
+  accountIds: readonly string[],
+): ProviderQuota | undefined {
+  const record = readCachedRecord("codex", accountKey);
+  if (!record) return undefined;
+  const contextId = record.credentialContextId;
+  if (!contextId || accountIds.length === 0) return record.snapshot;
+  return accountIds.some((id) => codexAccountContextId(id) === contextId)
+    ? record.snapshot
+    : undefined;
 }
 
 /**
@@ -247,7 +292,7 @@ function toCacheProvider(provider: ProviderQuota): CachedProvider | undefined {
     CACHE_SCHEMA_VERSION,
   )?.snapshot;
   if (!snapshot) return undefined;
-  const contextId = CONTEXT_SCOPED_PROVIDERS[provider.provider]?.();
+  const contextId = CONTEXT_SCOPED_PROVIDERS[provider.provider]?.(provider);
   return {
     snapshot,
     ...(contextId ? { credentialContextId: contextId } : {}),

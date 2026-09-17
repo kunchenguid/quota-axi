@@ -10,9 +10,10 @@ import type {
  * Discovery belongs to the adapter; collection never interprets credentials.
  *
  * A key is user-editable configuration, so a malformed or repeated one - which
- * would land in cache slots and output join columns - only costs the expansion:
- * discovery is abandoned for the adapter's single selected account rather than
- * failing a read every other provider would have answered.
+ * would land in cache slots and output join columns - costs only its own lane:
+ * the rest still expand, because one unusable entry must not hide the accounts
+ * beside it. Only when no lane survives does the read fall back to the
+ * adapter's single selected account, which never fails the whole report.
  */
 async function accountsFor(
   adapter: ProviderAdapter,
@@ -26,13 +27,17 @@ async function accountsFor(
     return undefined;
   }
   if (!accounts?.length) return undefined;
-  const keys = new Set(accounts.map((account) => account.accountKey));
-  const usable =
-    keys.size === accounts.length &&
-    accounts.every((account) =>
-      /^[a-z0-9][a-z0-9:_-]{0,95}$/.test(account.accountKey),
-    );
-  return usable ? accounts : undefined;
+  const keys = new Set<string>();
+  const usable = accounts.filter((account) => {
+    if (
+      !/^[a-z0-9][a-z0-9:_-]{0,95}$/.test(account.accountKey) ||
+      keys.has(account.accountKey)
+    )
+      return false;
+    keys.add(account.accountKey);
+    return true;
+  });
+  return usable.length > 0 ? usable : undefined;
 }
 
 export async function fetchAccountQuotas(

@@ -1,7 +1,11 @@
 import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { spawn } from "node:child_process";
-import { deleteCachedProvider, readCachedProvider } from "../cache.js";
+import {
+  deleteCachedProvider,
+  readCachedCodexProvider,
+  readCachedProvider,
+} from "../cache.js";
 import { readJsonFileResult, type JsonFileReadResult } from "../lib/fs.js";
 import { providerFetch } from "../lib/http.js";
 import { findCommandPath, terminateChild } from "../lib/process.js";
@@ -197,10 +201,7 @@ async function discoverCodexAccounts(
   const piLaneByAccountId = new Map<string, (typeof piLanes)[number]>();
   for (const piProviderId of ids) {
     const resolution = await resolvePiEntry(dependencies, piProviderId);
-    const storedAccountId =
-      resolution.status === "available" || resolution.status === "expired"
-        ? resolution.credentials?.accountId
-        : undefined;
+    const storedAccountId = resolvedAccountId(resolution);
     if (storedAccountId !== undefined) {
       if (
         nativeState.status !== "missing" &&
@@ -360,6 +361,15 @@ async function fetchCliAccountQuota(): Promise<ProviderQuota | undefined> {
   }
 }
 
+/** The account a Pi entry says it belongs to, as stored, when it names one. */
+function resolvedAccountId(
+  resolution: PiCodexCredentialResolution,
+): string | undefined {
+  return resolution.status === "available" || resolution.status === "expired"
+    ? resolution.credentials?.accountId
+    : undefined;
+}
+
 async function listPiCodexProviderIds(
   dependencies: CodexDependencies,
 ): Promise<string[]> {
@@ -402,6 +412,7 @@ async function fetchPiAccountQuota(
 ): Promise<ProviderQuota> {
   const attempts: SourceAttempt[] = [];
   const piCandidates: CredentialCandidate<CodexAttemptCredential>[] = [];
+  const accountIds: string[] = [];
   const providerIds = [
     account.piProviderId,
     ...(account.extraPiProviderIds ?? []),
@@ -411,6 +422,8 @@ async function fetchPiAccountQuota(
     const source = piCodexSource(piProviderId);
     const piResolution = await resolvePiEntry(dependencies, piProviderId);
     lastResolution = piResolution;
+    const storedAccountId = resolvedAccountId(piResolution);
+    if (storedAccountId) accountIds.push(storedAccountId);
     if (piResolution.status === "available") {
       piCandidates.push({
         source,
@@ -469,6 +482,7 @@ async function fetchPiAccountQuota(
     attempts,
     source,
     account.cacheKey,
+    accountIds,
   );
 }
 
@@ -490,11 +504,16 @@ async function fetchQuotaWithDependencies(
   let errorIsDefault = true;
 
   const credentialState = readCredentialState();
+  // The accounts this run's own credentials name. A cached snapshot stamped
+  // with none of them belongs to a login this configuration has replaced.
+  const accountIds: string[] = [];
   const oauthCandidates: CredentialCandidate<CodexAttemptCredential>[] = [];
   if (
     credentialState.status === "available" ||
     credentialState.status === "expired"
   ) {
+    if (credentialState.credentials.accountId)
+      accountIds.push(credentialState.credentials.accountId);
     oauthCandidates.push({
       source: "oauth",
       localState: credentialState.status === "available" ? "valid" : "expired",
@@ -531,6 +550,7 @@ async function fetchQuotaWithDependencies(
       attempts,
       "oauth",
       account?.cacheKey,
+      accountIds,
     );
   }
   if (oauthSelection.outcome === "all_rejected") {
@@ -546,6 +566,8 @@ async function fetchQuotaWithDependencies(
       piResolution = { status: "error" };
     }
     const piCandidates: CredentialCandidate<CodexAttemptCredential>[] = [];
+    const piAccountId = resolvedAccountId(piResolution);
+    if (piAccountId) accountIds.push(piAccountId);
     if (piResolution.status === "available") {
       piCandidates.push({
         source: PI_CODEX_CREDENTIAL_SOURCE,
@@ -606,6 +628,7 @@ async function fetchQuotaWithDependencies(
         attempts,
         PI_CODEX_CREDENTIAL_SOURCE,
         account?.cacheKey,
+        accountIds,
       );
     }
     if (piSelection.outcome === "all_rejected") {
@@ -650,6 +673,7 @@ async function fetchQuotaWithDependencies(
     attempts,
     undefined,
     account?.cacheKey,
+    accountIds,
   );
 }
 
@@ -728,14 +752,20 @@ function codexSuccessReport(
   });
 }
 
+/**
+ * `accountIds` names the ChatGPT accounts this run's credentials could have
+ * been reading, so a snapshot the vendor attributed to another one is not
+ * served back as this account's stale windows.
+ */
 function codexFailureReport(
   error: string,
   retryAfter: string | undefined,
   attempts: SourceAttempt[],
   source?: ProviderQuota["source"],
   accountKey?: string,
+  accountIds: readonly string[] = [],
 ): ProviderQuota {
-  const cached = readCachedProvider("codex", accountKey);
+  const cached = readCachedCodexProvider(accountKey, accountIds);
   if (cached) {
     return staleFromCache(cached, error, sourceNames(attempts), attempts);
   }

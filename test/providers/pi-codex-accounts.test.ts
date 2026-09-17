@@ -1330,7 +1330,7 @@ describe("Codex Pi sibling account lanes", () => {
     });
   });
 
-  it("reports the selected account instead of failing when a Pi key cannot be a lane key", async () => {
+  it("reports the usable lane instead of failing when a Pi key cannot be a lane key", async () => {
     writePiAuth({
       "openai-codex": piOauthEntry({
         access: "personal-access-token",
@@ -1358,6 +1358,74 @@ describe("Codex Pi sibling account lanes", () => {
       windows: [{ percentUsed: 20 }],
       state: { status: "fresh" },
     });
+  });
+
+  it("keeps the valid sibling lanes when one Pi key cannot be a lane key", async () => {
+    writePiAuth({
+      "openai-codex": piOauthEntry({
+        access: "personal-access-token",
+        accountId: "acct-personal",
+      }),
+      "openai-codex-work": piOauthEntry({
+        access: "work-access-token",
+        accountId: "acct-work",
+      }),
+      [`openai-codex-${"o".repeat(90)}`]: piOauthEntry({
+        access: "other-access-token",
+        accountId: "acct-other",
+      }),
+    });
+    stubUsageByToken({
+      "personal-access-token": usage(
+        20,
+        "personal@example.invalid",
+        "acct-personal",
+      ),
+      "work-access-token": usage(80, "work@example.invalid", "acct-work"),
+      "other-access-token": usage(50, "other@example.invalid", "acct-other"),
+    });
+
+    const reports = await readCodexLanes();
+    expect(
+      reports.map((report) => [
+        report.accountKey,
+        report.windows[0]?.percentUsed,
+      ]),
+    ).toEqual([
+      ["openai-codex", 20],
+      ["openai-codex-work", 80],
+    ]);
+  });
+
+  it("never serves a replaced sole account's cached windows under the next one", async () => {
+    writePiAuth({
+      "openai-codex-work": piOauthEntry({
+        access: "work-access-token",
+        accountId: "acct-work",
+      }),
+    });
+    stubUsageByToken({
+      "work-access-token": usage(80, "work@example.invalid", "acct-work"),
+    });
+
+    const first = await cacheCodexRead();
+    expect(first).toHaveLength(1);
+    expect(first[0]?.accountKey).toBeUndefined();
+    expect(first[0]?.windows[0]?.percentUsed).toBe(80);
+
+    // The Pi sibling is gone and this machine now holds one native login for
+    // another ChatGPT account, whose probe fails.
+    rmSync(join(process.env.PI_CODING_AGENT_DIR!, "auth.json"));
+    writeNativeAuth("native-access-token", "acct-other");
+    stubUsageByToken({
+      "native-access-token": new Response("unavailable", { status: 503 }),
+    });
+
+    const second = await readCodexLanes();
+    expect(second).toHaveLength(1);
+    expect(second[0]?.accountKey).toBeUndefined();
+    expect(second[0]?.windows).toEqual([]);
+    expect(second[0]?.state.stale).toBe(false);
   });
 });
 
