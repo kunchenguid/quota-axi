@@ -942,6 +942,26 @@ describe("color handling", () => {
     expect(findCardLine(lines, 1, "Codex sign-in required")).toBeDefined();
   });
 
+  it("keeps the filler account key out of the full footer", () => {
+    const response = fixtureResponse();
+    response.providers[0].accountKey = "default";
+    response.providers[0].account = { email: "kun@example.com" };
+    const full = renderQuotaTui(response, {
+      timeZone: "America/Los_Angeles",
+      full: true,
+    });
+    expect(findLine(full.split("\n"), "claude ·")).not.toContain("· default");
+    expect(full).toContain("claude · kun@example.com");
+
+    response.providers[0].accountKey = "openai-codex-work";
+    expect(
+      renderQuotaTui(response, {
+        timeZone: "America/Los_Angeles",
+        full: true,
+      }),
+    ).toContain("claude · openai-codex-work · kun@example.com");
+  });
+
   it("detects color depth from the environment", () => {
     expect(detectTuiColorDepth({}, false)).toBe("none");
     expect(detectTuiColorDepth({ NO_COLOR: "" }, true)).toBe("none");

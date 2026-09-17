@@ -699,9 +699,10 @@ function formatHeaderTime(iso: string, timeZone?: string): string {
 }
 
 function fullFooterLines(provider: ProviderQuota, width: number): string[] {
+  const accountKey = configuredAccountKey(provider);
   const accountParts: string[] = [
     provider.provider,
-    ...(provider.accountKey ? [provider.accountKey] : []),
+    ...(accountKey ? [accountKey] : []),
   ];
   const protectedAccountParts = new Set([0]);
   if (provider.account?.email) accountParts.push(provider.account.email);
@@ -873,16 +874,28 @@ function humanize(text: string): string {
   return text.replace(/_/g, " ");
 }
 
+/**
+ * The account key only when it names an account the user configured. An
+ * expanded report fills `default` on every provider that selected one account,
+ * which is a schema artefact rather than something to show a human.
+ */
+function configuredAccountKey(provider: ProviderQuota): string | undefined {
+  return provider.accountKey && provider.accountKey !== "default"
+    ? provider.accountKey
+    : undefined;
+}
+
 function accountCardLines(
   provider: ProviderQuota,
   border: "border" | "borderDim",
 ): Line[] {
-  if (!provider.accountKey || provider.accountKey === "default") return [];
+  const accountKey = configuredAccountKey(provider);
+  if (!accountKey) return [];
   return [
     interior(
       [
         {
-          text: truncate(`   account ${provider.accountKey}`, CARD_INTERIOR),
+          text: truncate(`   account ${accountKey}`, CARD_INTERIOR),
           style: "dim",
         },
       ],
