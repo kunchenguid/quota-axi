@@ -80,18 +80,26 @@ function annotateProviderAdvice(provider: ProviderQuota): ProviderQuota {
  * A discovered sibling Claude lane is excluded from the refresh delegate (only
  * the process-selected profile owns it), so it can never self-heal a credential
  * rejection on its own. Point at the exact non-interactive rotation for that
- * lane's own config directory instead.
+ * lane's own config directory instead. The delegate-eligible (process-selected)
+ * lane is excluded here: its own read already attempted that delegate, so
+ * repeating the remedy would misreport it as never auto-refreshed.
  */
 function needsClaudeReauthAdvice(provider: ProviderQuota): boolean {
   return (
     provider.provider === "claude" &&
     provider.accountLocator?.path !== undefined &&
+    provider.accountLocator.delegateEligible !== true &&
     provider.state.status === "auth_required"
   );
 }
 
 function claudeReauthRemedyCommand(provider: ProviderQuota): string {
-  return `CLAUDE_CONFIG_DIR=${provider.accountLocator!.path} claude doctor`;
+  return `CLAUDE_CONFIG_DIR=${shellQuote(provider.accountLocator!.path)} claude doctor`;
+}
+
+/** POSIX single-quote a value so a path with spaces or shell metacharacters survives a copy-paste. */
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
 function needsKeychainAccessAdvice(provider: ProviderQuota): boolean {

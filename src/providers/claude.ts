@@ -8,6 +8,7 @@ import {
 import {
   claudeCredentialContextId,
   claudeKeychainAccessMarkerPath,
+  claudeStoredProfileContextId,
   ensurePrivateParent,
   readJsonFileResult,
   type JsonFileReadResult,
@@ -187,31 +188,34 @@ export const claudeAdapter: ProviderAdapter = {
         ).status === "present"
       );
     });
-    return profiles.map((profile) => ({
-      accountKey: claudeAccountKey(profile),
-      locator: {
-        kind: "config-dir",
-        path: profile.configDir,
-        ...(process.platform === "darwin"
-          ? { keychainService: profile.keychainService }
-          : {}),
-      },
-      fetchQuota: (options) =>
-        fetchSelectedClaudeQuota(
-          {
-            ...options,
-            // Only the process-selected profile owns the existing delegate. Newly
-            // discovered profiles stay read-only; no vendor is launched for them.
-            refreshCredentials:
-              options.refreshCredentials &&
-              claudeCredentialContextId(profile) === selected,
-          },
-          profile,
-          profiles.length > 1,
-        ),
-      inspectAuth: (options) =>
-        inspectClaudeProfileAuth(options, profile, profiles.length > 1),
-    }));
+    return profiles.map((profile) => {
+      // Only the process-selected profile owns the existing delegate. Newly
+      // discovered profiles stay read-only; no vendor is launched for them.
+      const delegateEligible = claudeCredentialContextId(profile) === selected;
+      return {
+        accountKey: claudeAccountKey(profile),
+        locator: {
+          kind: "config-dir",
+          path: profile.configDir,
+          ...(process.platform === "darwin"
+            ? { keychainService: profile.keychainService }
+            : {}),
+          delegateEligible,
+        },
+        fetchQuota: (options) =>
+          fetchSelectedClaudeQuota(
+            {
+              ...options,
+              refreshCredentials:
+                options.refreshCredentials && delegateEligible,
+            },
+            profile,
+            profiles.length > 1,
+          ),
+        inspectAuth: (options) =>
+          inspectClaudeProfileAuth(options, profile, profiles.length > 1),
+      };
+    });
   },
 };
 
@@ -274,12 +278,18 @@ async function fetchSelectedClaudeQuota(
   exact = false,
 ): Promise<ProviderQuota> {
   const contextId = claudeCredentialContextId(profile);
+  const storedContextId = claudeStoredProfileContextId(profile);
   const locations = resolveClaudeProfileLocations(profile);
   // With several profiles there is no safe "only opaque item" inference for
   // the default. Each lane names its own exact service.
   if (exact) locations.acceptsOpaqueDefaultItem = false;
   return withCacheContext(
-    await fetchClaudeProfileQuota(options, locations, contextId),
+    await fetchClaudeProfileQuota(
+      options,
+      locations,
+      contextId,
+      storedContextId,
+    ),
     contextId,
   );
 }
@@ -288,6 +298,7 @@ async function fetchClaudeProfileQuota(
   options: ProviderOptions,
   locations: ClaudeProfileLocations,
   credentialContextId: string,
+  storedContextId: string,
 ): Promise<ProviderQuota> {
   const attempts: SourceAttempt[] = [];
 
@@ -325,6 +336,7 @@ async function fetchClaudeProfileQuota(
     pass.failure,
     attempts,
     credentialContextId,
+    storedContextId,
     claudeEnvOauthToken() !== undefined,
     pass.definitiveFailureIsEnvOnly,
   );
@@ -783,15 +795,20 @@ function failureReport(
   failure: ClaudeFailure,
   attempts: SourceAttempt[],
   credentialContextId: string,
+  storedContextId: string,
   envSelected: boolean,
   definitiveFailureIsEnvOnly: boolean,
 ): ProviderQuota {
   // The env token's own rejection describes only the env-selected session; it
   // never resolved a stored candidate, so it must not retire a cached snapshot
-  // that belongs to an unrelated stored-profile account.
+  // that belongs to an unrelated stored-profile account. A stored credential's
+  // own rejection always retires the identity its store is cached under
+  // (never the env-marked identity): an unrelated CLAUDE_CODE_OAUTH_TOKEN being
+  // set on this particular run must not hide the very cache entry this failure
+  // needs to purge.
   if (failure.definitiveAuth && !definitiveFailureIsEnvOnly) {
     try {
-      deleteCachedProviderInContext("claude", credentialContextId);
+      deleteCachedProviderInContext("claude", storedContextId);
     } catch {
       // Current authentication remains definitive when cache I/O is blocked.
     }

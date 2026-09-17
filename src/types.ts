@@ -253,6 +253,8 @@ export type AccountLocator = {
   path: string;
   entry?: string;
   keychainService?: string;
+  /** True only for the one lane the process-selected credential owns, so it stays eligible for delegated refresh; absent/false for a read-only sibling lane. */
+  delegateEligible?: boolean;
 };
 
 export type ProviderAccount = {
