@@ -303,8 +303,10 @@ describe("independent account reporting", () => {
     expect(claudeAccountKey(profile)).toBe(stored);
   });
 
-  it("falls back to the single-account reader when discovery faults", async () => {
-    const { fetchAccountQuotas } = await import("../src/providers/accounts.js");
+  it("announces the single-lane fallback when discovery faults", async () => {
+    const { fetchAccountQuotas, inspectAccountAuth } =
+      await import("../src/providers/accounts.js");
+    const { renderQuotaToon } = await import("../src/render.js");
     const healthy: ProviderQuota = {
       provider: "codex",
       windows: [],
@@ -325,6 +327,9 @@ describe("independent account reporting", () => {
       fetchQuota: async () => healthy,
       inspectAuth: async () => ({ provider: "codex", sources: [] }),
     };
+    const degraded = [
+      { source: "account-discovery", error: "account_discovery_failed" },
+    ];
     for (const discover of [
       async () => {
         throw new Error("private-token");
@@ -332,9 +337,44 @@ describe("independent account reporting", () => {
       async () => [duplicate, duplicate],
     ]) {
       const faulty = adapter(discover);
-      expect(await fetchAccountQuotas(faulty, options)).toEqual([healthy]);
+      const [report] = await fetchAccountQuotas(faulty, options);
       expect(faulty.fetchQuota).toHaveBeenCalledTimes(1);
+      expect(report.accountKey).toBeUndefined();
+      expect(report.state.status).toBe("fresh");
+      expect(report.state.degradedSources).toEqual(degraded);
+      expect(JSON.stringify(report)).not.toContain("private-token");
+      const toon = renderQuotaToon(
+        { generatedAt: now, schemaVersion: 5, providers: [report] },
+        "quota-axi",
+        false,
+      );
+      expect(toon).toContain("codex,all,degraded_source,account-discovery");
+      expect(toon).toContain("account_discovery_failed");
+      const [auth] = await inspectAccountAuth(faulty, options);
+      expect(auth.sources).toEqual([
+        {
+          source: "account-discovery",
+          status: "error",
+          error: "account_discovery_failed",
+        },
+      ]);
     }
+  });
+
+  it("enrolls the process-selected profile while an environment token is set", async () => {
+    const work = credential(".claude-work", "synthetic-work");
+    vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", "synthetic-env-personal");
+    const output = response(await command(["--full", "--json"]));
+    expect(output.providers).toHaveLength(2);
+    expect(output.providers.map((p) => p.accountLocator?.path)).toEqual([
+      join(home, ".claude"),
+      work,
+    ]);
+    expect(output.providers[0].accountLocator?.delegateEligible).toBe(true);
+    expect(output.providers[1].accountLocator?.delegateEligible).toBe(false);
+    const bearers = bearerTokens();
+    expect(bearers).toContain("Bearer synthetic-env-personal");
+    expect(bearers).toContain("Bearer synthetic-work");
   });
 
   it("preserves Z.AI and OpenCode Go bounds beside expanded Claude accounts", async () => {

@@ -426,7 +426,9 @@ function auditBlocks(response: QuotaAxiResponse): string[] {
     ...(response.providers.some((item) => item.accountLocator)
       ? {
           locatorKind: provider.accountLocator?.kind ?? NONE,
-          locatorPath: provider.accountLocator?.path ?? NONE,
+          locatorPath: provider.accountLocator
+            ? collapseHome(provider.accountLocator.path)
+            : NONE,
           locatorEntry: provider.accountLocator?.entry ?? NONE,
           keychainService: provider.accountLocator?.keychainService ?? NONE,
         }

@@ -6,39 +6,69 @@ import type {
   ProviderQuota,
 } from "../types.js";
 
+/** The account set could not be enumerated, so only one lane was read. */
+const DISCOVERY_SOURCE = "account-discovery";
+const DISCOVERY_ERROR = "account_discovery_failed";
+
+type AccountDiscovery =
+  | { accounts: ProviderAccount[] }
+  | { accounts?: undefined; failed: boolean };
+
 /** Discovery belongs to the adapter; collection never interprets credentials. */
 async function accountsFor(
   adapter: ProviderAdapter,
   options: ProviderOptions,
-): Promise<ProviderAccount[] | undefined> {
-  if (options.credentialMode === "profile-only") return undefined;
+): Promise<AccountDiscovery> {
+  if (options.credentialMode === "profile-only") return { failed: false };
   // A discovery fault belongs to one adapter: fall back to its single-account
-  // reader rather than failing every other provider's read alongside it.
+  // reader rather than failing every other provider's read alongside it. The
+  // fallback is announced, so a truncated account set is never silent.
   try {
     const accounts = await adapter.discoverAccounts?.();
-    if (!accounts?.length) return undefined;
+    if (!accounts?.length) return { failed: false };
     const keys = new Set<string>();
     for (const account of accounts) {
       if (
         !/^[a-z0-9][a-z0-9:_-]{0,95}$/.test(account.accountKey) ||
         keys.has(account.accountKey)
       ) {
-        return undefined;
+        return { failed: true };
       }
       keys.add(account.accountKey);
     }
-    return accounts;
+    return { accounts };
   } catch {
-    return undefined;
+    return { failed: true };
   }
+}
+
+function withDiscoveryFailure(report: ProviderQuota): ProviderQuota {
+  return {
+    ...report,
+    state: {
+      ...report.state,
+      degradedSources: [
+        ...(report.state.degradedSources ?? []),
+        { source: DISCOVERY_SOURCE, error: DISCOVERY_ERROR },
+      ],
+    },
+    attempts: [
+      ...(report.attempts ?? []),
+      { source: DISCOVERY_SOURCE, status: "failed", error: DISCOVERY_ERROR },
+    ],
+  };
 }
 
 export async function fetchAccountQuotas(
   adapter: ProviderAdapter,
   options: ProviderOptions,
 ): Promise<ProviderQuota[]> {
-  const accounts = await accountsFor(adapter, options);
-  if (!accounts) return [await adapter.fetchQuota(options)];
+  const discovery = await accountsFor(adapter, options);
+  const accounts = discovery.accounts;
+  if (!accounts) {
+    const report = await adapter.fetchQuota(options);
+    return [discovery.failed ? withDiscoveryFailure(report) : report];
+  }
   // Keep each adapter's declaration order, including failed accounts. Readers
   // return their own structured failure; no account selects a sibling's token.
   const reports: ProviderQuota[] = [];
@@ -78,8 +108,26 @@ export async function inspectAccountAuth(
   adapter: ProviderAdapter,
   options: ProviderOptions,
 ): Promise<AuthProviderReport[]> {
-  const accounts = await accountsFor(adapter, options);
-  if (!accounts) return [await adapter.inspectAuth(options)];
+  const discovery = await accountsFor(adapter, options);
+  const accounts = discovery.accounts;
+  if (!accounts) {
+    const report = await adapter.inspectAuth(options);
+    return [
+      discovery.failed
+        ? {
+            ...report,
+            sources: [
+              ...report.sources,
+              {
+                source: DISCOVERY_SOURCE,
+                status: "error",
+                error: DISCOVERY_ERROR,
+              },
+            ],
+          }
+        : report,
+    ];
+  }
   const reports: AuthProviderReport[] = [];
   for (const account of accounts) {
     let report: AuthProviderReport;

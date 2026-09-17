@@ -306,8 +306,10 @@ export type ProviderQuota = {
     untrustedWindowIds?: string[];
     /**
      * Sources that were superseded: a working source answered for this
-     * provider while these were broken or could not be read. Present only on a
-     * fresh reading, so the breakage behind a healthy row stays visible.
+     * provider while these were broken or could not be read. Credential
+     * sources are named only on a fresh reading, so the breakage behind a
+     * healthy row stays visible; `account-discovery` is named whenever account
+     * enumeration failed and only the single selected lane was read.
      */
     degradedSources?: DegradedSource[];
     /** Omitted from default `--json`; see `--full`. */

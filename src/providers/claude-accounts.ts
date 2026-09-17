@@ -2,7 +2,10 @@ import { readdirSync, realpathSync, statSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { claudeProfileLocations } from "../lib/claude-profile.js";
+import {
+  claudeEnvOauthToken,
+  claudeProfileLocations,
+} from "../lib/claude-profile.js";
 import {
   claudeCredentialContextId,
   claudeStoredProfileContextId,
@@ -15,6 +18,11 @@ export type ClaudeProfile = ReturnType<typeof claudeProfileLocations>;
  * directories in lexical order. A directory name alone is not an account:
  * enrollment requires a native credential file or the exact Keychain item.
  * No recursive search, credential values, or process-wide environment changes.
+ *
+ * The process-selected profile is also enrolled whenever it is explicitly
+ * selected or an environment token is set: that token names the account a live
+ * session is using, so the lane it belongs to must never be dropped for having
+ * no store of its own.
  */
 export async function discoverClaudeProfiles(
   hasKeychainItem: (profile: ClaudeProfile) => Promise<boolean>,
@@ -50,7 +58,8 @@ export async function discoverClaudeProfiles(
     const explicitlySelected =
       profile === selected &&
       (process.env.CLAUDE_CONFIG_DIR !== undefined ||
-        Boolean(process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR));
+        Boolean(process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR) ||
+        claudeEnvOauthToken() !== undefined);
     const filePresent =
       !(profile.secureStorageSelected && process.platform === "darwin") &&
       credentialFilePresent(join(profile.configDir, ".credentials.json"));
