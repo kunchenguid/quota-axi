@@ -189,7 +189,9 @@ describe("Kiro quota normalization", () => {
       expect(report.credits).toEqual({ remaining: 450, unit: "credits" });
       expect(report.windows[0].percentRemaining).toBeCloseTo((450 / 550) * 100);
       const interpreted = withQuotaSemantics(report, new Date().toISOString());
-      expect(interpreted.quotaSemantics?.effectiveAvailability[0]).toMatchObject({
+      expect(
+        interpreted.quotaSemantics?.effectiveAvailability[0],
+      ).toMatchObject({
         scope: "all_models",
         limitingWindowIds: ["credit"],
       });
