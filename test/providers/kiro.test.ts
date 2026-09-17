@@ -325,6 +325,44 @@ describe("Kiro provider", () => {
     expect(normalized.windows[0].kind).toBe("credits");
   });
 
+  it("rejects structurally empty breakdown and limit entries as untrusted evidence", () => {
+    const breakdownNormalized = normalizeKiroUsage({
+      usageBreakdownList: [
+        {},
+        { resourceType: "CREDIT", currentUsage: 1, usageLimit: 2 },
+      ],
+    });
+    expect(breakdownNormalized.untrustedWindowIds).toEqual(["usage:0"]);
+    expect(breakdownNormalized.windows).toHaveLength(1);
+    expect(breakdownNormalized.windows[0].kind).toBe("credits");
+
+    const limitNormalized = normalizeKiroUsage({
+      limits: [{}, { type: "CREDIT", currentUsage: 1, totalUsageLimit: 2 }],
+    });
+    expect(limitNormalized.untrustedWindowIds).toEqual(["limit:0"]);
+    expect(limitNormalized.windows).toHaveLength(1);
+    expect(limitNormalized.windows[0].kind).toBe("credits");
+  });
+
+  it("preserves untrusted-window evidence when quota_missing fails the provider", async () => {
+    const report = await createKiroAdapter({
+      credentialSources: [{ name: "test", source: availableSource() }],
+      fetch: vi.fn(
+        async () =>
+          new Response(JSON.stringify({ usageBreakdownList: [{}, null] }), {
+            status: 200,
+          }),
+      ),
+      now: () => NOW,
+    }).fetchQuota(OPTIONS);
+
+    expect(report.state).toMatchObject({
+      status: "error",
+      error: "quota_missing",
+      untrustedWindowIds: ["usage:0", "usage:1"],
+    });
+  });
+
   it("requests profiles then usage with the Kiro read-only headers", async () => {
     const request = vi
       .fn<(...args: Parameters<typeof fetch>) => ReturnType<typeof fetch>>()
