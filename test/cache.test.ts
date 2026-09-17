@@ -16,7 +16,9 @@ import {
   readCachedProvider,
   writeCachedProviders,
 } from "../src/cache.js";
+import { annotateQuotaAdvice } from "../src/advice.js";
 import { cacheFilePath, claudeCredentialContextId } from "../src/lib/fs.js";
+import { staleFromCache } from "../src/providers/common.js";
 import { createKimiCodeCliCredentialSource } from "../src/providers/kimi-code-cli-credential.js";
 import type { ProviderId, ProviderQuota } from "../src/types.js";
 
@@ -141,6 +143,30 @@ describe("quota cache", () => {
       schemaVersion: number;
     };
     expect(payload.schemaVersion).toBe(3);
+  });
+
+  it("keeps an expanded report's filler key out of a later unexpanded report", () => {
+    useTempCache();
+    const work = quota("codex", 20);
+    work.accountKey = "openai-codex-work";
+    const expanded = annotateQuotaAdvice({
+      generatedAt: "2026-07-06T18:10:00Z",
+      providers: [work, quota("copilot", 40)],
+    });
+    expect(expanded.schemaVersion).toBe(6);
+    expect(expanded.providers[1]?.accountKey).toBe("default");
+
+    writeCachedProviders(expanded.providers);
+    const cached = readCachedProvider("copilot");
+    expect(cached).toMatchObject({ windows: [{ percentUsed: 40 }] });
+    expect(cached?.accountKey).toBeUndefined();
+
+    const later = annotateQuotaAdvice({
+      generatedAt: "2026-07-06T19:10:00Z",
+      providers: [staleFromCache(cached!, "fetch failed", ["api"], [])],
+    });
+    expect(later.schemaVersion).toBe(5);
+    expect(later.providers[0]?.accountKey).toBeUndefined();
   });
 
   it("retains exact known and unfamiliar Codex cache identities", () => {

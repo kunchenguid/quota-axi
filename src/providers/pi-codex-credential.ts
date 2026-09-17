@@ -44,9 +44,9 @@ export type PiCodexCredentialInspection = {
 export type PiCodexCredentialBroker = {
   resolve(): Promise<PiCodexCredentialResolution>;
   inspect(): Promise<PiCodexCredentialInspection>;
-  resolveEntry?(providerId: string): Promise<PiCodexCredentialResolution>;
-  inspectEntry?(providerId: string): Promise<PiCodexCredentialInspection>;
-  listProviderIds?(): Promise<string[]>;
+  resolveEntry(providerId: string): Promise<PiCodexCredentialResolution>;
+  inspectEntry(providerId: string): Promise<PiCodexCredentialInspection>;
+  listProviderIds(): Promise<string[]>;
 };
 
 export function isPiCodexProviderId(value: string): boolean {

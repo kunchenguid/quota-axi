@@ -1143,6 +1143,15 @@ describe("Codex credential-state reporting", () => {
       const inspect = vi.fn(async () => {
         throw new Error("hostile Pi inspection");
       });
+      const resolveEntry = vi.fn(async () => {
+        throw new Error("hostile Pi entry rescue");
+      });
+      const inspectEntry = vi.fn(async () => {
+        throw new Error("hostile Pi entry inspection");
+      });
+      const listProviderIds = vi.fn(async () => {
+        throw new Error("hostile Pi entry listing");
+      });
       const readCachedProvider = vi.fn(() => {
         throw new Error("hostile cache rescue");
       });
@@ -1158,7 +1167,13 @@ describe("Codex credential-state reporting", () => {
       const { createCodexAdapter } =
         await import("../../src/providers/codex.js");
       const adapter = createCodexAdapter({
-        piCodexBroker: { resolve, inspect },
+        piCodexBroker: {
+          resolve,
+          inspect,
+          resolveEntry,
+          inspectEntry,
+          listProviderIds,
+        },
       });
       const result = await adapter.fetchQuota(options);
 
@@ -1181,6 +1196,9 @@ describe("Codex credential-state reporting", () => {
       });
       expect(resolve).not.toHaveBeenCalled();
       expect(inspect).not.toHaveBeenCalled();
+      expect(resolveEntry).not.toHaveBeenCalled();
+      expect(inspectEntry).not.toHaveBeenCalled();
+      expect(listProviderIds).not.toHaveBeenCalled();
       expect(readCachedProvider).not.toHaveBeenCalled();
       expect(findCommandPath).not.toHaveBeenCalled();
       expect(spawn).not.toHaveBeenCalled();

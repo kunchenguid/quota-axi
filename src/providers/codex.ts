@@ -363,11 +363,8 @@ async function fetchCliAccountQuota(): Promise<ProviderQuota | undefined> {
 async function listPiCodexProviderIds(
   dependencies: CodexDependencies,
 ): Promise<string[]> {
-  const broker = dependencies.piCodexBroker;
   try {
-    if (broker.listProviderIds) return await broker.listProviderIds();
-    const resolution = await broker.resolve();
-    return resolution.status === "missing" ? [] : [PI_CODEX_BUILTIN_ID];
+    return await dependencies.piCodexBroker.listProviderIds();
   } catch {
     return [];
   }
@@ -377,13 +374,8 @@ async function resolvePiEntry(
   dependencies: CodexDependencies,
   providerId: string,
 ): Promise<PiCodexCredentialResolution> {
-  const broker = dependencies.piCodexBroker;
   try {
-    return broker.resolveEntry
-      ? await broker.resolveEntry(providerId)
-      : providerId === PI_CODEX_BUILTIN_ID
-        ? await broker.resolve()
-        : { status: "missing" };
+    return await dependencies.piCodexBroker.resolveEntry(providerId);
   } catch {
     return { status: "error" };
   }
@@ -393,13 +385,8 @@ async function inspectPiEntry(
   dependencies: CodexDependencies,
   providerId: string,
 ): Promise<PiCodexCredentialInspection> {
-  const broker = dependencies.piCodexBroker;
   try {
-    return broker.inspectEntry
-      ? await broker.inspectEntry(providerId)
-      : providerId === PI_CODEX_BUILTIN_ID
-        ? await broker.inspect()
-        : { path: "", status: "missing" };
+    return await dependencies.piCodexBroker.inspectEntry(providerId);
   } catch {
     return {
       path: "",

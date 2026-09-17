@@ -43,6 +43,12 @@ const WINDOW_KINDS = [
   "unknown",
 ] as const satisfies readonly QuotaWindow["kind"][];
 const CACHE_SCHEMA_VERSION = 3;
+/**
+ * The filler an expanded report stamps on providers that selected one account.
+ * It describes that report, not the snapshot, so it is never persisted: a stale
+ * reading carrying it back would expand a report in which nothing expanded.
+ */
+const DEFAULT_ACCOUNT_KEY = "default";
 const CREDENTIAL_CONTEXT_ID = /^[a-f0-9]{64}$/;
 
 /**
@@ -81,7 +87,8 @@ export function readCachedProvider(
   return readCacheProviders().find(
     (item) =>
       item.snapshot.provider === provider &&
-      (item.snapshot.accountKey ?? "default") === (accountKey ?? "default"),
+      (item.snapshot.accountKey ?? DEFAULT_ACCOUNT_KEY) ===
+        (accountKey ?? DEFAULT_ACCOUNT_KEY),
   )?.snapshot;
 }
 
@@ -149,8 +156,8 @@ export function writeCachedProviders(providers: ProviderQuota[]): void {
     (a, b) =>
       PROVIDER_IDS.indexOf(a.snapshot.provider) -
         PROVIDER_IDS.indexOf(b.snapshot.provider) ||
-      (a.snapshot.accountKey ?? "default").localeCompare(
-        b.snapshot.accountKey ?? "default",
+      (a.snapshot.accountKey ?? DEFAULT_ACCOUNT_KEY).localeCompare(
+        b.snapshot.accountKey ?? DEFAULT_ACCOUNT_KEY,
       ),
   );
 
@@ -158,7 +165,7 @@ export function writeCachedProviders(providers: ProviderQuota[]): void {
 }
 
 function cacheIdentity(provider: ProviderQuota): string {
-  return `${provider.provider}/${provider.accountKey ?? "default"}`;
+  return `${provider.provider}/${provider.accountKey ?? DEFAULT_ACCOUNT_KEY}`;
 }
 
 export function deleteCachedProvider(
@@ -170,7 +177,7 @@ export function deleteCachedProvider(
     item.snapshot.provider !== provider
       ? true
       : accountKey !== undefined &&
-        (item.snapshot.accountKey ?? "default") !== accountKey,
+        (item.snapshot.accountKey ?? DEFAULT_ACCOUNT_KEY) !== accountKey,
   );
   if (remaining.length === existing.length) return;
   writeCacheFile(cacheFilePath(), remaining);
@@ -220,7 +227,10 @@ function toCacheProvider(provider: ProviderQuota): CachedProvider | undefined {
   const snapshot = normalizeCachedProvider(
     {
       provider: provider.provider,
-      accountKey: provider.accountKey,
+      accountKey:
+        provider.accountKey === DEFAULT_ACCOUNT_KEY
+          ? undefined
+          : provider.accountKey,
       label: provider.label,
       source: provider.source,
       plan: provider.plan,

@@ -390,6 +390,7 @@ When a provider expands to multiple accounts, the report uses quota `schemaVersi
 Every provider record then has an `accountKey`; providers still using one selected account use the literal `default`.
 Every flat TOON block adds `accountKey` immediately after `provider`, and the quota/exhaustion/attention join becomes **`provider` + `accountKey` + `scope`**.
 Models and model sort ties use **`provider` + `accountKey` + `id`**.
+Models `unmatchedWindowIds` entries gain the same key, so an unmapped window reads `provider/accountKey/scope` instead of `provider/scope`; the key keeps two accounts of one provider from reporting the same unmapped window indistinguishably.
 Declaration order remains non-preferential; quotas are never combined across accounts.
 
 A Codex Pi lane's key is the auth.json provider id (`openai-codex`, `openai-codex-work`); the native Codex lane's key is `codex-home`.
