@@ -2237,9 +2237,7 @@ describe("Claude credential-state reporting", () => {
         attempts: Array<{ source: string; status: string }>;
       }>;
     };
-    expect(
-      execFileText.mock.calls.filter(([, args]) => args.includes("-w")),
-    ).toHaveLength(1);
+    expect(execFileText).toHaveBeenCalledTimes(3);
     expect(execFileText).toHaveBeenCalledWith(
       "security",
       [

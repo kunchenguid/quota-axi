@@ -32,6 +32,20 @@ export function annotateQuotaAdvice(
 }
 
 /**
+ * The sibling-lane reauth advice names that lane's own config directory, so
+ * ordinary output demotes it - and the matching `state.remedyCommand` - to
+ * `--full` alongside `accountLocator`. Resolved through the same dispatcher
+ * that emitted the line rather than by matching the command text.
+ *
+ * @returns the help line to withhold, or undefined when nothing is demoted
+ */
+export function fullOnlyHelpLine(provider: ProviderQuota): string | undefined {
+  if (!needsClaudeReauthAdvice(provider)) return undefined;
+  const [line] = providerHelpLines(provider);
+  return line === claudeReauthHelpLine(provider) ? line : undefined;
+}
+
+/**
  * Situational advice stays first because it is actionable; only the tier hint
  * is worth repeating on every invocation.
  */
@@ -157,7 +171,8 @@ function providerHelpLines(provider: ProviderQuota): string[] {
   if (hasKeychainAccessAdvice(provider))
     return [keychainAccessHelpLine(provider)];
   if (hasGrokTokenRefreshAdvice(provider)) return [grokTokenRefreshHelpLine()];
-  if (hasClaudeReauthAdvice(provider)) return [claudeReauthHelpLine(provider)];
+  if (needsClaudeReauthAdvice(provider))
+    return [claudeReauthHelpLine(provider)];
   return [];
 }
 
@@ -175,14 +190,6 @@ function hasGrokTokenRefreshAdvice(provider: ProviderQuota): boolean {
   );
 }
 
-function hasClaudeReauthAdvice(provider: ProviderQuota): boolean {
-  return (
-    provider.provider === "claude" &&
-    provider.state.reason === CREDENTIALS_EXPIRED_REASON &&
-    provider.state.remedyCommand?.startsWith("CLAUDE_CONFIG_DIR=") === true
-  );
-}
-
 function keychainAccessHelpLine(provider: ProviderQuota): string {
   return `Tell your user: run \`${KEYCHAIN_ACCESS_REMEDY_COMMAND}\` once and approve Keychain access ("Always Allow") so quota-axi can read ${provider.provider}'s live quota.`;
 }
@@ -192,5 +199,5 @@ function grokTokenRefreshHelpLine(): string {
 }
 
 function claudeReauthHelpLine(provider: ProviderQuota): string {
-  return `Tell your user: this Claude account (${provider.accountKey ?? "default"}) is a sibling lane quota-axi never auto-refreshes, so run \`${provider.state.remedyCommand}\` once to have Claude Code rotate its own session.`;
+  return `Tell your user: this Claude account (${provider.accountKey ?? "default"}) is a sibling lane quota-axi never auto-refreshes, so run \`${claudeReauthRemedyCommand(provider)}\` once to have Claude Code rotate its own session.`;
 }

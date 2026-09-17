@@ -134,6 +134,10 @@ export function writeCachedProviders(providers: ProviderQuota[]): void {
     .filter((provider): provider is CachedProvider => Boolean(provider));
 
   const file = cacheFilePath();
+  // Known limitation: entries are keyed per provider/context, so contexts that
+  // stop being selected (a retired profile, a per-project config dir) currently
+  // accumulate without eviction. An entry cap or age-based prune is a separate
+  // design decision.
   const byProvider = new Map<string, CachedProvider>();
   let clearedExisting = false;
   for (const provider of readCacheProviders()) {

@@ -12,19 +12,25 @@ async function accountsFor(
   options: ProviderOptions,
 ): Promise<ProviderAccount[] | undefined> {
   if (options.credentialMode === "profile-only") return undefined;
-  const accounts = await adapter.discoverAccounts?.();
-  if (!accounts?.length) return undefined;
-  const keys = new Set<string>();
-  for (const account of accounts) {
-    if (
-      !/^[a-z0-9][a-z0-9:_-]{0,95}$/.test(account.accountKey) ||
-      keys.has(account.accountKey)
-    ) {
-      throw new Error(`invalid or duplicate ${adapter.id} account key`);
+  // A discovery fault belongs to one adapter: fall back to its single-account
+  // reader rather than failing every other provider's read alongside it.
+  try {
+    const accounts = await adapter.discoverAccounts?.();
+    if (!accounts?.length) return undefined;
+    const keys = new Set<string>();
+    for (const account of accounts) {
+      if (
+        !/^[a-z0-9][a-z0-9:_-]{0,95}$/.test(account.accountKey) ||
+        keys.has(account.accountKey)
+      ) {
+        return undefined;
+      }
+      keys.add(account.accountKey);
     }
-    keys.add(account.accountKey);
+    return accounts;
+  } catch {
+    return undefined;
   }
-  return accounts;
 }
 
 export async function fetchAccountQuotas(

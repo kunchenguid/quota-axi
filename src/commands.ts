@@ -163,7 +163,7 @@ export async function modelsCommand(
   };
   const quota = await fetchQuota(flags.providers, options);
   writeCachedProvidersBestEffort(quota.providers);
-  const response = createModelsResponse(quota, {
+  const response = createModelsResponse(redactedResponse(quota, flags.full), {
     ...(flags.intelligence ? { intelligence: flags.intelligence } : {}),
     ...(flags.sort ? { sort: flags.sort } : {}),
   });

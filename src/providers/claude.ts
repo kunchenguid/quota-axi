@@ -172,10 +172,11 @@ export const claudeAdapter: ProviderAdapter = {
   inspectAuth,
   discoverAccounts: async () => {
     const selected = claudeCredentialContextId();
-    let metadata: ReturnType<typeof readKeychainMetadata> | undefined;
+    // One metadata snapshot for the whole read: discovery and every lane it
+    // enrolls share it, so an N-profile run issues one bounded dump, not N+1.
+    const keychain = keychainMetadataCache();
     const profiles = await discoverClaudeProfiles(async (profile) => {
-      // One metadata snapshot per discovery, however many directories exist.
-      const snapshot = await (metadata ??= readKeychainMetadata());
+      const snapshot = await keychain.read();
       return (
         snapshot !== undefined &&
         selectKeychainItem(
@@ -192,6 +193,13 @@ export const claudeAdapter: ProviderAdapter = {
       // Only the process-selected profile owns the existing delegate. Newly
       // discovered profiles stay read-only; no vendor is launched for them.
       const delegateEligible = claudeCredentialContextId(profile) === selected;
+      const lane: ClaudeLane = {
+        exact: profiles.length > 1,
+        // The environment token names the one live session's account, never
+        // every enrolled profile, so a sibling lane reads its own store.
+        envEligible: delegateEligible,
+        keychain,
+      };
       return {
         accountKey: claudeAccountKey(profile),
         locator: {
@@ -210,10 +218,10 @@ export const claudeAdapter: ProviderAdapter = {
                 options.refreshCredentials && delegateEligible,
             },
             profile,
-            profiles.length > 1,
+            lane,
           ),
         inspectAuth: (options) =>
-          inspectClaudeProfileAuth(options, profile, profiles.length > 1),
+          inspectClaudeProfileAuth(options, profile, lane),
       };
     });
   },
@@ -246,6 +254,21 @@ const CLAUDE_CLI_REFRESH_DELEGATE: RefreshDelegate = {
   waitBudgetMs: 45_000,
 };
 
+/**
+ * How one discovered profile is read. `exact` refuses the opaque default
+ * Keychain item because each lane names its own service; `envEligible` marks
+ * the single process-selected lane CLAUDE_CODE_OAUTH_TOKEN actually describes;
+ * `keychain` shares one metadata snapshot across the lanes of a single read.
+ */
+type ClaudeLane = {
+  exact: boolean;
+  envEligible: boolean;
+  keychain?: KeychainMetadataCache;
+};
+
+/** The process-selected profile, read without account discovery. */
+const SELECTED_LANE: ClaudeLane = { exact: false, envEligible: true };
+
 type ClaudeQuotaPass =
   | { kind: "success"; report: ProviderQuota }
   | {
@@ -275,20 +298,25 @@ export async function fetchQuota(
 async function fetchSelectedClaudeQuota(
   options: ProviderOptions,
   profile: ClaudeProfile,
-  exact = false,
+  lane: ClaudeLane = SELECTED_LANE,
 ): Promise<ProviderQuota> {
-  const contextId = claudeCredentialContextId(profile);
   const storedContextId = claudeStoredProfileContextId(profile);
+  // A lane that never consults the environment token is not env-selected, so
+  // its reading is filed under - and served from - the profile's own identity.
+  const contextId = lane.envEligible
+    ? claudeCredentialContextId(profile)
+    : storedContextId;
   const locations = resolveClaudeProfileLocations(profile);
   // With several profiles there is no safe "only opaque item" inference for
   // the default. Each lane names its own exact service.
-  if (exact) locations.acceptsOpaqueDefaultItem = false;
+  if (lane.exact) locations.acceptsOpaqueDefaultItem = false;
   return withCacheContext(
     await fetchClaudeProfileQuota(
       options,
       locations,
       contextId,
       storedContextId,
+      lane,
     ),
     contextId,
   );
@@ -299,10 +327,11 @@ async function fetchClaudeProfileQuota(
   locations: ClaudeProfileLocations,
   credentialContextId: string,
   storedContextId: string,
+  lane: ClaudeLane,
 ): Promise<ProviderQuota> {
   const attempts: SourceAttempt[] = [];
 
-  let pass = await attemptClaudeQuota(options, attempts, locations);
+  let pass = await attemptClaudeQuota(options, attempts, locations, lane);
   if (pass.kind === "success") return pass.report;
 
   // Soft expiry the Claude CLI can fix: hand the rotation to the CLI that owns
@@ -319,7 +348,15 @@ async function fetchClaudeProfileQuota(
       const run = await runRefreshDelegate(CLAUDE_CLI_REFRESH_DELEGATE);
       attempts.push(refreshDelegateAttempt(CLAUDE_CLI_REFRESH_DELEGATE, run));
       if (run.status === "ran") {
-        const retry = await attemptClaudeQuota(options, attempts, locations);
+        // The vendor may have replaced the item it owns, so the shared snapshot
+        // cannot speak for the store this pass is about to re-read.
+        lane.keychain?.invalidate();
+        const retry = await attemptClaudeQuota(
+          options,
+          attempts,
+          locations,
+          lane,
+        );
         if (retry.kind === "success") return retry.report;
         pass = retry;
       } else if (run.status === "unconfirmed") {
@@ -337,7 +374,7 @@ async function fetchClaudeProfileQuota(
     attempts,
     credentialContextId,
     storedContextId,
-    claudeEnvOauthToken() !== undefined,
+    lane.envEligible && claudeEnvOauthToken() !== undefined,
     pass.definitiveFailureIsEnvOnly,
   );
 }
@@ -597,8 +634,9 @@ async function attemptClaudeQuota(
   options: ProviderOptions,
   attempts: SourceAttempt[],
   locations: ClaudeProfileLocations,
+  lane: ClaudeLane,
 ): Promise<ClaudeQuotaPass> {
-  const credentialStates = await readCredentialStates(options, locations);
+  const credentialStates = await readCredentialStates(options, locations, lane);
   const credentialCandidates = credentialStates
     .filter(
       (
@@ -913,11 +951,11 @@ export async function inspectAuth(
 async function inspectClaudeProfileAuth(
   options: ProviderOptions,
   profile: ClaudeProfile,
-  exact = false,
+  lane: ClaudeLane = SELECTED_LANE,
 ): Promise<AuthProviderReport> {
   const locations = resolveClaudeProfileLocations(profile);
-  if (exact) locations.acceptsOpaqueDefaultItem = false;
-  const states = await readCredentialStates(options, locations);
+  if (lane.exact) locations.acceptsOpaqueDefaultItem = false;
+  const states = await readCredentialStates(options, locations, lane);
   const sources = states.map((state): AuthSourceReport => {
     if (state.status === "available") {
       return {
@@ -1104,11 +1142,14 @@ function readEnvCredentialState(): CredentialState | undefined {
 async function readCredentialStates(
   options: ProviderOptions,
   locations = resolveClaudeProfileLocations(),
+  lane: ClaudeLane = SELECTED_LANE,
 ): Promise<CredentialState[]> {
   const states: CredentialState[] = [];
 
-  const envState = readEnvCredentialState();
-  if (envState) states.push(envState);
+  if (lane.envEligible) {
+    const envState = readEnvCredentialState();
+    if (envState) states.push(envState);
+  }
 
   if (locations.credentialFile !== undefined)
     states.push(
@@ -1120,7 +1161,7 @@ async function readCredentialStates(
     );
 
   if (process.platform === "darwin") {
-    const selection = await listKeychainItem(locations);
+    const selection = await listKeychainItem(locations, lane.keychain);
     if (selection.status === "missing") {
       states.push(keychainPresenceState("missing"));
       return states;
@@ -1209,15 +1250,38 @@ async function readKeychainItemPresence(
 // items and changed search lists without retaining a stale service/path pin.
 async function listKeychainItem(
   locations: ClaudeProfileLocations,
+  cache?: KeychainMetadataCache,
 ): Promise<KeychainSelection> {
-  const snapshot = await readKeychainMetadata();
+  const snapshot = await (cache ? cache.read() : readKeychainMetadata());
   return snapshot
     ? selectKeychainItem(snapshot.metadata, locations, snapshot.paths)
     : { status: "unknown" };
 }
 
+type KeychainMetadataSnapshot = { metadata: string; paths: string[] };
+
+type KeychainMetadataCache = {
+  read: () => Promise<KeychainMetadataSnapshot | undefined>;
+  invalidate: () => void;
+};
+
+/**
+ * One snapshot per read, shared by discovery and every lane it enrolls. It is
+ * deliberately not process-wide: a live `--tui` must still notice a replaced
+ * item on its next refresh, and a delegated refresh invalidates it at once.
+ */
+function keychainMetadataCache(): KeychainMetadataCache {
+  let snapshot: Promise<KeychainMetadataSnapshot | undefined> | undefined;
+  return {
+    read: () => (snapshot ??= readKeychainMetadata()),
+    invalidate: () => {
+      snapshot = undefined;
+    },
+  };
+}
+
 async function readKeychainMetadata(): Promise<
-  { metadata: string; paths: string[] } | undefined
+  KeychainMetadataSnapshot | undefined
 > {
   try {
     const output = await execFileText(

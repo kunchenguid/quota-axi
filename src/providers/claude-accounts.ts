@@ -3,7 +3,10 @@ import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { claudeProfileLocations } from "../lib/claude-profile.js";
-import { claudeCredentialContextId } from "../lib/fs.js";
+import {
+  claudeCredentialContextId,
+  claudeStoredProfileContextId,
+} from "../lib/fs.js";
 
 export type ClaudeProfile = ReturnType<typeof claudeProfileLocations>;
 
@@ -83,10 +86,15 @@ function fileIdentity(configDir: string): string {
   }
 }
 
+/**
+ * The published key names the profile itself, so it must not move when an
+ * ambient `CLAUDE_CODE_OAUTH_TOKEN` is exported or unexported: the stored
+ * identity is the macOS counterpart of the Linux config-directory hash.
+ */
 export function claudeAccountKey(profile: ClaudeProfile): string {
   const identity =
     process.platform === "darwin"
-      ? claudeCredentialContextId(profile)
+      ? claudeStoredProfileContextId(profile)
       : createHash("sha256")
           .update(
             JSON.stringify(["claude-file-v1", fileIdentity(profile.configDir)]),

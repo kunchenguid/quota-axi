@@ -1,5 +1,5 @@
 import { encode } from "@toon-format/toon";
-import { quotaHelpLines } from "./advice.js";
+import { fullOnlyHelpLine, quotaHelpLines } from "./advice.js";
 import { accountColumns } from "./providers/accounts.js";
 import { collapseHome } from "./lib/fs.js";
 import { isUsageFetchFailure } from "./providers/usage-fetch-failure.js";
@@ -547,14 +547,27 @@ export function redactedResponse(
   full: boolean,
 ): QuotaAxiResponse {
   if (full) return response;
-  return {
-    ...response,
-    providers: response.providers.map((provider) => ({
+  const withheld = new Set<string>();
+  const providers = response.providers.map((provider) => {
+    const helpLine = fullOnlyHelpLine(provider);
+    if (helpLine !== undefined) withheld.add(helpLine);
+    return {
       ...provider,
+      // The reason survives so the lane still surfaces as needing attention;
+      // only the command naming its config directory is demoted to `--full`.
+      ...(helpLine !== undefined
+        ? { state: { ...provider.state, remedyCommand: undefined } }
+        : {}),
       account: undefined,
       accountLocator: undefined,
       attempts: undefined,
-    })),
+    };
+  });
+  const help = response.help?.filter((line) => !withheld.has(line));
+  return {
+    ...response,
+    ...(help ? { help: help.length > 0 ? help : undefined } : {}),
+    providers,
   };
 }
 

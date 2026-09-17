@@ -9,7 +9,12 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ProviderOptions, ProviderQuota } from "../src/types.js";
+import type {
+  ProviderAccount,
+  ProviderAdapter,
+  ProviderOptions,
+  ProviderQuota,
+} from "../src/types.js";
 
 let home: string;
 const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
@@ -99,6 +104,14 @@ function credential(name: string, token: string): string {
   return dir;
 }
 
+async function modelsJson(args: string[]) {
+  const { modelsCommand } = await import("../src/commands.js");
+  return modelsCommand(
+    ["--provider", "claude", "--json", "--no-credential-refresh", ...args],
+    undefined,
+  );
+}
+
 async function command(args: string[] = []) {
   const { quotaCommand } = await import("../src/commands.js");
   return quotaCommand(
@@ -107,9 +120,16 @@ async function command(args: string[] = []) {
   );
 }
 
+function bearerTokens(): (string | null)[] {
+  return (
+    vi.mocked(fetch).mock.calls as unknown as [string, RequestInit][]
+  ).map(([, init]) => new Headers(init.headers).get("authorization"));
+}
+
 function response(text: string): {
   schemaVersion: number;
   providers: ProviderQuota[];
+  help?: string[];
 } {
   return JSON.parse(text);
 }
@@ -238,6 +258,83 @@ describe("independent account reporting", () => {
     );
     expect(toon).toContain(output.providers[1].accountKey!);
     expect(process.exitCode).toBeUndefined();
+    // The sibling reauth remedy names the lane's config directory, so it is
+    // demoted to `--full` with the rest of the account evidence.
+    expect(output.providers[1].state.reason).toBe("credentials_expired");
+    expect(output.providers[1].state.remedyCommand).toBeUndefined();
+    for (const ordinary of [
+      JSON.stringify(output),
+      toon,
+      await command(["--tui", "--once"]),
+      await modelsJson([]),
+    ]) {
+      expect(ordinary).not.toContain(work);
+    }
+    const full = response(await command(["--full", "--json"]));
+    expect(full.providers[1].state.remedyCommand).toContain(work);
+    expect(JSON.stringify(full.help)).toContain(work);
+    expect(await modelsJson(["--full"])).toContain(work);
+  });
+
+  it("lets the environment token select only the process-selected lane", async () => {
+    credential(".claude", "synthetic-personal");
+    credential(".claude-work", "synthetic-work");
+    vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", "synthetic-env-personal");
+    const output = response(await command(["--json"]));
+    expect(output.providers).toHaveLength(2);
+    const bearers = bearerTokens();
+    expect(bearers).toContain("Bearer synthetic-env-personal");
+    expect(bearers).toContain("Bearer synthetic-work");
+    expect(bearers).not.toContain("Bearer synthetic-personal");
+  });
+
+  it("keeps the macOS account key stable across the environment token", async () => {
+    Object.defineProperty(process, "platform", {
+      value: "darwin",
+      configurable: true,
+    });
+    const { claudeAccountKey } =
+      await import("../src/providers/claude-accounts.js");
+    const { claudeProfileLocations } =
+      await import("../src/lib/claude-profile.js");
+    const profile = claudeProfileLocations({});
+    const stored = claudeAccountKey(profile);
+    vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", "synthetic-env-personal");
+    expect(claudeAccountKey(profile)).toBe(stored);
+  });
+
+  it("falls back to the single-account reader when discovery faults", async () => {
+    const { fetchAccountQuotas } = await import("../src/providers/accounts.js");
+    const healthy: ProviderQuota = {
+      provider: "codex",
+      windows: [],
+      state: { status: "fresh", stale: false },
+    };
+    const adapter = (
+      discoverAccounts: () => Promise<ProviderAccount[]>,
+    ): ProviderAdapter => ({
+      id: "codex",
+      label: "Codex",
+      fetchQuota: vi.fn(async () => healthy),
+      inspectAuth: async () => ({ provider: "codex", sources: [] }),
+      discoverAccounts,
+    });
+    const duplicate: ProviderAccount = {
+      accountKey: "one",
+      locator: { kind: "synthetic", path: "/fixture" },
+      fetchQuota: async () => healthy,
+      inspectAuth: async () => ({ provider: "codex", sources: [] }),
+    };
+    for (const discover of [
+      async () => {
+        throw new Error("private-token");
+      },
+      async () => [duplicate, duplicate],
+    ]) {
+      const faulty = adapter(discover);
+      expect(await fetchAccountQuotas(faulty, options)).toEqual([healthy]);
+      expect(faulty.fetchQuota).toHaveBeenCalledTimes(1);
+    }
   });
 
   it("preserves Z.AI and OpenCode Go bounds beside expanded Claude accounts", async () => {
