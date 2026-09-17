@@ -42,6 +42,16 @@ async function accountsFor(
   }
 }
 
+/**
+ * This run produced exactly one lane, so the report is the legacy keyless one.
+ * A stale snapshot can still carry the key it was cached under, and that is a
+ * record of an earlier run's discovery, never evidence of this run's expansion.
+ */
+function unexpanded(report: ProviderQuota): ProviderQuota {
+  if (report.accountKey === undefined) return report;
+  return { ...report, accountKey: undefined };
+}
+
 function withDiscoveryFailure(report: ProviderQuota): ProviderQuota {
   return {
     ...report,
@@ -67,7 +77,9 @@ export async function fetchAccountQuotas(
   const accounts = discovery.accounts;
   if (!accounts) {
     const report = await adapter.fetchQuota(options);
-    return [discovery.failed ? withDiscoveryFailure(report) : report];
+    return [
+      unexpanded(discovery.failed ? withDiscoveryFailure(report) : report),
+    ];
   }
   // Keep each adapter's declaration order, including failed accounts. Readers
   // return their own structured failure; no account selects a sibling's token.
@@ -93,7 +105,7 @@ export async function fetchAccountQuotas(
     }
     reports.push(
       accounts.length === 1
-        ? report
+        ? unexpanded(report)
         : {
             ...report,
             accountKey: account.accountKey,

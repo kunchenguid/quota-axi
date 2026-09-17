@@ -104,18 +104,18 @@ function credential(name: string, token: string): string {
   return dir;
 }
 
-async function modelsJson(args: string[]) {
+async function modelsJson(args: string[], providers = "claude") {
   const { modelsCommand } = await import("../src/commands.js");
   return modelsCommand(
-    ["--provider", "claude", "--json", "--no-credential-refresh", ...args],
+    ["--provider", providers, "--json", "--no-credential-refresh", ...args],
     undefined,
   );
 }
 
-async function command(args: string[] = []) {
+async function command(args: string[] = [], providers = "claude") {
   const { quotaCommand } = await import("../src/commands.js");
   return quotaCommand(
-    ["--provider", "claude", "--no-credential-refresh", ...args],
+    ["--provider", providers, "--no-credential-refresh", ...args],
     undefined,
   );
 }
@@ -358,6 +358,56 @@ describe("independent account reporting", () => {
           error: "account_discovery_failed",
         },
       ]);
+    }
+  });
+
+  it("keeps a later single-provider stale run on the legacy schema", async () => {
+    credential(".claude", "synthetic-personal");
+    credential(".claude-work", "synthetic-work");
+    const { PROVIDERS } = await import("../src/providers/index.js");
+    const { readCachedProvider } = await import("../src/cache.js");
+    const { staleFromCache } = await import("../src/providers/common.js");
+    const codex = vi.spyOn(PROVIDERS.codex, "fetchQuota").mockResolvedValue({
+      provider: "codex",
+      label: "Codex",
+      source: "oauth",
+      windows: [
+        {
+          id: "five_hour",
+          label: "session",
+          kind: "session",
+          percentRemaining: 70,
+        },
+      ],
+      state: {
+        status: "fresh",
+        stale: false,
+        refreshedAt: now,
+        sourcesTried: ["oauth"],
+      },
+    });
+    try {
+      const expanded = response(await command(["--json"], "claude,codex"));
+      expect(expanded.schemaVersion).toBe(6);
+      expect(
+        expanded.providers.find((p) => p.provider === "codex")?.accountKey,
+      ).toBe("default");
+      codex.mockImplementation(async () =>
+        staleFromCache(
+          readCachedProvider("codex")!,
+          "fetch failed",
+          ["oauth"],
+          [],
+        ),
+      );
+      const alone = response(await command(["--json"], "codex"));
+      expect(alone.providers).toHaveLength(1);
+      expect(alone.providers[0].state.stale).toBe(true);
+      expect(alone.providers[0].accountKey).toBeUndefined();
+      expect(alone.schemaVersion).toBe(5);
+      expect(JSON.parse(await modelsJson([], "codex")).schemaVersion).toBe(1);
+    } finally {
+      codex.mockRestore();
     }
   });
 
