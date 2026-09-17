@@ -75,6 +75,7 @@ const ACCENTS: Record<ProviderId, StyleSpec> = {
   agy: { rgb: [232, 184, 109], ansi16: "93", bold: true },
   alibaba: { rgb: [255, 155, 120], ansi16: "91", bold: true },
   "opencode-go": { rgb: [160, 210, 255], ansi16: "96", bold: true },
+  fireworks: { rgb: [250, 150, 90], ansi16: "33", bold: true },
 };
 
 const STYLES: Record<Exclude<StyleName, `accent:${ProviderId}`>, StyleSpec> = {
@@ -630,6 +631,12 @@ function compactHeadlineWindowName(label: string, width: number): string {
  * Compress a window label into the 7-char row column: drop a trailing
  * period/unit token ("Fable week" -> "fable", "730h window" -> "730h"),
  * then fall back to the last hyphen segment and an ellipsis.
+ *
+ * The hyphen fallback is a property of model names, where the distinguishing
+ * part is the suffix ("GPT-5.3-Codex-Spark" -> "spark"), so it is limited to
+ * model windows. A hyphenated resource name reads the other way round
+ * ("h100-us-iowa-1", "requests-per-minute"), and keeping only its last segment
+ * would name the wrong thing rather than shorten the right one.
  */
 export function shortWindowLabel(window: QuotaWindow): string {
   const tokens = window.label.split(/[\s_]+/).filter(Boolean);
@@ -642,7 +649,11 @@ export function shortWindowLabel(window: QuotaWindow): string {
     tokens.pop();
   }
   let label = tokens.join(" ").toLowerCase();
-  if (displayWidth(label) > 7 && label.includes("-")) {
+  if (
+    window.kind === "model" &&
+    displayWidth(label) > 7 &&
+    label.includes("-")
+  ) {
     label = label.slice(label.lastIndexOf("-") + 1);
   }
   if (displayWidth(label) > 7) label = truncate(label, 7);

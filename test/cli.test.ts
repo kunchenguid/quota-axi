@@ -24,6 +24,7 @@ const originalZaiProvider = PROVIDERS.zai;
 const originalAgyProvider = PROVIDERS.agy;
 const originalAlibabaProvider = PROVIDERS.alibaba;
 const originalOpenCodeGoProvider = PROVIDERS["opencode-go"];
+const originalFireworksProvider = PROVIDERS.fireworks;
 const originalXdgCacheHome = process.env.XDG_CACHE_HOME;
 const originalClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
 const originalCodexHome = process.env.CODEX_HOME;
@@ -40,6 +41,7 @@ afterEach(() => {
   PROVIDERS.agy = originalAgyProvider;
   PROVIDERS.alibaba = originalAlibabaProvider;
   PROVIDERS["opencode-go"] = originalOpenCodeGoProvider;
+  PROVIDERS.fireworks = originalFireworksProvider;
   if (originalXdgCacheHome === undefined) delete process.env.XDG_CACHE_HOME;
   else process.env.XDG_CACHE_HOME = originalXdgCacheHome;
   if (originalClaudeConfigDir === undefined)
@@ -66,6 +68,7 @@ describe("CLI flag parsing", () => {
       "agy",
       "alibaba",
       "opencode-go",
+      "fireworks",
     ]);
   });
 
@@ -103,6 +106,7 @@ describe("CLI flag parsing", () => {
           "agy",
           "alibaba",
           "opencode-go",
+          "fireworks",
         ],
         json: true,
         full: true,
@@ -884,6 +888,7 @@ describe("default TOON decision blocks", () => {
     PROVIDERS.agy = providerWithQuota(unavailableAgyQuota());
     PROVIDERS.alibaba = providerWithQuota(freshAlibabaQuota());
     PROVIDERS["opencode-go"] = providerWithQuota(freshOpenCodeGoQuota());
+    PROVIDERS.fireworks = providerWithQuota(freshFireworksQuota());
 
     const output = await capture([]);
     const named = new Set([
@@ -898,6 +903,7 @@ describe("default TOON decision blocks", () => {
       "codex",
       "copilot",
       "cursor",
+      "fireworks",
       "grok",
       "kimi",
       "opencode-go",
@@ -1258,6 +1264,7 @@ describe("CLI plumbing via the axi SDK", () => {
     PROVIDERS.agy = providerWithAuth("agy", "Antigravity");
     PROVIDERS.alibaba = providerWithAuth("alibaba", "Alibaba Coding Plan");
     PROVIDERS["opencode-go"] = providerWithAuth("opencode-go", "OpenCode Go");
+    PROVIDERS.fireworks = providerWithAuth("fireworks", "Fireworks AI");
 
     const output = await capture(["--allow-keychain-prompt", "auth"]);
     expect(output).toContain(
@@ -1816,6 +1823,29 @@ function freshOpenCodeGoQuota(): ProviderQuota {
       stale: false,
       refreshedAt: "2026-07-06T18:10:00Z",
       sourcesTried: ["opencode:auth.json"],
+    },
+  };
+}
+
+function freshFireworksQuota(): ProviderQuota {
+  return {
+    provider: "fireworks",
+    label: "Fireworks AI",
+    source: "api",
+    windows: [
+      {
+        id: "quota:h100-us-iowa-1",
+        label: "h100-us-iowa-1",
+        kind: "unknown",
+        percentUsed: 25,
+        percentRemaining: 75,
+      },
+    ],
+    state: {
+      status: "fresh",
+      stale: false,
+      refreshedAt: "2026-07-06T18:10:00Z",
+      sourcesTried: ["env"],
     },
   };
 }

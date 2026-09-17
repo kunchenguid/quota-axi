@@ -89,6 +89,9 @@ const ENV_KEYS = [
   "XDG_DATA_HOME",
   "GITHUB_COPILOT_APPS_JSON",
   "GH_CONFIG_DIR",
+  "FIREWORKS_API_KEY",
+  "FIREWORKS_ACCOUNT_ID",
+  "FIREWORKS_AUTH_INI",
 ] as const;
 
 const originalEnv = Object.fromEntries(
@@ -115,6 +118,9 @@ beforeEach(() => {
     "apps.json",
   );
   process.env.GH_CONFIG_DIR = join(tempDir, "gh");
+  process.env.FIREWORKS_AUTH_INI = join(tempDir, "fireworks", "auth.ini");
+  delete process.env.FIREWORKS_API_KEY;
+  delete process.env.FIREWORKS_ACCOUNT_ID;
   delete process.env.GROK_AUTH;
   delete process.env.GROK_AUTH_JSON;
   delete process.env.GROK_AUTH_PATH;
@@ -303,6 +309,89 @@ describe("credential source contract", { timeout: 30_000 }, () => {
       expect(api.bearers).toEqual([
         "Bearer apps-probe-token",
         "Bearer gho_probe_fixture",
+      ]);
+      expect(result.state.status).toBe("auth_required");
+    });
+  });
+
+  /**
+   * Fireworks has two independent stores and no stored expiry: the
+   * environment key, then the `firectl` login. A blank value in either one
+   * selects nothing, and a value that exists but cannot be sent stays visible
+   * as a credential that exists.
+   */
+  describe("fireworks", () => {
+    const fireworksSources = ["env", "fireworks:auth.ini"];
+
+    function writeAuthIni(text: string): void {
+      const path = process.env.FIREWORKS_AUTH_INI!;
+      mkdirSync(join(path, ".."), { recursive: true });
+      writeFileSync(path, text, { mode: 0o600 });
+    }
+
+    it("leaves absent stores unmarked, so nothing reads as degraded", async () => {
+      // A login file that names only SSO material holds no API key.
+      writeAuthIni("id_token = fixture\nrefresh_token = fixture\n");
+      stubRejectingApi();
+
+      const result = await readQuota("fireworks");
+
+      for (const source of fireworksSources) {
+        const attempts = attemptsFor(result, source);
+        expect(attempts.length).toBeGreaterThan(0);
+        for (const attempt of attempts) {
+          expect(attempt.credentialPresent).toBeUndefined();
+        }
+      }
+      expect(result.state.status).toBe("auth_required");
+    });
+
+    it.each([
+      ["a token reference", "$FIREWORKS_TOKEN"],
+      ["a control character", "key\u0007value"],
+    ])(
+      "marks a present but unusable environment key (%s) as a credential that exists",
+      async (_label, value) => {
+        process.env.FIREWORKS_API_KEY = value;
+        stubRejectingApi();
+
+        const result = await readQuota("fireworks");
+        const attempts = attemptsFor(result, "env");
+
+        expect(attempts.length).toBeGreaterThan(0);
+        for (const attempt of attempts) {
+          expect(attempt.credentialPresent).toBe(true);
+        }
+      },
+    );
+
+    it("marks a present but unusable auth.ini as a credential that exists", async () => {
+      writeAuthIni("api_key = $FIREWORKS_TOKEN\n");
+      stubRejectingApi();
+
+      const result = await readQuota("fireworks");
+      const attempts = attemptsFor(result, "fireworks:auth.ini");
+
+      expect(attempts.length).toBeGreaterThan(0);
+      for (const attempt of attempts) {
+        expect(attempt.credentialPresent).toBe(true);
+      }
+      expect(result.state.status).toBe("auth_required");
+    });
+
+    it("probes every readable store's key, in declared order, before a sign-in verdict", async () => {
+      process.env.FIREWORKS_API_KEY = "fireworks-env-probe-token";
+      process.env.FIREWORKS_ACCOUNT_ID = "contract-fixture";
+      writeAuthIni(
+        "api_key = fireworks-ini-probe-token\naccount_id = contract-fixture\n",
+      );
+      const api = stubRejectingApi();
+
+      const result = await readQuota("fireworks");
+
+      expect(api.bearers).toEqual([
+        "Bearer fireworks-env-probe-token",
+        "Bearer fireworks-ini-probe-token",
       ]);
       expect(result.state.status).toBe("auth_required");
     });

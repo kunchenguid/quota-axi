@@ -157,6 +157,11 @@ function semanticsFor(
       return alibabaSemantics(provider.windows, generatedAt);
     case "opencode-go":
       return opencodeGoSemantics(provider.windows, generatedAt);
+    case "fireworks":
+      return unknownSemantics(
+        provider.windows,
+        "Fireworks reports independent per-resource account quotas (the vendor documents GPU, request-rate, and spend-limit quotas) and no cycle for any of them, so quota-axi reports each quota's own usage and does not claim a combined effective remaining percentage.",
+      );
   }
 }
 

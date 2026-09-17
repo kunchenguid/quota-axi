@@ -397,6 +397,21 @@ describe("renderQuotaTui structure", () => {
     ).toBe("spark");
   });
 
+  it("truncates a hyphenated resource name instead of naming its last segment", () => {
+    // The last-segment rule reads a model name's distinguishing suffix. A
+    // resource name reads the other way round, so keeping only "1" or "minute"
+    // would name the wrong quota rather than shorten the right one.
+    for (const [label, expected] of [
+      ["h100-us-iowa-1", "h100-u\u2026"],
+      ["requests-per-minute", "reques\u2026"],
+      ["monthly-spend-limit-usd", "monthl\u2026"],
+    ]) {
+      expect(shortWindowLabel({ id: "w", label, kind: "unknown" })).toBe(
+        expected,
+      );
+    }
+  });
+
   it("omits the marker when a window's pace is unknown", () => {
     const lines = render();
     const spark = findLine(lines, "spark   ");
