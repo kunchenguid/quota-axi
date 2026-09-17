@@ -7,12 +7,21 @@ import { main, normalizeArgv } from "../src/cli.js";
 import { authCommand, quotaCommand } from "../src/commands.js";
 import { PROVIDERS } from "../src/providers/index.js";
 import { redactedResponse } from "../src/render.js";
+import { runLiveTui } from "../src/tui-live.js";
 import type {
   ProviderAdapter,
   ProviderOptions,
   ProviderQuota,
   QuotaAxiResponse,
 } from "../src/types.js";
+
+// The live loop repaints on a timer the command owns, so stub it to observe the
+// interval the command actually hands over.
+vi.mock("../src/tui-live.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/tui-live.js")>()),
+  runLiveTui: vi.fn(async () => undefined),
+}));
+const runLiveTuiMock = vi.mocked(runLiveTui);
 
 const originalClaudeProvider = PROVIDERS.claude;
 const originalCodexProvider = PROVIDERS.codex;
@@ -163,6 +172,29 @@ describe("CLI flag parsing", () => {
     await expect(
       authCommand(["--tui"], { binPath: "quota-axi" }),
     ).rejects.toThrow("--tui is only supported by the quota command");
+  });
+
+  it("refreshes the live report every two minutes unless --refresh overrides it", async () => {
+    PROVIDERS.claude = providerWithQuota(freshClaudeQuota());
+    const restoreTty = stubTty(true);
+    const resting = { scrollable: false, offset: 0, maxOffset: 0 };
+    try {
+      runLiveTuiMock.mockClear();
+      await quotaCommand(["--tui", "--provider", "claude"], undefined);
+      const fallback = runLiveTuiMock.mock.calls.at(-1)?.[0];
+      expect(fallback?.intervalMillis).toBe(120_000);
+      expect(fallback?.status?.(resting)).toContain("refreshing every 2m");
+
+      await quotaCommand(
+        ["--tui", "--provider", "claude", "--refresh", "45s"],
+        undefined,
+      );
+      const overridden = runLiveTuiMock.mock.calls.at(-1)?.[0];
+      expect(overridden?.intervalMillis).toBe(45_000);
+      expect(overridden?.status?.(resting)).toContain("refreshing every 45s");
+    } finally {
+      restoreTty();
+    }
   });
 
   it("rejects unsupported providers", () => {
@@ -1416,6 +1448,18 @@ function providerWithAuth(
       };
     },
   };
+}
+
+function stubTty(value: boolean): () => void {
+  const restores = [process.stdout, process.stdin].map((stream) => {
+    const descriptor = Object.getOwnPropertyDescriptor(stream, "isTTY");
+    Object.defineProperty(stream, "isTTY", { value, configurable: true });
+    return () => {
+      if (descriptor) Object.defineProperty(stream, "isTTY", descriptor);
+      else delete (stream as { isTTY?: boolean }).isTTY;
+    };
+  });
+  return () => restores.forEach((restore) => restore());
 }
 
 function useTempCache(): void {
