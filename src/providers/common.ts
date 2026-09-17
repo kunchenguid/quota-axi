@@ -43,6 +43,7 @@ export function failedProvider(args: {
   source?: ProviderSource;
   retryAfter?: string;
   attempts?: SourceAttempt[];
+  untrustedWindowIds?: string[];
 }): ProviderQuota {
   return {
     provider: args.provider,
@@ -55,6 +56,9 @@ export function failedProvider(args: {
       error: args.error,
       retryAfter: args.retryAfter,
       sourcesTried: args.sourcesTried,
+      ...(args.untrustedWindowIds && args.untrustedWindowIds.length > 0
+        ? { untrustedWindowIds: args.untrustedWindowIds }
+        : {}),
     },
     attempts: args.attempts,
   };

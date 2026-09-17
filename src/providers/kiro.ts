@@ -351,7 +351,14 @@ async function fetchQuota(dependencies: Dependencies): Promise<ProviderQuota> {
       }
       const normalized = normalizeKiroUsage(payload);
       if (normalized.windows.length === 0) {
-        throw new KiroError("quota_missing", false, false);
+        throw new KiroError(
+          "quota_missing",
+          false,
+          false,
+          undefined,
+          false,
+          normalized.untrustedWindowIds,
+        );
       }
       attempts[attempts.length - 1] = { source: name, status: "success" };
       const report = successProvider({
@@ -398,6 +405,7 @@ async function fetchQuota(dependencies: Dependencies): Promise<ProviderQuota> {
     retryAfter: lastFailure.retryAfter,
     sourcesTried: sourceNames(attempts),
     attempts,
+    untrustedWindowIds: lastFailure.untrustedWindowIds,
   });
 }
 
@@ -429,6 +437,7 @@ type Failure = {
   staleEligible: boolean;
   definitiveAuth: boolean;
   retryAfter?: string;
+  untrustedWindowIds?: string[];
 };
 
 async function requestKiroUsage(
@@ -610,7 +619,7 @@ function normalizeBreakdown(
   root: Record<string, unknown>,
 ): QuotaWindow | undefined {
   const record = objectValue(value);
-  if (!record) return undefined;
+  if (!record || isStructurallyEmpty(record)) return undefined;
   const resourceType = stringValue(record.resourceType);
   const label =
     stringValue(record.displayName) ??
@@ -644,7 +653,7 @@ function normalizeLimitList(
   return value.flatMap((raw, index) => {
     const record = objectValue(raw);
     const id = stringValue(record?.type) ?? `limit:${index}`;
-    if (!record) {
+    if (!record || isStructurallyEmpty(record)) {
       untrustedWindowIds.push(id);
       return [];
     }
@@ -718,6 +727,9 @@ function classifyKiroFailure(error: unknown): Failure {
           ? "rate_limited"
           : "error",
       ...(error.retryAfter ? { retryAfter: error.retryAfter } : {}),
+      ...(error.untrustedWindowIds && error.untrustedWindowIds.length > 0
+        ? { untrustedWindowIds: error.untrustedWindowIds }
+        : {}),
       staleEligible: error.staleEligible,
       definitiveAuth: error.auth,
     };
@@ -763,6 +775,10 @@ function objectValue(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
+function isStructurallyEmpty(record: Record<string, unknown>): boolean {
+  return Object.keys(record).length === 0;
+}
+
 function stringValue(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() !== ""
     ? value.trim()
@@ -793,6 +809,7 @@ class KiroError extends Error {
     readonly staleEligible: boolean,
     readonly retryAfter?: string,
     readonly rateLimited = false,
+    readonly untrustedWindowIds?: string[],
   ) {
     super(message);
     this.code = message;
