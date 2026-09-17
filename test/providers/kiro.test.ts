@@ -163,39 +163,42 @@ describe("Kiro quota normalization", () => {
     });
   });
 
-  it("includes active trial credits in the balance and all_models bound", async () => {
-    const report = await adapterWith(CREDENTIALS, async () =>
-      jsonResponse({
-        ...USAGE_PAYLOAD,
-        usageBreakdownList: [
-          {
-            resourceType: "CREDIT",
-            currentUsage: 0,
-            usageLimit: 50,
-            freeTrialInfo: {
-              freeTrialStatus: "ACTIVE",
-              freeTrialExpiry: "2099-10-01T00:00:00.000Z",
-              currentUsage: 999,
-              currentUsageWithPrecision: 100,
-              usageLimit: 999,
-              usageLimitWithPrecision: 500,
+  it.each([undefined, "", "not-a-date", "2099-10-01T00:00:00.000Z"])(
+    "includes active trial credits in the balance and all_models bound with expiry %s",
+    async (expiry) => {
+      const report = await adapterWith(CREDENTIALS, async () =>
+        jsonResponse({
+          ...USAGE_PAYLOAD,
+          usageBreakdownList: [
+            {
+              resourceType: "CREDIT",
+              currentUsage: 0,
+              usageLimit: 50,
+              freeTrialInfo: {
+                freeTrialStatus: "ACTIVE",
+                freeTrialExpiry: expiry,
+                currentUsage: 999,
+                currentUsageWithPrecision: 100,
+                usageLimit: 999,
+                usageLimitWithPrecision: 500,
+              },
             },
-          },
-        ],
-      }),
-    ).fetchQuota(OPTIONS);
-    expect(report.credits).toEqual({ remaining: 450, unit: "credits" });
-    expect(report.windows[0].percentRemaining).toBeCloseTo((450 / 550) * 100);
-    const interpreted = withQuotaSemantics(report, new Date().toISOString());
-    expect(interpreted.quotaSemantics?.effectiveAvailability[0]).toMatchObject({
-      scope: "all_models",
-      limitingWindowIds: ["credit"],
-    });
-    expect(
-      interpreted.quotaSemantics?.effectiveAvailability[0]
-        .effectivePercentRemaining,
-    ).toBeCloseTo((450 / 550) * 100);
-  });
+          ],
+        }),
+      ).fetchQuota(OPTIONS);
+      expect(report.credits).toEqual({ remaining: 450, unit: "credits" });
+      expect(report.windows[0].percentRemaining).toBeCloseTo((450 / 550) * 100);
+      const interpreted = withQuotaSemantics(report, new Date().toISOString());
+      expect(interpreted.quotaSemantics?.effectiveAvailability[0]).toMatchObject({
+        scope: "all_models",
+        limitingWindowIds: ["credit"],
+      });
+      expect(
+        interpreted.quotaSemantics?.effectiveAvailability[0]
+          .effectivePercentRemaining,
+      ).toBeCloseTo((450 / 550) * 100);
+    },
+  );
 
   it.each([
     [1995, 5, 99.75, 0.25, "unknown"],

@@ -491,10 +491,12 @@ function normalizeBreakdowns(
     if (!base) return [];
     let { used, limit } = base;
     const trial = objectValue(item.freeTrialInfo);
-    const trialExpiry = parseEpochOrIso(trial?.freeTrialExpiry);
+    const trialExpiry = Date.parse(
+      parseEpochOrIso(trial?.freeTrialExpiry) ?? "",
+    );
     if (
       trial?.freeTrialStatus === "ACTIVE" &&
-      (!trialExpiry || Date.parse(trialExpiry) > Date.now())
+      (Number.isNaN(trialExpiry) || trialExpiry >= Date.now())
     ) {
       const pool = creditPool(trial);
       if (!pool) return [];
