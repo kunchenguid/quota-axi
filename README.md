@@ -354,7 +354,7 @@ CODEX_HOME=/path/to/codex-profile quota-axi --provider codex --profile-only --fu
 
 A normal invocation reports every Codex ChatGPT subscription it can discover from sibling entries in one Pi `auth.json`.
 It keeps each account's quota windows, resets, plan, effective availability, runway, and `spendPriority` separate.
-Each account gets its own TUI card, including accounts whose quota cannot be read.
+Each account gets its own TUI card, naming its key on an `account <key>` line under the card title, including accounts whose quota cannot be read.
 
 ```sh
 quota-axi --provider codex --json
@@ -400,6 +400,7 @@ A key the report cannot publish (malformed or repeated) costs the expansion, not
 
 If no provider expands, output stays byte-compatible in shape and field order: quota schema 5, auth/models schema 1, and no account column.
 A sole discovered Pi sibling uses that legacy representation.
+Expansion follows the lanes discovered rather than the rows published, so when a native login and a Pi sibling turn out to be one account the single surviving row still carries its key and the report stays schema 6.
 Consumers must honor the schema version; a legacy keyless row means the single selected lane, and keys must never be inferred from row position.
 
 Account collection is shared in `src/providers/accounts.ts`.
@@ -635,20 +636,20 @@ Any bounding window without usable pace makes the **whole scope** unmeasurable: 
 
 ### Quota enums
 
-| Name                             | Values                                                                                 |
-| -------------------------------- | -------------------------------------------------------------------------------------- |
-| Provider statuses                | `fresh`, `stale`, `unavailable`, `auth_required`, `rate_limited`, or `error`           |
-| Provider sources                 | `oauth`, `pi:openai-codex`, `cli-rpc`, `cli`, `api`, `web`, `cache`, or `unavailable`  |
-| Current provider adapter sources | `oauth`, `pi:openai-codex`, `cli-rpc`, `cli`, `api`, `web`, `cache`, and `unavailable` |
-| Window kinds                     | `session`, `weekly`, `monthly`, `model`, `credits`, or `unknown`                       |
-| Window pace statuses             | `ahead`, `on_pace`, `behind`, or `unknown`                                             |
-| Effective pace statuses          | `ahead`, `on_pace`, `behind`, `mixed`, or `unknown`                                    |
-| Effective runway statuses        | `exhausted_now`, `projected_exhaustion`, `through_reset`, or `unknown`                 |
-| Effective selection statuses     | `known` or `unknown`                                                                   |
-| Pace projection confidence       | `early` or `established`                                                               |
-| Pace cycle basis                 | `starts_at_resets_at` or `window_seconds`                                              |
-| Quota relationship statuses      | `known`, `partial`, or `unknown`                                                       |
-| Source attempt statuses          | `success`, `failed`, or `skipped`                                                      |
+| Name                             | Values                                                                                                                   |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| Provider statuses                | `fresh`, `stale`, `unavailable`, `auth_required`, `rate_limited`, or `error`                                             |
+| Provider sources                 | `oauth`, `pi:openai-codex`, `pi:openai-codex-*` sibling keys, `cli-rpc`, `cli`, `api`, `web`, `cache`, or `unavailable`  |
+| Current provider adapter sources | `oauth`, `pi:openai-codex`, `pi:openai-codex-*` sibling keys, `cli-rpc`, `cli`, `api`, `web`, `cache`, and `unavailable` |
+| Window kinds                     | `session`, `weekly`, `monthly`, `model`, `credits`, or `unknown`                                                         |
+| Window pace statuses             | `ahead`, `on_pace`, `behind`, or `unknown`                                                                               |
+| Effective pace statuses          | `ahead`, `on_pace`, `behind`, `mixed`, or `unknown`                                                                      |
+| Effective runway statuses        | `exhausted_now`, `projected_exhaustion`, `through_reset`, or `unknown`                                                   |
+| Effective selection statuses     | `known` or `unknown`                                                                                                     |
+| Pace projection confidence       | `early` or `established`                                                                                                 |
+| Pace cycle basis                 | `starts_at_resets_at` or `window_seconds`                                                                                |
+| Quota relationship statuses      | `known`, `partial`, or `unknown`                                                                                         |
+| Source attempt statuses          | `success`, `failed`, or `skipped`                                                                                        |
 
 Source attempts can include `credentialPresent` when a source is not genuinely absent, including when a read failure prevents a more precise classification. They can also carry an explicit `degraded` flag that overrides the derived classification in either direction: `false` when a non-success attempt is not a broken credential source, and `true` when a skipped source was itself unreadable without establishing that a credential is present. Otherwise fresh reports derive `state.degradedSources` from failed attempts and skipped attempts with `credentialPresent`.
 
@@ -677,7 +678,7 @@ Catalog buckets are coarse editorial classifications relative to the current fro
 
 Every models response includes `catalog.version` and `catalog.provenance`; callers must treat catalog freshness and unmapped `unmatchedWindowIds` as explicit uncertainty. A model row exposes the applicable effective quota scope and provider state. When no model-specific scope is known, the provider account scope remains the evidence rather than an invented model limit.
 
-Default model order is deterministic and non-preferential: provider, then model ID. `--sort runway` is an explicit, evidence-preserving comparator only: finite `usableRunwaySeconds` descend, then `through_reset`, then `exhausted_now`, with unknown evidence last. Equal evidence appears in `sort.tieGroups`; no hidden score or model, provider, harness, credential, or route recommendation is implied. The comparator registry is intentionally extensible for a future separately sourced `cost` comparator, which is not shipped in v1.
+Default model order is deterministic and non-preferential: provider, then `accountKey` in an account-expanded report, then model ID. `--sort runway` is an explicit, evidence-preserving comparator only: finite `usableRunwaySeconds` descend, then `through_reset`, then `exhausted_now`, with unknown evidence last. Equal evidence appears in `sort.tieGroups`; no hidden score or model, provider, harness, credential, or route recommendation is implied. The comparator registry is intentionally extensible for a future separately sourced `cost` comparator, which is not shipped in v1.
 
 ### `auth --json` shape
 
@@ -882,7 +883,7 @@ Providers with no established non-interactive rotation command stay read-only on
 | Quota cache contents                   | Stores normalized non-secret snapshots only.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | Claude Keychain access marker          | Lives alongside the quota cache as `claude-keychain-access-granted-<service-hash>-account-<account-hash>`, where the service hash is eight hexadecimal characters and the account hash is sixteen. It uses `0600` file permissions, contains no credential material, raw account name, or raw service name, and markers written by earlier versions are ignored rather than deleted.                                                                                                                                                                                         |
 | Cursor CLI Keychain access marker      | Lives alongside the quota cache as `cursor-cli-keychain-access-granted-account-<account-hash>`, where the account hash is sixteen hexadecimal characters. It uses `0600` file permissions and contains no credential material or raw account identity.                                                                                                                                                                                                                                                                                                                       |
-| Cached reports                         | Only fresh provider snapshots with windows are cached. Cache schema 3 stores one snapshot per `provider` plus `accountKey` (or `default` for the legacy single lane). Stale fallback never substitutes another account's windows. Schema 1 and 2 files without `accountKey` remain readable.                                                                                                                                                                                                                                                                                 |
+| Cached reports                         | Only fresh provider snapshots with windows are cached. Cache schema 3 slots one snapshot per `provider` plus `accountKey`; a snapshot with no key holds that provider's `default` slot, and the filler `default` key an expanded report stamps on single-account providers is never written, so a stale reading can never expand a report in which nothing expanded. Stale fallback never substitutes another account's windows. Schema 1 and 2 files without `accountKey` remain readable.                                                                                  |
 | Fresh provider reports with no windows | Clear any cached snapshot for that provider/account lane, so entitlement-only reports do not leave stale quota windows behind.                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | Reports and details not cached         | Failed providers, stale providers, account identity, and source attempts are not cached.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | Claude cache fallback                  | Follows the [Claude provider rules](#provider-notes), including the denied-Keychain exception. Eligible fallback uses a formerly fresh snapshot from the same selected Claude configuration context, with a seven-day provider bound plus reset and resetless-window pruning. Its opaque SHA-256 context identifier includes the configuration directory and the selected Keychain service, which already encodes any secure-storage selector. Legacy context-less records and snapshots from the earlier broad suffix-discovery context are withheld without deleting them. |
