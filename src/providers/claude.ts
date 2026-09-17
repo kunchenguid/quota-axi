@@ -505,6 +505,32 @@ function unconfirmedRefreshFailure(): ClaudeFailure {
   });
 }
 
+/**
+ * Ask `/api/oauth/profile` whether a stored-expired bearer the usage endpoint
+ * rate limited is genuinely dead. The probe is recorded like the success path's
+ * identity lookup, so `--full` shows the evidence behind a reclassified
+ * verdict; it is not a credential source, so it never marks one superseded.
+ *
+ * @returns true only when the vendor explicitly rejected the bearer
+ */
+async function confirmClaudeStoredExpiry(
+  credential: ClaudeCredentials,
+  attempts: SourceAttempt[],
+): Promise<boolean> {
+  const identity = await fetchOauthProfile(credential);
+  attempts.push(
+    identity.error
+      ? {
+          source: "oauth-profile",
+          status: "failed",
+          error: identity.error,
+          degraded: false,
+        }
+      : { source: "oauth-profile", status: "success" },
+  );
+  return identity.error === "identity_profile_http_401";
+}
+
 async function attemptClaudeQuota(
   options: ProviderOptions,
   attempts: SourceAttempt[],
@@ -628,12 +654,7 @@ async function attemptClaudeQuota(
           // source still lets a remaining sibling stored source be tried,
           // matching the existing behavior for stored-only candidates.
           if (credential.source === "env") break;
-        } else if (
-          state.status === "expired" &&
-          failure.status === "rate_limited" &&
-          (await fetchOauthProfile(credential)).error ===
-            "identity_profile_http_401"
-        ) {
+        } else {
           // Stored expiry is advisory only - a stored-expired credential can
           // still be live vendor-side, so a 429 here might be a genuine rate
           // limit whose Retry-After should not be discarded. Confirm real
@@ -641,13 +662,24 @@ async function attemptClaudeQuota(
           // answers with an explicit "access token has expired" 401, before
           // reclassifying. Any other outcome (live, transient, or unclear)
           // leaves the original rate-limited failure untouched.
-          transientFailure = new ClaudeFailure("Claude credential expired", {
-            status: "unavailable",
-            staleEligible: true,
-          }).withUsageFetchFailure();
-          break;
-        } else {
-          transientFailure = failure.withUsageFetchFailure();
+          const expiryConfirmed =
+            state.status === "expired" &&
+            failure.status === "rate_limited" &&
+            (await confirmClaudeStoredExpiry(credential, attempts));
+          if (expiryConfirmed) {
+            transientFailure = new ClaudeFailure("Claude credential expired", {
+              status: "unavailable",
+              staleEligible: true,
+            }).withUsageFetchFailure();
+            // The credential is now known-expired rather than merely
+            // stored-expired, so it reaches the same refresh delegate a
+            // definitive rejection would.
+            if (state.status === "expired" && state.refreshable) {
+              refreshableExpiredRejected = true;
+            }
+          } else {
+            transientFailure = failure.withUsageFetchFailure();
+          }
           transientFailureIsEnv = credential.source === "env";
           // The env token is an independent source the vendor merely resolves
           // first; its non-definitive failure must not withhold a still-untried

@@ -64,12 +64,12 @@ function mockUnreadableStore(): void {
  * source. On darwin this exists alongside the Keychain source (both are
  * checked), giving a second, independent stored candidate.
  */
-function writeOauthFile(accessToken: string): void {
+function writeOauthFile(accessToken: string, expiresAt?: number): void {
   const dir = join(home, ".claude");
   mkdirSync(dir, { recursive: true });
   writeFileSync(
     join(dir, ".credentials.json"),
-    JSON.stringify({ claudeAiOauth: { accessToken } }),
+    JSON.stringify({ claudeAiOauth: { accessToken, expiresAt } }),
   );
 }
 
@@ -362,6 +362,46 @@ describe("Claude CLAUDE_CODE_OAUTH_TOKEN credential source", () => {
     const report = await fetchQuota(options);
 
     expect(report.state.status).not.toBe("auth_required");
+    expect(readCachedProvider("claude")).toBeDefined();
+  });
+
+  it("keeps a confirmed stored expiry ahead of an earlier definitive rejection", async () => {
+    // Keychain is tried before the oauth-file sidecar on darwin, and the
+    // environment token before both.
+    writeOauthFile(OAUTH_FILE_TOKEN, Date.now() - 60_000);
+    mockStore({ accessToken: STORED_TOKEN });
+    const { fetchQuota } = await import("../../src/providers/claude.js");
+    const { writeCachedProviders, readCachedProvider } =
+      await import("../../src/cache.js");
+    const fresh = await fetchQuota(options);
+    expect(fresh.state.status).toBe("fresh");
+    writeCachedProviders([fresh]);
+    expect(readCachedProvider("claude")).toBeDefined();
+
+    // The env token fails transiently, the Keychain sibling is definitively
+    // rejected, and the stored-expired sidecar that runs last is confirmed
+    // expired against /profile. That confirmation is the reading's own
+    // unresolved outcome, so the earlier 401 must not be promoted to a
+    // sign-out that retires the snapshot above.
+    vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", ENV_TOKEN);
+    fetchMock.mockImplementation(async (url: string, init: unknown) => {
+      const bearer = (init as { headers: Record<string, string> }).headers
+        .authorization;
+      if (bearer === `Bearer ${ENV_TOKEN}`)
+        return new Response("{}", { status: 500 });
+      if (bearer === `Bearer ${STORED_TOKEN}`)
+        return new Response("{}", { status: 401 });
+      return String(url).includes("/oauth/profile")
+        ? new Response("{}", { status: 401 })
+        : new Response("{}", {
+            status: 429,
+            headers: { "retry-after": "60" },
+          });
+    });
+    const report = await fetchQuota(options);
+
+    expect(report.state.status).not.toBe("auth_required");
+    expect(report.state.error).toBe("Claude credential expired");
     expect(readCachedProvider("claude")).toBeDefined();
   });
 

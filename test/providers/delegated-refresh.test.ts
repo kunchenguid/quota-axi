@@ -383,8 +383,16 @@ function writeValidClaudeCredential(): void {
 
 type RecordedRequest = { url: string; init: RequestInit | undefined };
 
-/** 401 for the stale bearer, live usage for the rotated one. */
-function stubBearerAwareFetch(liveToken: string): {
+/**
+ * Rejection for the stale bearer, live usage for the rotated one. The stale
+ * usage status is configurable so a vendor that answers the usage endpoint with
+ * a 429 while `/profile` still reports the explicit expiry can be exercised;
+ * `/profile` always rejects the stale bearer.
+ */
+function stubBearerAwareFetch(
+  liveToken: string,
+  staleUsageStatus = 401,
+): {
   mock: ReturnType<typeof vi.fn>;
   requests: RecordedRequest[];
 } {
@@ -393,7 +401,11 @@ function stubBearerAwareFetch(liveToken: string): {
     requests.push({ url, init });
     const headers = (init?.headers ?? {}) as Record<string, string>;
     if (headers.authorization !== `Bearer ${liveToken}`) {
-      return new Response(null, { status: 401 });
+      if (url === PROFILE_URL) return new Response(null, { status: 401 });
+      return new Response(null, {
+        status: staleUsageStatus,
+        headers: { "retry-after": "60" },
+      });
     }
     if (url === PROFILE_URL) {
       return Response.json({
@@ -443,6 +455,33 @@ describe.skipIf(process.platform === "win32")(
       expect(stored.claudeAiOauth.accessToken).toBe("rotated-access-token");
       expect(requests.map((request) => request.url)).toEqual([
         USAGE_URL,
+        USAGE_URL,
+        PROFILE_URL,
+      ]);
+    });
+
+    it("recovers live quota when the expiry was confirmed behind a 429", async () => {
+      writeExpiredClaudeCredential();
+      const cli = stubClaudeCli({ rotateTo: "rotated-access-token" });
+      const { requests } = stubBearerAwareFetch("rotated-access-token", 429);
+
+      const { fetchQuota } = await import("../../src/providers/claude.js");
+      const result = await fetchQuota({
+        allowKeychainPrompt: false,
+        refreshCredentials: true,
+      });
+
+      // The usage endpoint rate limited the stale bearer, so the expiry came
+      // from the /profile confirmation rather than a definitive usage 401. It
+      // is the same known-expired, refreshable store, so it reaches the same
+      // delegate and self-heals instead of reporting a terminal expiry.
+      expect(result.state.status).toBe("fresh");
+      expect(result.windows.length).toBeGreaterThan(0);
+      expect(cli.invocationCount()).toBe(1);
+      expect(cli.arguments()).toEqual(["doctor"]);
+      expect(requests.map((request) => request.url)).toEqual([
+        USAGE_URL,
+        PROFILE_URL,
         USAGE_URL,
         PROFILE_URL,
       ]);

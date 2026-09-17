@@ -1374,6 +1374,14 @@ describe("Claude credential-state reporting", () => {
       status: "failed",
       error: "Claude quota endpoint rate limited",
     });
+    // The confirming probe is visible evidence for the reclassified verdict,
+    // and is not a credential source, so it never marks one superseded.
+    expect(result.attempts).toContainEqual({
+      source: "oauth-profile",
+      status: "failed",
+      error: "identity_profile_http_401",
+      degraded: false,
+    });
   });
 
   it("does not reclassify a 429 against a live (non-expired) credential", async () => {
