@@ -3,31 +3,44 @@ import type { Dispatcher } from "undici";
 
 type ProviderRequestInit = RequestInit & { dispatcher?: Dispatcher };
 
-const PROXY_DISPATCHERS = Symbol.for("quota-axi.proxy-dispatchers");
+/**
+ * A proxy dispatcher and the fetch implementation that owns it travel together:
+ * Node's global fetch carries a different undici build than this package's, and
+ * handing it this package's `ProxyAgent` fails interface validation on newer
+ * Node releases ("invalid onError method"). Requests without a proxy stay on the
+ * global fetch.
+ */
+type ProxyRoute = {
+  dispatcher: Dispatcher;
+  fetch: typeof globalThis.fetch;
+};
+
+const PROXY_ROUTES = Symbol.for("quota-axi.proxy-routes");
 const sharedGlobals = globalThis as unknown as Record<symbol, unknown>;
-const proxyDispatchers =
-  (sharedGlobals[PROXY_DISPATCHERS] as
-    | Map<string, Promise<Dispatcher>>
-    | undefined) ?? new Map<string, Promise<Dispatcher>>();
-sharedGlobals[PROXY_DISPATCHERS] = proxyDispatchers;
+const proxyRoutes =
+  (sharedGlobals[PROXY_ROUTES] as
+    | Map<string, Promise<ProxyRoute>>
+    | undefined) ?? new Map<string, Promise<ProxyRoute>>();
+sharedGlobals[PROXY_ROUTES] = proxyRoutes;
 
 function requestUrl(input: string | URL | Request): string {
   if (typeof input === "string") return input;
   return input instanceof URL ? input.href : input.url;
 }
 
-function configuredProxyDispatcher(
+function configuredProxyRoute(
   input: string | URL | Request,
-): Promise<Dispatcher> | undefined {
+): Promise<ProxyRoute> | undefined {
   const proxyUrl = getProxyForUrl(requestUrl(input));
   if (!proxyUrl) return undefined;
-  const existing = proxyDispatchers.get(proxyUrl);
+  const existing = proxyRoutes.get(proxyUrl);
   if (existing) return existing;
-  const dispatcher = import("undici").then(
-    ({ ProxyAgent }) => new ProxyAgent(proxyUrl),
-  );
-  proxyDispatchers.set(proxyUrl, dispatcher);
-  return dispatcher;
+  const route = import("undici").then(({ ProxyAgent, fetch: undiciFetch }) => ({
+    dispatcher: new ProxyAgent(proxyUrl),
+    fetch: undiciFetch as unknown as typeof globalThis.fetch,
+  }));
+  proxyRoutes.set(proxyUrl, route);
+  return route;
 }
 
 /** Fetch through the host's standard proxy environment when one is configured. */
@@ -35,9 +48,10 @@ export async function providerFetch(
   input: string | URL | Request,
   init: RequestInit = {},
 ): Promise<Response> {
-  const dispatcher = await configuredProxyDispatcher(input);
-  return fetch(
-    input,
-    dispatcher ? ({ ...init, dispatcher } as ProviderRequestInit) : init,
-  );
+  const route = await configuredProxyRoute(input);
+  if (!route) return fetch(input, init);
+  return route.fetch(input, {
+    ...init,
+    dispatcher: route.dispatcher,
+  } as ProviderRequestInit);
 }
