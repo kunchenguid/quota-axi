@@ -27,6 +27,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.doUnmock("../../src/cache.js");
   vi.doUnmock("../../src/lib/process.js");
   vi.doUnmock("node:child_process");
   vi.resetModules();

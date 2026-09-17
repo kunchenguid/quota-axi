@@ -2,10 +2,10 @@ import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { spawn } from "node:child_process";
 import {
-  bindCodexCacheAccountIds,
   deleteCachedProvider,
   readCachedCodexProvider,
   readCachedProvider,
+  stampCodexStoredAccountId,
 } from "../cache.js";
 import { readJsonFileResult, type JsonFileReadResult } from "../lib/fs.js";
 import { providerFetch } from "../lib/http.js";
@@ -413,7 +413,7 @@ async function fetchPiAccountQuota(
 ): Promise<ProviderQuota> {
   const attempts: SourceAttempt[] = [];
   const piCandidates: CredentialCandidate<CodexAttemptCredential>[] = [];
-  const accountIds: string[] = [];
+  const storedAccountIds = new Map<string, string>();
   const providerIds = [
     account.piProviderId,
     ...(account.extraPiProviderIds ?? []),
@@ -424,7 +424,7 @@ async function fetchPiAccountQuota(
     const piResolution = await resolvePiEntry(dependencies, piProviderId);
     lastResolution = piResolution;
     const storedAccountId = resolvedAccountId(piResolution);
-    if (storedAccountId) accountIds.push(storedAccountId);
+    if (storedAccountId) storedAccountIds.set(piProviderId, storedAccountId);
     if (piResolution.status === "available") {
       piCandidates.push({
         source,
@@ -456,17 +456,17 @@ async function fetchPiAccountQuota(
     attemptCodexCandidate(candidate.credential),
   );
   appendSelectionAttempts(attempts, piSelection);
-  const source = piCodexSource(
+  const answeringProviderId =
     providerIds.find(
       (id) => piCodexSource(id) === piSelection.winner?.source,
-    ) ?? account.piProviderId,
-  );
+    ) ?? account.piProviderId;
+  const source = piCodexSource(answeringProviderId);
   if (piSelection.outcome === "quota") {
     return codexSuccessReport(
       piSelection.result!,
       source,
       attempts,
-      accountIds,
+      storedAccountIds.get(answeringProviderId),
     );
   }
   const piResolution = lastResolution;
@@ -488,7 +488,7 @@ async function fetchPiAccountQuota(
     attempts,
     source,
     account.cacheKey,
-    accountIds,
+    [...storedAccountIds.values()],
   );
 }
 
@@ -513,13 +513,17 @@ async function fetchQuotaWithDependencies(
   // The accounts this run's own credentials name. A cached snapshot stamped
   // with none of them belongs to a login this configuration has replaced.
   const accountIds: string[] = [];
+  // The native store answers both the `oauth` probe and the CLI fallback.
+  let nativeAccountId: string | undefined;
   const oauthCandidates: CredentialCandidate<CodexAttemptCredential>[] = [];
   if (
     credentialState.status === "available" ||
     credentialState.status === "expired"
   ) {
-    if (credentialState.credentials.accountId)
-      accountIds.push(credentialState.credentials.accountId);
+    if (credentialState.credentials.accountId) {
+      nativeAccountId = credentialState.credentials.accountId;
+      accountIds.push(nativeAccountId);
+    }
     oauthCandidates.push({
       source: "oauth",
       localState: credentialState.status === "available" ? "valid" : "expired",
@@ -549,7 +553,7 @@ async function fetchQuotaWithDependencies(
       oauthSelection.result!,
       "oauth",
       attempts,
-      accountIds,
+      nativeAccountId,
     );
   }
   if (oauthSelection.outcome === "transient") {
@@ -630,7 +634,7 @@ async function fetchQuotaWithDependencies(
         piSelection.result!,
         PI_CODEX_CREDENTIAL_SOURCE,
         attempts,
-        accountIds,
+        piAccountId,
       );
     }
     if (piSelection.outcome === "transient") {
@@ -655,7 +659,7 @@ async function fetchQuotaWithDependencies(
   try {
     const quota = await probeCodexCli();
     attempts[attempts.length - 1] = { source: "cli-rpc", status: "success" };
-    return codexSuccessReport(quota, "cli-rpc", attempts, accountIds);
+    return codexSuccessReport(quota, "cli-rpc", attempts, nativeAccountId);
   } catch (error) {
     const message = errorMessage(error);
     attempts[attempts.length - 1] = {
@@ -734,11 +738,15 @@ function appendSelectionAttempts(
   }
 }
 
+/**
+ * `storedAccountId` is what the one credential that answered still stores, so a
+ * later failed probe of that same store can recognize its own snapshot.
+ */
 function codexSuccessReport(
   quota: NormalizedCodexQuota,
   source: ProviderQuota["source"],
   attempts: SourceAttempt[],
-  accountIds: readonly string[] = [],
+  storedAccountId?: string,
 ): ProviderQuota {
   const report = successProvider({
     provider: "codex",
@@ -752,7 +760,7 @@ function codexSuccessReport(
     sourcesTried: sourceNames(attempts),
     attempts,
   });
-  bindCodexCacheAccountIds(report, accountIds);
+  stampCodexStoredAccountId(report, storedAccountId);
   return report;
 }
 
@@ -1199,9 +1207,7 @@ async function fetchProfileOnlyQuota(): Promise<ProviderQuota> {
       attempt.result,
       "oauth",
       [{ source: "oauth", status: "success" }],
-      credentialState.credentials.accountId
-        ? [credentialState.credentials.accountId]
-        : [],
+      credentialState.credentials.accountId,
     );
   }
 

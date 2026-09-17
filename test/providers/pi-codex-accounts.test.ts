@@ -1494,12 +1494,18 @@ async function readCodexLanes() {
   return fetchAccountQuotas(adapter, OPTIONS);
 }
 
-/** One read plus the cache write the quota command performs after it. */
+/**
+ * The quota command's own path: it copies every report through
+ * `withQuotaSemantics` and `annotateQuotaAdvice` before caching it, so a stamp
+ * bound to the adapter's object alone never reaches the cache writer.
+ */
 async function cacheCodexRead() {
-  const reports = await readCodexLanes();
+  vi.resetModules();
+  const { fetchQuota } = await import("../../src/commands.js");
   const { writeCachedProviders } = await import("../../src/cache.js");
-  writeCachedProviders(reports);
-  return reports;
+  const response = await fetchQuota(["codex"], OPTIONS);
+  writeCachedProviders(response.providers);
+  return response.providers;
 }
 
 function writeNativeAuth(accessToken: string, accountId?: string): void {
