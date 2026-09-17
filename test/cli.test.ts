@@ -1938,6 +1938,7 @@ describe("default TOON decision blocks", () => {
     PROVIDERS.elevenlabs = providerWithQuota(freshElevenLabsQuota());
     PROVIDERS.devin = providerWithQuota(freshDevinQuota());
     PROVIDERS.muse = providerWithQuota(emptyFreshQuota("muse", "Muse"));
+    PROVIDERS.kiro = providerWithQuota(freshKiroQuota());
 
     const output = await capture([]);
     const named = new Set([
@@ -3661,6 +3662,29 @@ function freshDevinQuota(): ProviderQuota {
       authStatus: "usable",
       refreshedAt: "2026-09-22T12:00:00.000Z",
       sourcesTried: ["env:WINDSURF_API_KEY"],
+    },
+  };
+}
+
+function freshKiroQuota(): ProviderQuota {
+  return {
+    provider: "kiro",
+    label: "Kiro",
+    source: "api",
+    windows: [
+      {
+        id: "credits",
+        label: "credits",
+        kind: "credits",
+        percentUsed: 15,
+        percentRemaining: 85,
+      },
+    ],
+    state: {
+      status: "fresh",
+      stale: false,
+      refreshedAt: "2026-07-06T18:10:00Z",
+      sourcesTried: ["kiro-cli"],
     },
   };
 }

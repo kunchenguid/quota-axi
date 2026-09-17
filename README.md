@@ -570,12 +570,12 @@ Everything a consumer branches on stays in the default tier: `accountKey` and `a
 
 ### Quota report shape
 
-| Object                        | Fields                                                                                                                                                                 |
-| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Quota report                  | `providers`                                                                                                                                                            |
-| Provider report               | `provider`, optional `accountKey`, `accountKeys` (every quota row), `windows`, `quotaSemantics`, `state`, optional `plan`, optional `credits`, and optional `notSetUp` |
-| Provider report with `--full` | Also `label`, `source`, optional `account` identity, and per-source `attempts`                                                                                         |
-| Account identity (`--full`)   | Optional `email`, `organization`, `accountId`, and `identityStatus`                                                                                                    |
+| Object                        | Fields                                                                                                                                                                                           |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Quota report                  | `providers`                                                                                                                                                                                      |
+| Provider report               | `provider`, optional `accountKey`, `accountKeys` (every quota row), `windows`, `quotaSemantics`, `state`, optional `plan`, optional `credits`, optional `overageStatus`, and optional `notSetUp` |
+| Provider report with `--full` | Also `label`, `source`, optional `account` identity, and per-source `attempts`                                                                                                                   |
+| Account identity (`--full`)   | Optional `email`, `organization`, `accountId`, and `identityStatus`                                                                                                                              |
 
 Account identity and per-source `attempts` are omitted unless `--full` is passed.
 Claude `identityStatus` is `verified` only when Anthropic returns an authoritative account identifier; `email` and `organization` are display-only and must not be used for duplicate detection.
