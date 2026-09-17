@@ -1453,6 +1453,37 @@ describe("Codex Pi sibling account lanes", () => {
     expect(second[0]?.state.stale).toBe(true);
     expect(second[0]?.windows[0]?.percentUsed).toBe(80);
   });
+
+  it("keeps the Pi builtin's stale windows when the native probe fails transiently", async () => {
+    writeNativeAuth("native-access-token", "acct-native");
+    writePiAuth({
+      "openai-codex": piOauthEntry({
+        access: "personal-access-token",
+        accountId: "acct-pi",
+      }),
+    });
+    stubUsageByToken({
+      "native-access-token": new Response("unauthorized", { status: 401 }),
+      "personal-access-token": usage(40, "pi@example.invalid", "acct-pi"),
+    });
+
+    const first = await cacheCodexRead();
+    expect(first).toHaveLength(1);
+    expect(first[0]?.source).toBe("pi:openai-codex");
+    expect(first[0]?.windows[0]?.percentUsed).toBe(40);
+
+    // The native store still names another account, but its probe never got an
+    // answer, so it proves nothing about the Pi entry that filled the cache.
+    stubUsageByToken({
+      "native-access-token": new Response("unavailable", { status: 503 }),
+      "personal-access-token": usage(40, "pi@example.invalid", "acct-pi"),
+    });
+
+    const second = await readCodexLanes();
+    expect(second).toHaveLength(1);
+    expect(second[0]?.state.stale).toBe(true);
+    expect(second[0]?.windows[0]?.percentUsed).toBe(40);
+  });
 });
 
 function writePiAuth(store: Record<string, unknown>): void {

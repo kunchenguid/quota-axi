@@ -544,6 +544,22 @@ async function fetchQuotaWithDependencies(
     errorIsDefault = false;
   }
 
+  // Every stored id this run's credentials name has to be known before the
+  // first failure return, because a partial set would reject a snapshot one of
+  // the unread credentials still accounts for. Resolving is a bounded local
+  // read; which source answers is still decided below, in priority order.
+  let piResolution: PiCodexCredentialResolution | undefined;
+  let piAccountId: string | undefined;
+  if (!account || account.includesBuiltinPi) {
+    try {
+      piResolution = await dependencies.piCodexBroker.resolve();
+    } catch {
+      piResolution = { status: "error" };
+    }
+    piAccountId = resolvedAccountId(piResolution);
+    if (piAccountId) accountIds.push(piAccountId);
+  }
+
   const oauthSelection = await selectCredential(oauthCandidates, (candidate) =>
     attemptCodexCandidate(candidate.credential),
   );
@@ -573,16 +589,8 @@ async function fetchQuotaWithDependencies(
     errorIsDefault = false;
   }
 
-  if (!account || account.includesBuiltinPi) {
-    let piResolution: PiCodexCredentialResolution;
-    try {
-      piResolution = await dependencies.piCodexBroker.resolve();
-    } catch {
-      piResolution = { status: "error" };
-    }
+  if (piResolution) {
     const piCandidates: CredentialCandidate<CodexAttemptCredential>[] = [];
-    const piAccountId = resolvedAccountId(piResolution);
-    if (piAccountId) accountIds.push(piAccountId);
     if (piResolution.status === "available") {
       piCandidates.push({
         source: PI_CODEX_CREDENTIAL_SOURCE,
