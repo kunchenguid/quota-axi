@@ -894,6 +894,7 @@ describe("default TOON decision blocks", () => {
     PROVIDERS["opencode-go"] = providerWithQuota(freshOpenCodeGoQuota());
     PROVIDERS.commandcode = providerWithQuota(freshCommandCodeQuota());
     PROVIDERS.kiro = providerWithQuota(freshKiroQuota());
+    PROVIDERS.kiro = providerWithQuota(freshKiroQuota());
 
     const output = await capture([]);
     const named = new Set([
@@ -1924,6 +1925,29 @@ function freshCommandCodeQuota(): ProviderQuota {
       stale: false,
       refreshedAt: "2026-07-06T18:10:00Z",
       sourcesTried: ["pi:commandcode"],
+    },
+  };
+}
+
+function freshKiroQuota(): ProviderQuota {
+  return {
+    provider: "kiro",
+    label: "Kiro",
+    source: "api",
+    windows: [
+      {
+        id: "credits",
+        label: "credits",
+        kind: "credits",
+        percentUsed: 15,
+        percentRemaining: 85,
+      },
+    ],
+    state: {
+      status: "fresh",
+      stale: false,
+      refreshedAt: "2026-07-06T18:10:00Z",
+      sourcesTried: ["kiro-cli"],
     },
   };
 }

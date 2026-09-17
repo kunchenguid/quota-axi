@@ -810,6 +810,59 @@ describe("cards for providers with no combinable bound", () => {
     expect(findCardLine(lines, 0, "72% week")).toBeDefined();
   });
 
+  it("renders Kiro's provider-native per-window usage without inventing a combined bound", () => {
+    const kiro = withQuotaSemantics(
+      {
+        provider: "kiro",
+        label: "Kiro",
+        source: "api",
+        plan: "Kiro Pro",
+        overageStatus: "enabled",
+        windows: [
+          {
+            id: "CREDIT",
+            label: "credits",
+            kind: "credits",
+            usage: 120,
+            limit: 200,
+            unit: "credits",
+            percentUsed: 60,
+            percentRemaining: 40,
+            overage: 5,
+            overageCharges: 2.5,
+            currency: "USD",
+            resetsAt: "2026-08-20T00:00:00.000Z",
+          },
+        ],
+        state: {
+          status: "fresh",
+          stale: false,
+          refreshedAt: GENERATED_AT,
+          sourcesTried: ["kiro-cli"],
+        },
+      },
+      GENERATED_AT,
+    );
+    const lines = renderQuotaTui(
+      {
+        generatedAt: GENERATED_AT,
+        schemaVersion: 6,
+        providers: [claudeProvider(), kiro],
+      },
+      { timeZone: "America/Los_Angeles" },
+    ).split("\n");
+
+    const headline = findCardLine(lines, 1, "per-window usage");
+    expect(headline).toContain("no combined bound");
+    expect(findCardLine(lines, 1, "used 120 / 200 credits")).toBeDefined();
+    expect(findCardLine(lines, 1, "60% used")).toContain("40% remaining");
+    expect(findCardLine(lines, 1, "overage 5 credits")).toBeDefined();
+    expect(findCardLine(lines, 1, "charges 2.5 USD")).toBeDefined();
+    expect(findCardLine(lines, 1, "overage enabled")).toBeDefined();
+    const card = lines.map((line) => line.slice(CARD_COLUMNS + 2)).join("\n");
+    expect(card).not.toContain("effective unknown");
+  });
+
   it.each([
     ["fresh", false, "effective unknown"],
     ["stale", true, "stale · effective unknown"],
