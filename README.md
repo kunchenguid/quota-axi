@@ -72,7 +72,7 @@ Default TOON is decision-shaped: `quota[]` carries one fully populated row per m
 $ quota-axi --provider claude --json
 {
   "generatedAt": "2026-03-15T16:42:00.000Z",
-  "schemaVersion": 5,
+  "schemaVersion": 6,
   "providers": [
     {
       "provider": "claude",
@@ -352,13 +352,13 @@ CODEX_HOME=/path/to/codex-profile quota-axi --provider codex --profile-only --fu
 
 ## Output Model
 
-The `quota` command's `--json` emits `schemaVersion: 5`.
+The `quota` command's `--json` emits `schemaVersion: 6`.
 
 ### Normalized schema contract
 
 The package publishes TypeScript declarations from its package root, so consumers can use `import type { QuotaAxiResponse, ModelsResponse } from "quota-axi"`. The adapter contract is `ProviderAdapter` in and normalized `ProviderQuota` out: adapters report observed quota data, never rank, mint credentials, or retain raw responses. The narrowly bounded vendor-owned renewal path is documented under [Delegated credential refresh](#delegated-credential-refresh).
 
-`schemaVersion` is command-specific. Additive optional fields do not bump it. A semantic or incompatible shape change does. The `quota` report is version 5, `auth` is version 1, and `models` is version 1.
+`schemaVersion` is command-specific. Additive optional fields do not bump it. A semantic or incompatible shape change does. The `quota` report is version 6, `auth` is version 1, and `models` is version 1.
 
 ### Default report blocks
 
@@ -467,7 +467,7 @@ Codex is the provider this applies to today. The vendor reports a named model li
 
 `quotaSemantics.status` is `known` only when quota-axi understands the relationships needed for the reported scopes. A non-definitive availability entry omits `effectivePercentRemaining`. Unfamiliar vendor windows produce `partial` or `unknown` semantics and are named in `unresolvedWindowIds`; an empty provider report is `unknown` without inventing an unresolved window.
 
-Cursor's IDE windows (`included_usage`, `auto_usage`, `api_usage`, and optional `spend_limit`) all draw on the same plan billing cycle, so quota-axi treats them as jointly bounding and reports an `all_models` effective remaining equal to the lowest of them. That is the conservative reading: it never overstates headroom. Grok Bot weekly usage is a separate Cursor-account meter reported as its own `grok_bot` scope, so it never lowers IDE headroom and IDE windows never mask Grok Bot exhaustion. An unfamiliar Cursor window is not folded into either bound and does not create a bound of its own - it stays named in `unresolvedWindowIds` and turns the provider's semantics `partial` while the recognized-window bounds remain. GitHub Copilot's window relationships are still unknown, so it reports no effective remaining.
+Cursor's included IDE windows (`included_usage`, `auto_usage`, and `api_usage`) jointly bound the subscription model pool, so quota-axi reports their lowest remaining value as `all_models`. The optional `spend_limit` caps paid on-demand usage after included usage runs out and is reported independently as `on_demand`; exhausting it never lowers included model-pool availability. Grok Bot weekly usage is a third Cursor-account meter reported as `grok_bot`, so none of these three resources masks another's exhaustion. An unfamiliar Cursor window is not folded into a known bound and does not create a bound of its own - it stays named in `unresolvedWindowIds` and turns the provider's semantics `partial` while recognized bounds remain. GitHub Copilot's window relationships are still unknown, so it reports no effective remaining.
 
 Z.AI's `five_hour` and `weekly` usage windows jointly bound model usage and are reported as one `all_models` scope, while the `mcp_month` tool window is a separate resource reported as its own `tools` scope; a tool window near exhaustion therefore never lowers model headroom, and model windows never mask tool exhaustion. An unfamiliar or untrusted Z.AI window is not folded into either bound: it stays named in `unresolvedWindowIds`, turns the provider's semantics `partial`, and leaves both scopes non-definitive because it could add a bound to either.
 

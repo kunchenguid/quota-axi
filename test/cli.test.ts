@@ -484,7 +484,7 @@ describe("CLI quota rendering", () => {
     const codex = output.providers.find(
       (provider) => provider.provider === "codex",
     );
-    expect(output.schemaVersion).toBe(5);
+    expect(output.schemaVersion).toBe(6);
     expect(claude?.state.reason).toBe("keychain_access_required");
     expect(claude?.state.remedyCommand).toBe(
       "quota-axi --allow-keychain-prompt",
@@ -789,7 +789,7 @@ describe("CLI quota rendering", () => {
     const json = JSON.parse(
       await capture(["--provider", "kimi", "--json"]),
     ) as QuotaAxiResponse;
-    expect(json.schemaVersion).toBe(5);
+    expect(json.schemaVersion).toBe(6);
     expect(json.providers).toEqual([
       expect.objectContaining({
         provider: "kimi",
@@ -1182,7 +1182,7 @@ describe("--json tiering", () => {
     ) as QuotaAxiResponse;
     const [claude, cursor, grok, kimi] = json.providers;
 
-    expect(json.schemaVersion).toBe(5);
+    expect(json.schemaVersion).toBe(6);
     expect(claude?.state).toMatchObject({
       status: "stale",
       stale: true,
@@ -1285,7 +1285,7 @@ describe("response redaction", () => {
   it("hides account identity and attempts unless --full is set", () => {
     const response: QuotaAxiResponse = {
       generatedAt: "2026-07-06T18:10:00Z",
-      schemaVersion: 5,
+      schemaVersion: 6,
       providers: [
         {
           provider: "claude",

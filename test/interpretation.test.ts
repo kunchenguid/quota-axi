@@ -973,13 +973,16 @@ describe("quota semantics", () => {
     });
   });
 
-  it("bounds Cursor by its lowest recognized window across all models", () => {
+  it("keeps Cursor included model availability separate from its on-demand spend limit", () => {
     const result = withQuotaSemantics(
       provider("cursor", [
-        window("included_usage", "monthly", 58),
-        window("auto_usage", "monthly", 88),
-        window("api_usage", "monthly", 21),
-        window("spend_limit", "credits", 40),
+        window("included_usage", "monthly", 83),
+        window("auto_usage", "monthly", 91),
+        window("api_usage", "monthly", 64),
+        window("spend_limit", "credits", 0, {
+          spentUsd: 12.5,
+          limitUsd: 10,
+        }),
       ]),
       GENERATED_AT,
     );
@@ -990,9 +993,20 @@ describe("quota semantics", () => {
       expect.objectContaining({
         scope: "all_models",
         status: "known",
-        effectivePercentRemaining: 21,
-        boundedBy: ["included_usage", "auto_usage", "api_usage", "spend_limit"],
+        effectivePercentRemaining: 64,
+        boundedBy: ["included_usage", "auto_usage", "api_usage"],
         limitingWindowIds: ["api_usage"],
+      }),
+      expect.objectContaining({
+        scope: "on_demand",
+        status: "known",
+        effectivePercentRemaining: 0,
+        boundedBy: ["spend_limit"],
+        limitingWindowIds: ["spend_limit"],
+        runway: expect.objectContaining({
+          status: "exhausted_now",
+          limitingWindowId: "spend_limit",
+        }),
       }),
     ]);
   });
@@ -1127,10 +1141,16 @@ describe("quota semantics", () => {
 
     expect(result.quotaSemantics?.effectiveAvailability[0]).toMatchObject({
       scope: "all_models",
-      status: "unknown",
-      boundedBy: ["included_usage", "spend_limit"],
+      status: "known",
+      effectivePercentRemaining: 58,
+      boundedBy: ["included_usage"],
     });
-    expect(result.quotaSemantics?.effectiveAvailability[0]).not.toHaveProperty(
+    expect(result.quotaSemantics?.effectiveAvailability[1]).toMatchObject({
+      scope: "on_demand",
+      status: "unknown",
+      boundedBy: ["spend_limit"],
+    });
+    expect(result.quotaSemantics?.effectiveAvailability[1]).not.toHaveProperty(
       "effectivePercentRemaining",
     );
   });
