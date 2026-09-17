@@ -85,6 +85,7 @@ function needsGrokTokenRefreshAdvice(provider: ProviderQuota): boolean {
 
 function isBlockedCredentialAttempt(attempt: SourceAttempt): boolean {
   if (isKeychainSource(attempt.source)) return false;
+  if (isIdentityLookupSource(attempt.source)) return false;
   if (attempt.status === "skipped") return true;
   return (
     attempt.status === "failed" &&

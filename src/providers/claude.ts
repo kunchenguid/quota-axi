@@ -663,9 +663,13 @@ async function attemptClaudeQuota(
           transientFailureIsEnv = credential.source === "env";
           // The env token is an independent source the vendor merely resolves
           // first; its non-definitive failure must not withhold a still-untried
-          // stored source. A transient failure from a stored source still stops
-          // the loop, matching the existing within-source rule.
-          if (credential.source !== "env") break;
+          // stored source. An unresolved (transient) failure from a stored
+          // source still stops the loop, matching the existing within-source
+          // rule. A confirmed expiry is instead a resolved verdict on that one
+          // source, so it hands over to a remaining sibling exactly as the
+          // definitive branch above does - otherwise a live sibling would go
+          // unread while quota-axi asserts the account's credential expired.
+          if (!expiryConfirmed && credential.source !== "env") break;
         }
       }
     }
