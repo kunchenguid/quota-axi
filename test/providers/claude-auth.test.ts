@@ -1421,7 +1421,9 @@ describe("Claude credential-state reporting", () => {
       "fetch",
       vi.fn(async (url: string) =>
         url.includes("/oauth/profile")
-          ? new Response(JSON.stringify({}), { status: 200 })
+          ? Response.json({
+              account: { uuid: "account-uuid-fixture" },
+            })
           : new Response(null, {
               status: 429,
               headers: { "retry-after": "60" },
@@ -1438,6 +1440,12 @@ describe("Claude credential-state reporting", () => {
     expect(result.state.status).toBe("rate_limited");
     expect(result.state.error).toBe("Claude quota endpoint rate limited");
     expect(result.state.retryAfter).toBeTruthy();
+    // The profile endpoint answered live, so the probe is a plain success and
+    // never marks the source that answered as superseded.
+    expect(result.attempts).toContainEqual({
+      source: "oauth-profile",
+      status: "success",
+    });
   });
 
   it.each(["5xx", "timeout"])(
