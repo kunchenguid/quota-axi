@@ -337,7 +337,6 @@ async function fetchQuota(dependencies: Dependencies): Promise<ProviderQuota> {
         credentialPresent: true,
       });
       if (lastFailure.code !== "quota_missing") lastFailure = failure;
-      if (!failure.definitiveAuth) continue;
       continue;
     }
     if (!("credential" in resolution)) continue;
@@ -380,7 +379,13 @@ async function fetchQuota(dependencies: Dependencies): Promise<ProviderQuota> {
         status: "failed",
         error: failure.code,
       };
-      lastFailure = failure;
+      if (
+        failure.code !== "quota_missing" ||
+        lastFailure.code === "quota_missing" ||
+        lastFailure.code === "kiro_sign_in_required"
+      ) {
+        lastFailure = failure;
+      }
       if (!failure.definitiveAuth && failure.code !== "quota_missing") break;
     }
   }

@@ -480,7 +480,7 @@ Everything a consumer branches on stays in the default tier: `state.status`, `st
 | Object                        | Fields                                                                                                           |
 | ----------------------------- | ---------------------------------------------------------------------------------------------------------------- |
 | Quota report                  | `providers`                                                                                                      |
-| Provider report               | `provider`, optional `accountKey`, `windows`, `quotaSemantics`, `state`, optional `plan`, and optional `credits` |
+| Provider report               | `provider`, optional `accountKey`, `windows`, `quotaSemantics`, `state`, optional `plan`, optional `credits`, and optional `overageStatus` |
 | Provider report with `--full` | Also `label`, `source`, optional `account` identity, and per-source `attempts`                                   |
 | Account identity (`--full`)   | Optional `email`, `organization`, `accountId`, and `identityStatus`                                              |
 
