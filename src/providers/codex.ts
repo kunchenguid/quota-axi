@@ -2,6 +2,7 @@ import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { spawn } from "node:child_process";
 import {
+  bindCodexCacheAccountIds,
   deleteCachedProvider,
   readCachedCodexProvider,
   readCachedProvider,
@@ -461,7 +462,12 @@ async function fetchPiAccountQuota(
     ) ?? account.piProviderId,
   );
   if (piSelection.outcome === "quota") {
-    return codexSuccessReport(piSelection.result!, source, attempts);
+    return codexSuccessReport(
+      piSelection.result!,
+      source,
+      attempts,
+      accountIds,
+    );
   }
   const piResolution = lastResolution;
   const finalError =
@@ -539,7 +545,12 @@ async function fetchQuotaWithDependencies(
   );
   appendSelectionAttempts(attempts, oauthSelection);
   if (oauthSelection.outcome === "quota") {
-    return codexSuccessReport(oauthSelection.result!, "oauth", attempts);
+    return codexSuccessReport(
+      oauthSelection.result!,
+      "oauth",
+      attempts,
+      accountIds,
+    );
   }
   if (oauthSelection.outcome === "transient") {
     // The request failed, not the credential, so a sibling credential is not
@@ -619,6 +630,7 @@ async function fetchQuotaWithDependencies(
         piSelection.result!,
         PI_CODEX_CREDENTIAL_SOURCE,
         attempts,
+        accountIds,
       );
     }
     if (piSelection.outcome === "transient") {
@@ -643,18 +655,7 @@ async function fetchQuotaWithDependencies(
   try {
     const quota = await probeCodexCli();
     attempts[attempts.length - 1] = { source: "cli-rpc", status: "success" };
-    return successProvider({
-      provider: "codex",
-      label: "Codex",
-      source: "cli-rpc",
-      plan: quota.plan,
-      account: quota.account,
-      windows: quota.windows,
-      credits: quota.credits,
-      refreshedAt: quota.refreshedAt,
-      sourcesTried: sourceNames(attempts),
-      attempts,
-    });
+    return codexSuccessReport(quota, "cli-rpc", attempts, accountIds);
   } catch (error) {
     const message = errorMessage(error);
     attempts[attempts.length - 1] = {
@@ -737,8 +738,9 @@ function codexSuccessReport(
   quota: NormalizedCodexQuota,
   source: ProviderQuota["source"],
   attempts: SourceAttempt[],
+  accountIds: readonly string[] = [],
 ): ProviderQuota {
-  return successProvider({
+  const report = successProvider({
     provider: "codex",
     label: "Codex",
     source,
@@ -750,12 +752,14 @@ function codexSuccessReport(
     sourcesTried: sourceNames(attempts),
     attempts,
   });
+  bindCodexCacheAccountIds(report, accountIds);
+  return report;
 }
 
 /**
- * `accountIds` names the ChatGPT accounts this run's credentials could have
- * been reading, so a snapshot the vendor attributed to another one is not
- * served back as this account's stale windows.
+ * `accountIds` names the ChatGPT accounts this run's credentials still store,
+ * so a snapshot stamped for another stored identity is not served back as this
+ * account's stale windows.
  */
 function codexFailureReport(
   error: string,
@@ -1191,9 +1195,14 @@ async function fetchProfileOnlyQuota(): Promise<ProviderQuota> {
     credentials: credentialState.credentials,
   });
   if (attempt.kind === "quota") {
-    return codexSuccessReport(attempt.result, "oauth", [
-      { source: "oauth", status: "success" },
-    ]);
+    return codexSuccessReport(
+      attempt.result,
+      "oauth",
+      [{ source: "oauth", status: "success" }],
+      credentialState.credentials.accountId
+        ? [credentialState.credentials.accountId]
+        : [],
+    );
   }
 
   const error =

@@ -1427,6 +1427,32 @@ describe("Codex Pi sibling account lanes", () => {
     expect(second[0]?.windows).toEqual([]);
     expect(second[0]?.state.stale).toBe(false);
   });
+
+  it("keeps stale windows when the vendor account id differs from the stored one", async () => {
+    writePiAuth({
+      "openai-codex-work": piOauthEntry({
+        access: "work-access-token",
+        accountId: "acct-stored",
+      }),
+    });
+    stubUsageByToken({
+      "work-access-token": usage(80, "work@example.invalid", "acct-vendor"),
+    });
+
+    const first = await cacheCodexRead();
+    expect(first).toHaveLength(1);
+    expect(first[0]?.account?.accountId).toBe("acct-vendor");
+    expect(first[0]?.windows[0]?.percentUsed).toBe(80);
+
+    stubUsageByToken({
+      "work-access-token": new Response("unavailable", { status: 503 }),
+    });
+
+    const second = await readCodexLanes();
+    expect(second).toHaveLength(1);
+    expect(second[0]?.state.stale).toBe(true);
+    expect(second[0]?.windows[0]?.percentUsed).toBe(80);
+  });
 });
 
 function writePiAuth(store: Record<string, unknown>): void {

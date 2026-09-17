@@ -70,14 +70,12 @@ export async function fetchAccountQuotas(
     }
     if (report) readings.push({ account, report });
   }
-  return readings.map(({ account, report }) =>
-    accounts.length === 1
-      ? report
-      : {
-          ...report,
-          accountKey: account.accountKey,
-        },
-  );
+  if (accounts.length > 1) {
+    for (const { account, report } of readings) {
+      report.accountKey = account.accountKey;
+    }
+  }
+  return readings.map(({ report }) => report);
 }
 
 export async function inspectAccountAuth(

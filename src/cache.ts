@@ -59,7 +59,7 @@ const CREDENTIAL_CONTEXT_ID = /^[a-f0-9]{64}$/;
  * signed in to another ChatGPT account. A snapshot from one such context says
  * nothing about another, so each is stamped on write and checked on stale
  * reuse - strictly for Claude and Kimi, whose identity a reading always has,
- * and on proven mismatch for Codex, whose vendor account id is optional.
+ * and on proven mismatch for Codex, whose stored account id is optional.
  *
  * How that stamp is obtained is not the same question for each. A Claude
  * profile is fixed by this process's own environment, so deriving it here reads
@@ -69,17 +69,51 @@ const CREDENTIAL_CONTEXT_ID = /^[a-f0-9]{64}$/;
  * and a Kimi reading need not come from that configuration in the first place,
  * because Pi brokers a credential for the default endpoint while naming no
  * deployment. Kimi therefore reports the identity of whatever actually produced
- * its reading. Codex's account is not local configuration at all, so the stamp
- * is the account the vendor itself attributed the reading to, hashed because
- * the cache holds no account identity in the clear.
+ * its reading. Codex's slot is not local configuration either: a failed probe
+ * can only name the accounts the credentials still store, so the stamp is those
+ * stored ids (not the vendor's response id, which can differ while the token
+ * is the same) hashed because the cache holds no account identity in the clear.
  */
 const CONTEXT_SCOPED_PROVIDERS: Partial<
   Record<ProviderId, (provider: ProviderQuota) => string | undefined>
 > = {
   claude: claudeCredentialContextId,
   kimi: kimiReadingContextId,
-  codex: (provider) => codexAccountContextId(provider.account?.accountId),
+  codex: codexStampContextId,
 };
+
+/**
+ * Stored ChatGPT account ids the credentials that produced this report named.
+ * Held off the serialized snapshot so a later failed probe can compare the
+ * same ids it still reads from the store, not the vendor's response id.
+ */
+const codexStampAccountIds = new WeakMap<ProviderQuota, readonly string[]>();
+
+export function bindCodexCacheAccountIds(
+  provider: ProviderQuota,
+  accountIds: readonly string[],
+): void {
+  const unique = [...new Set(accountIds.filter((id) => id.length > 0))];
+  if (unique.length > 0) codexStampAccountIds.set(provider, unique);
+}
+
+function codexStampContextId(provider: ProviderQuota): string | undefined {
+  return (
+    codexStoredContextId(codexStampAccountIds.get(provider) ?? []) ??
+    codexAccountContextId(provider.account?.accountId)
+  );
+}
+
+function codexStoredContextId(
+  accountIds: readonly string[],
+): string | undefined {
+  const unique = [...new Set(accountIds.filter((id) => id.length > 0))].sort();
+  if (unique.length === 0) return undefined;
+  if (unique.length === 1) return codexAccountContextId(unique[0]);
+  return createHash("sha256")
+    .update(JSON.stringify(["codex-account-v1", unique]))
+    .digest("hex");
+}
 
 function codexAccountContextId(accountId?: string): string | undefined {
   return accountId
@@ -114,15 +148,17 @@ function readCachedRecord(
 }
 
 /**
- * Codex stale quota, withheld when the snapshot names a ChatGPT account none of
- * the credentials this run could have read names. A Codex slot is not tied to
- * one account by its name: the keyless slot is shared by a sole discovered lane
- * and the single-account path, and a stable Pi entry key can be signed in to a
- * different account, so the slot alone cannot say whose windows it holds.
+ * Codex stale quota, withheld when the snapshot was stamped with stored
+ * ChatGPT account ids none of this run's credentials still name. A Codex slot
+ * is not tied to one account by its name: the keyless slot is shared by a sole
+ * discovered lane and the single-account path, and a stable Pi entry key can be
+ * signed in to a different account, so the slot alone cannot say whose windows
+ * it holds.
  *
+ * The stamp is the stored ids, not the vendor response id: those can differ
+ * while the same token is live, and a later failed probe only has the store.
  * An unstamped snapshot, or a run whose credentials name no account, proves
- * nothing either way and is served as before - a reading the vendor never
- * attributed is not evidence of a different account.
+ * nothing either way and is served as before.
  */
 export function readCachedCodexProvider(
   accountKey: string | undefined,
@@ -132,7 +168,8 @@ export function readCachedCodexProvider(
   if (!record) return undefined;
   const contextId = record.credentialContextId;
   if (!contextId || accountIds.length === 0) return record.snapshot;
-  return accountIds.some((id) => codexAccountContextId(id) === contextId)
+  return codexStoredContextId(accountIds) === contextId ||
+    accountIds.some((id) => codexAccountContextId(id) === contextId)
     ? record.snapshot
     : undefined;
 }
