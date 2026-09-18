@@ -21,7 +21,7 @@ import type { ProviderQuota, SourceAttempt } from "../src/types.js";
  */
 
 type PiProviderCase = {
-  provider: "codex" | "kimi" | "grok";
+  provider: "codex" | "cursor" | "kimi" | "grok";
   /** Property name Pi stores this provider's credential under. */
   piKey: string;
   /** Attempt source name the adapter reports for its Pi store. */
@@ -41,6 +41,17 @@ const CASES: PiProviderCase[] = [
       refresh: "must-not-be-read",
       expires: Date.now() + 3_600_000,
       accountId: "acct-contract-fixture",
+    },
+  },
+  {
+    provider: "cursor",
+    piKey: "cursor",
+    piSource: "pi:cursor",
+    liveEntry: {
+      type: "oauth",
+      access: "pi-cursor-probe-token",
+      refresh: "must-not-be-read",
+      expires: Date.now() + 3_600_000,
     },
   },
   {
@@ -89,6 +100,8 @@ const ENV_KEYS = [
   "XDG_DATA_HOME",
   "GITHUB_COPILOT_APPS_JSON",
   "GH_CONFIG_DIR",
+  "CURSOR_STATE_DB",
+  "CURSOR_CLI_CONFIG",
 ] as const;
 
 const originalEnv = Object.fromEntries(
@@ -115,14 +128,30 @@ beforeEach(() => {
     "apps.json",
   );
   process.env.GH_CONFIG_DIR = join(tempDir, "gh");
+  process.env.CURSOR_STATE_DB = join(tempDir, "cursor", "state.vscdb");
+  process.env.CURSOR_CLI_CONFIG = join(tempDir, "cursor", "cli-config.json");
   delete process.env.GROK_AUTH;
   delete process.env.GROK_AUTH_JSON;
   delete process.env.GROK_AUTH_PATH;
   mkdirSync(process.env.CODEX_HOME, { recursive: true });
-  vi.doMock("../src/lib/process.js", async (importOriginal) => ({
-    ...(await importOriginal<typeof import("../src/lib/process.js")>()),
-    findCommandPath: vi.fn(async () => undefined),
-  }));
+  vi.doMock("../src/lib/process.js", async (importOriginal) => {
+    const original =
+      await importOriginal<typeof import("../src/lib/process.js")>();
+    return {
+      ...original,
+      findCommandPath: vi.fn(async () => undefined),
+      commandExists: vi.fn(async (command: string) =>
+        command === "sqlite3" ? true : original.commandExists(command),
+      ),
+      execFileText: vi.fn(
+        async (command: string, args: string[], timeout: number) => {
+          if (command === "sqlite3")
+            throw new Error("unable to open database file");
+          return original.execFileText(command, args, timeout);
+        },
+      ),
+    };
+  });
 });
 
 afterEach(() => {

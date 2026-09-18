@@ -20,9 +20,8 @@ import type { AuthSourceReport, ProviderOptions } from "../types.js";
  * Access-token refresh is intentionally not implemented: neither the Linux
  * `refreshToken` field nor the macOS `cursor-refresh-token` item is read,
  * because no safe vendor-owned non-interactive refresh command has been
- * established for Cursor. A rejected access token can therefore use an
- * eligible stale snapshot or report that authentication is required; recovery
- * is running `cursor-agent login` again.
+ * established for Cursor. A rejected access token therefore reports that
+ * authentication is required; recovery is running `cursor-agent login` again.
  */
 export const CURSOR_CLI_SOURCE = "cli-keychain";
 export const CURSOR_CLI_AUTHFILE_SOURCE = "cli-authfile";
