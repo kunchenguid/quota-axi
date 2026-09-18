@@ -446,10 +446,7 @@ export function renderAuthToon(
   const sources = reports.flatMap((report) =>
     report.sources.map((source) => ({
       provider: report.provider,
-      ...accountColumns(
-        report,
-        reports.some((item) => Boolean(item.accountKey)),
-      ),
+      ...accountColumns(report),
       source: source.source,
       path: source.path ? collapseHome(source.path) : "none",
       status: source.status,
@@ -476,10 +473,7 @@ export function renderModelsToon(
 ): string {
   const models = response.models.map((model) => ({
     provider: model.provider,
-    ...accountColumns(
-      model,
-      response.models.some((item) => Boolean(item.accountKey)),
-    ),
+    ...accountColumns(model),
     id: model.id,
     label: model.label,
     intelligence: model.intelligence,
@@ -509,10 +503,7 @@ export function renderModelsToon(
   if (full) {
     const evidence = response.models.map((model) => ({
       provider: model.provider,
-      ...accountColumns(
-        model,
-        response.models.some((item) => Boolean(item.accountKey)),
-      ),
+      ...accountColumns(model),
       id: model.id,
       boundedBy: model.effective?.boundedBy.join(" + ") ?? "unknown",
       limitingWindowIds:
@@ -637,6 +628,6 @@ function attemptRow(provider: ProviderQuota, attempt: SourceAttempt) {
 function providerColumns(provider: ProviderQuota) {
   return {
     provider: provider.provider,
-    ...accountColumns(provider, Boolean(provider.accountKey)),
+    ...accountColumns(provider),
   };
 }

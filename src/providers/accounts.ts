@@ -109,10 +109,17 @@ export async function inspectAccountAuth(
   return reports;
 }
 
-/** One spelling for the join columns in every flat output block. */
-export function accountColumns(
-  report: { provider: string; accountKey?: string },
-  expanded: boolean,
-): { accountKey?: string } {
-  return expanded ? { accountKey: report.accountKey ?? "default" } : {};
+/**
+ * One spelling for the join columns in every flat output block.
+ *
+ * Expansion is already decided upstream: each command fills every report's
+ * `accountKey` with the `default` filler as soon as one report carries a real
+ * key (`annotateQuotaAdvice`, `inspectAuth`, `createModelsResponse`). So a key
+ * here means the response expanded, and the renderer only copies it across.
+ */
+export function accountColumns(report: {
+  provider: string;
+  accountKey?: string;
+}): { accountKey?: string } {
+  return report.accountKey ? { accountKey: report.accountKey } : {};
 }

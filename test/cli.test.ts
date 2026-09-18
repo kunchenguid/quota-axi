@@ -1123,6 +1123,26 @@ describe("default TOON decision blocks", () => {
       expect(output).not.toContain("projectionBasis");
     }
   });
+
+  it("gives an unexpanded provider the default account key beside an expanded one", async () => {
+    useTempCache();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-15T12:00:00.000Z"));
+    PROVIDERS.claude = providerWithQuota(pacedProvider("claude", 90, 10));
+    PROVIDERS.codex = providerWithAccounts([
+      ["openai-codex", pacedProvider("codex", 20, 80)],
+      ["openai-codex-work", pacedProvider("codex", 40, 60)],
+    ]);
+
+    const output = await capture(["--provider", "claude,codex"]);
+
+    expect(output).toContain("quota[3]{provider,accountKey,");
+    expect(toonRows(output, "quota").map((row) => row.slice(0, 2))).toEqual([
+      ["claude", "default"],
+      ["codex", "openai-codex"],
+      ["codex", "openai-codex-work"],
+    ]);
+  });
 });
 
 describe("--json tiering", () => {
@@ -1395,6 +1415,26 @@ function providerWithQuota(quota: ProviderQuota): ProviderAdapter {
     },
     async inspectAuth() {
       return { provider: quota.provider, sources: [] };
+    },
+  };
+}
+
+/** Expands into one lane per account, the way an adapter's discovery does. */
+function providerWithAccounts(
+  lanes: [string, ProviderQuota][],
+): ProviderAdapter {
+  return {
+    ...providerWithQuota(lanes[0][1]),
+    async discoverAccounts() {
+      return lanes.map(([accountKey, quota]) => ({
+        accountKey,
+        async fetchQuota() {
+          return quota;
+        },
+        async inspectAuth() {
+          return { provider: quota.provider, sources: [] };
+        },
+      }));
     },
   };
 }
