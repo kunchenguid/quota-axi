@@ -1,0 +1,41 @@
+# Trusted no-mistakes gate configuration.
+#
+# no-mistakes reads `commands` (and `agent`) only from the default-branch copy of
+# this file, so a pushed branch cannot inject shell; `allow_repo_commands` stays
+# unset/false for the same reason. See
+# https://kunchenguid.github.io/no-mistakes/reference/repo-config/
+#
+# `commands.test` must be declared, not left empty: no-mistakes runs it as the
+# Test step's deterministic baseline, while an empty value leaves the step to an
+# open-ended agent that invents its own validation commands. The pair below is
+# the repository's own ladder: `commands.prepare` matches the install line in
+# `.airlock/lint.sh` and `.github/workflows/ci.yml`, and `commands.test` runs the
+# package's single suite definition (`pnpm run build && vitest run`, non-watch,
+# self-terminating) rather than a re-typed copy that can drift.
+# `test.instructions` bounds the agent that still runs after that baseline: it
+# is the trusted live-validation runbook, honored only from this default-branch
+# copy, and it keeps the agent's own scenarios local, offline, and
+# self-terminating so the step cannot hang on an invented network or
+# host-discovery probe.
+# `test/no-mistakes-config.test.ts` guards these strings and the non-watch
+# property; changing them is a deliberate config change, not a refactor.
+commands:
+  prepare: pnpm install --frozen-lockfile
+  test: pnpm test
+
+test:
+  # Product startup and live-validation runbook, read only from the trusted
+  # default-branch copy.
+  instructions: |
+    Run the repository's own deterministic suite, `pnpm test`, as the baseline
+    and treat its result as the primary evidence.
+
+    For any additional scenario, stay local to this worktree and bounded: drive
+    the CLI with synthetic fixtures and mocked credential, vendor-process, and
+    HTTP boundaries, and give every command an explicit short timeout.
+
+    Do not make outbound network calls or contact a provider API. Do not enter a
+    live quota or credential path, and never refresh, mint, or exchange a
+    credential. Do not start a proxy, discover hosts or ports, or probe an
+    endpoint you did not start in this worktree. Do not search the whole
+    filesystem. Do not run a command that waits indefinitely.

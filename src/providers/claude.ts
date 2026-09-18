@@ -262,6 +262,17 @@ function isProfileOnly(options: ProviderOptions): boolean {
 }
 
 /**
+ * The identity lookup is not a credential source, so its failure never marks
+ * the source that answered as superseded; `account` already reports the
+ * unverified identity.
+ */
+function oauthProfileAttempt(error?: string): SourceAttempt {
+  return error
+    ? { source: "oauth-profile", status: "failed", error, degraded: false }
+    : { source: "oauth-profile", status: "success" };
+}
+
+/**
  * Read exactly the profile selected by CLAUDE_CONFIG_DIR. This path is kept
  * separate from normal discovery so profile isolation can never reach the
  * default home, Keychain, refresh delegate, or quota cache.
@@ -350,16 +361,7 @@ async function fetchProfileOnlyQuota(): Promise<ProviderQuota> {
     // Stored expiry is advisory here too: the selected bearer is always tested.
     const quota = await fetchOauthUsage(state.credentials);
     attempts[0] = { source: "oauth-file", status: "success" };
-    attempts.push(
-      quota.identityError
-        ? {
-            source: "oauth-profile",
-            status: "failed",
-            error: quota.identityError,
-            degraded: false,
-          }
-        : { source: "oauth-profile", status: "success" },
-    );
+    attempts.push(oauthProfileAttempt(quota.identityError));
     return successProvider({
       provider: "claude",
       label: "Claude",
@@ -505,6 +507,30 @@ function unconfirmedRefreshFailure(): ClaudeFailure {
   });
 }
 
+/**
+ * Ask `/api/oauth/profile` whether a stored-expired bearer the usage endpoint
+ * rate limited is genuinely dead. The probe is recorded like the success path's
+ * identity lookup, so `--full` shows the evidence behind a reclassified
+ * verdict.
+ *
+ * A profile 401 is not authoritative on its own, and nothing here treats it
+ * that way: the identity lookup on the success path reports exactly the same
+ * rejection as an unverified identity and keeps the live quota the usage
+ * endpoint just returned. It carries weight only in combination with the
+ * caller's own two signals - the usage endpoint rate limited this bearer, and
+ * the store that holds it already recorded it as expired.
+ *
+ * @returns true only when the vendor explicitly rejected the bearer
+ */
+async function confirmClaudeStoredExpiry(
+  credential: ClaudeCredentials,
+  attempts: SourceAttempt[],
+): Promise<boolean> {
+  const identity = await fetchOauthProfile(credential);
+  attempts.push(oauthProfileAttempt(identity.error));
+  return identity.error === "identity_profile_http_401";
+}
+
 async function attemptClaudeQuota(
   options: ProviderOptions,
   attempts: SourceAttempt[],
@@ -579,19 +605,7 @@ async function attemptClaudeQuota(
           source: credential.source,
           status: "success",
         };
-        attempts.push(
-          quota.identityError
-            ? {
-                source: "oauth-profile",
-                status: "failed",
-                error: quota.identityError,
-                // The identity lookup is not a credential source, so its
-                // failure never marks a source as superseded; `account`
-                // already reports the unverified identity.
-                degraded: false,
-              }
-            : { source: "oauth-profile", status: "success" },
-        );
+        attempts.push(oauthProfileAttempt(quota.identityError));
         return {
           kind: "success",
           report: successProvider({
@@ -629,13 +643,33 @@ async function attemptClaudeQuota(
           // matching the existing behavior for stored-only candidates.
           if (credential.source === "env") break;
         } else {
-          transientFailure = failure.withUsageFetchFailure();
+          // Stored expiry is advisory only - a stored-expired credential can
+          // still be live vendor-side, so a 429 here might be a genuine rate
+          // limit whose Retry-After should not be discarded. Confirm real
+          // expiry against /api/oauth/profile, the same call the vendor
+          // answers with an explicit "access token has expired" 401, before
+          // reclassifying. Any other outcome (live, transient, or unclear)
+          // leaves the original rate-limited failure untouched.
+          const expiryConfirmed =
+            state.status === "expired" &&
+            failure.status === "rate_limited" &&
+            (await confirmClaudeStoredExpiry(credential, attempts));
+          transientFailure = expiryConfirmed
+            ? new ClaudeFailure("Claude credential expired", {
+                status: "unavailable",
+                staleEligible: true,
+              }).withUsageFetchFailure()
+            : failure.withUsageFetchFailure();
           transientFailureIsEnv = credential.source === "env";
           // The env token is an independent source the vendor merely resolves
           // first; its non-definitive failure must not withhold a still-untried
-          // stored source. A transient failure from a stored source still stops
-          // the loop, matching the existing within-source rule.
-          if (credential.source !== "env") break;
+          // stored source. An unresolved (transient) failure from a stored
+          // source still stops the loop, matching the existing within-source
+          // rule. A confirmed expiry is instead a resolved verdict on that one
+          // source, so it hands over to a remaining sibling exactly as the
+          // definitive branch above does - otherwise a live sibling would go
+          // unread while quota-axi asserts the account's credential expired.
+          if (!expiryConfirmed && credential.source !== "env") break;
         }
       }
     }

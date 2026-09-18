@@ -63,9 +63,15 @@ function needsKeychainAccessAdvice(provider: ProviderQuota): boolean {
   const attempts = provider.attempts ?? [];
   return (
     provider.state.status !== "fresh" &&
-    !attempts.some((attempt) => attempt.status === "success") &&
+    !attempts.some(isCredentialSourceReading) &&
     attempts.some(isBlockedCredentialAttempt) &&
     attempts.some(isPromptBlockedKeychainAttempt)
+  );
+}
+
+function isCredentialSourceReading(attempt: SourceAttempt): boolean {
+  return (
+    attempt.status === "success" && !isIdentityLookupSource(attempt.source)
   );
 }
 
@@ -79,6 +85,7 @@ function needsGrokTokenRefreshAdvice(provider: ProviderQuota): boolean {
 
 function isBlockedCredentialAttempt(attempt: SourceAttempt): boolean {
   if (isKeychainSource(attempt.source)) return false;
+  if (isIdentityLookupSource(attempt.source)) return false;
   if (attempt.status === "skipped") return true;
   return (
     attempt.status === "failed" &&
@@ -99,6 +106,15 @@ function isDefinitiveCredentialRejection(error: string | undefined): boolean {
 /** Providers name their Keychain source `keychain` or `<store>-keychain`. */
 function isKeychainSource(source: string): boolean {
   return source === "keychain" || source.endsWith("-keychain");
+}
+
+/**
+ * The OAuth identity lookup is a probe made with a credential some source
+ * already supplied, not a credential source of its own, so its outcome neither
+ * establishes nor cancels a credential reading.
+ */
+function isIdentityLookupSource(source: string): boolean {
+  return source === "oauth-profile";
 }
 
 function isPromptBlockedKeychainAttempt(attempt: SourceAttempt): boolean {

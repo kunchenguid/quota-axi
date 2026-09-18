@@ -1342,6 +1342,219 @@ describe("Claude credential-state reporting", () => {
     }
   });
 
+  it("reclassifies a 429 against a stored-expired credential as expired once /profile confirms it", async () => {
+    const home = useTempHome();
+    writeClaudeCredential(home, {
+      accessToken: "advisory-expired-token",
+      expiresAt: "2000-01-01T00:00:00.000Z",
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) =>
+        url.includes("/oauth/profile")
+          ? new Response(null, { status: 401 })
+          : new Response(null, {
+              status: 429,
+              headers: { "retry-after": "2864" },
+            }),
+      ),
+    );
+
+    const { fetchQuota } = await import("../../src/providers/claude.js");
+    const result = await fetchQuota({
+      allowKeychainPrompt: false,
+      refreshCredentials: false,
+    });
+
+    expect(result.state.status).toBe("unavailable");
+    expect(result.state.error).toBe("Claude credential expired");
+    expect(result.state.retryAfter).toBeUndefined();
+    expect(result.attempts).toContainEqual({
+      source: "oauth-file",
+      status: "failed",
+      error: "Claude quota endpoint rate limited",
+    });
+    // The confirming probe is visible evidence for the reclassified verdict,
+    // and is not a credential source, so it never marks one superseded.
+    expect(result.attempts).toContainEqual({
+      source: "oauth-profile",
+      status: "failed",
+      error: "identity_profile_http_401",
+      degraded: false,
+    });
+  });
+
+  it("does not reclassify a 429 against a live (non-expired) credential", async () => {
+    const home = useTempHome();
+    writeClaudeCredential(home, {
+      accessToken: "live-token",
+      expiresAt: "2035-01-01T00:00:00.000Z",
+    });
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(null, {
+          status: 429,
+          headers: { "retry-after": "60" },
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { fetchQuota } = await import("../../src/providers/claude.js");
+    const result = await fetchQuota({
+      allowKeychainPrompt: false,
+      refreshCredentials: false,
+    });
+
+    expect(result.state.status).toBe("rate_limited");
+    expect(result.state.error).toBe("Claude quota endpoint rate limited");
+    // A live credential never needs the /profile confirmation round trip.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not reclassify a 429 against a stored-expired credential that is still live vendor-side", async () => {
+    const home = useTempHome();
+    writeClaudeCredential(home, {
+      accessToken: "advisory-expired-but-still-live-token",
+      expiresAt: "2000-01-01T00:00:00.000Z",
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) =>
+        url.includes("/oauth/profile")
+          ? Response.json({
+              account: { uuid: "account-uuid-fixture" },
+            })
+          : new Response(null, {
+              status: 429,
+              headers: { "retry-after": "60" },
+            }),
+      ),
+    );
+
+    const { fetchQuota } = await import("../../src/providers/claude.js");
+    const result = await fetchQuota({
+      allowKeychainPrompt: false,
+      refreshCredentials: false,
+    });
+
+    expect(result.state.status).toBe("rate_limited");
+    expect(result.state.error).toBe("Claude quota endpoint rate limited");
+    expect(result.state.retryAfter).toBeTruthy();
+    // The profile endpoint answered live, so the probe is a plain success and
+    // never marks the source that answered as superseded.
+    expect(result.attempts).toContainEqual({
+      source: "oauth-profile",
+      status: "success",
+    });
+  });
+
+  it("hands a confirmed expiry over to a still-untried sibling source", async () => {
+    // Claude Code rotates the Keychain item every few hours, and darwin tries
+    // it before the sidecar, so it is the store most likely to read as
+    // stored-expired while a live sibling is sitting right behind it.
+    usePlatform("darwin");
+    const home = useTempHome();
+    await writeKeychainAccessMarker();
+    writeClaudeCredential(home, {
+      accessToken: "live-sidecar-token",
+      expiresAt: "2035-01-01T00:00:00.000Z",
+    });
+    const execFileText = mockKeychainRead(async () =>
+      JSON.stringify({
+        claudeAiOauth: {
+          accessToken: "expired-keychain-token",
+          expiresAt: "2000-01-01T00:00:00.000Z",
+        },
+      }),
+    );
+    vi.doMock("../../src/lib/process.js", () => ({ execFileText }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        const bearer = (init?.headers as Record<string, string>)?.authorization;
+        if (bearer === "Bearer expired-keychain-token") {
+          return url.includes("/oauth/profile")
+            ? new Response(null, { status: 401 })
+            : new Response(null, {
+                status: 429,
+                headers: { "retry-after": "2864" },
+              });
+        }
+        return url.includes("/oauth/profile")
+          ? Response.json({ account: { uuid: "account-uuid-fixture" } })
+          : Response.json({ five_hour: { utilization: 21 } });
+      }),
+    );
+
+    const { fetchQuota } = await import("../../src/providers/claude.js");
+    const result = await fetchQuota({
+      allowKeychainPrompt: false,
+      refreshCredentials: false,
+    });
+
+    expect(result.state.status).toBe("fresh");
+    expect(result.state.error).toBeUndefined();
+    expect(result.windows).toMatchObject([
+      { id: "five_hour", percentUsed: 21 },
+    ]);
+    expect(result.attempts).toContainEqual({
+      source: "oauth-file",
+      status: "success",
+    });
+  });
+
+  it("does not advise Keychain access from the identity probe's rejection alone", async () => {
+    usePlatform("darwin");
+    const home = useTempHome();
+    writeClaudeCredential(home, {
+      accessToken: "advisory-expired-token",
+      expiresAt: "2000-01-01T00:00:00.000Z",
+    });
+    const execFileText = mockKeychainRead(
+      async () => "keychain item metadata\n",
+    );
+    vi.doMock("../../src/lib/process.js", () => ({ execFileText }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) =>
+        url.includes("/oauth/profile")
+          ? new Response(null, { status: 401 })
+          : new Response(null, {
+              status: 429,
+              headers: { "retry-after": "2864" },
+            }),
+      ),
+    );
+
+    const { fetchQuota } = await import("../../src/providers/claude.js");
+    const result = await fetchQuota({
+      allowKeychainPrompt: false,
+      refreshCredentials: false,
+    });
+    const annotated = annotateQuotaAdvice({
+      generatedAt: new Date().toISOString(),
+      providers: [result],
+    });
+
+    expect(result.attempts).toContainEqual({
+      source: "keychain",
+      status: "skipped",
+      error: "keychain_prompt_required",
+      credentialPresent: true,
+    });
+    // The credential source itself was only rate limited, never definitively
+    // rejected, so the probe's own 401 must not stand in for one.
+    expect(result.attempts).toContainEqual({
+      source: "oauth-profile",
+      status: "failed",
+      error: "identity_profile_http_401",
+      degraded: false,
+    });
+    expect(annotated.providers[0]?.state.reason).toBeUndefined();
+    expect(annotated.providers[0]?.state.remedyCommand).toBeUndefined();
+    expect(annotated.help).toBeUndefined();
+  });
+
   it.each(["5xx", "timeout"])(
     "does not advise Keychain access after an oauth-file %s failure",
     async (failureKind) => {

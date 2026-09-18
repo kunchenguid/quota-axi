@@ -64,12 +64,12 @@ function mockUnreadableStore(): void {
  * source. On darwin this exists alongside the Keychain source (both are
  * checked), giving a second, independent stored candidate.
  */
-function writeOauthFile(accessToken: string): void {
+function writeOauthFile(accessToken: string, expiresAt?: number): void {
   const dir = join(home, ".claude");
   mkdirSync(dir, { recursive: true });
   writeFileSync(
     join(dir, ".credentials.json"),
-    JSON.stringify({ claudeAiOauth: { accessToken } }),
+    JSON.stringify({ claudeAiOauth: { accessToken, expiresAt } }),
   );
 }
 
@@ -363,6 +363,96 @@ describe("Claude CLAUDE_CODE_OAUTH_TOKEN credential source", () => {
 
     expect(report.state.status).not.toBe("auth_required");
     expect(readCachedProvider("claude")).toBeDefined();
+  });
+
+  it("keeps a confirmed stored expiry ahead of an earlier definitive rejection", async () => {
+    // Keychain is tried before the oauth-file sidecar on darwin, and the
+    // environment token before both.
+    writeOauthFile(OAUTH_FILE_TOKEN, Date.now() - 60_000);
+    mockStore({ accessToken: STORED_TOKEN });
+    const { fetchQuota } = await import("../../src/providers/claude.js");
+    const { writeCachedProviders, readCachedProvider } =
+      await import("../../src/cache.js");
+    const fresh = await fetchQuota(options);
+    expect(fresh.state.status).toBe("fresh");
+    writeCachedProviders([fresh]);
+    expect(readCachedProvider("claude")).toBeDefined();
+
+    // The env token fails transiently, the Keychain sibling is definitively
+    // rejected, and the stored-expired sidecar that runs last is confirmed
+    // expired against /profile. That confirmation is the reading's own
+    // unresolved outcome, so the earlier 401 must not be promoted to a
+    // sign-out that retires the snapshot above.
+    vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", ENV_TOKEN);
+    fetchMock.mockImplementation(async (url: string, init: unknown) => {
+      const bearer = (init as { headers: Record<string, string> }).headers
+        .authorization;
+      if (bearer === `Bearer ${ENV_TOKEN}`)
+        return new Response("{}", { status: 500 });
+      if (bearer === `Bearer ${STORED_TOKEN}`)
+        return new Response("{}", { status: 401 });
+      return String(url).includes("/oauth/profile")
+        ? new Response("{}", { status: 401 })
+        : new Response("{}", {
+            status: 429,
+            headers: { "retry-after": "60" },
+          });
+    });
+    const report = await fetchQuota(options);
+
+    expect(report.state.status).not.toBe("auth_required");
+    expect(report.state.error).toBe("Claude credential expired");
+    expect(readCachedProvider("claude")).toBeDefined();
+  });
+
+  it("still offers the Keychain remedy when only the identity probe answered", async () => {
+    // The Keychain holds the credential but its value read is gated, the env
+    // token is rejected non-definitively, and the stored-expired sidecar is
+    // merely rate limited. Nothing read a credential, so the one actionable
+    // remedy is the Keychain grant - the identity probe answering live must
+    // not read as a source that produced a reading.
+    vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", ENV_TOKEN);
+    writeOauthFile(OAUTH_FILE_TOKEN, Date.now() - 60_000);
+    mockStore({ accessToken: STORED_TOKEN });
+    fetchMock.mockImplementation(async (url: string, init: unknown) => {
+      const bearer = (init as { headers: Record<string, string> }).headers
+        .authorization;
+      if (bearer === `Bearer ${ENV_TOKEN}`)
+        return new Response("{}", { status: 403 });
+      return String(url).includes("/oauth/profile")
+        ? Response.json({ account: { uuid: "account-uuid-fixture" } })
+        : new Response("{}", {
+            status: 429,
+            headers: { "retry-after": "60" },
+          });
+    });
+
+    const { fetchQuota } = await import("../../src/providers/claude.js");
+    const { annotateQuotaAdvice, KEYCHAIN_ACCESS_REASON } =
+      await import("../../src/advice.js");
+    const report = await fetchQuota({
+      allowKeychainPrompt: false,
+      refreshCredentials: false,
+    });
+    const annotated = annotateQuotaAdvice({
+      generatedAt: "2026-09-18T00:00:00.000Z",
+      providers: [report],
+    });
+
+    expect(report.attempts).toContainEqual({
+      source: "keychain",
+      status: "skipped",
+      error: "keychain_prompt_required",
+      credentialPresent: true,
+    });
+    expect(report.attempts).toContainEqual({
+      source: "oauth-profile",
+      status: "success",
+    });
+    expect(annotated.providers[0]?.state.reason).toBe(KEYCHAIN_ACCESS_REASON);
+    expect(annotated.help?.join("\n") ?? "").toContain(
+      "--allow-keychain-prompt",
+    );
   });
 
   it("trims surrounding whitespace on the environment token before sending it", async () => {
