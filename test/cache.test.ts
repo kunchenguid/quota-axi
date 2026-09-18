@@ -447,6 +447,27 @@ oauth_host = "https://auth.kimi.ai"
     expect(statSync(cacheFilePath()).mode & 0o777).toBe(0o600);
   });
 
+  it("clears a cached provider after a definitive auth failure", () => {
+    useTempCache();
+    writeCachedProviders([quota("kiro", 10), quota("claude", 20)]);
+
+    writeCachedProviders([
+      {
+        ...quota("kiro", 10),
+        windows: [],
+        state: {
+          status: "auth_required",
+          stale: false,
+          error: "kiro_sign_in_required",
+          sourcesTried: ["kiro-cli"],
+        },
+      },
+    ]);
+
+    expect(readCachedProvider("kiro")).toBeUndefined();
+    expect(readCachedProvider("claude")?.windows[0].percentUsed).toBe(20);
+  });
+
   it("clears a stale snapshot after a fresh no-window report", () => {
     useTempCache();
     writeCachedProviders([quota("claude", 10), quota("copilot", 20)]);

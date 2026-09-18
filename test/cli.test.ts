@@ -990,6 +990,50 @@ describe("default TOON decision blocks", () => {
     ]);
   });
 
+  it("keeps account keys on credit rows in expanded reports", async () => {
+    useTempCache();
+    const creditQuota = (accountKey: string): ProviderQuota => ({
+      provider: "commandcode",
+      label: "Command Code",
+      source: "api",
+      accountKey,
+      windows: [],
+      credits: { remaining: 12.5, unit: "credits" },
+      state: {
+        status: "fresh",
+        stale: false,
+        refreshedAt: "2026-07-06T18:10:00Z",
+        authStatus: "usable",
+        sourcesTried: ["pi:commandcode"],
+      },
+    });
+    PROVIDERS.commandcode = providerWithAccounts([
+      ["work", creditQuota("work")],
+      ["personal", creditQuota("personal")],
+    ]);
+
+    const output = await capture(["--provider", "commandcode"]);
+
+    expect(toonRows(output, "attention")).toEqual([
+      [
+        "commandcode",
+        "work",
+        "all",
+        "credits",
+        "remaining 12.5 credits (auth usable)",
+        "none",
+      ],
+      [
+        "commandcode",
+        "personal",
+        "all",
+        "credits",
+        "remaining 12.5 credits (auth usable)",
+        "none",
+      ],
+    ]);
+  });
+
   it("renders an unmeasurable spendPriority as `unknown`, never as 0", async () => {
     useTempCache();
     vi.useFakeTimers();

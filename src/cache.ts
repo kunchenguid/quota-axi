@@ -221,9 +221,11 @@ export function writeCachedProviders(providers: ProviderQuota[]): void {
     providers
       .filter(
         (provider) =>
-          provider.state.status === "fresh" &&
-          provider.windows.length === 0 &&
-          !missingRequiredContext(provider.provider),
+          (provider.state.status === "fresh" &&
+            provider.windows.length === 0 &&
+            !missingRequiredContext(provider)) ||
+          (provider.state.status === "auth_required" &&
+            !missingRequiredContext(provider)),
       )
       .map(cacheIdentity),
   );
@@ -354,14 +356,12 @@ function toCacheProvider(provider: ProviderQuota): CachedProvider | undefined {
   };
 }
 
-function missingRequiredContext(provider: ProviderId): boolean {
+function missingRequiredContext(provider: ProviderQuota): boolean {
   // Codex stamps are optional; Claude, Kimi, and Command Code must not clear
   // when the current reading has no published context identity.
-  if (provider === "codex") return false;
-  const scope = CONTEXT_SCOPED_PROVIDERS[provider];
-  return (
-    scope !== undefined && !scope({ provider } as ProviderQuota)
-  );
+  if (provider.provider === "codex") return false;
+  const scope = CONTEXT_SCOPED_PROVIDERS[provider.provider];
+  return scope !== undefined && !scope(provider);
 }
 
 function serializeCachedProvider(
