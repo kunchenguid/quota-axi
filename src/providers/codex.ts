@@ -510,8 +510,9 @@ async function fetchQuotaWithDependencies(
   let errorIsDefault = true;
 
   const credentialState = readCredentialState();
-  // The accounts this run's own credentials name. A cached snapshot stamped
-  // with none of them belongs to a login this configuration has replaced.
+  // The accounts whose credentials this reading has tried. A failure may only
+  // serve a cached snapshot stamped with one of them: a credential never tried
+  // cannot vouch for windows filed under the slot this reading shares.
   const accountIds: string[] = [];
   // The native store answers both the `oauth` probe and the CLI fallback.
   let nativeAccountId: string | undefined;
@@ -544,22 +545,6 @@ async function fetchQuotaWithDependencies(
     errorIsDefault = false;
   }
 
-  // Every stored id this run's credentials name has to be known before the
-  // first failure return, because a partial set would reject a snapshot one of
-  // the unread credentials still accounts for. Resolving is a bounded local
-  // read; which source answers is still decided below, in priority order.
-  let piResolution: PiCodexCredentialResolution | undefined;
-  let piAccountId: string | undefined;
-  if (!account || account.includesBuiltinPi) {
-    try {
-      piResolution = await dependencies.piCodexBroker.resolve();
-    } catch {
-      piResolution = { status: "error" };
-    }
-    piAccountId = resolvedAccountId(piResolution);
-    if (piAccountId) accountIds.push(piAccountId);
-  }
-
   const oauthSelection = await selectCredential(oauthCandidates, (candidate) =>
     attemptCodexCandidate(candidate.credential),
   );
@@ -589,7 +574,17 @@ async function fetchQuotaWithDependencies(
     errorIsDefault = false;
   }
 
-  if (piResolution) {
+  if (!account || account.includesBuiltinPi) {
+    let piResolution: PiCodexCredentialResolution;
+    try {
+      piResolution = await dependencies.piCodexBroker.resolve();
+    } catch {
+      piResolution = { status: "error" };
+    }
+    // Only a resolution holding credentials names an account, and those
+    // credentials are always tried below.
+    const piAccountId = resolvedAccountId(piResolution);
+    if (piAccountId) accountIds.push(piAccountId);
     const piCandidates: CredentialCandidate<CodexAttemptCredential>[] = [];
     if (piResolution.status === "available") {
       piCandidates.push({
@@ -646,13 +641,14 @@ async function fetchQuotaWithDependencies(
       );
     }
     if (piSelection.outcome === "transient") {
+      // The Pi entry is this reading's source; a rejected native login is not.
       return codexFailureReport(
         piSelection.transientError ?? finalError,
         piSelection.retryAfter,
         attempts,
         PI_CODEX_CREDENTIAL_SOURCE,
         account?.cacheKey,
-        accountIds,
+        piAccountId ? [piAccountId] : [],
       );
     }
     if (piSelection.outcome === "all_rejected") {
@@ -773,9 +769,9 @@ function codexSuccessReport(
 }
 
 /**
- * `accountIds` names the ChatGPT accounts this run's credentials still store,
- * so a snapshot stamped for another stored identity is not served back as this
- * account's stale windows.
+ * `accountIds` names the ChatGPT accounts the credentials this reading tried
+ * still store, so a snapshot stamped for another stored identity is not served
+ * back as this account's stale windows.
  */
 function codexFailureReport(
   error: string,

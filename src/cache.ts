@@ -142,17 +142,17 @@ function readCachedRecord(
 }
 
 /**
- * Codex stale quota, withheld when the snapshot was stamped with stored
- * ChatGPT account ids none of this run's credentials still name. A Codex slot
- * is not tied to one account by its name: the keyless slot is shared by a sole
- * discovered lane and the single-account path, and a stable Pi entry key can be
- * signed in to a different account, so the slot alone cannot say whose windows
- * it holds.
+ * Codex stale quota, withheld when the snapshot was stamped with a stored
+ * ChatGPT account id none of the failed reading's tried credentials name. A
+ * Codex slot is not tied to one account by its name: the keyless slot is shared
+ * by a sole discovered lane and the single-account path, and a stable Pi entry
+ * key can be signed in to a different account, so the slot alone cannot say
+ * whose windows it holds.
  *
  * The stamp is the stored id, not the vendor response id: those can differ
  * while the same token is live, and a later failed probe only has the store.
- * An unstamped snapshot, or a run whose credentials name no account, proves
- * nothing either way and is served as before.
+ * An unstamped snapshot, or a reading whose tried credentials name no account,
+ * proves nothing either way and is served as before.
  */
 export function readCachedCodexProvider(
   accountKey: string | undefined,

@@ -1454,17 +1454,15 @@ describe("Codex Pi sibling account lanes", () => {
     expect(second[0]?.windows[0]?.percentUsed).toBe(80);
   });
 
-  it("keeps the Pi builtin's stale windows when the native probe fails transiently", async () => {
-    writeNativeAuth("native-access-token", "acct-native");
+  it("never serves an untried Pi entry's cached windows for a native probe that failed", async () => {
     writePiAuth({
       "openai-codex": piOauthEntry({
-        access: "personal-access-token",
-        accountId: "acct-pi",
+        access: "pi-access-token",
+        accountId: "acct-b",
       }),
     });
     stubUsageByToken({
-      "native-access-token": new Response("unauthorized", { status: 401 }),
-      "personal-access-token": usage(40, "pi@example.invalid", "acct-pi"),
+      "pi-access-token": usage(40, "b@example.invalid", "acct-b"),
     });
 
     const first = await cacheCodexRead();
@@ -1472,17 +1470,50 @@ describe("Codex Pi sibling account lanes", () => {
     expect(first[0]?.source).toBe("pi:openai-codex");
     expect(first[0]?.windows[0]?.percentUsed).toBe(40);
 
-    // The native store still names another account, but its probe never got an
-    // answer, so it proves nothing about the Pi entry that filled the cache.
+    // A native login for another account now outranks B's Pi entry. Its probe
+    // gets no answer, so B's credential is never tried and cannot vouch for
+    // the snapshot it filled.
+    writeNativeAuth("native-access-token", "acct-a");
     stubUsageByToken({
       "native-access-token": new Response("unavailable", { status: 503 }),
-      "personal-access-token": usage(40, "pi@example.invalid", "acct-pi"),
+      "pi-access-token": usage(40, "b@example.invalid", "acct-b"),
     });
 
     const second = await readCodexLanes();
     expect(second).toHaveLength(1);
-    expect(second[0]?.state.stale).toBe(true);
-    expect(second[0]?.windows[0]?.percentUsed).toBe(40);
+    expect(second[0]?.source).toBe("oauth");
+    expect(second[0]?.state.stale).toBe(false);
+    expect(second[0]?.windows).toEqual([]);
+  });
+  it("never serves a rejected native login's cached windows for a Pi probe that failed", async () => {
+    writeNativeAuth("native-access-token", "acct-a");
+    stubUsageByToken({
+      "native-access-token": usage(10, "a@example.invalid", "acct-a"),
+    });
+
+    const first = await cacheCodexRead();
+    expect(first).toHaveLength(1);
+    expect(first[0]?.source).toBe("oauth");
+    expect(first[0]?.windows[0]?.percentUsed).toBe(10);
+
+    // A's login is now signed out and B's Pi entry answers for this reading,
+    // but its probe gets no answer.
+    writePiAuth({
+      "openai-codex": piOauthEntry({
+        access: "pi-access-token",
+        accountId: "acct-b",
+      }),
+    });
+    stubUsageByToken({
+      "native-access-token": new Response("unauthorized", { status: 401 }),
+      "pi-access-token": new Response("unavailable", { status: 503 }),
+    });
+
+    const second = await readCodexLanes();
+    expect(second).toHaveLength(1);
+    expect(second[0]?.source).toBe("pi:openai-codex");
+    expect(second[0]?.state.stale).toBe(false);
+    expect(second[0]?.windows).toEqual([]);
   });
 });
 
