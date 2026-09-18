@@ -28,7 +28,7 @@ export function degradedSources(
 ): DegradedSource[] {
   const bySource = new Map<string, DegradedSource>();
   for (const attempt of attempts ?? []) {
-    if (attempt.status === "success") {
+    if (attempt.status === "success" || attempt.degraded === false) {
       bySource.delete(attempt.source);
       continue;
     }

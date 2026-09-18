@@ -36,7 +36,8 @@ export function retryAfterToIso(
   if (!raw) return undefined;
   const seconds = Number(raw);
   if (Number.isFinite(seconds) && seconds >= 0) {
-    return new Date(now + seconds * 1000).toISOString();
+    const date = new Date(now + seconds * 1000);
+    return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
   }
   const date = new Date(raw);
   return Number.isNaN(date.getTime()) ? undefined : date.toISOString();

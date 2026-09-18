@@ -2675,31 +2675,62 @@ attributes:
     );
   });
 
-  it("does not treat Keychain exit 44 as signed-out or retire the Claude cache", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-07-06T20:00:00.000Z"));
-    usePlatform("darwin");
-    useTempHome();
-    const { readCachedProvider, writeCachedProviders } =
-      await import("../../src/cache.js");
-    writeCachedProviders([cachedClaudeQuota(34)]);
-    const execFileText = mockKeychainRead(async () => {
-      throw Object.assign(new Error("not found"), { code: 44 });
-    });
-    vi.doMock("../../src/lib/process.js", () => ({ execFileText }));
-    const { fetchQuota } = await import("../../src/providers/claude.js");
-    const result = await fetchQuota({
+  it.each([
+    {
+      name: "exit 44",
       allowKeychainPrompt: true,
-      refreshCredentials: false,
-    });
-    expect(result.state.status).not.toBe("auth_required");
-    expect(result.state.error).toBe("keychain_unreachable");
-    expect(result.source).toBe("cache");
-    expect(readCachedProvider("claude")).toMatchObject({
-      provider: "claude",
-      source: "oauth",
-    });
-  });
+      execError: Object.assign(new Error("not found"), { code: 44 }),
+      expectedError: "keychain_unreachable",
+    },
+    {
+      name: "prompt timeout",
+      allowKeychainPrompt: true,
+      execError: Object.assign(new Error("timed out"), { killed: true }),
+      expectedError: "keychain_prompt_timeout",
+    },
+    {
+      name: "prompt required",
+      allowKeychainPrompt: false,
+      execError: undefined,
+      expectedError: "keychain_prompt_required",
+    },
+  ])(
+    "does not treat Keychain $name plus sidecar 401 as signed-out",
+    async ({ allowKeychainPrompt, execError, expectedError }) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-07-06T20:00:00.000Z"));
+      usePlatform("darwin");
+      const home = useTempHome();
+      writeClaudeCredential(home, {
+        accessToken: "expired-sidecar",
+        expiresAt: "2000-01-01T00:00:00.000Z",
+      });
+      const { readCachedProvider, writeCachedProviders } =
+        await import("../../src/cache.js");
+      writeCachedProviders([cachedClaudeQuota(34)]);
+      const execFileText = mockKeychainRead(async () => {
+        if (execError) throw execError;
+        return "";
+      });
+      vi.doMock("../../src/lib/process.js", () => ({ execFileText }));
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => new Response(null, { status: 401 })),
+      );
+      const { fetchQuota } = await import("../../src/providers/claude.js");
+      const result = await fetchQuota({
+        allowKeychainPrompt,
+        refreshCredentials: false,
+      });
+      expect(result.state.status).not.toBe("auth_required");
+      expect(result.state.error).toBe(expectedError);
+      expect(result.source).toBe("cache");
+      expect(readCachedProvider("claude")).toMatchObject({
+        provider: "claude",
+        source: "oauth",
+      });
+    },
+  );
 
   it("does not treat a denied Keychain plus sidecar 401 as signed-out or retire the cache", async () => {
     vi.useFakeTimers();

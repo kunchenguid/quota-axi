@@ -61,3 +61,52 @@ export async function providerFetch(
   // members the declaration misses (`bytes`) exist at runtime.
   return response as unknown as Response;
 }
+
+export const PROVIDER_RESPONSE_LIMIT_BYTES = 262_144;
+
+/**
+ * Read a provider response body under the shared decoded-size cap. The
+ * declared length is checked first, then the streamed accumulation; `fail`
+ * maps each rejection code (`response_too_large`, `response_size_unverifiable`,
+ * `provider_timeout`) onto the calling adapter's error type.
+ */
+export async function readBoundedResponseBody(
+  response: Response,
+  signal: AbortSignal,
+  fail: (code: string) => Error,
+): Promise<Uint8Array> {
+  const declared = response.headers.get("content-length")?.trim();
+  if (
+    declared &&
+    /^\d+$/.test(declared) &&
+    Number(declared) > PROVIDER_RESPONSE_LIMIT_BYTES
+  ) {
+    await response.body?.cancel().catch(() => undefined);
+    throw fail("response_too_large");
+  }
+  if (!response.body) throw fail("response_size_unverifiable");
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let length = 0;
+  try {
+    while (true) {
+      if (signal.aborted) throw fail("provider_timeout");
+      const result = await reader.read();
+      if (result.done) break;
+      length += result.value.byteLength;
+      if (length > PROVIDER_RESPONSE_LIMIT_BYTES)
+        throw fail("response_too_large");
+      chunks.push(result.value);
+    }
+  } finally {
+    void reader.cancel().catch(() => undefined);
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(length);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
+}

@@ -8,6 +8,7 @@ import {
 } from "./lib/fs.js";
 import { kimiReadingContextId } from "./providers/kimi-cache-context.js";
 import { commandCodeReadingContextId } from "./providers/commandcode-cache-context.js";
+import { miniMaxReadingContextId } from "./providers/minimax-cache-context.js";
 import { isPiCodexSource } from "./providers/pi-codex-credential.js";
 import type {
   ProviderId,
@@ -60,9 +61,9 @@ const CREDENTIAL_CONTEXT_ID = /^[a-f0-9]{64}$/;
  * identifies the source-plus-account pair, and a Codex slot can be signed in to
  * another ChatGPT account. A snapshot from one such context says nothing about
  * another, so each is stamped on write and checked on stale reuse - strictly
- * for Claude, Kimi, and Command Code, whose identity a reading always has (and
- * which skip write and clear when that identity is missing), and on proven
- * mismatch for Codex, whose stored account id is optional.
+ * for Claude, Kimi, Command Code, and MiniMax, whose identity a reading
+ * always has (and which skip write and clear when that identity is missing),
+ * and on proven mismatch for Codex, whose stored account id is optional.
  *
  * How that stamp is obtained is not the same question for each. A Claude
  * profile is fixed by this process's own environment, so deriving it here reads
@@ -77,7 +78,9 @@ const CREDENTIAL_CONTEXT_ID = /^[a-f0-9]{64}$/;
  * can only name the accounts the credentials still store, so the stamp is the
  * stored id of the one credential that answered (not the vendor's response id,
  * which can differ while the token is the same) hashed because the cache holds
- * no account identity in the clear.
+ * no account identity in the clear. MiniMax publishes the same kind of stamp:
+ * the answering credential source plus the deployment host its resolution
+ * implies.
  */
 const CONTEXT_SCOPED_PROVIDERS: Partial<
   Record<ProviderId, (provider: ProviderQuota) => string | undefined>
@@ -86,6 +89,7 @@ const CONTEXT_SCOPED_PROVIDERS: Partial<
   kimi: kimiReadingContextId,
   commandcode: commandCodeReadingContextId,
   codex: codexStampContextId,
+  minimax: miniMaxReadingContextId,
 };
 
 /**
@@ -202,6 +206,17 @@ export function readCachedCommandCodeProvider(
   contextId: string,
 ): ProviderQuota | undefined {
   return readCachedProviderInContext("commandcode", contextId);
+}
+
+/**
+ * MiniMax stale quota may only be reused when the cache record proves it was
+ * captured from the same credential source and deployment host the caller is
+ * asking about.
+ */
+export function readCachedMiniMaxProvider(
+  contextId: string,
+): ProviderQuota | undefined {
+  return readCachedProviderInContext("minimax", contextId);
 }
 
 function readCachedProviderInContext(
@@ -340,8 +355,9 @@ function toCacheProvider(provider: ProviderQuota): CachedProvider | undefined {
   )?.snapshot;
   if (!snapshot) return undefined;
   const contextId = CONTEXT_SCOPED_PROVIDERS[provider.provider]?.(provider);
-  // Claude, Kimi, and Command Code require a published identity; Codex stamps
-  // are optional and withheld only on proven mismatch at read time.
+  // Claude, Kimi, Command Code, and MiniMax require a published identity;
+  // Codex stamps are optional and withheld only on proven mismatch at read
+  // time.
   if (
     provider.provider !== "codex" &&
     CONTEXT_SCOPED_PROVIDERS[provider.provider] &&
@@ -355,13 +371,11 @@ function toCacheProvider(provider: ProviderQuota): CachedProvider | undefined {
 }
 
 function missingRequiredContext(provider: ProviderId): boolean {
-  // Codex stamps are optional; Claude, Kimi, and Command Code must not clear
-  // when the current reading has no published context identity.
+  // Codex stamps are optional; Claude, Kimi, Command Code, and MiniMax must
+  // not clear when the current reading has no published context identity.
   if (provider === "codex") return false;
   const scope = CONTEXT_SCOPED_PROVIDERS[provider];
-  return (
-    scope !== undefined && !scope({ provider } as ProviderQuota)
-  );
+  return scope !== undefined && !scope({ provider } as ProviderQuota);
 }
 
 function serializeCachedProvider(
@@ -604,7 +618,7 @@ function normalizeCachedCredits(
   if (!data) return undefined;
   const remaining = numberValue(data.remaining);
   const unlimited = booleanValue(data.unlimited);
-  const unit = literalValue(data.unit, ["usd", "credits"] as const);
+  const unit = literalValue(data.unit, ["usd", "cny", "credits"] as const);
   if (remaining === undefined && unlimited === undefined && unit === undefined)
     return undefined;
   return {

@@ -76,6 +76,22 @@ describe("degraded source classification", () => {
     ).toEqual([]);
   });
 
+  it("clears a source after explicit non-degraded recovery", () => {
+    expect(
+      degradedSources([
+        { source: "web", status: "failed", error: "provider_auth_rejected" },
+        {
+          source: "web",
+          status: "skipped",
+          error: "model_auth_probe_live",
+          credentialPresent: true,
+          degraded: false,
+        },
+        { source: "pi:xai", status: "success", credentialPresent: true },
+      ]),
+    ).toEqual([]);
+  });
+
   it("reports no degraded source for a report with no attempts", () => {
     expect(degradedSources(undefined)).toEqual([]);
   });

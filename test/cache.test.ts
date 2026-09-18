@@ -14,6 +14,7 @@ import {
   readCachedClaudeProvider,
   readCachedCommandCodeProvider,
   readCachedKimiProvider,
+  readCachedMiniMaxProvider,
   readCachedProvider,
   writeCachedProviders,
 } from "../src/cache.js";
@@ -26,6 +27,7 @@ import {
 } from "../src/providers/commandcode-cache-context.js";
 import { staleFromCache } from "../src/providers/common.js";
 import { createKimiCodeCliCredentialSource } from "../src/providers/kimi-code-cli-credential.js";
+import { publishMiniMaxReadingContextId } from "../src/providers/minimax-cache-context.js";
 import type { ProviderId, ProviderQuota } from "../src/types.js";
 
 const originalXdgCacheHome = process.env.XDG_CACHE_HOME;
@@ -375,6 +377,34 @@ oauth_host = "https://auth.kimi.ai"
     ).toBeUndefined();
   });
 
+  it("scopes MiniMax cache reuse to the reading's source and deployment", () => {
+    useTempCache();
+    const globalContext = "a".repeat(64);
+    const otherContext = "b".repeat(64);
+    publishMiniMaxReadingContextId(globalContext);
+
+    writeCachedProviders([quota("minimax", 42)]);
+
+    const payload = JSON.parse(readFileSync(cacheFilePath(), "utf8")) as {
+      providers: Array<{ credentialContext?: string }>;
+    };
+    expect(payload.providers[0]?.credentialContext).toBe(globalContext);
+    expect(readCachedMiniMaxProvider(globalContext)).toBeDefined();
+    expect(readCachedMiniMaxProvider(otherContext)).toBeUndefined();
+
+    // A legacy record without a context is withheld, not deleted.
+    writeFileSync(
+      cacheFilePath(),
+      JSON.stringify({
+        generatedAt: "x",
+        schemaVersion: 2,
+        providers: [quota("minimax", 11)],
+      }),
+    );
+    expect(readCachedMiniMaxProvider(globalContext)).toBeUndefined();
+    expect(readCachedProvider("minimax")?.windows[0].percentUsed).toBe(11);
+  });
+
   it("writes normalized cache data with mode 0600 and no attempts or sentinel secret", () => {
     useTempCache();
     const sentinel = "CACHE-SENTINEL-KIMI-612704";
@@ -596,5 +626,6 @@ function providerLabel(provider: ProviderId): string {
   if (provider === "agy") return "Antigravity";
   if (provider === "commandcode") return "Command Code";
   if (provider === "opencode-go") return "OpenCode Go";
+  if (provider === "minimax") return "MiniMax";
   return "Kimi";
 }

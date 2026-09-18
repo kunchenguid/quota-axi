@@ -9,7 +9,11 @@ export type ProviderId =
   | "agy"
   | "alibaba"
   | "opencode-go"
-  | "commandcode";
+  | "commandcode"
+  | "minimax"
+  | "mimo"
+  | "deepseek"
+  | "openrouter";
 
 export const PROVIDER_IDS = [
   "claude",
@@ -23,6 +27,10 @@ export const PROVIDER_IDS = [
   "alibaba",
   "opencode-go",
   "commandcode",
+  "minimax",
+  "mimo",
+  "deepseek",
+  "openrouter",
 ] as const satisfies readonly ProviderId[];
 
 export type ProviderSource =
@@ -278,7 +286,7 @@ export type ProviderQuota = {
   credits?: {
     remaining?: number;
     unlimited?: boolean;
-    unit?: "usd" | "credits";
+    unit?: "usd" | "cny" | "credits";
   };
   state: {
     status: ProviderStatus;
@@ -356,7 +364,7 @@ export type IntelligenceBucket = "high" | "medium" | "low";
 
 /** Native-provider model knowledge used by the `models` evidence join. */
 export type ModelCatalogEntry = {
-  provider: "claude" | "codex" | "grok" | "kimi";
+  provider: ProviderId;
   id: string;
   label: string;
   intelligence: IntelligenceBucket;

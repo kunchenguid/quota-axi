@@ -1,0 +1,10 @@
+{
+  "available_amount": "12.50",
+  "cash_balance": "10.00",
+  "voucher_balance": "2.50",
+  "credit_balance": "0",
+  "owed_amount": "0",
+  "balance_alert_switch": false,
+  "balance_alert_threshold": "0",
+  "base_resp": { "status_code": 0, "status_msg": "" }
+}
