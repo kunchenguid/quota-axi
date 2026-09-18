@@ -247,8 +247,30 @@ export type DegradedSource = {
   error?: string;
 };
 
+export type AccountLocator = {
+  /** Local credential selector, never a credential or a verified user identity. */
+  kind: string;
+  path: string;
+  entry?: string;
+  keychainService?: string;
+  /** True only for the one lane the process-selected credential owns, so it stays eligible for delegated refresh; absent/false for a read-only sibling lane. */
+  delegateEligible?: boolean;
+};
+
+export type ProviderAccount = {
+  /** Opaque local lane identity, stable across refresh and discovery order. */
+  accountKey: string;
+  locator: AccountLocator;
+  fetchQuota(options: ProviderOptions): Promise<ProviderQuota>;
+  inspectAuth(options: ProviderOptions): Promise<AuthProviderReport>;
+};
+
 export type ProviderQuota = {
   provider: ProviderId;
+  /** Present in account-expanded reports; absent for the legacy single lane. */
+  accountKey?: string;
+  /** Exact local selector evidence. Only published by --full. */
+  accountLocator?: AccountLocator;
   /** Display name. Omitted from default `--json`; see `--full`. */
   label?: string;
   /** Report provenance. Omitted from default `--json`; see `--full`. */
@@ -284,8 +306,10 @@ export type ProviderQuota = {
     untrustedWindowIds?: string[];
     /**
      * Sources that were superseded: a working source answered for this
-     * provider while these were broken or could not be read. Present only on a
-     * fresh reading, so the breakage behind a healthy row stays visible.
+     * provider while these were broken or could not be read. Credential
+     * sources are named only on a fresh reading, so the breakage behind a
+     * healthy row stays visible; `account-discovery` is named whenever account
+     * enumeration failed and only the single selected lane was read.
      */
     degradedSources?: DegradedSource[];
     /** Omitted from default `--json`; see `--full`. */
@@ -296,7 +320,7 @@ export type ProviderQuota = {
 
 export type QuotaAxiResponse = {
   generatedAt: string;
-  schemaVersion: 5;
+  schemaVersion: 5 | 6;
   providers: ProviderQuota[];
   help?: string[];
 };
@@ -319,6 +343,7 @@ export type ProviderOptions = {
 export type ProviderAdapter = {
   id: ProviderId;
   label: string;
+  discoverAccounts?(): Promise<ProviderAccount[]>;
   fetchQuota(options: ProviderOptions): Promise<ProviderQuota>;
   inspectAuth(options: ProviderOptions): Promise<AuthProviderReport>;
 };
@@ -333,6 +358,7 @@ export type AuthSourceReport = {
 
 export type AuthProviderReport = {
   provider: ProviderId;
+  accountKey?: string;
   sources: AuthSourceReport[];
 };
 
@@ -365,6 +391,7 @@ export type ProviderStateSummary = Pick<
 >;
 
 export type ModelQuotaRecord = {
+  accountKey?: string;
   provider: ModelCatalogEntry["provider"];
   id: string;
   label: string;
@@ -376,7 +403,10 @@ export type ModelQuotaRecord = {
   state: ProviderStateSummary;
 };
 
-export type ModelReference = Pick<ModelQuotaRecord, "provider" | "id">;
+export type ModelReference = Pick<
+  ModelQuotaRecord,
+  "provider" | "accountKey" | "id"
+>;
 
 /** Opt-in ordering keys. Future keys require their own evidence and docs. */
 export type ModelSortKey = "runway";
@@ -389,7 +419,7 @@ export type ModelSortResult = {
 
 export type ModelsResponse = {
   generatedAt: string;
-  schemaVersion: 1;
+  schemaVersion: 1 | 2;
   catalog: Pick<ModelCatalog, "version" | "provenance">;
   models: ModelQuotaRecord[];
   /** Provider/model window scopes with no corresponding catalog entry. */

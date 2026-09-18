@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import {
-  deleteCachedProvider as deleteCachedProviderFromDisk,
+  deleteCachedProviderInContext as deleteCachedProviderInContextFromDisk,
   readCachedKimiProvider as readCachedProviderFromDisk,
 } from "../cache.js";
 import type {
@@ -90,7 +90,7 @@ type KimiDependencies = {
   cliCredentialSource: KimiCodeCliCredentialSource;
   fetch: typeof globalThis.fetch;
   readCachedProvider: typeof readCachedProviderFromDisk;
-  deleteCachedProvider: typeof deleteCachedProviderFromDisk;
+  deleteCachedProviderInContext: typeof deleteCachedProviderInContextFromDisk;
   now: () => number;
   deadlineMs: number;
 };
@@ -122,7 +122,7 @@ export function createKimiAdapter(
     cliCredentialSource: createKimiCodeCliCredentialSource(),
     fetch: globalThis.fetch,
     readCachedProvider: readCachedProviderFromDisk,
-    deleteCachedProvider: deleteCachedProviderFromDisk,
+    deleteCachedProviderInContext: deleteCachedProviderInContextFromDisk,
     now: Date.now,
     deadlineMs: OPERATION_DEADLINE_MS,
     ...overrides,
@@ -248,8 +248,8 @@ type KimiFailureRecord = {
   credentialPresent: boolean;
   /**
    * The cache identity a reading from this source would have belonged to, so
-   * the stale fallback for a failure asks for the numbers that source produced
-   * rather than for whatever the single Kimi cache slot happens to hold.
+   * both the stale fallback and the definitive-rejection purge name the numbers
+   * that source produced rather than whichever context the run last published.
    */
   cacheContextId?: string;
 };
@@ -418,6 +418,7 @@ async function acquireKimiQuota(
       defining.cacheContextId,
       attempts,
       dependencies,
+      failures,
     );
   } catch (error) {
     const failure = asKimiFailure(error);
@@ -788,14 +789,11 @@ function failureReport(
   cacheContextId: string | undefined,
   attempts: SourceAttempt[],
   dependencies: KimiDependencies,
+  rejected: readonly KimiFailureRecord[] = [
+    { failure, credentialPresent: false, cacheContextId },
+  ],
 ): ProviderQuota {
-  if (failure.definitiveAuth) {
-    try {
-      dependencies.deleteCachedProvider("kimi");
-    } catch {
-      // The current auth failure is still definitive even if the cache is not writable.
-    }
-  }
+  if (failure.definitiveAuth) retireRejectedContexts(rejected, dependencies);
 
   if (failure.staleEligible && cacheContextId) {
     try {
@@ -831,6 +829,30 @@ function failureReport(
     },
     attempts,
   };
+}
+
+/**
+ * A definitive rejection retires the numbers of every source that was itself
+ * definitively rejected, each under the identity that source's reading would
+ * have carried. A source that only failed transiently keeps its snapshot.
+ */
+function retireRejectedContexts(
+  rejected: readonly KimiFailureRecord[],
+  dependencies: KimiDependencies,
+): void {
+  const contexts = new Set(
+    rejected
+      .filter((record) => record.failure.definitiveAuth)
+      .map((record) => record.cacheContextId)
+      .filter((contextId): contextId is string => contextId !== undefined),
+  );
+  for (const contextId of contexts) {
+    try {
+      dependencies.deleteCachedProviderInContext("kimi", contextId);
+    } catch {
+      // The current auth failure is still definitive even if the cache is not writable.
+    }
+  }
 }
 
 function staleKimiReport(

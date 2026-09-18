@@ -8,6 +8,10 @@ import {
   normalizeRetryAfter,
 } from "../../src/providers/kimi.js";
 import { quotaJsonReport, renderQuotaToon } from "../../src/render.js";
+import {
+  kimiReadingContextId,
+  publishKimiReadingContextId,
+} from "../../src/providers/kimi-cache-context.js";
 import type {
   KimiCodeCliCredentialInspection,
   KimiCodeCliCredentialResolution,
@@ -143,7 +147,7 @@ describe("Kimi request transport", () => {
       cliCredentialSource: cliSource,
       fetch: request,
       readCachedProvider: () => undefined,
-      deleteCachedProvider: () => undefined,
+      deleteCachedProviderInContext: () => undefined,
       now: () => NOW,
     }).fetchQuota(OPTIONS);
 
@@ -291,7 +295,7 @@ describe("Kimi request transport", () => {
         accessToken: "cli-token-after-pi-rejection",
       }),
       fetch: request,
-      deleteCachedProvider: remove,
+      deleteCachedProviderInContext: remove,
     }).fetchQuota(OPTIONS);
 
     expect(report.state.status).toBe("fresh");
@@ -316,7 +320,7 @@ describe("Kimi request transport", () => {
     const report = await testAdapter({
       cliCredentialSource: cliCredentialSource({ status: "missing" }),
       fetch: vi.fn(async () => new Response(null, { status: 401 })),
-      deleteCachedProvider: remove,
+      deleteCachedProviderInContext: remove,
       readCachedProvider: () => cachedQuota(),
     }).fetchQuota(OPTIONS);
 
@@ -325,7 +329,36 @@ describe("Kimi request transport", () => {
       stale: false,
       error: "provider_auth_rejected",
     });
-    expect(remove).toHaveBeenCalledWith("kimi");
+    expect(remove).toHaveBeenCalledWith("kimi", expect.any(String));
+  });
+
+  it("retires the rejected Pi context, not only the published environment", async () => {
+    const piReading = await testAdapter({
+      fetch: vi.fn(async () => jsonResponse(SUCCESS_PAYLOAD)),
+    }).fetchQuota(OPTIONS);
+    expect(piReading.state.status).toBe("fresh");
+    const piContext = kimiReadingContextId();
+    expect(piContext).toBeDefined();
+    expect(piContext).not.toBe(TEST_CREDENTIAL_CONTEXT_ID);
+
+    // The CLI source publishes its environment before anything is probed, so a
+    // purge that reads the published context retires that deployment while the
+    // rejected Pi snapshot it never describes survives.
+    const cli = cliCredentialSource({ status: "missing" });
+    cli.select = vi.fn(async () => {
+      publishKimiReadingContextId(TEST_CREDENTIAL_CONTEXT_ID);
+      return TEST_SELECTION;
+    });
+    const remove = vi.fn();
+    await testAdapter({
+      cliCredentialSource: cli,
+      fetch: vi.fn(async () => new Response(null, { status: 401 })),
+      deleteCachedProviderInContext: remove,
+      readCachedProvider: () => cachedQuota(),
+    }).fetchQuota(OPTIONS);
+
+    expect(kimiReadingContextId()).toBe(TEST_CREDENTIAL_CONTEXT_ID);
+    expect(remove).toHaveBeenCalledWith("kimi", piContext);
   });
 
   it("does not report a rejected credential as sign-out while a sibling is only unreachable", async () => {
@@ -333,7 +366,7 @@ describe("Kimi request transport", () => {
     const report = await testAdapter({
       cliCredentialSource: cliCredentialSource({ status: "error" }),
       fetch: vi.fn(async () => new Response(null, { status: 401 })),
-      deleteCachedProvider: remove,
+      deleteCachedProviderInContext: remove,
       readCachedProvider: () => cachedQuota(),
     }).fetchQuota(OPTIONS);
 
@@ -1303,12 +1336,12 @@ describe("Kimi credential outcomes and cache policy", () => {
       const report = await testAdapter({
         broker: broker({ status }),
         fetch: request,
-        deleteCachedProvider: remove,
+        deleteCachedProviderInContext: remove,
         readCachedProvider: () => cachedQuota(),
       }).fetchQuota(OPTIONS);
 
       expect(request).not.toHaveBeenCalled();
-      expect(remove).toHaveBeenCalledWith("kimi");
+      expect(remove).toHaveBeenCalledWith("kimi", expect.any(String));
       expect(report.state).toMatchObject({
         status: "auth_required",
         stale: false,
@@ -1434,11 +1467,11 @@ describe("Kimi credential outcomes and cache policy", () => {
     const remove = vi.fn();
     const report = await testAdapter({
       fetch: vi.fn(async () => new Response(null, { status: 403 })),
-      deleteCachedProvider: remove,
+      deleteCachedProviderInContext: remove,
       readCachedProvider: () => cachedQuota(),
     }).fetchQuota(OPTIONS);
 
-    expect(remove).toHaveBeenCalledWith("kimi");
+    expect(remove).toHaveBeenCalledWith("kimi", expect.any(String));
     expect(report.state.status).toBe("auth_required");
     expect(report.source).toBe("unavailable");
   });
@@ -1521,11 +1554,11 @@ describe("Kimi credential outcomes and cache policy", () => {
         broker: broker({ status: "missing" }),
         cliCredentialSource: cliCredentialSource(input),
         fetch: request,
-        deleteCachedProvider: remove,
+        deleteCachedProviderInContext: remove,
       }).fetchQuota(OPTIONS);
 
       expect(request).not.toHaveBeenCalled();
-      expect(remove).toHaveBeenCalledWith("kimi");
+      expect(remove).toHaveBeenCalledWith("kimi", expect.any(String));
       expect(report.state).toMatchObject({
         status: "auth_required",
         stale: false,
@@ -1664,11 +1697,11 @@ describe("Kimi credential outcomes and cache policy", () => {
         accessToken: "dead-non-refreshable-cli-token",
       }),
       fetch: request,
-      deleteCachedProvider: remove,
+      deleteCachedProviderInContext: remove,
     }).fetchQuota(OPTIONS);
 
     expect(request).toHaveBeenCalledOnce();
-    expect(remove).toHaveBeenCalledWith("kimi");
+    expect(remove).toHaveBeenCalledWith("kimi", expect.any(String));
     expect(report.state).toMatchObject({
       status: "auth_required",
       stale: false,
@@ -1688,7 +1721,7 @@ describe("Kimi credential outcomes and cache policy", () => {
         accessToken: "soft-expired-cli-token",
       }),
       fetch: request,
-      deleteCachedProvider: remove,
+      deleteCachedProviderInContext: remove,
     }).fetchQuota(OPTIONS);
 
     expect(request).toHaveBeenCalledOnce();
@@ -1728,7 +1761,7 @@ describe("Kimi credential outcomes and cache policy", () => {
         accessToken: "soft-expired-cli-token",
       }),
       fetch: request,
-      deleteCachedProvider: remove,
+      deleteCachedProviderInContext: remove,
       readCachedProvider: () => cachedQuota(),
     }).fetchQuota(OPTIONS);
 
@@ -1790,7 +1823,7 @@ describe("Kimi credential outcomes and cache policy", () => {
       }),
       cliCredentialSource: cliCredentialSource({ status: "missing" }),
       fetch: request,
-      deleteCachedProvider: remove,
+      deleteCachedProviderInContext: remove,
     }).fetchQuota(OPTIONS);
 
     expect(request).toHaveBeenCalledOnce();
@@ -1832,7 +1865,7 @@ describe("Kimi credential outcomes and cache policy", () => {
         accessToken: "soft-expired-cli-token",
       }),
       fetch: request,
-      deleteCachedProvider: remove,
+      deleteCachedProviderInContext: remove,
     }).fetchQuota(OPTIONS);
 
     expect(request).toHaveBeenCalledTimes(2);
@@ -1889,7 +1922,7 @@ describe("Kimi credential outcomes and cache policy", () => {
         accessToken: "cli-token",
       }),
       fetch: request,
-      deleteCachedProvider: remove,
+      deleteCachedProviderInContext: remove,
     }).fetchQuota(OPTIONS);
 
     expect(request).toHaveBeenCalledTimes(2);
@@ -1909,7 +1942,7 @@ describe("Kimi credential outcomes and cache policy", () => {
       broker: broker({ status: "missing" }),
       cliCredentialSource: cliCredentialSource({ status: "error" }),
       readCachedProvider: () => cachedQuota(),
-      deleteCachedProvider: remove,
+      deleteCachedProviderInContext: remove,
     }).fetchQuota(OPTIONS);
 
     expect(remove).not.toHaveBeenCalled();
@@ -1948,7 +1981,7 @@ describe("Kimi credential outcomes and cache policy", () => {
         broker: broker({ status: "missing" }),
         cliCredentialSource: cliCredentialSource({ status }),
         readCachedProvider: () => cachedQuota(),
-        deleteCachedProvider: remove,
+        deleteCachedProviderInContext: remove,
       }).fetchQuota(OPTIONS);
 
       expect(remove).not.toHaveBeenCalled();
@@ -2037,7 +2070,7 @@ function testAdapter(
       jsonResponse(SUCCESS_PAYLOAD),
     ) as unknown as typeof fetch,
     readCachedProvider: () => undefined,
-    deleteCachedProvider: () => undefined,
+    deleteCachedProviderInContext: () => undefined,
     now: () => NOW,
     ...overrides,
   });

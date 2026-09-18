@@ -217,6 +217,7 @@ function buildLiveCard(provider: ProviderQuota, generatedAtMs: number): Card {
       rightTitle,
       "border",
     ),
+    ...accountCardLines(provider, "border"),
     interior([], "border"),
   ];
 
@@ -367,6 +368,7 @@ function buildFailedCard(provider: ProviderQuota): Card {
       rightTitle,
       "borderDim",
     ),
+    ...accountCardLines(provider, "borderDim"),
     interior([], "borderDim"),
   ];
   const message =
@@ -697,7 +699,11 @@ function formatHeaderTime(iso: string, timeZone?: string): string {
 }
 
 function fullFooterLines(provider: ProviderQuota, width: number): string[] {
-  const accountParts: string[] = [provider.provider];
+  const accountParts: string[] = [
+    provider.provider,
+    ...(provider.accountKey ? [provider.accountKey] : []),
+  ];
+  if (provider.accountLocator) accountParts.push(provider.accountLocator.path);
   const protectedAccountParts = new Set([0]);
   if (provider.account?.email) accountParts.push(provider.account.email);
   if (provider.account?.organization) {
@@ -843,8 +849,11 @@ function padCardToHeight(card: Card, height: number): Card {
   const missing = height - card.length;
   if (missing <= 0) return card;
   const bottom = card.at(-1);
-  const interiorLine = card[1];
-  if (!bottom || !interiorLine) return card;
+  const border = card[1]?.[0];
+  if (!bottom || !border) return card;
+  // The first interior row can contain an account label. Padding must retain
+  // its border style without copying that content into every extra row.
+  const interiorLine = interior([], border.style ?? "border");
   return [
     ...card.slice(0, -1),
     ...Array.from({ length: missing }, () => [...interiorLine]),
@@ -1059,4 +1068,22 @@ function rgbToAnsi256([r, g, b]: [number, number, number]): number {
         ? 1
         : Math.min(5, Math.round((value - 35) / 40));
   return 16 + 36 * level(r) + 6 * level(g) + level(b);
+}
+
+function accountCardLines(
+  provider: ProviderQuota,
+  border: "border" | "borderDim",
+): Line[] {
+  if (!provider.accountKey || provider.accountKey === "default") return [];
+  return [
+    interior(
+      [
+        {
+          text: truncate(`   account ${provider.accountKey}`, CARD_INTERIOR),
+          style: "dim",
+        },
+      ],
+      border,
+    ),
+  ];
 }

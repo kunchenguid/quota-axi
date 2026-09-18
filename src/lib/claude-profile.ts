@@ -29,14 +29,14 @@ export function claudeEnvOauthToken(): string | undefined {
  * credential directory is `CLAUDE_CONFIG_DIR` or `~/.claude`; a nonempty
  * secure-storage selector names the Keychain service instead.
  */
-export function claudeProfileLocations(): {
+export function claudeProfileLocations(env: NodeJS.ProcessEnv = process.env): {
   configDir: string;
   secureStorageSelected: boolean;
   keychainService: string;
   acceptsOpaqueDefaultItem: boolean;
 } {
-  const configured = process.env.CLAUDE_CONFIG_DIR;
-  const storage = process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR;
+  const configured = env.CLAUDE_CONFIG_DIR;
+  const storage = env.CLAUDE_SECURESTORAGE_CONFIG_DIR;
   const defaultDir = join(homedir(), ".claude").normalize("NFC");
   const configDir = (configured ?? defaultDir).normalize("NFC");
   // Hash the raw NFC path, just as the vendor does: resolving a relative path

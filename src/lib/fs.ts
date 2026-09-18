@@ -57,8 +57,33 @@ export function cacheFilePath(): string {
  * An opaque, deterministic cache-provenance identifier for the Claude profile
  * selected by the current process. The selected path never leaves this helper.
  */
-export function claudeCredentialContextId(): string {
-  const { configDir, keychainService } = claudeProfileLocations();
+export function claudeCredentialContextId(
+  profile = claudeProfileLocations(),
+): string {
+  return claudeProfileContextId(profile, claudeEnvOauthToken() !== undefined);
+}
+
+/**
+ * The identity a profile's own stored-credential file/Keychain item is cached
+ * under, independent of whether an unrelated `CLAUDE_CODE_OAUTH_TOKEN` happens
+ * to be set on this particular invocation. A stored credential's own definitive
+ * rejection must retire the cache it was actually written under, not whichever
+ * context is ambiently current: the env token is a presence marker on
+ * {@link claudeCredentialContextId}, so a run that merely has that variable set
+ * must not fail to find (and thus fail to purge) a snapshot the same profile
+ * cached on an earlier, env-token-free run.
+ */
+export function claudeStoredProfileContextId(
+  profile = claudeProfileLocations(),
+): string {
+  return claudeProfileContextId(profile, false);
+}
+
+function claudeProfileContextId(
+  profile: ReturnType<typeof claudeProfileLocations>,
+  envSelected: boolean,
+): string {
+  const { configDir, keychainService } = profile;
   // Include the exact service: it already encodes the secure-storage selector,
   // including a relative raw path hash.
   // Version the identity to withhold snapshots from earlier opaque discovery.
@@ -69,7 +94,6 @@ export function claudeCredentialContextId(): string {
   // appended only when such a token is supplied, so every existing profile
   // keeps the identity it already cached under. It is a presence marker, never
   // any part of the token.
-  const envSelected = claudeEnvOauthToken() !== undefined;
   return createHash("sha256")
     .update(
       JSON.stringify([

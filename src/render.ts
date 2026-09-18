@@ -1,5 +1,6 @@
 import { encode } from "@toon-format/toon";
-import { quotaHelpLines } from "./advice.js";
+import { fullOnlyHelpLine, quotaHelpLines } from "./advice.js";
+import { accountColumns } from "./providers/accounts.js";
 import { collapseHome } from "./lib/fs.js";
 import { isUsageFetchFailure } from "./providers/usage-fetch-failure.js";
 import { SELECTION_SCALAR_KEY } from "./types.js";
@@ -28,8 +29,8 @@ export function renderHelp(lines: string[]): string {
 
 /**
  * One measurable scope. Every column is populated for every row, and rows stay
- * in provider-declaration order: a `spendPriority` column must never read as a
- * published ranking.
+ * in provider-declaration and account-discovery order: a `spendPriority`
+ * column must never read as a published ranking.
  */
 type QuotaRow = {
   provider: ProviderId;
@@ -44,7 +45,8 @@ type QuotaRow = {
 
 /**
  * Sparse: a scope appears only when it has a finite exhaustion point, so it
- * joins back to exactly one `quota[]` row on `provider` + `scope`.
+ * joins back to exactly one `quota[]` row on `provider` + `scope`, plus
+ * `accountKey` when the report is account-expanded.
  */
 type ExhaustionRow = {
   provider: ProviderId;
@@ -99,8 +101,8 @@ export function renderQuotaToon(
 }
 
 /**
- * Contract invariant: every requested provider appears at least once, in
- * `quota[]` or `attention[]` or both, and never in metric order.
+ * Contract invariant: every requested provider/account lane appears at least
+ * once, in `quota[]` or `attention[]` or both, and never in metric order.
  */
 function quotaBlocks(response: QuotaAxiResponse): ProviderBlocks {
   const blocks: ProviderBlocks = { quota: [], exhaustion: [], attention: [] };
@@ -112,7 +114,7 @@ function quotaBlocks(response: QuotaAxiResponse): ProviderBlocks {
     for (const scope of scopes) {
       if (scope.effectivePercentRemaining === undefined) {
         scopeAttention.push({
-          provider: provider.provider,
+          ...providerColumns(provider),
           scope: scope.scope,
           kind: scope.boundConflict ? "bound_conflict" : "headroom_unknown",
           detail: scope.boundConflict
@@ -128,7 +130,7 @@ function quotaBlocks(response: QuotaAxiResponse): ProviderBlocks {
         const blocked = blockedSignals(scope);
         if (blocked) {
           scopeAttention.push({
-            provider: provider.provider,
+            ...providerColumns(provider),
             scope: scope.scope,
             kind: "unmeasurable",
             detail: blocked,
@@ -151,7 +153,7 @@ function quotaRow(
   scope: EffectiveAvailability,
 ): QuotaRow {
   return {
-    provider: provider.provider,
+    ...providerColumns(provider),
     scope: scope.scope,
     effectivePercentRemaining: scope.effectivePercentRemaining as number,
     // `unknown`, never `0`: `0` is exact utilization, a different claim.
@@ -175,7 +177,7 @@ function exhaustionRow(
     return undefined;
   }
   return {
-    provider: provider.provider,
+    ...providerColumns(provider),
     scope: scope.scope,
     usableRunwaySeconds: runway.usableRunwaySeconds ?? UNKNOWN,
     projectedExhaustedAt: runway.projectedExhaustedAt ?? UNKNOWN,
@@ -208,7 +210,7 @@ function providerAttention(
  */
 function degradedSourceRows(provider: ProviderQuota): AttentionRow[] {
   return (provider.state.degradedSources ?? []).map((degraded) => ({
-    provider: provider.provider,
+    ...providerColumns(provider),
     scope: "all",
     kind: "degraded_source",
     detail: degraded.error
@@ -229,7 +231,7 @@ function providerStateRows(
   const unresolved = joinIds(provider.quotaSemantics?.unresolvedWindowIds);
   if (unresolved) {
     rows.push({
-      provider: provider.provider,
+      ...providerColumns(provider),
       scope: "all",
       kind: "unresolved_windows",
       detail: unresolved,
@@ -239,7 +241,7 @@ function providerStateRows(
   const untrusted = joinIds(provider.state.untrustedWindowIds);
   if (untrusted) {
     rows.push({
-      provider: provider.provider,
+      ...providerColumns(provider),
       scope: "all",
       kind: "untrusted_windows",
       detail: untrusted,
@@ -258,7 +260,7 @@ function providerStateRows(
   // status to state, or when nothing else would name this provider at all.
   if (suffix === "" && rows.length + scopeRows > 0) return rows;
   rows.unshift({
-    provider: provider.provider,
+    ...providerColumns(provider),
     scope: "all",
     kind: "no_quota",
     detail: `${provider.state.error ?? "no measurable scope"}${suffix}`,
@@ -284,7 +286,7 @@ function primaryProviderRow(provider: ProviderQuota): AttentionRow | undefined {
     ? `${baseDetail}${DETAIL_SEPARATOR}reason ${state.reason}`
     : baseDetail;
   return {
-    provider: provider.provider,
+    ...providerColumns(provider),
     scope: "all",
     kind,
     detail: state.retryAfter
@@ -375,7 +377,7 @@ function joinIds(ids: string[] | undefined): string | undefined {
 /** `--full` audit tier: every derivation input the lean blocks summarize. */
 function auditBlocks(response: QuotaAxiResponse): string[] {
   const providers = response.providers.map((provider) => ({
-    provider: provider.provider,
+    ...providerColumns(provider),
     plan: provider.plan ?? UNKNOWN,
     source: provider.source ?? UNKNOWN,
     status: provider.state.status,
@@ -385,7 +387,7 @@ function auditBlocks(response: QuotaAxiResponse): string[] {
   }));
   const windows = response.providers.flatMap((provider) =>
     provider.windows.map((window) => ({
-      provider: provider.provider,
+      ...providerColumns(provider),
       id: window.id,
       label: window.label,
       percentRemaining: window.percentRemaining ?? UNKNOWN,
@@ -402,7 +404,7 @@ function auditBlocks(response: QuotaAxiResponse): string[] {
   );
   const scopeAudit = response.providers.flatMap((provider) =>
     (provider.quotaSemantics?.effectiveAvailability ?? []).map((scope) => ({
-      provider: provider.provider,
+      ...providerColumns(provider),
       scope: scope.scope,
       boundedBy: joinIds(scope.boundedBy) ?? NONE,
       relationships: provider.quotaSemantics?.status ?? UNKNOWN,
@@ -416,11 +418,21 @@ function auditBlocks(response: QuotaAxiResponse): string[] {
     })),
   );
   const accounts = response.providers.map((provider) => ({
-    provider: provider.provider,
+    ...providerColumns(provider),
     email: provider.account?.email ?? "hidden",
     organization: provider.account?.organization ?? NONE,
     accountId: provider.account?.accountId ?? NONE,
     identityStatus: provider.account?.identityStatus ?? UNKNOWN,
+    ...(response.providers.some((item) => item.accountLocator)
+      ? {
+          locatorKind: provider.accountLocator?.kind ?? NONE,
+          locatorPath: provider.accountLocator
+            ? collapseHome(provider.accountLocator.path)
+            : NONE,
+          locatorEntry: provider.accountLocator?.entry ?? NONE,
+          keychainService: provider.accountLocator?.keychainService ?? NONE,
+        }
+      : {}),
   }));
   const attempts = response.providers.flatMap((provider) =>
     (provider.attempts ?? []).map((attempt) => attemptRow(provider, attempt)),
@@ -441,6 +453,10 @@ export function renderAuthToon(
   const sources = reports.flatMap((report) =>
     report.sources.map((source) => ({
       provider: report.provider,
+      ...accountColumns(
+        report,
+        reports.some((item) => Boolean(item.accountKey)),
+      ),
       source: source.source,
       path: source.path ? collapseHome(source.path) : "none",
       status: source.status,
@@ -467,6 +483,10 @@ export function renderModelsToon(
 ): string {
   const models = response.models.map((model) => ({
     provider: model.provider,
+    ...accountColumns(
+      model,
+      response.models.some((item) => Boolean(item.accountKey)),
+    ),
     id: model.id,
     label: model.label,
     intelligence: model.intelligence,
@@ -496,6 +516,10 @@ export function renderModelsToon(
   if (full) {
     const evidence = response.models.map((model) => ({
       provider: model.provider,
+      ...accountColumns(
+        model,
+        response.models.some((item) => Boolean(item.accountKey)),
+      ),
       id: model.id,
       boundedBy: model.effective?.boundedBy.join(" + ") ?? "unknown",
       limitingWindowIds:
@@ -510,7 +534,9 @@ export function renderModelsToon(
   }
   blocks.push(
     renderHelp([
-      "Default model order is deterministic and non-preferential (provider, then id)",
+      response.schemaVersion === 2
+        ? "Default model order is deterministic and non-preferential (provider, accountKey, then id)"
+        : "Default model order is deterministic and non-preferential (provider, then id)",
       "Run `quota-axi models --sort runway` for the documented opt-in runway comparator",
       "Run `quota-axi models --json` for catalog provenance and full quota evidence",
     ]),
@@ -523,13 +549,27 @@ export function redactedResponse(
   full: boolean,
 ): QuotaAxiResponse {
   if (full) return response;
+  const withheld = new Set<string>();
+  const providers = response.providers.map((provider) => {
+    const helpLine = fullOnlyHelpLine(provider);
+    if (helpLine !== undefined) withheld.add(helpLine);
+    return {
+      ...provider,
+      // The reason survives so the lane still surfaces as needing attention;
+      // only the command naming its config directory is demoted to `--full`.
+      ...(helpLine !== undefined
+        ? { state: { ...provider.state, remedyCommand: undefined } }
+        : {}),
+      account: undefined,
+      accountLocator: undefined,
+      attempts: undefined,
+    };
+  });
+  const help = response.help?.filter((line) => !withheld.has(line));
   return {
     ...response,
-    providers: response.providers.map((provider) => ({
-      ...provider,
-      account: undefined,
-      attempts: undefined,
-    })),
+    ...(help ? { help: help.length > 0 ? help : undefined } : {}),
+    providers,
   };
 }
 
@@ -608,9 +648,16 @@ function demotedSemantics(semantics: QuotaSemantics): QuotaSemantics {
 
 function attemptRow(provider: ProviderQuota, attempt: SourceAttempt) {
   return {
-    provider: provider.provider,
+    ...providerColumns(provider),
     source: attempt.source,
     status: attempt.status,
     error: attempt.error ?? "none",
+  };
+}
+
+function providerColumns(provider: ProviderQuota) {
+  return {
+    provider: provider.provider,
+    ...accountColumns(provider, Boolean(provider.accountKey)),
   };
 }
