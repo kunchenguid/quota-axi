@@ -7,16 +7,22 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import {
   deleteCachedProvider as deleteCachedProviderFromDisk,
-  readCachedProvider as readCachedProviderFromDisk,
+  readCachedZaiProvider as readCachedProviderFromDisk,
 } from "../cache.js";
 import { readJsonFileResult, type JsonFileReadResult } from "../lib/fs.js";
 import { resolvePiAuthFilePath } from "../lib/pi-agent-dir.js";
 import { classifyPiAuthEntry } from "../lib/pi-auth-store.js";
 import { usableLiteralSecret } from "../lib/secret.js";
+import {
+  ZAI_API_KEY_ENV,
+  publishZaiReadingContextId,
+  zaiCredentialContextId,
+} from "./zai-cache-context.js";
 import type {
   AuthProviderReport,
   AuthSourceReport,
   ProviderAdapter,
+  ProviderId,
   ProviderOptions,
   ProviderQuota,
   ProviderStatus,
@@ -35,6 +41,7 @@ const ZAI_HOST = "api.z.ai";
 const ZHIPU_HOST = "open.bigmodel.cn";
 const OPENCODE_AUTH_SOURCE = "opencode:auth.json";
 const PI_ZAI_SOURCE = "pi:zai";
+const ENV_ZAI_SOURCE = "env:ZAI_API_KEY";
 const PI_ZAI_PROVIDER_ID = "zai";
 const USER_AGENT = `quota-axi/${VERSION}`;
 
@@ -143,6 +150,38 @@ function extractPiZaiCredential(
     : { status: "invalid", path, error: "invalid_credential" };
 }
 
+/**
+ * Resolve the Z.AI key supplied through the environment. The value is used for
+ * the request only: it is never logged, cached, or written back, and an unusable
+ * value reports `invalid` rather than being sent, so a template or command
+ * reference cannot reach a header.
+ *
+ * @param readEnv reads the raw environment value, injectable for tests
+ * @returns a credential source over the environment
+ */
+export function createEnvCredentialSource(
+  readEnv: () => string | undefined = () => process.env[ZAI_API_KEY_ENV],
+): ZaiCredentialSource {
+  function resolve(): ZaiCredentialResolution {
+    const path = ZAI_API_KEY_ENV;
+    const raw = readEnv()?.trim();
+    if (!raw) return { status: "missing", path };
+    const key = usableLiteralSecret(raw);
+    return key
+      ? { status: "available", apiKey: key, host: ZAI_HOST, path }
+      : { status: "invalid", path, error: "invalid_credential" };
+  }
+  return {
+    resolve,
+    inspect(): ZaiCredentialInspection {
+      const resolution = resolve();
+      if (resolution.status === "available")
+        return { status: "available", path: resolution.path };
+      return resolution;
+    },
+  };
+}
+
 export function createOpencodeAuthCredentialSource(
   filePath: () => string = opencodeAuthFilePath,
 ): ZaiCredentialSource {
@@ -182,6 +221,7 @@ function createJsonAuthCredentialSource(
 
 export function defaultZaiCredentialSources(): NamedZaiCredentialSource[] {
   return [
+    { name: ENV_ZAI_SOURCE, source: createEnvCredentialSource() },
     { name: PI_ZAI_SOURCE, source: createPiAuthCredentialSource() },
     {
       name: OPENCODE_AUTH_SOURCE,
@@ -236,6 +276,44 @@ export function createZaiAdapter(
 
 export const zaiAdapter = createZaiAdapter();
 
+/**
+ * The account a resolved source speaks for. Only the environment source has no
+ * identity of its own, so its key stands in; a stored source names itself,
+ * because Pi and opencode can hold different accounts.
+ */
+function contextForSource(
+  name: string,
+  resolution: ZaiCredentialResolution,
+): string | undefined {
+  if (name !== ENV_ZAI_SOURCE)
+    return zaiCredentialContextId({ kind: "stored", source: name });
+  // The environment names an account only through the key itself, so an absent
+  // or unusable value identifies nothing to cache against.
+  return resolution.status === "available"
+    ? zaiCredentialContextId({ kind: "env-key", apiKey: resolution.apiKey })
+    : undefined;
+}
+
+/**
+ * What this run learned about individual accounts, which the merged failure
+ * cannot carry.
+ *
+ * `preferCredentialFailure` reports the least definitive failure, because a
+ * provider whose other source may recover is not in an auth_required state. A
+ * definitive rejection of ONE credential is real all the same, and deciding the
+ * cache from the merged failure loses it both ways: a rejected key keeps being
+ * served from cache when a sibling source fails transiently, and a rejected key
+ * discards every other account's snapshot when it does not.
+ */
+type ZaiCacheScope = {
+  /** Contexts whose credential this run proved bad. */
+  rejected: Set<string>;
+  /** Accounts a stale reading may stand in for, most specific first. */
+  staleContexts: string[];
+  /** Whether any source produced a usable credential at all. */
+  resolvedAny: boolean;
+};
+
 async function acquireZaiQuota(
   dependencies: ZaiDependencies,
 ): Promise<ProviderQuota> {
@@ -246,6 +324,11 @@ async function acquireZaiQuota(
   );
   const attempts: SourceAttempt[] = [];
   let lastFailure: ZaiFailure | undefined;
+  const cacheScope: ZaiCacheScope = {
+    rejected: new Set(),
+    staleContexts: [],
+    resolvedAny: false,
+  };
 
   try {
     for (const { name, source } of dependencies.credentialSources) {
@@ -258,10 +341,15 @@ async function acquireZaiQuota(
           error: failure.code,
         });
         lastFailure = preferCredentialFailure(lastFailure, failure);
+        const unresolvedContext = contextForSource(name, resolution);
+        if (!failure.definitiveAuth && unresolvedContext !== undefined)
+          cacheScope.staleContexts.push(unresolvedContext);
         continue;
       }
 
       attempts.push({ source: name, status: "failed" });
+      cacheScope.resolvedAny = true;
+      const contextId = contextForSource(name, resolution);
       try {
         const payload = await requestZaiQuota(
           resolution.apiKey,
@@ -279,6 +367,7 @@ async function acquireZaiQuota(
           source: name,
           status: "success",
         };
+        if (contextId !== undefined) publishZaiReadingContextId(contextId);
         return {
           provider: "zai",
           label: "Z.AI",
@@ -308,9 +397,12 @@ async function acquireZaiQuota(
         };
         lastFailure = preferCredentialFailure(lastFailure, failure);
         if (failure.definitiveAuth) {
+          if (contextId !== undefined) cacheScope.rejected.add(contextId);
           continue;
         }
-        return failureReport(failure, attempts, dependencies);
+        if (contextId !== undefined)
+          cacheScope.staleContexts.unshift(contextId);
+        return failureReport(failure, attempts, dependencies, cacheScope);
       }
     }
 
@@ -328,7 +420,7 @@ async function acquireZaiQuota(
         status: "auth_required",
         definitiveAuth: true,
       });
-    return failureReport(failure, attempts, dependencies);
+    return failureReport(failure, attempts, dependencies, cacheScope);
   } catch (error) {
     const failure =
       error instanceof ZaiFailure
@@ -343,7 +435,7 @@ async function acquireZaiQuota(
         error: failure.code,
       });
     }
-    return failureReport(failure, attempts, dependencies);
+    return failureReport(failure, attempts, dependencies, cacheScope);
   } finally {
     clearTimeout(deadline);
   }
@@ -382,10 +474,20 @@ function failureReport(
   failure: ZaiFailure,
   attempts: SourceAttempt[],
   dependencies: ZaiDependencies,
+  cacheScope: ZaiCacheScope,
 ): ProviderQuota {
-  if (failure.definitiveAuth) {
+  // A rejection disproves the credential that was tried, so drop exactly that
+  // account. When nothing resolved at all there is no account left to report,
+  // and the provider retires as a whole.
+  const retirements: (readonly [ProviderId, string?])[] = cacheScope.resolvedAny
+    ? [...cacheScope.rejected].map((contextId) => ["zai", contextId] as const)
+    : failure.definitiveAuth
+      ? [["zai"] as const]
+      : [];
+  for (const [provider, contextId] of retirements) {
     try {
-      dependencies.deleteCachedProvider("zai");
+      if (contextId === undefined) dependencies.deleteCachedProvider(provider);
+      else dependencies.deleteCachedProvider(provider, contextId);
     } catch {
       // The current auth failure is still definitive even if the cache is not writable.
     }
@@ -393,17 +495,20 @@ function failureReport(
 
   if (failure.staleEligible) {
     try {
-      const cached = dependencies.readCachedProvider("zai");
-      const stale = cached
-        ? staleZaiReport(
-            cached,
-            failure.code,
-            failure.retryAfter,
-            attempts,
-            dependencies.now(),
-          )
-        : undefined;
-      if (stale) return stale;
+      for (const contextId of cacheScope.staleContexts) {
+        if (cacheScope.rejected.has(contextId)) continue;
+        const cached = dependencies.readCachedProvider(contextId);
+        const stale = cached
+          ? staleZaiReport(
+              cached,
+              failure.code,
+              failure.retryAfter,
+              attempts,
+              dependencies.now(),
+            )
+          : undefined;
+        if (stale) return stale;
+      }
     } catch {
       // Cache I/O cannot replace the bounded current provider failure.
     }

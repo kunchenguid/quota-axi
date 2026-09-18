@@ -14,15 +14,23 @@ import {
   readCachedClaudeProvider,
   readCachedKimiProvider,
   readCachedProvider,
+  readCachedZaiProvider,
   writeCachedProviders,
 } from "../src/cache.js";
 import { cacheFilePath, claudeCredentialContextId } from "../src/lib/fs.js";
 import { createKimiCodeCliCredentialSource } from "../src/providers/kimi-code-cli-credential.js";
+import {
+  ZAI_API_KEY_ENV,
+  publishZaiReadingContextId,
+  resetZaiReadingContextId,
+  zaiCredentialContextId,
+} from "../src/providers/zai-cache-context.js";
 import type { ProviderId, ProviderQuota } from "../src/types.js";
 
 const originalXdgCacheHome = process.env.XDG_CACHE_HOME;
 const originalClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
 const originalKimiCodeHome = process.env.KIMI_CODE_HOME;
+const originalZaiApiKey = process.env[ZAI_API_KEY_ENV];
 let tempDir: string | undefined;
 
 afterEach(() => {
@@ -33,6 +41,9 @@ afterEach(() => {
   else process.env.CLAUDE_CONFIG_DIR = originalClaudeConfigDir;
   if (originalKimiCodeHome === undefined) delete process.env.KIMI_CODE_HOME;
   else process.env.KIMI_CODE_HOME = originalKimiCodeHome;
+  if (originalZaiApiKey === undefined) delete process.env[ZAI_API_KEY_ENV];
+  else process.env[ZAI_API_KEY_ENV] = originalZaiApiKey;
+  resetZaiReadingContextId();
   if (tempDir) rmSync(tempDir, { recursive: true, force: true });
   tempDir = undefined;
 });
@@ -208,6 +219,81 @@ describe("quota cache", () => {
     expect(contextId).toMatch(/^[a-f0-9]{64}$/);
     expect(JSON.stringify(payload)).not.toContain(contextDir);
     expect(readCachedClaudeProvider(claudeCredentialContextId())).toBeDefined();
+  });
+
+  it("refuses a stored-credential Z.AI snapshot to an env-key reading", () => {
+    useTempCache();
+    const stored = zaiCredentialContextId({
+      kind: "stored",
+      source: "opencode:auth.json",
+    });
+    publishZaiReadingContextId(stored);
+    writeCachedProviders([quota("zai", 42)]);
+    expect(readCachedZaiProvider(stored)).toBeDefined();
+
+    const envKey = zaiCredentialContextId({
+      kind: "env-key",
+      apiKey: "synthetic-zai-env-key",
+    });
+
+    expect(readCachedZaiProvider(envKey)).toBeUndefined();
+    expect(readFileSync(cacheFilePath(), "utf8")).not.toContain(
+      "synthetic-zai-env-key",
+    );
+  });
+
+  it("refuses an env-key Z.AI snapshot to a stored-credential reading", () => {
+    useTempCache();
+    const envKey = zaiCredentialContextId({
+      kind: "env-key",
+      apiKey: "synthetic-zai-env-key",
+    });
+    publishZaiReadingContextId(envKey);
+    writeCachedProviders([quota("zai", 42)]);
+    expect(readCachedZaiProvider(envKey)).toBeDefined();
+    expect(readFileSync(cacheFilePath(), "utf8")).not.toContain(
+      "synthetic-zai-env-key",
+    );
+
+    expect(
+      readCachedZaiProvider(
+        zaiCredentialContextId({ kind: "stored", source: "pi:zai" }),
+      ),
+    ).toBeUndefined();
+  });
+
+  it("keeps Z.AI snapshots from different ZAI_API_KEY accounts apart", () => {
+    useTempCache();
+    const accountA = zaiCredentialContextId({
+      kind: "env-key",
+      apiKey: "synthetic-zai-account-a",
+    });
+    const accountB = zaiCredentialContextId({
+      kind: "env-key",
+      apiKey: "synthetic-zai-account-b",
+    });
+    publishZaiReadingContextId(accountA);
+    writeCachedProviders([quota("zai", 42)]);
+
+    expect(readCachedZaiProvider(accountA)).toBeDefined();
+    expect(readCachedZaiProvider(accountB)).toBeUndefined();
+    expect(readFileSync(cacheFilePath(), "utf8")).not.toContain(
+      "synthetic-zai-account-a",
+    );
+  });
+
+  it("keeps two stored Z.AI sources apart, because they can hold different accounts", () => {
+    useTempCache();
+    const pi = zaiCredentialContextId({ kind: "stored", source: "pi:zai" });
+    const opencode = zaiCredentialContextId({
+      kind: "stored",
+      source: "opencode:auth.json",
+    });
+    publishZaiReadingContextId(pi);
+    writeCachedProviders([quota("zai", 42)]);
+
+    expect(readCachedZaiProvider(pi)).toBeDefined();
+    expect(readCachedZaiProvider(opencode)).toBeUndefined();
   });
 
   it("refuses Kimi cache captured under another Kimi Code environment", async () => {
