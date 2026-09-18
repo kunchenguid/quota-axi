@@ -265,6 +265,7 @@ describe("live report viewport", () => {
     );
     expect(scrolling).toContain("↑ 2 more");
     expect(scrolling).toContain("↓ 7 more");
+    expect(scrolling).toContain("r refresh");
     expect(scrolling).not.toContain(HINT);
   });
 });
