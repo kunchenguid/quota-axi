@@ -108,6 +108,47 @@ describe("renderQuotaTui structure", () => {
     expect(row[99]).toBe("│");
   });
 
+  it.each([80, 99, 100, 101, 120, 121, 200, 201])(
+    "keeps card borders and quota figures legible at %i columns",
+    (columns) => {
+      const response = fixtureResponse();
+      response.providers[0].plan =
+        "An extraordinarily long subscription plan name";
+      response.providers[0].windows[0].label =
+        "Extraordinarily long session quota label";
+      const lines = renderQuotaTui(response, {
+        columns,
+        timeZone: "America/Los_Angeles",
+      }).split("\n");
+      const twoColumn = columns >= 100;
+      const cardWidth = twoColumn ? Math.floor((columns - 2) / 2) : columns;
+
+      for (const line of lines) {
+        expect(displayColumns(line)).toBeLessThanOrEqual(columns);
+        if (!/^[╭│╰]/u.test(line)) continue;
+        const left = line.slice(0, cardWidth);
+        expect(displayColumns(left)).toBe(cardWidth);
+        expect(left).toMatch(/^[╭│╰].*[╮│╯]$/u);
+        if (line.length > cardWidth) {
+          expect(line.slice(cardWidth, cardWidth + 2)).toBe("  ");
+          const right = line.slice(cardWidth + 2);
+          expect(displayColumns(right)).toBe(cardWidth);
+          expect(right).toMatch(/^[╭│╰].*[╮│╯]$/u);
+        }
+      }
+
+      const report = lines.join("\n");
+      for (const figure of ["97%", "72%", "85%", "5%", "100%", "45%"])
+        expect(report).toContain(figure);
+      if (columns >= 200) {
+        expect(report).toContain("extraordinarily long session quota label");
+        expect(report).toContain(
+          "An extraordinarily long subscription plan name",
+        );
+      }
+    },
+  );
+
   it("promotes effective headroom with the runway verdict on the headline", () => {
     const lines = render();
     expect(findLine(lines, "72% week")).toContain("on pace ✓");
@@ -269,10 +310,10 @@ describe("renderQuotaTui structure", () => {
     availability.runway.usableRunwaySeconds = undefined;
 
     const lines = renderQuotaTui(response, {
-      columns: 80,
+      columns: 100,
       timeZone: "America/Los_Angeles",
     }).split("\n");
-    const headline = findLine(lines, "85%");
+    const headline = findCardLine(lines, 0, "85%");
     expect(headline).toMatch(/85% .* week\s+exhaustion projected/);
     expect(displayColumns(headline)).toBe(CARD_COLUMNS);
   });
@@ -294,10 +335,10 @@ describe("renderQuotaTui structure", () => {
     availability.runway.usableRunwaySeconds = undefined;
 
     const lines = renderQuotaTui(response, {
-      columns: 80,
+      columns: 100,
       timeZone: "America/Los_Angeles",
     }).split("\n");
-    const headline = findLine(lines, "85%");
+    const headline = findCardLine(lines, 0, "85%");
     expect(headline).toMatch(/85% .* week \+1\s+exhaustion projected/);
     expect(displayColumns(headline)).toBe(CARD_COLUMNS);
   });
@@ -358,10 +399,10 @@ describe("renderQuotaTui structure", () => {
     availability.limitingWindowIds = [modelWindow.id];
 
     const lines = renderQuotaTui(response, {
-      columns: 80,
+      columns: 100,
       timeZone: "America/Los_Angeles",
     }).split("\n");
-    const headline = findLine(lines, "85%");
+    const headline = findCardLine(lines, 0, "85%");
     expect(headline).toMatch(/85% .* week\s+on pace ✓/);
     expect(displayColumns(headline)).toBe(49);
   });
@@ -449,7 +490,7 @@ describe("renderQuotaTui structure", () => {
     for (const line of narrow) expect(line.length).toBeLessThanOrEqual(80);
     const claudeTitle = findLine(narrow, "● claude");
     expect(claudeTitle).not.toContain("codex");
-    expect(claudeTitle.trimEnd()).toHaveLength(49);
+    expect(claudeTitle.trimEnd()).toHaveLength(80);
     expect(narrow.length).toBeGreaterThan(render().length);
   });
 

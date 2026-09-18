@@ -16,7 +16,7 @@ import type {
 export type TuiColorDepth = "none" | "16" | "256" | "truecolor";
 
 export type TuiOptions = {
-  /** Raw terminal width; clamped to [80, 120], defaults to 100. */
+  /** Raw terminal width; at least 80 columns, defaults to 100. */
   columns?: number;
   colorDepth?: TuiColorDepth;
   /** Mirrors `--full`: appends account identity and source-attempt footers. */
@@ -25,15 +25,10 @@ export type TuiOptions = {
   timeZone?: string;
 };
 
-const CARD_WIDTH = 49;
-const CARD_INTERIOR = CARD_WIDTH - 2;
+const MIN_CARD_WIDTH = 49;
 const CARD_GUTTER = 2;
-const TWO_COLUMN_MIN = CARD_WIDTH * 2 + CARD_GUTTER;
-const EFFECTIVE_BAR_WIDTH = 41;
-/** 3 gutter + 8 label + bar + 1 + 4 percent + 2 + 6 reset + 1 = CARD_INTERIOR. */
-const WINDOW_BAR_WIDTH = CARD_INTERIOR - 25;
+const TWO_COLUMN_MIN = MIN_CARD_WIDTH * 2 + CARD_GUTTER;
 const MIN_COLUMNS = 80;
-const MAX_COLUMNS = 120;
 const GRAPHEME_SEGMENTER = new Intl.Segmenter("en", {
   granularity: "grapheme",
 });
@@ -125,6 +120,9 @@ export function renderQuotaTui(
 ): string {
   const columns = resolveColumns(options.columns);
   const twoColumn = columns >= TWO_COLUMN_MIN;
+  const cardWidth = twoColumn
+    ? Math.floor((columns - CARD_GUTTER) / 2)
+    : columns;
   const generatedAtMs = Date.parse(response.generatedAt);
   const timeZone = options.timeZone;
 
@@ -132,7 +130,9 @@ export function renderQuotaTui(
     ...response.providers.filter(isLive),
     ...response.providers.filter((provider) => !isLive(provider)),
   ];
-  const cards = ordered.map((provider) => buildCard(provider, generatedAtMs));
+  const cards = ordered.map((provider) =>
+    buildCard(provider, generatedAtMs, cardWidth),
+  );
 
   const lines: Line[] = [];
   lines.push([{ text: `  ${headerText(response, timeZone)}`, style: "dim" }]);
@@ -167,10 +167,7 @@ export function renderTuiHintLine(
 }
 
 function resolveColumns(columns: number | undefined): number {
-  return Math.min(
-    MAX_COLUMNS,
-    Math.max(MIN_COLUMNS, columns ?? TWO_COLUMN_MIN),
-  );
+  return Math.max(MIN_COLUMNS, columns ?? TWO_COLUMN_MIN);
 }
 
 function isLive(provider: ProviderQuota): boolean {
@@ -195,13 +192,22 @@ function headerText(response: QuotaAxiResponse, timeZone?: string): string {
 
 type Card = Line[];
 
-function buildCard(provider: ProviderQuota, generatedAtMs: number): Card {
+function buildCard(
+  provider: ProviderQuota,
+  generatedAtMs: number,
+  width: number,
+): Card {
   return isLive(provider)
-    ? buildLiveCard(provider, generatedAtMs)
-    : buildFailedCard(provider);
+    ? buildLiveCard(provider, generatedAtMs, width)
+    : buildFailedCard(provider, width);
 }
 
-function buildLiveCard(provider: ProviderQuota, generatedAtMs: number): Card {
+function buildLiveCard(
+  provider: ProviderQuota,
+  generatedAtMs: number,
+  width: number,
+): Card {
+  const interiorWidth = width - 2;
   const stale = provider.state.stale;
   const rightTitle = [
     provider.plan,
@@ -218,39 +224,43 @@ function buildLiveCard(provider: ProviderQuota, generatedAtMs: number): Card {
       },
       rightTitle,
       "border",
+      width,
     ),
-    ...accountCardLines(provider, "border"),
-    interior([], "border"),
+    ...accountCardLines(provider, "border", width),
+    interior([], "border", width),
   ];
 
   const headline = pickHeadlineAvailability(provider);
-  const creditsLine = creditsOnlyHeadline(provider, stale);
+  const creditsLine = creditsOnlyHeadline(provider, stale, width);
   if (creditsLine) {
     lines.push(...creditsLine);
   } else if (hasWhollyUnknownWindowRelationships(provider)) {
-    lines.push(...windowsOnlyHeadline(stale));
+    lines.push(...windowsOnlyHeadline(stale, width));
   } else {
-    lines.push(...effectiveHeadline(provider, headline, stale));
+    lines.push(...effectiveHeadline(provider, headline, stale, width));
   }
 
   if (provider.windows.length > 0) {
-    lines.push(interior([], "border"));
+    lines.push(interior([], "border", width));
     for (const window of provider.windows) {
-      lines.push(interior(windowRow(window, generatedAtMs), "border"));
+      lines.push(
+        interior(windowRow(window, generatedAtMs, width), "border", width),
+      );
     }
   }
 
   for (const note of cardNotes(provider)) {
     lines.push(
       interior(
-        [{ text: `   ${truncate(note, CARD_INTERIOR - 4)}`, style: "dimmer" }],
+        [{ text: `   ${truncate(note, interiorWidth - 4)}`, style: "dimmer" }],
         "border",
+        width,
       ),
     );
   }
 
-  lines.push(interior([], "border"));
-  lines.push(bottomLine("border"));
+  lines.push(interior([], "border", width));
+  lines.push(bottomLine("border", width));
   return lines;
 }
 
@@ -263,7 +273,9 @@ function effectiveHeadline(
   provider: ProviderQuota,
   headline: EffectiveAvailability | undefined,
   stale: boolean | undefined,
+  width: number,
 ): Line[] {
+  const barWidth = width - 8;
   const lines: Line[] = [];
   const effectivePct = headline?.effectivePercentRemaining;
   const markerPct = effectiveMarkerPercent(provider, headline);
@@ -273,11 +285,7 @@ function effectiveHeadline(
     effectivePct === undefined ? undefined : `${Math.round(effectivePct)}%`;
   const headlineLabelWidth = Math.max(
     0,
-    EFFECTIVE_BAR_WIDTH -
-      lineWidth(verdict) -
-      1 -
-      displayWidth(percentText ?? "") -
-      1,
+    barWidth - lineWidth(verdict) - 1 - displayWidth(percentText ?? "") - 1,
   );
   const left: Line =
     effectivePct !== undefined && percentText !== undefined
@@ -301,20 +309,22 @@ function effectiveHeadline(
     interior(
       [
         { text: "   " },
-        ...padBetween(left, verdict, EFFECTIVE_BAR_WIDTH),
+        ...padBetween(left, verdict, barWidth),
         { text: "   " },
       ],
       "border",
+      width,
     ),
   );
   lines.push(
     interior(
       [
         { text: "   " },
-        ...thinBar(effectivePct, markerPct, EFFECTIVE_BAR_WIDTH),
+        ...thinBar(effectivePct, markerPct, barWidth),
         { text: "   " },
       ],
       "border",
+      width,
     ),
   );
   return lines;
@@ -329,6 +339,7 @@ function effectiveHeadline(
 function creditsOnlyHeadline(
   provider: ProviderQuota,
   stale: boolean | undefined,
+  width: number,
 ): Line[] | undefined {
   if (provider.windows.length > 0) return undefined;
   const credits = provider.credits;
@@ -350,6 +361,7 @@ function creditsOnlyHeadline(
         },
       ],
       "border",
+      width,
     ),
   ];
 }
@@ -375,7 +387,10 @@ function hasWhollyUnknownWindowRelationships(provider: ProviderQuota): boolean {
   return provider.windows.every(({ id }) => unresolved.has(id));
 }
 
-function windowsOnlyHeadline(stale: boolean | undefined): Line[] {
+function windowsOnlyHeadline(
+  stale: boolean | undefined,
+  width: number,
+): Line[] {
   const left: Line = [
     {
       text: stale ? "stale · per-window usage" : "per-window usage",
@@ -387,17 +402,15 @@ function windowsOnlyHeadline(stale: boolean | undefined): Line[] {
   // window rows' reset column rather than the (absent) bar's end.
   return [
     interior(
-      [
-        { text: "   " },
-        ...padBetween(left, right, CARD_INTERIOR - 4),
-        { text: " " },
-      ],
+      [{ text: "   " }, ...padBetween(left, right, width - 6), { text: " " }],
       "border",
+      width,
     ),
   ];
 }
 
-function buildFailedCard(provider: ProviderQuota): Card {
+function buildFailedCard(provider: ProviderQuota, width: number): Card {
+  const interiorWidth = width - 2;
   const status = provider.state.status;
   const rightTitle =
     status === "auth_required" ? "signed out" : humanize(status);
@@ -406,9 +419,10 @@ function buildFailedCard(provider: ProviderQuota): Card {
       { text: ` ○ ${provider.provider} `, style: "dimBold" },
       rightTitle,
       "borderDim",
+      width,
     ),
-    ...accountCardLines(provider, "borderDim"),
-    interior([], "borderDim"),
+    ...accountCardLines(provider, "borderDim", width),
+    interior([], "borderDim", width),
   ];
   const message =
     humanize(provider.state.error ?? "") ||
@@ -431,16 +445,17 @@ function buildFailedCard(provider: ProviderQuota): Card {
       interior(
         [
           {
-            text: `   ${truncate(entry.text, CARD_INTERIOR - 4)}`,
+            text: `   ${truncate(entry.text, interiorWidth - 4)}`,
             style: entry.style,
           },
         ],
         "borderDim",
+        width,
       ),
     );
   }
-  lines.push(interior([], "borderDim"));
-  lines.push(bottomLine("borderDim"));
+  lines.push(interior([], "borderDim", width));
+  lines.push(bottomLine("borderDim", width));
   return lines;
 }
 
@@ -448,17 +463,18 @@ function titleLine(
   name: Segment,
   rightText: string,
   borderStyle: StyleName,
+  width: number,
 ): Line {
   let right = rightText === "" ? "" : ` ${rightText} `;
-  let dashes = CARD_WIDTH - 4 - displayWidth(name.text) - displayWidth(right);
+  let dashes = width - 4 - displayWidth(name.text) - displayWidth(right);
   if (dashes < 1) {
     right = ` ${truncate(
       rightText,
-      Math.max(0, CARD_WIDTH - 7 - displayWidth(name.text)),
+      Math.max(0, width - 7 - displayWidth(name.text)),
     )} `;
     dashes = Math.max(
       1,
-      CARD_WIDTH - 4 - displayWidth(name.text) - displayWidth(right),
+      width - 4 - displayWidth(name.text) - displayWidth(right),
     );
   }
   return [
@@ -470,32 +486,46 @@ function titleLine(
   ];
 }
 
-function bottomLine(borderStyle: StyleName): Line {
-  return [{ text: `╰${"─".repeat(CARD_INTERIOR)}╯`, style: borderStyle }];
+function bottomLine(borderStyle: StyleName, width: number): Line {
+  return [{ text: `╰${"─".repeat(width - 2)}╯`, style: borderStyle }];
 }
 
-function interior(content: Line, borderStyle: StyleName): Line {
-  const used = lineWidth(content);
-  const pad = Math.max(0, CARD_INTERIOR - used);
+function interior(content: Line, borderStyle: StyleName, width: number): Line {
+  const bounded = truncateLine(content, width - 2);
+  const used = lineWidth(bounded);
+  const pad = Math.max(0, width - 2 - used);
   return [
     { text: "│", style: borderStyle },
-    ...content,
+    ...bounded,
     { text: " ".repeat(pad) },
     { text: "│", style: borderStyle },
   ];
 }
 
-function windowRow(window: QuotaWindow, generatedAtMs: number): Line {
+function windowRow(
+  window: QuotaWindow,
+  generatedAtMs: number,
+  width: number,
+): Line {
   const pct = window.percentRemaining;
   const marker = window.pace?.timeRemainingPercent;
   const reset = resetCountdown(window, generatedAtMs);
+  const interiorWidth = width - 2;
+  // Keep at least the original 22-cell bar, then spend spare width on labels.
+  const labelWidth = Math.min(48, Math.max(8, interiorWidth - 39));
+  const percent = pct === undefined ? "?" : `${Math.round(pct)}%`;
+  const barWidth =
+    interiorWidth - labelWidth - 13 - Math.max(4, displayWidth(percent));
   return [
     { text: "   " },
-    { text: padEndDisplay(shortWindowLabel(window), 8), style: "label" },
-    ...thinBar(pct, marker, WINDOW_BAR_WIDTH),
+    {
+      text: padEndDisplay(shortWindowLabel(window, labelWidth - 1), labelWidth),
+      style: "label",
+    },
+    ...thinBar(pct, marker, barWidth),
     { text: " " },
     {
-      text: (pct === undefined ? "?" : `${Math.round(pct)}%`).padStart(4),
+      text: percent.padStart(4),
       style: pct === undefined ? "dim" : healthStyle(pct),
     },
     { text: "  " },
@@ -672,7 +702,7 @@ function compactHeadlineWindowName(label: string, width: number): string {
  * period/unit token ("Fable week" -> "fable", "730h window" -> "730h"),
  * then fall back to the last hyphen segment and an ellipsis.
  */
-export function shortWindowLabel(window: QuotaWindow): string {
+export function shortWindowLabel(window: QuotaWindow, width = 7): string {
   const tokens = window.label.split(/[\s_]+/).filter(Boolean);
   if (
     tokens.length > 1 &&
@@ -683,11 +713,11 @@ export function shortWindowLabel(window: QuotaWindow): string {
     tokens.pop();
   }
   let label = tokens.join(" ").toLowerCase();
-  if (displayWidth(label) > 7 && label.includes("-")) {
+  if (displayWidth(label) > width && label.includes("-")) {
     label = label.slice(label.lastIndexOf("-") + 1);
   }
-  if (displayWidth(label) > 7) label = truncate(label, 7);
-  return label || truncate(window.id, 7);
+  if (displayWidth(label) > width) label = truncate(label, width);
+  return label || truncate(window.id, width);
 }
 
 function resetCountdown(window: QuotaWindow, generatedAtMs: number): string {
@@ -894,7 +924,9 @@ function padCardToHeight(card: Card, height: number): Card {
   if (!bottom || !borderStyle) return card;
   return [
     ...card.slice(0, -1),
-    ...Array.from({ length: missing }, () => interior([], borderStyle)),
+    ...Array.from({ length: missing }, () =>
+      interior([], borderStyle, lineWidth(bottom)),
+    ),
     bottom,
   ];
 }
@@ -927,6 +959,7 @@ function configuredAccountKey(provider: ProviderQuota): string | undefined {
 function accountCardLines(
   provider: ProviderQuota,
   border: "border" | "borderDim",
+  width: number,
 ): Line[] {
   const accountKey = configuredAccountKey(provider);
   if (!accountKey) return [];
@@ -934,11 +967,12 @@ function accountCardLines(
     interior(
       [
         {
-          text: truncate(`   account ${accountKey}`, CARD_INTERIOR),
+          text: truncate(`   account ${accountKey}`, width - 2),
           style: "dim",
         },
       ],
       border,
+      width,
     ),
   ];
 }
