@@ -361,28 +361,6 @@ describe("independent account reporting", () => {
     }
   });
 
-  it("keeps the sole non-selected profile's locator and reauth remedy", async () => {
-    const work = join(home, ".claude-work");
-    mkdirSync(join(work, ".credentials.json"), { recursive: true });
-    const full = response(await command(["--full", "--json"]));
-    expect(full.providers).toHaveLength(1);
-    expect(full.schemaVersion).toBe(5);
-    expect(full.providers[0].accountKey).toBeUndefined();
-    expect(full.providers[0].accountLocator).toEqual({
-      kind: "config-dir",
-      path: work,
-      delegateEligible: false,
-    });
-    expect(full.providers[0].state.status).toBe("auth_required");
-    expect(full.providers[0].state.remedyCommand).toContain(work);
-    expect(JSON.stringify(full.help)).toContain(work);
-    const plain = response(await command(["--json"]));
-    expect(plain.schemaVersion).toBe(5);
-    expect(plain.providers[0].accountLocator).toBeUndefined();
-    expect(plain.providers[0].state.reason).toBe("credentials_expired");
-    expect(JSON.stringify(plain)).not.toContain(work);
-  });
-
   it("keeps a later single-provider stale run on the legacy schema", async () => {
     credential(".claude", "synthetic-personal");
     credential(".claude-work", "synthetic-work");

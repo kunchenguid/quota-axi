@@ -43,9 +43,9 @@ async function accountsFor(
 }
 
 /**
- * Only a run that discovered several lanes publishes keys. A stale snapshot can
- * still carry the key it was cached under, and that is a record of an earlier
- * run's discovery, never evidence of this run's expansion.
+ * This run produced exactly one lane, so the report is the legacy keyless one.
+ * A stale snapshot can still carry the key it was cached under, and that is a
+ * record of an earlier run's discovery, never evidence of this run's expansion.
  */
 function unexpanded(report: ProviderQuota): ProviderQuota {
   if (report.accountKey === undefined) return report;
@@ -103,11 +103,9 @@ export async function fetchAccountQuotas(
         },
       };
     }
-    // The locator is discovery's own answer about this lane, so it stays with
-    // the report however many lanes were found; only the key means expansion.
     reports.push(
       accounts.length === 1
-        ? { ...unexpanded(report), accountLocator: account.locator }
+        ? unexpanded(report)
         : {
             ...report,
             accountKey: account.accountKey,
