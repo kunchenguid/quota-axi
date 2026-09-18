@@ -217,15 +217,13 @@ function readCachedProviderInContext(
 }
 
 export function writeCachedProviders(providers: ProviderQuota[]): void {
-  const clearProviders = new Set(
-    providers
-      .filter(
-        (provider) =>
-          provider.state.status === "fresh" &&
-          provider.windows.length === 0 &&
-          !missingRequiredContext(provider.provider),
-      )
-      .map(cacheIdentity),
+  const clearProviders = providers.filter(
+    (provider) =>
+      (provider.state.status === "fresh" &&
+        provider.windows.length === 0 &&
+        !missingRequiredContext(provider)) ||
+      (provider.state.status === "auth_required" &&
+        !missingRequiredContext(provider)),
   );
   const cacheable = providers
     .map(toCacheProvider)
@@ -235,7 +233,11 @@ export function writeCachedProviders(providers: ProviderQuota[]): void {
   const byProvider = new Map<string, CachedProvider>();
   let clearedExisting = false;
   for (const provider of readCacheProviders()) {
-    if (clearProviders.has(cacheIdentity(provider.snapshot))) {
+    if (
+      clearProviders.some((current) =>
+        shouldClearCachedProvider(current, provider),
+      )
+    ) {
       clearedExisting = true;
       continue;
     }
@@ -258,6 +260,15 @@ export function writeCachedProviders(providers: ProviderQuota[]): void {
 
 function cacheIdentity(provider: ProviderQuota): string {
   return `${provider.provider}/${provider.accountKey ?? DEFAULT_ACCOUNT_KEY}`;
+}
+
+function shouldClearCachedProvider(
+  current: ProviderQuota,
+  cached: CachedProvider,
+): boolean {
+  if (cacheIdentity(current) !== cacheIdentity(cached.snapshot)) return false;
+  const context = CONTEXT_SCOPED_PROVIDERS[current.provider]?.(current);
+  return context === undefined || context === cached.credentialContextId;
 }
 
 export function deleteCachedProvider(
@@ -354,14 +365,12 @@ function toCacheProvider(provider: ProviderQuota): CachedProvider | undefined {
   };
 }
 
-function missingRequiredContext(provider: ProviderId): boolean {
+function missingRequiredContext(provider: ProviderQuota): boolean {
   // Codex stamps are optional; Claude, Kimi, and Command Code must not clear
   // when the current reading has no published context identity.
-  if (provider === "codex") return false;
-  const scope = CONTEXT_SCOPED_PROVIDERS[provider];
-  return (
-    scope !== undefined && !scope({ provider } as ProviderQuota)
-  );
+  if (provider.provider === "codex") return false;
+  const scope = CONTEXT_SCOPED_PROVIDERS[provider.provider];
+  return scope !== undefined && !scope(provider);
 }
 
 function serializeCachedProvider(

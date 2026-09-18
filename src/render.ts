@@ -262,7 +262,7 @@ function providerStateRows(
   const credits = creditBalance(provider);
   if (credits) {
     rows.unshift({
-      provider: provider.provider,
+      ...providerColumns(provider),
       scope: "all",
       kind: "credits",
       detail: `${credits}${suffix}`,

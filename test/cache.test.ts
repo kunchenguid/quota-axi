@@ -172,7 +172,7 @@ describe("quota cache", () => {
       generatedAt: "2026-07-06T19:10:00Z",
       providers: [staleFromCache(cached!, "fetch failed", ["api"], [])],
     });
-    expect(later.schemaVersion).toBe(5);
+    expect(later.schemaVersion).toBe(6);
     expect(later.providers[0]?.accountKey).toBeUndefined();
   });
 
@@ -445,6 +445,48 @@ oauth_host = "https://auth.kimi.ai"
     expect(readCachedProvider("kimi")).toBeUndefined();
     expect(readCachedProvider("claude")?.windows[0].percentUsed).toBe(10);
     expect(statSync(cacheFilePath()).mode & 0o777).toBe(0o600);
+  });
+
+  it("clears a cached provider after a definitive auth failure", () => {
+    useTempCache();
+    writeCachedProviders([quota("kiro", 10), quota("claude", 20)]);
+
+    writeCachedProviders([
+      {
+        ...quota("kiro", 10),
+        windows: [],
+        state: {
+          status: "auth_required",
+          stale: false,
+          error: "kiro_sign_in_required",
+          sourcesTried: ["kiro-cli"],
+        },
+      },
+    ]);
+
+    expect(readCachedProvider("kiro")).toBeUndefined();
+    expect(readCachedProvider("claude")?.windows[0].percentUsed).toBe(20);
+  });
+
+  it("does not clear another Claude context after an auth failure", () => {
+    useTempCache();
+    writeCachedProviders([quota("claude", 10)]);
+    process.env.CLAUDE_CONFIG_DIR = join(tempDir!, "other-claude-context");
+
+    writeCachedProviders([
+      {
+        ...quota("claude", 10),
+        windows: [],
+        state: {
+          status: "auth_required",
+          stale: false,
+          error: "credentials_invalid",
+          sourcesTried: ["oauth-file"],
+        },
+      },
+    ]);
+
+    expect(readCachedProvider("claude")?.windows[0].percentUsed).toBe(10);
   });
 
   it("clears a stale snapshot after a fresh no-window report", () => {

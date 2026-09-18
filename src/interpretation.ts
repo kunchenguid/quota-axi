@@ -163,6 +163,11 @@ function semanticsFor(
         provider.state.untrustedWindowIds ?? [],
         generatedAt,
       );
+    case "kiro":
+      return unknownSemantics(
+        provider.windows,
+        "Kiro reports usage breakdowns and limits, but quota-axi has no provider evidence that they are jointly bounding or how they map to model scopes, so it preserves each window without claiming combined availability.",
+      );
   }
 }
 

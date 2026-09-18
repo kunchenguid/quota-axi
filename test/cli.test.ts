@@ -25,6 +25,7 @@ const originalAgyProvider = PROVIDERS.agy;
 const originalAlibabaProvider = PROVIDERS.alibaba;
 const originalOpenCodeGoProvider = PROVIDERS["opencode-go"];
 const originalCommandCodeProvider = PROVIDERS.commandcode;
+const originalKiroProvider = PROVIDERS.kiro;
 const originalXdgCacheHome = process.env.XDG_CACHE_HOME;
 const originalClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
 const originalCodexHome = process.env.CODEX_HOME;
@@ -42,6 +43,7 @@ afterEach(() => {
   PROVIDERS.alibaba = originalAlibabaProvider;
   PROVIDERS["opencode-go"] = originalOpenCodeGoProvider;
   PROVIDERS.commandcode = originalCommandCodeProvider;
+  PROVIDERS.kiro = originalKiroProvider;
   if (originalXdgCacheHome === undefined) delete process.env.XDG_CACHE_HOME;
   else process.env.XDG_CACHE_HOME = originalXdgCacheHome;
   if (originalClaudeConfigDir === undefined)
@@ -69,6 +71,7 @@ describe("CLI flag parsing", () => {
       "alibaba",
       "opencode-go",
       "commandcode",
+      "kiro",
     ]);
   });
 
@@ -107,6 +110,7 @@ describe("CLI flag parsing", () => {
           "alibaba",
           "opencode-go",
           "commandcode",
+          "kiro",
         ],
         json: true,
         full: true,
@@ -488,7 +492,7 @@ describe("CLI quota rendering", () => {
     const codex = output.providers.find(
       (provider) => provider.provider === "codex",
     );
-    expect(output.schemaVersion).toBe(5);
+    expect(output.schemaVersion).toBe(6);
     expect(claude?.state.reason).toBe("keychain_access_required");
     expect(claude?.state.remedyCommand).toBe(
       "quota-axi --allow-keychain-prompt",
@@ -793,7 +797,7 @@ describe("CLI quota rendering", () => {
     const json = JSON.parse(
       await capture(["--provider", "kimi", "--json"]),
     ) as QuotaAxiResponse;
-    expect(json.schemaVersion).toBe(5);
+    expect(json.schemaVersion).toBe(6);
     expect(json.providers).toEqual([
       expect.objectContaining({
         provider: "kimi",
@@ -889,6 +893,8 @@ describe("default TOON decision blocks", () => {
     PROVIDERS.alibaba = providerWithQuota(freshAlibabaQuota());
     PROVIDERS["opencode-go"] = providerWithQuota(freshOpenCodeGoQuota());
     PROVIDERS.commandcode = providerWithQuota(freshCommandCodeQuota());
+    PROVIDERS.kiro = providerWithQuota(freshKiroQuota());
+    PROVIDERS.kiro = providerWithQuota(freshKiroQuota());
 
     const output = await capture([]);
     const named = new Set([
@@ -906,6 +912,7 @@ describe("default TOON decision blocks", () => {
       "cursor",
       "grok",
       "kimi",
+      "kiro",
       "opencode-go",
       "zai",
     ]);
@@ -975,6 +982,50 @@ describe("default TOON decision blocks", () => {
     expect(toonRows(output, "attention")).toEqual([
       [
         "commandcode",
+        "all",
+        "credits",
+        "remaining 12.5 credits (auth usable)",
+        "none",
+      ],
+    ]);
+  });
+
+  it("keeps account keys on credit rows in expanded reports", async () => {
+    useTempCache();
+    const creditQuota = (accountKey: string): ProviderQuota => ({
+      provider: "commandcode",
+      label: "Command Code",
+      source: "api",
+      accountKey,
+      windows: [],
+      credits: { remaining: 12.5, unit: "credits" },
+      state: {
+        status: "fresh",
+        stale: false,
+        refreshedAt: "2026-07-06T18:10:00Z",
+        authStatus: "usable",
+        sourcesTried: ["pi:commandcode"],
+      },
+    });
+    PROVIDERS.commandcode = providerWithAccounts([
+      ["work", creditQuota("work")],
+      ["personal", creditQuota("personal")],
+    ]);
+
+    const output = await capture(["--provider", "commandcode"]);
+
+    expect(toonRows(output, "attention")).toEqual([
+      [
+        "commandcode",
+        "work",
+        "all",
+        "credits",
+        "remaining 12.5 credits (auth usable)",
+        "none",
+      ],
+      [
+        "commandcode",
+        "personal",
         "all",
         "credits",
         "remaining 12.5 credits (auth usable)",
@@ -1238,7 +1289,7 @@ describe("--json tiering", () => {
     ) as QuotaAxiResponse;
     const [claude, cursor, grok, kimi] = json.providers;
 
-    expect(json.schemaVersion).toBe(5);
+    expect(json.schemaVersion).toBe(6);
     expect(claude?.state).toMatchObject({
       status: "stale",
       stale: true,
@@ -1342,7 +1393,7 @@ describe("response redaction", () => {
   it("hides account identity and attempts unless --full is set", () => {
     const response: QuotaAxiResponse = {
       generatedAt: "2026-07-06T18:10:00Z",
-      schemaVersion: 5,
+      schemaVersion: 6,
       providers: [
         {
           provider: "claude",
@@ -1918,6 +1969,29 @@ function freshCommandCodeQuota(): ProviderQuota {
       stale: false,
       refreshedAt: "2026-07-06T18:10:00Z",
       sourcesTried: ["pi:commandcode"],
+    },
+  };
+}
+
+function freshKiroQuota(): ProviderQuota {
+  return {
+    provider: "kiro",
+    label: "Kiro",
+    source: "api",
+    windows: [
+      {
+        id: "credits",
+        label: "credits",
+        kind: "credits",
+        percentUsed: 15,
+        percentRemaining: 85,
+      },
+    ],
+    state: {
+      status: "fresh",
+      stale: false,
+      refreshedAt: "2026-07-06T18:10:00Z",
+      sourcesTried: ["kiro-cli"],
     },
   };
 }
