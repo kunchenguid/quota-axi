@@ -217,17 +217,13 @@ function readCachedProviderInContext(
 }
 
 export function writeCachedProviders(providers: ProviderQuota[]): void {
-  const clearProviders = new Set(
-    providers
-      .filter(
-        (provider) =>
-          (provider.state.status === "fresh" &&
-            provider.windows.length === 0 &&
-            !missingRequiredContext(provider)) ||
-          (provider.state.status === "auth_required" &&
-            !missingRequiredContext(provider)),
-      )
-      .map(cacheIdentity),
+  const clearProviders = providers.filter(
+    (provider) =>
+      (provider.state.status === "fresh" &&
+        provider.windows.length === 0 &&
+        !missingRequiredContext(provider)) ||
+      (provider.state.status === "auth_required" &&
+        !missingRequiredContext(provider)),
   );
   const cacheable = providers
     .map(toCacheProvider)
@@ -237,7 +233,11 @@ export function writeCachedProviders(providers: ProviderQuota[]): void {
   const byProvider = new Map<string, CachedProvider>();
   let clearedExisting = false;
   for (const provider of readCacheProviders()) {
-    if (clearProviders.has(cacheIdentity(provider.snapshot))) {
+    if (
+      clearProviders.some((current) =>
+        shouldClearCachedProvider(current, provider),
+      )
+    ) {
       clearedExisting = true;
       continue;
     }
@@ -260,6 +260,15 @@ export function writeCachedProviders(providers: ProviderQuota[]): void {
 
 function cacheIdentity(provider: ProviderQuota): string {
   return `${provider.provider}/${provider.accountKey ?? DEFAULT_ACCOUNT_KEY}`;
+}
+
+function shouldClearCachedProvider(
+  current: ProviderQuota,
+  cached: CachedProvider,
+): boolean {
+  if (cacheIdentity(current) !== cacheIdentity(cached.snapshot)) return false;
+  const context = CONTEXT_SCOPED_PROVIDERS[current.provider]?.(current);
+  return context === undefined || context === cached.credentialContextId;
 }
 
 export function deleteCachedProvider(

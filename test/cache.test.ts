@@ -468,6 +468,27 @@ oauth_host = "https://auth.kimi.ai"
     expect(readCachedProvider("claude")?.windows[0].percentUsed).toBe(20);
   });
 
+  it("does not clear another Claude context after an auth failure", () => {
+    useTempCache();
+    writeCachedProviders([quota("claude", 10)]);
+    process.env.CLAUDE_CONFIG_DIR = join(tempDir!, "other-claude-context");
+
+    writeCachedProviders([
+      {
+        ...quota("claude", 10),
+        windows: [],
+        state: {
+          status: "auth_required",
+          stale: false,
+          error: "credentials_invalid",
+          sourcesTried: ["oauth-file"],
+        },
+      },
+    ]);
+
+    expect(readCachedProvider("claude")?.windows[0].percentUsed).toBe(10);
+  });
+
   it("clears a stale snapshot after a fresh no-window report", () => {
     useTempCache();
     writeCachedProviders([quota("claude", 10), quota("copilot", 20)]);
