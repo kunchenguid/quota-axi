@@ -731,7 +731,7 @@ describe("cards for providers with no combinable bound", () => {
     const lines = renderQuotaTui(
       {
         generatedAt: GENERATED_AT,
-        schemaVersion: 5,
+        schemaVersion: 6,
         providers: [creditsOnly],
       },
       { timeZone: "America/Los_Angeles" },
@@ -1013,7 +1013,7 @@ describe("color handling", () => {
     const lines = renderQuotaTui(
       {
         generatedAt: GENERATED_AT,
-        schemaVersion: 5,
+        schemaVersion: 6,
         providers: [work, personal],
       },
       { columns: 120, timeZone: "America/Los_Angeles" },

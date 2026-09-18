@@ -172,7 +172,7 @@ describe("quota cache", () => {
       generatedAt: "2026-07-06T19:10:00Z",
       providers: [staleFromCache(cached!, "fetch failed", ["api"], [])],
     });
-    expect(later.schemaVersion).toBe(5);
+    expect(later.schemaVersion).toBe(6);
     expect(later.providers[0]?.accountKey).toBeUndefined();
   });
 

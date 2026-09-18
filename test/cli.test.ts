@@ -1952,29 +1952,6 @@ function freshKiroQuota(): ProviderQuota {
   };
 }
 
-function freshKiroQuota(): ProviderQuota {
-  return {
-    provider: "kiro",
-    label: "Kiro",
-    source: "api",
-    windows: [
-      {
-        id: "credits",
-        label: "credits",
-        kind: "credits",
-        percentUsed: 15,
-        percentRemaining: 85,
-      },
-    ],
-    state: {
-      status: "fresh",
-      stale: false,
-      refreshedAt: "2026-07-06T18:10:00Z",
-      sourcesTried: ["kiro-cli"],
-    },
-  };
-}
-
 function unavailableAgyQuota(): ProviderQuota {
   return {
     provider: "agy",
