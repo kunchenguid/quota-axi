@@ -51,14 +51,14 @@ describe("Cursor quota parsing", () => {
       },
       {
         id: "auto_usage",
-        label: "auto usage",
+        label: "Cursor Models (includes Cursor Grok and Composer)",
         kind: "monthly",
         percentUsed: 12,
         percentRemaining: 88,
       },
       {
         id: "api_usage",
-        label: "API usage",
+        label: "Other Models",
         kind: "monthly",
         percentUsed: 7,
         percentRemaining: 93,
@@ -73,6 +73,80 @@ describe("Cursor quota parsing", () => {
         limitUsd: 25,
       },
     ]);
+  });
+
+  it("labels included usage Included in Ultra when that is the plan heading", () => {
+    const result = normalizeCursorUsage(
+      {
+        planUsage: {
+          totalPercentUsed: 58,
+          autoPercentUsed: 63,
+          apiPercentUsed: 58,
+        },
+      },
+      { planInfo: { planName: "ultra" } },
+    );
+
+    expect(result?.windows).toMatchObject([
+      {
+        id: "included_usage",
+        label: "Included in Ultra",
+        percentUsed: 58,
+        percentRemaining: 42,
+      },
+      {
+        id: "auto_usage",
+        label: "Cursor Models (includes Cursor Grok and Composer)",
+        percentUsed: 63,
+        percentRemaining: 37,
+      },
+      {
+        id: "api_usage",
+        label: "Other Models",
+        percentUsed: 58,
+        percentRemaining: 42,
+      },
+    ]);
+  });
+
+  it("uses membershipType ultra when plan info is absent", () => {
+    const result = normalizeCursorUsage(
+      { planUsage: { totalPercentUsed: 63 } },
+      undefined,
+      { membershipType: "ultra" },
+    );
+
+    expect(result?.windows[0]).toMatchObject({
+      id: "included_usage",
+      label: "Included in Ultra",
+    });
+  });
+
+  it("labels included usage Included in Ultra when membershipType is Ultra even if the plan heading is not", () => {
+    const result = normalizeCursorUsage(
+      { planUsage: { totalPercentUsed: 58 } },
+      { planInfo: { planName: "pro", price: "pro" } },
+      { membershipType: "ultra" },
+    );
+
+    expect(result?.plan).toBe("pro");
+    expect(result?.windows[0]).toMatchObject({
+      id: "included_usage",
+      label: "Included in Ultra",
+    });
+  });
+
+  it("labels included usage Included in Ultra when plan.price is Ultra even if planName is not", () => {
+    const result = normalizeCursorUsage(
+      { planUsage: { totalPercentUsed: 58 } },
+      { planInfo: { planName: "pro", price: "ultra" } },
+    );
+
+    expect(result?.plan).toBe("pro");
+    expect(result?.windows[0]).toMatchObject({
+      id: "included_usage",
+      label: "Included in Ultra",
+    });
   });
 
   it("returns undefined when Cursor exposes no numeric quota windows", () => {
@@ -180,12 +254,14 @@ describe("Cursor Grok Bot weekly usage", () => {
     expect(result?.windows).toMatchObject([
       {
         id: "included_usage",
+        label: "included usage",
         kind: "monthly",
         percentUsed: 15,
         startsAt: "2026-07-19T21:37:33.000Z",
       },
       {
         id: "auto_usage",
+        label: "Cursor Models (includes Cursor Grok and Composer)",
         kind: "monthly",
         percentUsed: 14,
         startsAt: "2026-07-19T21:37:33.000Z",
