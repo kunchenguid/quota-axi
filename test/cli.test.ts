@@ -1939,7 +1939,6 @@ describe("default TOON decision blocks", () => {
     PROVIDERS.devin = providerWithQuota(freshDevinQuota());
     PROVIDERS.muse = providerWithQuota(emptyFreshQuota("muse", "Muse"));
     PROVIDERS.kiro = providerWithQuota(freshKiroQuota());
-    PROVIDERS.kiro = providerWithQuota(freshKiroQuota());
 
     const output = await capture([]);
     const named = new Set([

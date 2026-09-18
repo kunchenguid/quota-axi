@@ -72,7 +72,7 @@ Default TOON is decision-shaped: `quota[]` carries one fully populated row per m
 $ quota-axi --provider claude --json
 {
   "generatedAt": "2026-03-15T16:42:00.000Z",
-  "schemaVersion": 6,
+  "schemaVersion": 5,
   "providers": [
     {
       "provider": "claude",
@@ -497,7 +497,7 @@ Other adapters retain their existing source-selection behavior.
 
 ## Output Model
 
-The `quota` command's `--json` emits `schemaVersion: 6`.
+The `quota` command's `--json` emits `schemaVersion: 5`, or `6` when a provider expands to multiple accounts.
 
 ### Normalized schema contract
 

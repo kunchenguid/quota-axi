@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { deleteCachedProvider as deleteCachedProviderFromDisk } from "../cache.js";
 import { readJsonFileResult } from "../lib/fs.js";
 import { providerFetch } from "../lib/http.js";
 import { execFileText } from "../lib/process.js";
@@ -62,6 +63,7 @@ type NamedCredentialSource = { name: string; source: CredentialSource };
 type Dependencies = {
   credentialSources: NamedCredentialSource[];
   fetch: typeof globalThis.fetch;
+  deleteCachedProvider: typeof deleteCachedProviderFromDisk;
   now: () => number;
   deadlineMs: number;
 };
@@ -82,6 +84,7 @@ export function createKiroAdapter(
   const dependencies: Dependencies = {
     credentialSources: defaultKiroCredentialSources(),
     fetch: providerFetch,
+    deleteCachedProvider: deleteCachedProviderFromDisk,
     now: Date.now,
     deadlineMs: KIRO_REQUEST_TIMEOUT_MS,
     ...overrides,
@@ -394,6 +397,16 @@ async function fetchQuota(dependencies: Dependencies): Promise<ProviderQuota> {
         lastFailure = failure;
       }
       if (!failure.definitiveAuth && failure.code !== "quota_missing") break;
+    }
+  }
+  // A definitive sign-out must not leave a stale fresh snapshot the generic
+  // fresh-reuse cache could serve later. Mirror the Z.AI/Grok adapter pattern
+  // and retire Kiro's own slot here rather than broadening the shared writer.
+  if (lastFailure.definitiveAuth) {
+    try {
+      dependencies.deleteCachedProvider("kiro");
+    } catch {
+      // The auth failure is still definitive even if the cache is not writable.
     }
   }
   return failedProvider({

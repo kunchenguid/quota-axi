@@ -761,25 +761,25 @@ oauth_host = "https://auth.kimi.ai"
     expect(statSync(cacheFilePath()).mode & 0o777).toBe(0o600);
   });
 
-  it("clears a cached provider after a definitive auth failure", () => {
+  it("does not clear another Claude context after an auth failure", () => {
     useTempCache();
-    writeCachedProviders([quota("kiro", 10), quota("claude", 20)]);
+    writeCachedProviders([quota("claude", 10)]);
+    process.env.CLAUDE_CONFIG_DIR = join(tempDir!, "other-claude-context");
 
     writeCachedProviders([
       {
-        ...quota("kiro", 10),
+        ...quota("claude", 10),
         windows: [],
         state: {
           status: "auth_required",
           stale: false,
-          error: "kiro_sign_in_required",
-          sourcesTried: ["kiro-cli"],
+          error: "credentials_invalid",
+          sourcesTried: ["oauth-file"],
         },
       },
     ]);
 
-    expect(readCachedProvider("kiro")).toBeUndefined();
-    expect(readCachedProvider("claude")?.windows[0].percentUsed).toBe(20);
+    expect(readCachedProvider("claude")?.windows[0].percentUsed).toBe(10);
   });
 
   it("clears a stale snapshot after a fresh no-window report", () => {

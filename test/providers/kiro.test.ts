@@ -309,6 +309,63 @@ describe("Kiro provider", () => {
     });
   });
 
+  it("retires its own cached snapshot on a definitive sign-out", async () => {
+    const deleteCachedProvider = vi.fn();
+    const report = await createKiroAdapter({
+      credentialSources: [
+        {
+          name: "invalid",
+          source: {
+            resolve: async () => ({
+              status: "invalid" as const,
+              path: "/invalid/auth.json",
+              error: "invalid_credential",
+            }),
+            inspect: async () => ({
+              status: "invalid" as const,
+              path: "/invalid/auth.json",
+              error: "invalid_credential",
+            }),
+          },
+        },
+      ],
+      fetch: vi.fn(async () => new Response(null, { status: 401 })),
+      deleteCachedProvider,
+      now: () => NOW,
+    }).fetchQuota(OPTIONS);
+
+    expect(report.state).toMatchObject({ status: "auth_required" });
+    expect(deleteCachedProvider).toHaveBeenCalledWith("kiro");
+  });
+
+  it("keeps its cached snapshot on a non-definitive failure", async () => {
+    const deleteCachedProvider = vi.fn();
+    await createKiroAdapter({
+      credentialSources: [
+        {
+          name: "error",
+          source: {
+            resolve: async () => ({
+              status: "error" as const,
+              path: "/kiro/auth.json",
+              error: "read_error",
+            }),
+            inspect: async () => ({
+              status: "error" as const,
+              path: "/kiro/auth.json",
+              error: "read_error",
+            }),
+          },
+        },
+      ],
+      fetch: vi.fn(async () => new Response(null, { status: 500 })),
+      deleteCachedProvider,
+      now: () => NOW,
+    }).fetchQuota(OPTIONS);
+
+    expect(deleteCachedProvider).not.toHaveBeenCalled();
+  });
+
   it("rejects an empty successful response instead of clearing quota evidence", async () => {
     const report = await createKiroAdapter({
       credentialSources: [{ name: "test", source: availableSource() }],
