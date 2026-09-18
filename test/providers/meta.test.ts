@@ -39,6 +39,7 @@ const testAdapter = (overrides: Parameters<typeof createMetaAdapter>[0] = {}) =>
   createMetaAdapter({
     readCachedProvider: () => undefined,
     deleteCachedProvider: vi.fn(),
+    now: () => NOW,
     ...overrides,
   });
 
