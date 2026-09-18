@@ -478,9 +478,11 @@ export function writeCachedProviders(
     providers
       .filter(
         (provider) =>
-          provider.state.status === "fresh" &&
-          provider.windows.length === 0 &&
-          !missingRequiredContext(provider.provider),
+          (provider.state.status === "fresh" &&
+            provider.windows.length === 0 &&
+            !missingRequiredContext(provider.provider)) ||
+          (provider.state.status === "auth_required" &&
+            clearsOnAuthFailure(provider.provider)),
       )
       .map(cacheIdentity),
   );
@@ -739,6 +741,16 @@ function missingRequiredContext(provider: ProviderId): boolean {
   if (provider === "codex") return false;
   const scope = CONTEXT_SCOPED_PROVIDERS[provider];
   return scope !== undefined && !scope({ provider } as ProviderQuota);
+}
+
+// A definitive auth failure retires a provider's default-slot snapshot, but
+// only for providers whose slot alone identifies the account. Context-scoped
+// providers (Claude, Kimi, Command Code, MiniMax, ElevenLabs, Devin, Muse)
+// share one slot across keys and distinguish accounts by a published context
+// id, so a rejected *different* key must not retire the identified key's disk
+// snapshot; they retire through their own read-path context matching instead.
+function clearsOnAuthFailure(provider: ProviderId): boolean {
+  return !(provider in CONTEXT_SCOPED_PROVIDERS);
 }
 
 function serializeCachedProvider(
