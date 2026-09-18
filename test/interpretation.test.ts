@@ -420,6 +420,52 @@ describe("quota semantics", () => {
     });
   });
 
+  it("treats Kiro's single credit window as the all_models bound", () => {
+    const result = withQuotaSemantics(
+      provider("kiro", [
+        window("credit", "credits", 75, {
+          resetsAt: offsetFromGeneratedAt(7 * 24 * 60 * 60),
+        }),
+      ]),
+      GENERATED_AT,
+    );
+
+    expect(result.quotaSemantics).toMatchObject({
+      status: "known",
+      effectiveAvailability: [
+        {
+          scope: "all_models",
+          status: "known",
+          effectivePercentRemaining: 75,
+          boundedBy: ["credit"],
+          limitingWindowIds: ["credit"],
+        },
+      ],
+    });
+    expect(result.quotaSemantics.unresolvedWindowIds).toBeUndefined();
+    expect(result.quotaSemantics.effectiveAvailability[0]?.pace?.status).toBe(
+      "unknown",
+    );
+  });
+
+  it("keeps Kiro effective unknown when an unfamiliar window appears", () => {
+    const result = withQuotaSemantics(
+      provider("kiro", [
+        window("credit", "credits", 75),
+        window("bonus", "unknown", 50),
+      ]),
+      GENERATED_AT,
+    );
+
+    expect(result.quotaSemantics).toMatchObject({
+      status: "partial",
+      effectiveAvailability: [
+        { scope: "all_models", status: "unknown", boundedBy: ["credit"] },
+      ],
+      unresolvedWindowIds: ["bonus"],
+    });
+  });
+
   it("surfaces pace on a non-currently-limiting bounding window that is ahead", () => {
     const result = withQuotaSemantics(
       provider("claude", [

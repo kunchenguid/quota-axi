@@ -5,6 +5,10 @@ import {
   ensurePrivateParent,
   readJsonFile,
 } from "./lib/fs.js";
+import {
+  kiroReadingContextId,
+  kiroRetirementContextId,
+} from "./providers/kiro-cache-context.js";
 import { kimiReadingContextId } from "./providers/kimi-cache-context.js";
 import type {
   ProviderId,
@@ -51,7 +55,7 @@ const CREDENTIAL_CONTEXT_ID = /^[a-f0-9]{64}$/;
  * nothing about another, so each is stamped on write and required to match on
  * stale reuse.
  *
- * How that stamp is obtained is not the same question for both. A Claude
+ * How that stamp is obtained depends on the provider. A Claude
  * profile is fixed by this process's own environment, so deriving it here reads
  * the same selection the reading used. Kimi's is not derivable here at all.
  * Kimi Code rewrites `config.toml` on login, so a read taken after the quota
@@ -59,18 +63,29 @@ const CREDENTIAL_CONTEXT_ID = /^[a-f0-9]{64}$/;
  * and a Kimi reading need not come from that configuration in the first place,
  * because Pi brokers a credential for the default endpoint while naming no
  * deployment. Kimi therefore reports the identity of whatever actually produced
- * its reading.
+ * its reading. Kiro likewise captures the context before its request, plus a
+ * region-independent retirement context so logout can retire the matching
+ * snapshot after the token row containing its region has gone. Configuration
+ * equality alone does not prove account continuity; Kiro withholds stale reuse.
  */
 const CONTEXT_SCOPED_PROVIDERS: Partial<
-  Record<ProviderId, () => string | undefined>
+  Record<
+    ProviderId,
+    {
+      reading: (provider: ProviderQuota) => string | undefined;
+      retirement?: (provider: ProviderQuota) => string | undefined;
+    }
+  >
 > = {
-  claude: claudeCredentialContextId,
-  kimi: kimiReadingContextId,
+  claude: { reading: claudeCredentialContextId },
+  kimi: { reading: kimiReadingContextId },
+  kiro: { reading: kiroReadingContextId, retirement: kiroRetirementContextId },
 };
 
 type CachedProvider = {
   snapshot: ProviderQuota;
   credentialContextId?: string;
+  credentialRetirementContextId?: string;
 };
 
 export function readCachedProvider(
@@ -116,13 +131,16 @@ function readCachedProviderInContext(
 }
 
 export function writeCachedProviders(providers: ProviderQuota[]): void {
-  const clearProviders = new Set(
+  const clearProviders = new Map(
     providers
       .filter(
         (provider) =>
           provider.state.status === "fresh" && provider.windows.length === 0,
       )
-      .map((provider) => provider.provider),
+      .map((provider) => [
+        provider.provider,
+        CONTEXT_SCOPED_PROVIDERS[provider.provider]?.reading(provider),
+      ]),
   );
   const cacheable = providers
     .map(toCacheProvider)
@@ -132,7 +150,13 @@ export function writeCachedProviders(providers: ProviderQuota[]): void {
   const byProvider = new Map<ProviderId, CachedProvider>();
   let clearedExisting = false;
   for (const provider of readCacheProviders()) {
-    if (clearProviders.has(provider.snapshot.provider)) {
+    if (
+      clearProviders.has(provider.snapshot.provider) &&
+      (!(provider.snapshot.provider in CONTEXT_SCOPED_PROVIDERS) ||
+        (clearProviders.get(provider.snapshot.provider) !== undefined &&
+          clearProviders.get(provider.snapshot.provider) ===
+            provider.credentialContextId))
+    ) {
       clearedExisting = true;
       continue;
     }
@@ -148,12 +172,21 @@ export function writeCachedProviders(providers: ProviderQuota[]): void {
   writeCacheFile(file, merged);
 }
 
-export function deleteCachedProvider(provider: ProviderId): void {
+export function deleteCachedProvider(
+  provider: ProviderId,
+  contextId?: string,
+  retirementId?: string,
+): void {
   const existing = readCacheProviders();
-  if (!existing.some((item) => item.snapshot.provider === provider)) return;
+  const matches = (item: CachedProvider) =>
+    item.snapshot.provider === provider &&
+    (contextId === undefined || item.credentialContextId === contextId) &&
+    (retirementId === undefined ||
+      item.credentialRetirementContextId === retirementId);
+  if (!existing.some(matches)) return;
   writeCacheFile(
     cacheFilePath(),
-    existing.filter((item) => item.snapshot.provider !== provider),
+    existing.filter((item) => !matches(item)),
   );
 }
 
@@ -215,10 +248,14 @@ function toCacheProvider(provider: ProviderQuota): CachedProvider | undefined {
     CACHE_SCHEMA_VERSION,
   )?.snapshot;
   if (!snapshot) return undefined;
-  const contextId = CONTEXT_SCOPED_PROVIDERS[provider.provider]?.();
+  const contextId =
+    CONTEXT_SCOPED_PROVIDERS[provider.provider]?.reading(provider);
+  const retirementId =
+    CONTEXT_SCOPED_PROVIDERS[provider.provider]?.retirement?.(provider);
   return {
     snapshot,
     ...(contextId ? { credentialContextId: contextId } : {}),
+    ...(retirementId ? { credentialRetirementContextId: retirementId } : {}),
   };
 }
 
@@ -229,6 +266,9 @@ function serializeCachedProvider(
     ...provider.snapshot,
     ...(provider.credentialContextId
       ? { credentialContext: provider.credentialContextId }
+      : {}),
+    ...(provider.credentialRetirementContextId
+      ? { credentialRetirementContext: provider.credentialRetirementContextId }
       : {}),
   };
 }
@@ -283,6 +323,7 @@ function normalizeCachedProvider(
     snapshot.state.untrustedWindowIds = untrustedWindowIds;
   if (credits) snapshot.credits = credits;
   const credentialContext = stringValue(data.credentialContext);
+  const retirementContext = stringValue(data.credentialRetirementContext);
   return {
     snapshot,
     ...(schemaVersion === CACHE_SCHEMA_VERSION &&
@@ -290,6 +331,12 @@ function normalizeCachedProvider(
     credentialContext &&
     CREDENTIAL_CONTEXT_ID.test(credentialContext)
       ? { credentialContextId: credentialContext }
+      : {}),
+    ...(schemaVersion === CACHE_SCHEMA_VERSION &&
+    CONTEXT_SCOPED_PROVIDERS[provider]?.retirement &&
+    retirementContext &&
+    CREDENTIAL_CONTEXT_ID.test(retirementContext)
+      ? { credentialRetirementContextId: retirementContext }
       : {}),
   };
 }

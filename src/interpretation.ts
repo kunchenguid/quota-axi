@@ -157,7 +157,39 @@ function semanticsFor(
       return alibabaSemantics(provider.windows, generatedAt);
     case "opencode-go":
       return opencodeGoSemantics(provider.windows, generatedAt);
+    case "kiro":
+      return kiroSemantics(provider.windows, generatedAt);
   }
+}
+
+/**
+ * The adapter combines applicable base and trial credits into `credit`; that
+ * shared meter bounds `all_models`. Unfamiliar breakdowns cannot establish a
+ * combined bound, so they leave effective availability unresolved.
+ */
+function kiroSemantics(
+  windows: QuotaWindow[],
+  generatedAt: string,
+): QuotaSemantics {
+  const credit = windows.filter(({ id }) => id === "credit");
+  const unresolved = windows.filter((window) => !credit.includes(window));
+  if (unresolved.length > 0) {
+    const unresolvedWindowIds = unresolved.map(({ id }) => id);
+    return {
+      status: credit.length > 0 ? "partial" : "unknown",
+      description:
+        "Kiro's credit window is the plan's single vendor-metered pool, but unfamiliar windows are not folded into that bound, so they stay unresolved.",
+      effectiveAvailability:
+        credit.length > 0
+          ? [unresolvedAvailability("all_models", credit, unresolvedWindowIds)]
+          : [],
+      unresolvedWindowIds,
+    };
+  }
+  return knownSemantics(
+    credit.length > 0 ? [availability("all_models", credit, generatedAt)] : [],
+    "Kiro's credit window is the plan's single vendor-metered pool that every request draws from, so it alone bounds usage at all_models scope. The endpoint reports the next reset but no cycle start, so pace stays unknown.",
+  );
 }
 
 /**
