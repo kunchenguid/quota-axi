@@ -47,6 +47,24 @@ afterEach(() => {
 });
 
 describe("quota cache", () => {
+  it.each([true, false])(
+    "leaves persistent snapshots untouched by native Claude reads with windows %s",
+    (hasWindows) => {
+      useTempCache();
+      writeCachedProviders([quota("claude", 20), quota("copilot", 30)]);
+      const before = readFileSync(cacheFilePath(), "utf8");
+      const native = quota("claude", 80);
+      native.source = "cli";
+      native.state.sourcesTried = ["env", "claude-native-inference"];
+      if (!hasWindows) native.windows = [];
+      writeCachedProviders([native]);
+      expect(readFileSync(cacheFilePath(), "utf8")).toBe(before);
+      writeCachedProviders([native, quota("copilot", 40)]);
+      expect(readCachedProvider("claude")?.windows[0]?.percentUsed).toBe(20);
+      expect(readCachedProvider("copilot")?.windows[0]?.percentUsed).toBe(40);
+    },
+  );
+
   it("ignores malformed matching entries", () => {
     useTempCache();
     const file = cacheFilePath();

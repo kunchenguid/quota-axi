@@ -764,7 +764,7 @@ async function attemptClaudeQuota(
     new ClaudeFailure("Claude quota unavailable", { staleEligible: true });
   // A failed Keychain discovery/read never saw the live session. A 401 from a leftover
   // oauth-file sidecar is not evidence the user is signed out of Claude.
-  if (keychainFailure && failure.definitiveAuth) {
+  if (keychainFailure && failure.definitiveAuth && !definitiveFailureIsEnv) {
     failure = new ClaudeFailure(keychainFailure.source.error!, {
       staleEligible: true,
     });

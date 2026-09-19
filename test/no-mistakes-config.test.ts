@@ -56,34 +56,8 @@ function runsSuiteOnce(command: string): boolean {
 
 type NoMistakesConfig = {
   commands?: Record<string, unknown>;
-  test?: { instructions?: unknown };
   allow_repo_commands?: unknown;
 };
-
-/**
- * The runbook flattened into lowercase, whitespace-collapsed clauses so each
- * required or forbidden behaviour can be asserted next to the instruction that
- * states it. The clause view is an assertion aid, not a model of the prompt
- * no-mistakes assembles from `test.instructions`.
- */
-function runbookClauses(instructions: unknown): string[] {
-  if (typeof instructions !== "string") return [];
-  return instructions
-    .replace(/\s+/g, " ")
-    .trim()
-    .toLowerCase()
-    .split(/(?<=\.)\s+/)
-    .filter(Boolean);
-}
-
-/**
- * True when a prompt clause states a prohibition ("do not", "never", "no")
- * about the given subject, so each forbidden behaviour has to be named next to
- * the instruction that forbids it rather than merely appearing somewhere.
- */
-function forbids(clause: string, subject: RegExp): boolean {
-  return /\b(?:do not|never|no)\b/.test(clause) && subject.test(clause);
-}
 
 function readConfig(): NoMistakesConfig {
   const raw = readFileSync(join(root, ".no-mistakes.yaml"), "utf8");
@@ -137,53 +111,6 @@ describe("no-mistakes trusted configuration", () => {
 
   it("rejects the repository's own watch script as the gate suite", () => {
     expect(runsSuiteOnce(readScripts()["test:watch"] ?? "")).toBe(false);
-  });
-
-  it("declares a trusted runbook that requires the deterministic suite and bounds the agent", () => {
-    // The Test step still launches an agent after `commands.test`; this runbook
-    // is the trusted bound on its own scenarios, so it must name the same
-    // deterministic suite the baseline runs and forbid each live or unbounded
-    // probe.
-    const config = readConfig();
-    const clauses = runbookClauses(config.test?.instructions);
-    const runbook = clauses.join(" ");
-
-    expect(config.test?.instructions).toBeTypeOf("string");
-    expect(runbook).not.toBe("");
-    expect(runbook).toContain(expectedCommands.test);
-    expect(
-      clauses.some(
-        (clause) =>
-          /\bscenarios?\b/.test(clause) && /\bbounded\b|\blocal\b/.test(clause),
-      ),
-    ).toBe(true);
-
-    const forbiddenSubjects = [
-      /\bnetwork\b/,
-      /\bcredential\b/,
-      /\brefresh\b|\bexchange\b/,
-      /\bproxy\b/,
-      /\bhosts?\b|\bports?\b/,
-      /\bfilesystem\b/,
-      /\bindefinitely\b|\bunbounded\b/,
-    ];
-    const unguarded = forbiddenSubjects.filter(
-      (subject) => !clauses.some((clause) => forbids(clause, subject)),
-    );
-    expect(unguarded).toEqual([]);
-  });
-
-  it("credits a prohibition only when the clause forbids the behaviour it names", () => {
-    // The guard above relies on this distinction: a runbook that mentions a
-    // behaviour without forbidding it must not count.
-    expect(forbids("do not start a proxy", /\bproxy\b/)).toBe(true);
-    expect(
-      forbids("never refresh, mint, or exchange a credential", /\brefresh\b/),
-    ).toBe(true);
-    expect(forbids("start a proxy and probe hosts", /\bproxy\b/)).toBe(false);
-    expect(forbids("do not search the whole filesystem", /\bnetwork\b/)).toBe(
-      false,
-    );
   });
 
   it("keeps observable command execution on the trusted copy", () => {

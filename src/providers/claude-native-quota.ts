@@ -88,6 +88,9 @@ export async function fetchClaudeNativeQuota(
   if ((process.env.ANTHROPIC_API_KEY ?? "").trim() !== "") {
     return failure("claude_native_api_key_present");
   }
+  if ((process.env.ANTHROPIC_AUTH_TOKEN ?? "").trim() !== "") {
+    return failure("claude_native_auth_token_present");
+  }
   const command = await (
     dependencies.findClaude ?? (() => findCommandPath("claude"))
   )();
@@ -104,6 +107,8 @@ export async function fetchClaudeNativeQuota(
         env: {
           ...process.env,
           ANTHROPIC_LOG: "debug",
+          CLAUDE_CODE_MAX_RETRIES: "0",
+          CLAUDE_CODE_RETRY_WATCHDOG: "0",
           DISABLE_TELEMETRY: "1",
           DISABLE_ERROR_REPORTING: "1",
           DISABLE_AUTOUPDATER: "1",
@@ -162,29 +167,20 @@ export function parseClaudeNativeDebug(
   const clean = raw.replace(ANSI_ESCAPE_PATTERN, "");
   const responsePattern =
     /\[(log_[^\]]+)\] response start([\s\S]{0,12000}?)(?=\[log_|$)/g;
-  let rateLimitBlock: string | undefined;
-  let latestWindows: QuotaWindow[] | undefined;
-
+  let latestBlock: string | undefined;
   for (const match of clean.matchAll(responsePattern)) {
-    const block = match[2] ?? "";
-    const status = responseStatus(block);
-    if (status === 429) rateLimitBlock = block;
-    if (status !== 200) continue;
-    const windows = parsedWindows(block, now);
-    if (windows.length > 0) latestWindows = windows;
+    latestBlock = match[2];
   }
+  if (latestBlock === undefined)
+    return failure("claude_native_quota_unavailable");
 
-  if (latestWindows) {
-    return {
-      kind: "success",
-      windows: latestWindows,
-      refreshedAt: new Date(now).toISOString(),
-    };
-  }
-  if (rateLimitBlock) {
-    const retryAfter = stringHeader(rateLimitBlock, "retry-after");
-    const retryAfterAt = boundedRetryAfter(retryAfter, now);
-    const windows = parsedWindows(rateLimitBlock, now);
+  const status = responseStatus(latestBlock);
+  const windows = parsedWindows(latestBlock, now);
+  if (status === 429) {
+    const retryAfterAt = boundedRetryAfter(
+      stringHeader(latestBlock, "retry-after"),
+      now,
+    );
     return {
       kind: "failure",
       error: "claude_native_rate_limited",
@@ -193,11 +189,18 @@ export function parseClaudeNativeDebug(
       ...(windows.length > 0 ? { windows } : {}),
     };
   }
+  if (status === 200 && windows.length > 0) {
+    return {
+      kind: "success",
+      windows,
+      refreshedAt: new Date(now).toISOString(),
+    };
+  }
   return failure("claude_native_quota_unavailable");
 }
 
 function parsedWindows(block: string, now: number): QuotaWindow[] {
-  return [
+  const windows = [
     parsedWindow(
       block,
       "5h",
@@ -216,7 +219,10 @@ function parsedWindows(block: string, now: number): QuotaWindow[] {
       SEVEN_DAYS_SECONDS,
       now,
     ),
-  ].filter((window): window is QuotaWindow => window !== undefined);
+  ];
+  return windows.every((window): window is QuotaWindow => window !== undefined)
+    ? windows
+    : [];
 }
 
 function parsedWindow(
@@ -335,6 +341,8 @@ function runNativeProcess(
     let timedOut = false;
     let outputLimited = false;
     let settled = false;
+    let interrupted: NodeJS.Signals | undefined;
+    let resumeDefaultSignal = false;
     let forceKill: ReturnType<typeof setTimeout> | undefined;
 
     const stop = (signal: NodeJS.Signals): void => {
@@ -352,7 +360,14 @@ function runNativeProcess(
     };
     const scheduleForceKill = (): void => {
       if (forceKill) return;
-      forceKill = setTimeout(() => stop("SIGKILL"), NATIVE_KILL_GRACE_MS);
+      forceKill = setTimeout(() => {
+        stop("SIGKILL");
+        if (interrupted) {
+          child.stdout?.destroy();
+          child.stderr?.destroy();
+          finish(processFailure());
+        }
+      }, NATIVE_KILL_GRACE_MS);
       forceKill.unref();
     };
     const timeout = setTimeout(() => {
@@ -376,19 +391,34 @@ function runNativeProcess(
     };
     child.stdout?.on("data", (chunk: Buffer) => collect(stdout, chunk));
     child.stderr?.on("data", (chunk: Buffer) => collect(stderr, chunk));
-    child.once("error", () => {
+    const onSignal = (signal: NodeJS.Signals): void => {
+      if (interrupted) return;
+      interrupted = signal;
+      resumeDefaultSignal = process.listenerCount(signal) === 1;
+      stop("SIGTERM");
+      scheduleForceKill();
+    };
+    const onInterrupt = (): void => onSignal("SIGINT");
+    const onTerminate = (): void => onSignal("SIGTERM");
+    const finish = (result: NativeProcessResult): void => {
       if (settled) return;
       settled = true;
+      if (interrupted) stop("SIGKILL");
       clearTimeout(timeout);
       if (forceKill) clearTimeout(forceKill);
-      resolve(processFailure());
-    });
+      process.removeListener("SIGINT", onInterrupt);
+      process.removeListener("SIGTERM", onTerminate);
+      resolve(result);
+      if (interrupted && resumeDefaultSignal) {
+        const signal = interrupted;
+        setImmediate(() => process.kill(process.pid, signal));
+      }
+    };
+    process.prependListener("SIGINT", onInterrupt);
+    process.prependListener("SIGTERM", onTerminate);
+    child.once("error", () => finish(processFailure()));
     child.once("close", (exitCode, signal) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timeout);
-      if (forceKill) clearTimeout(forceKill);
-      resolve({
+      finish({
         stdout: stdout.join(""),
         stderr: stderr.join(""),
         exitCode,

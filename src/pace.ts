@@ -331,18 +331,6 @@ export function summarizeEffectiveSelection(
   let cycleSecondsSum = 0;
 
   for (const window of windows) {
-    const remaining = finiteNumber(window.percentRemaining);
-    if (remaining !== undefined && isZeroUse(window, remaining)) {
-      const unknownReason =
-        window.pace?.status === "unknown" ? window.pace.reason : undefined;
-      if (
-        window.pace === undefined ||
-        unknownReason === "missing_cycle" ||
-        unknownReason === "future_cycle_start"
-      ) {
-        continue;
-      }
-    }
     const gap = windowSelectionGap(window);
     const cycleSeconds = finiteNumber(window.pace?.cycleSeconds);
     if (gap === undefined || cycleSeconds === undefined || cycleSeconds <= 0) {

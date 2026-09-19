@@ -217,6 +217,10 @@ function readCachedProviderInContext(
 }
 
 export function writeCachedProviders(providers: ProviderQuota[]): void {
+  providers = providers.filter(
+    (provider) =>
+      !(provider.provider === "claude" && provider.source === "cli"),
+  );
   const clearProviders = new Set(
     providers
       .filter(

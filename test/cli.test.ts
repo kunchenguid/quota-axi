@@ -1260,35 +1260,50 @@ describe("default TOON decision blocks", () => {
     );
   });
 
-  it("states a raw credit balance instead of contradicting it with no_quota", async () => {
-    useTempCache();
-    PROVIDERS.commandcode = providerWithQuota({
-      provider: "commandcode",
-      label: "Command Code",
-      source: "api",
-      windows: [],
-      credits: { remaining: 12.5, unit: "credits" },
-      state: {
-        status: "fresh",
-        stale: false,
-        refreshedAt: "2026-07-06T18:10:00Z",
-        authStatus: "usable",
-        sourcesTried: ["pi:commandcode"],
-      },
-    });
+  it.each([false, true])(
+    "states a raw credit balance with expanded accounts %s",
+    async (expanded) => {
+      useTempCache();
+      PROVIDERS.commandcode = providerWithQuota({
+        provider: "commandcode",
+        label: "Command Code",
+        source: "api",
+        windows: [],
+        credits: { remaining: 12.5, unit: "credits" },
+        state: {
+          status: "fresh",
+          stale: false,
+          refreshedAt: "2026-07-06T18:10:00Z",
+          authStatus: "usable",
+          sourcesTried: ["pi:commandcode"],
+        },
+      });
 
-    const output = await capture(["--provider", "commandcode"]);
+      if (expanded) {
+        PROVIDERS.codex = providerWithAccounts([
+          ["openai-codex", pacedProvider("codex", 20, 80)],
+          ["openai-codex-work", pacedProvider("codex", 40, 60)],
+        ]);
+      }
+      const output = await capture([
+        "--provider",
+        expanded ? "commandcode,codex" : "commandcode",
+      ]);
 
-    expect(toonRows(output, "attention")).toEqual([
-      [
-        "commandcode",
-        "all",
-        "credits",
-        "remaining 12.5 credits (auth usable)",
-        "none",
-      ],
-    ]);
-  });
+      expect(
+        toonRows(output, "attention").filter((row) => row[0] === "commandcode"),
+      ).toEqual([
+        [
+          "commandcode",
+          ...(expanded ? ["default"] : []),
+          "all",
+          "credits",
+          "remaining 12.5 credits (auth usable)",
+          "none",
+        ],
+      ]);
+    },
+  );
 
   it("renders an unmeasurable spendPriority as `unknown`, never as 0", async () => {
     useTempCache();

@@ -117,6 +117,15 @@ function needsKeychainAccessAdvice(provider: ProviderQuota): boolean {
   return (
     provider.state.status !== "fresh" &&
     !envScopeDenialEndedDiscovery(attempts) &&
+    !(
+      provider.provider === "claude" &&
+      attempts.some(
+        (attempt) =>
+          attempt.source === "env" &&
+          attempt.status === "failed" &&
+          attempt.error === "Claude sign-in required",
+      )
+    ) &&
     !attempts.some(isCredentialSourceReading) &&
     attempts.some(isBlockedCredentialAttempt) &&
     attempts.some(isPromptBlockedKeychainAttempt)

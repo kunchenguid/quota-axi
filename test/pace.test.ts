@@ -909,20 +909,6 @@ describe("summarizeEffectiveSelection", () => {
     ).toEqual({ status: "unknown", unmeasurableWindowIds: ["five_hour"] });
   });
 
-  it("does not let an unused 100% window with unknown pace fail the scope", () => {
-    const unusedFiveHour = window({
-      id: "five_hour",
-      kind: "session",
-      percentUsed: 0,
-      percentRemaining: 100,
-      pace: { status: "unknown", reason: "missing_cycle" },
-    });
-    const weekly = bounded("weekly", 90, { timeRemainingPercent: 50 });
-    expect(summarizeEffectiveSelection([unusedFiveHour, weekly]).status).toBe(
-      "known",
-    );
-  });
-
   it("treats a near-zero or absent remaining cycle as unmeasurable", () => {
     for (const timeRemainingPercent of [
       0,

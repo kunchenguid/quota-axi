@@ -1,5 +1,16 @@
-import { existsSync } from "node:fs";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   fetchClaudeNativeQuota,
   parseClaudeNativeDebug,
@@ -84,6 +95,56 @@ describe("Claude native quota debug parsing", () => {
     expect(JSON.stringify(result)).not.toContain(SECRET);
   });
 
+  it.each([200, 429])("withholds incomplete %s window pairs", (status) => {
+    for (const slug of ["5h", "7d"]) {
+      for (const invalid of ["malformed", undefined]) {
+        const headers = validHeaders();
+        const key = `anthropic-ratelimit-unified-${slug}-reset`;
+        if (invalid === undefined) delete headers[key];
+        else headers[key] = invalid;
+        const result = parseClaudeNativeDebug(
+          responseLog(status, headers),
+          NOW,
+        );
+        expect(result).toEqual({
+          kind: "failure",
+          error:
+            status === 429
+              ? "claude_native_rate_limited"
+              : "claude_native_quota_unavailable",
+          status: status === 429 ? "rate_limited" : "unavailable",
+        });
+      }
+    }
+  });
+
+  it("uses a later 429 instead of earlier successful headers", () => {
+    const latest = responseLog(429, {
+      ...validHeaders(),
+      "anthropic-ratelimit-unified-7d-utilization": "1",
+      "retry-after": "60",
+    });
+    expect(
+      parseClaudeNativeDebug(responseLog(200, validHeaders()) + latest, NOW),
+    ).toEqual(parseClaudeNativeDebug(latest, NOW));
+  });
+
+  it.each([200, 500])(
+    "does not revive old headers after an incomplete %s response",
+    (status) => {
+      expect(
+        parseClaudeNativeDebug(
+          responseLog(200, validHeaders()) + responseLog(status),
+          NOW,
+        ),
+      ).toEqual({
+        kind: "failure",
+        error: "claude_native_quota_unavailable",
+        status: "unavailable",
+      });
+    },
+  );
+
   it.each([
     ["numeric seconds", "60", "2026-09-19T06:01:00.000Z"],
     ["HTTP-date", "Sat, 19 Sep 2026 06:05:00 GMT", "2026-09-19T06:05:00.000Z"],
@@ -166,57 +227,69 @@ describe("Claude native quota debug parsing", () => {
 });
 
 describe("Claude native quota process contract", () => {
+  beforeEach(() => {
+    vi.stubEnv("ANTHROPIC_API_KEY", undefined);
+    vi.stubEnv("ANTHROPIC_AUTH_TOKEN", undefined);
+  });
   afterEach(() => {
     vi.unstubAllEnvs();
   });
 
-  it("refuses before spawning when a nonblank ANTHROPIC_API_KEY is present", async () => {
-    vi.stubEnv("ANTHROPIC_API_KEY", SECRET);
-    let looked = false;
-    let spawned = false;
-    const result = await fetchClaudeNativeQuota({
-      findClaude: async () => {
-        looked = true;
-        return "/synthetic/claude";
-      },
-      run: async () => {
-        spawned = true;
-        throw new Error("must not run");
-      },
-    });
-
-    expect(looked).toBe(false);
-    expect(spawned).toBe(false);
-    expect(result).toEqual({
-      kind: "failure",
-      error: "claude_native_api_key_present",
-      status: "unavailable",
-    });
-    expect(JSON.stringify(result)).not.toContain(SECRET);
-    expect(process.env.ANTHROPIC_API_KEY).toBe(SECRET);
-  });
-
-  it.each(["", "   "])(
-    "treats a blank ANTHROPIC_API_KEY %j as absent",
-    async (value) => {
-      vi.stubEnv("ANTHROPIC_API_KEY", value);
+  it.each([
+    ["ANTHROPIC_API_KEY", "claude_native_api_key_present"],
+    ["ANTHROPIC_AUTH_TOKEN", "claude_native_auth_token_present"],
+  ])(
+    "refuses before spawning when a nonblank %s is present",
+    async (name, error) => {
+      vi.stubEnv(name, SECRET);
+      let looked = false;
+      let spawned = false;
       const result = await fetchClaudeNativeQuota({
-        findClaude: async () => "/synthetic/claude",
-        now: () => NOW,
-        run: async () => ({
-          stdout: "OK\n",
-          stderr: responseLog(200, validHeaders()),
-          exitCode: 0,
-          signal: null,
-          timedOut: false,
-          outputLimited: false,
-        }),
+        findClaude: async () => {
+          looked = true;
+          return "/synthetic/claude";
+        },
+        run: async () => {
+          spawned = true;
+          throw new Error("must not run");
+        },
       });
 
-      expect(result.kind).toBe("success");
-      expect(process.env.ANTHROPIC_API_KEY).toBe(value);
+      expect(looked).toBe(false);
+      expect(spawned).toBe(false);
+      expect(result).toEqual({
+        kind: "failure",
+        error,
+        status: "unavailable",
+      });
+      expect(JSON.stringify(result)).not.toContain(SECRET);
+      expect(process.env[name]).toBe(SECRET);
     },
   );
+
+  it.each([
+    ["ANTHROPIC_API_KEY", ""],
+    ["ANTHROPIC_API_KEY", "   "],
+    ["ANTHROPIC_AUTH_TOKEN", ""],
+    ["ANTHROPIC_AUTH_TOKEN", "   "],
+  ])("treats a blank %s %j as absent", async (name, value) => {
+    vi.stubEnv(name, value);
+    const result = await fetchClaudeNativeQuota({
+      findClaude: async () => "/synthetic/claude",
+      now: () => NOW,
+      run: async () => ({
+        stdout: "OK\n",
+        stderr: responseLog(200, validHeaders()),
+        exitCode: 0,
+        signal: null,
+        timedOut: false,
+        outputLimited: false,
+      }),
+    });
+
+    expect(result.kind).toBe("success");
+    expect(process.env[name]).toBe(value);
+  });
 
   it.each([
     [
@@ -364,6 +437,10 @@ describe("Claude native quota process contract", () => {
   });
 
   it("uses an empty scratch directory and the disclosed bounded command", async () => {
+    vi.stubEnv("CLAUDE_CODE_MAX_RETRIES", "9");
+    vi.stubEnv("CLAUDE_CODE_RETRY_WATCHDOG", "1");
+    vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", SECRET);
+    vi.stubEnv("ANTHROPIC_BASE_URL", "https://fixture.invalid");
     let cwd = "";
     let args: readonly string[] = [];
     let env: NodeJS.ProcessEnv = {};
@@ -374,7 +451,7 @@ describe("Claude native quota process contract", () => {
         cwd = options.cwd;
         args = receivedArgs;
         env = options.env;
-        expect(existsSync(cwd)).toBe(true);
+        expect(readdirSync(cwd)).toEqual([]);
         return {
           stdout: "OK\n",
           stderr: responseLog(200, validHeaders()),
@@ -402,10 +479,16 @@ describe("Claude native quota process contract", () => {
     expect(args.at(-1)).toBe("Reply with exactly OK and nothing else.");
     expect(env).toMatchObject({
       ANTHROPIC_LOG: "debug",
+      CLAUDE_CODE_MAX_RETRIES: "0",
+      CLAUDE_CODE_RETRY_WATCHDOG: "0",
+      CLAUDE_CODE_OAUTH_TOKEN: SECRET,
+      ANTHROPIC_BASE_URL: "https://fixture.invalid",
       DISABLE_TELEMETRY: "1",
       DISABLE_ERROR_REPORTING: "1",
       DISABLE_AUTOUPDATER: "1",
     });
+    expect(process.env.CLAUDE_CODE_MAX_RETRIES).toBe("9");
+    expect(process.env.CLAUDE_CODE_RETRY_WATCHDOG).toBe("1");
   });
 
   it.each(["OK.\n", "Ok\n", "", "Sure, OK!\n"])(
@@ -475,6 +558,25 @@ describe("Claude native quota process contract", () => {
     expect(result).toEqual({ kind: "failure", error, status: "unavailable" });
   });
 
+  it("cleans signal listeners when native process creation fails", async () => {
+    const before = [
+      process.listenerCount("SIGINT"),
+      process.listenerCount("SIGTERM"),
+    ];
+    const result = await fetchClaudeNativeQuota({
+      findClaude: async () => "/synthetic/missing-claude",
+    });
+    expect(result).toEqual({
+      kind: "failure",
+      error: "claude_native_process_failed",
+      status: "unavailable",
+    });
+    expect([
+      process.listenerCount("SIGINT"),
+      process.listenerCount("SIGTERM"),
+    ]).toEqual(before);
+  });
+
   it("reports missing Claude as incompatible without spawning", async () => {
     let spawned = false;
     const result = await fetchClaudeNativeQuota({
@@ -492,4 +594,114 @@ describe("Claude native quota process contract", () => {
       status: "unavailable",
     });
   });
+});
+
+describe("Claude native subprocess cancellation", () => {
+  it.each([
+    ["SIGINT", false],
+    ["SIGTERM", false],
+    ["SIGINT", true],
+    ["SIGTERM", true],
+  ] as const)(
+    "cleans the process group on %s with caller handler %s",
+    async (signal, hasHandler) => {
+      const directory = mkdtempSync(join(tmpdir(), "quota-axi-native-cancel-"));
+      const ready = join(directory, "ready.json");
+      const executable = join(directory, "native.cjs");
+      writeFileSync(
+        executable,
+        `#!${process.execPath}
+const { spawn } = require("node:child_process");
+const { writeFileSync } = require("node:fs");
+process.on("SIGTERM", () => {});
+const child = spawn(process.execPath, ["-e", 'process.on("SIGTERM", () => {}); process.send("ready"); setInterval(() => {}, 1000);'], { stdio: ["ignore", "ignore", "ignore", "ipc"] });
+child.once("message", () => writeFileSync(process.env.FIXTURE_READY, JSON.stringify({ pid: process.pid, descendant: child.pid, cwd: process.cwd() })));
+setInterval(() => {}, 1000);
+`,
+        { mode: 0o700 },
+      );
+      const moduleUrl = new URL(
+        "../../src/providers/claude-native-quota.ts",
+        import.meta.url,
+      ).href;
+      const runner = spawn(
+        process.execPath,
+        [
+          "--import",
+          "tsx",
+          "--input-type=module",
+          "-e",
+          `
+import { fetchClaudeNativeQuota } from ${JSON.stringify(moduleUrl)};
+let calls = 0;
+const handler = () => { calls++; };
+if (${hasHandler}) process.on(${JSON.stringify(signal)}, handler);
+const before = [process.listenerCount("SIGINT"), process.listenerCount("SIGTERM")];
+const result = await fetchClaudeNativeQuota({ findClaude: async () => process.env.FIXTURE_EXECUTABLE });
+process.send({ calls, before, after: [process.listenerCount("SIGINT"), process.listenerCount("SIGTERM")], result });
+process.disconnect();
+`,
+        ],
+        {
+          env: {
+            PATH: process.env.PATH,
+            FIXTURE_READY: ready,
+            FIXTURE_EXECUTABLE: executable,
+          },
+          stdio: ["ignore", "ignore", "pipe", "ipc"],
+        },
+      );
+      const closed = once(runner, "close");
+      const messages: unknown[] = [];
+      runner.on("message", (message) => messages.push(message));
+      let child: { pid: number; descendant: number; cwd: string } | undefined;
+      try {
+        await vi.waitFor(() => expect(existsSync(ready)).toBe(true), {
+          timeout: 4000,
+          interval: 20,
+        });
+        child = JSON.parse(readFileSync(ready, "utf8")) as typeof child;
+        runner.kill(signal);
+        const [code, exitSignal] = await closed;
+        expect(hasHandler ? code : exitSignal).toBe(hasHandler ? 0 : signal);
+        expect(messages).toEqual([
+          {
+            calls: hasHandler ? 1 : 0,
+            before:
+              signal === "SIGINT"
+                ? [Number(hasHandler), 0]
+                : [0, Number(hasHandler)],
+            after:
+              signal === "SIGINT"
+                ? [Number(hasHandler), 0]
+                : [0, Number(hasHandler)],
+            result: {
+              kind: "failure",
+              error: "claude_native_process_failed",
+              status: "unavailable",
+            },
+          },
+        ]);
+        expect(existsSync(child!.cwd)).toBe(false);
+        await vi.waitFor(
+          () => {
+            expect(() => process.kill(child!.pid, 0)).toThrow();
+            expect(() => process.kill(child!.descendant, 0)).toThrow();
+          },
+          { timeout: 2000, interval: 20 },
+        );
+      } finally {
+        runner.kill("SIGKILL");
+        if (child) {
+          try {
+            process.kill(-child.pid, "SIGKILL");
+          } catch {
+            child = undefined;
+          }
+        }
+        rmSync(directory, { recursive: true, force: true });
+      }
+    },
+    10000,
+  );
 });

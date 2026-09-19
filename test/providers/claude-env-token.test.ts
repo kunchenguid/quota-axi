@@ -689,15 +689,35 @@ describe("Claude CLAUDE_CODE_OAUTH_TOKEN credential source", () => {
     expect(readFileSync(cacheFilePath(), "utf8")).not.toContain(ENV_TOKEN);
   });
 
-  it("still withholds a sign-out verdict when the Keychain itself is unreadable", async () => {
-    // Preserved behavior: a source quota-axi could not open may hold the live
-    // session, so a rejection elsewhere is reported without asserting sign-out.
-    vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", ENV_TOKEN);
+  it.each([true, false])(
+    "keeps an env 401 authoritative with Keychain prompt permission %s",
+    async (allowKeychainPrompt) => {
+      vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", ENV_TOKEN);
+      if (allowKeychainPrompt) mockUnreadableStore();
+      else mockStore({ accessToken: STORED_TOKEN });
+      respondWith({}, 401);
+      const { fetchQuota } = await import("../../src/providers/claude.js");
+      const { annotateQuotaAdvice } = await import("../../src/advice.js");
+      const report = await fetchQuota({ ...options, allowKeychainPrompt });
+      const annotated = annotateQuotaAdvice({
+        generatedAt: new Date().toISOString(),
+        providers: [report],
+      });
+
+      expect(report.state.status).toBe("auth_required");
+      expect(report.state.error).toBe("Claude sign-in required");
+      expect(annotated.providers[0]?.state.reason).toBeUndefined();
+      expect(annotated.providers[0]?.state.remedyCommand).toBeUndefined();
+      expect(usageBearers()).toEqual([`Bearer ${ENV_TOKEN}`]);
+    },
+  );
+
+  it("withholds a stored-session sign-out when Keychain is unreadable", async () => {
+    writeOauthFile(STORED_TOKEN);
     mockUnreadableStore();
     respondWith({}, 401);
     const { fetchQuota } = await import("../../src/providers/claude.js");
     const report = await fetchQuota(options);
-
     expect(report.state.status).not.toBe("auth_required");
   });
 
