@@ -817,10 +817,7 @@ describe("OpenCode Go multi-source credentials", () => {
       ),
       fetch: vi.fn(async () => usageResponse()),
     }).fetchQuota(OPTIONS);
-    const interpreted = withQuotaSemantics(
-      report,
-      "2026-08-28T00:00:00.000Z",
-    );
+    const interpreted = withQuotaSemantics(report, "2026-08-28T00:00:00.000Z");
 
     expect(report.attempts).toEqual([
       {

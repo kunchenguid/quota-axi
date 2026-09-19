@@ -247,9 +247,7 @@ function inspectSafely(
   }
 }
 
-async function selectOpenCodeGoCredential(
-  dependencies: Dependencies,
-): Promise<{
+async function selectOpenCodeGoCredential(dependencies: Dependencies): Promise<{
   resolved: ResolvedCredentialSource[];
   selection: CredentialSelection<NormalizedOpenCodeGoPayload>;
 }> {
@@ -334,9 +332,7 @@ function sourceAttempts(
       source: name,
       status: resolution.status === "error" ? "failed" : "skipped",
       error: credentialError(resolution),
-      ...(resolution.status === "invalid"
-        ? { credentialPresent: true }
-        : {}),
+      ...(resolution.status === "invalid" ? { credentialPresent: true } : {}),
     };
   });
 }
