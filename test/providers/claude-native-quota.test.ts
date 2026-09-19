@@ -235,6 +235,122 @@ describe("Claude native quota process contract", () => {
     vi.unstubAllEnvs();
   });
 
+  it.each(["stdout", "stderr"] as const)(
+    "accepts a complete validated observation from %s",
+    async (stream) => {
+      const result = await fetchClaudeNativeQuota({
+        findClaude: async () => "/synthetic/claude",
+        now: () => NOW,
+        run: async () => ({
+          stdout:
+            stream === "stdout"
+              ? `${responseLog(200, validHeaders())}${SECRET}`
+              : `model output ${SECRET}`,
+          stderr:
+            stream === "stderr"
+              ? `${responseLog(200, validHeaders())}${SECRET}`
+              : `application log ${SECRET}`,
+          exitCode: 0,
+          signal: null,
+          timedOut: false,
+          outputLimited: false,
+        }),
+      });
+
+      expect(result).toMatchObject({ kind: "success" });
+      expect(result.kind === "success" && result.windows).toHaveLength(2);
+      expect(JSON.stringify(result)).not.toContain(SECRET);
+    },
+  );
+
+  it("rejects conflicting complete observations across streams", async () => {
+    const result = await fetchClaudeNativeQuota({
+      findClaude: async () => "/synthetic/claude",
+      now: () => NOW,
+      run: async () => ({
+        stdout: responseLog(200, validHeaders()),
+        stderr: responseLog(200, {
+          ...validHeaders(),
+          "anthropic-ratelimit-unified-5h-utilization": "0.75",
+        }),
+        exitCode: 0,
+        signal: null,
+        timedOut: false,
+        outputLimited: false,
+      }),
+    });
+
+    expect(result).toEqual({
+      kind: "failure",
+      error: "claude_native_quota_unavailable",
+      status: "unavailable",
+    });
+    expect(JSON.stringify(result)).not.toContain(SECRET);
+  });
+
+  it("accepts the same complete observation from both streams", async () => {
+    const raw = responseLog(200, validHeaders());
+    const result = await fetchClaudeNativeQuota({
+      findClaude: async () => "/synthetic/claude",
+      now: () => NOW,
+      run: async () => ({
+        stdout: raw,
+        stderr: raw,
+        exitCode: 0,
+        signal: null,
+        timedOut: false,
+        outputLimited: false,
+      }),
+    });
+
+    expect(result).toMatchObject({ kind: "success" });
+    expect(JSON.stringify(result)).not.toContain(SECRET);
+  });
+
+  it("ignores an incomplete sibling stream", async () => {
+    const result = await fetchClaudeNativeQuota({
+      findClaude: async () => "/synthetic/claude",
+      now: () => NOW,
+      run: async () => ({
+        stdout: responseLog(200, validHeaders()),
+        stderr: `[log_fixture] response start {"status":200,"secret":"${SECRET}"}`,
+        exitCode: 0,
+        signal: null,
+        timedOut: false,
+        outputLimited: false,
+      }),
+    });
+
+    expect(result).toMatchObject({ kind: "success" });
+    expect(JSON.stringify(result)).not.toContain(SECRET);
+  });
+
+  it("keeps a complete stdout 429 when the child later times out", async () => {
+    const result = await fetchClaudeNativeQuota({
+      findClaude: async () => "/synthetic/claude",
+      now: () => NOW,
+      run: async () => ({
+        stdout: responseLog(429, {
+          ...validHeaders(),
+          "retry-after": "45",
+        }),
+        stderr: `application log ${SECRET}`,
+        exitCode: null,
+        signal: "SIGTERM",
+        timedOut: true,
+        outputLimited: false,
+      }),
+    });
+
+    expect(result).toMatchObject({
+      kind: "failure",
+      error: "claude_native_rate_limited",
+      status: "rate_limited",
+      retryAfter: "2026-09-19T06:00:45.000Z",
+    });
+    expect(JSON.stringify(result)).not.toContain(SECRET);
+  });
+
   it.each([
     ["ANTHROPIC_API_KEY", "claude_native_api_key_present"],
     ["ANTHROPIC_AUTH_TOKEN", "claude_native_auth_token_present"],

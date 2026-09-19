@@ -118,7 +118,11 @@ export async function fetchClaudeNativeQuota(
       return failure("claude_native_process_failed");
     }
 
-    const parsed = parseClaudeNativeDebug(result.stderr, dependencies.now?.());
+    const now = dependencies.now?.() ?? Date.now();
+    const parsed = selectNativeObservation(
+      parseClaudeNativeDebug(result.stdout, now),
+      parseClaudeNativeDebug(result.stderr, now),
+    );
     if (isCompleteRateLimitObservation(parsed)) return parsed;
     if (result.timedOut) return failure("claude_native_timeout");
     if (result.outputLimited) return failure("claude_native_output_limit");
@@ -138,6 +142,26 @@ export async function fetchClaudeNativeQuota(
       rmSync(scratch, { recursive: true, force: true });
     }
   }
+}
+
+/**
+ * The Anthropic SDK's default console logger writes debug records to stdout,
+ * while Claude's own debug sink can use stderr. Treat the streams as
+ * independent observations so unrelated model/application output cannot join
+ * fragments across the stream boundary.
+ */
+function selectNativeObservation(
+  stdout: ClaudeNativeQuotaResult,
+  stderr: ClaudeNativeQuotaResult,
+): ClaudeNativeQuotaResult {
+  const observed = [stdout, stderr].filter(
+    (result) => result.kind === "success" || result.status === "rate_limited",
+  );
+  if (observed.length === 0) return failure("claude_native_quota_unavailable");
+  if (observed.length === 1) return observed[0]!;
+  return JSON.stringify(observed[0]) === JSON.stringify(observed[1])
+    ? observed[0]!
+    : failure("claude_native_quota_unavailable");
 }
 
 /**
