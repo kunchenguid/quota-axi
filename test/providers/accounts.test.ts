@@ -1,0 +1,352 @@
+import { describe, expect, it } from "vitest";
+import { annotateQuotaAdvice } from "../../src/advice.js";
+import { withQuotaSemantics } from "../../src/interpretation.js";
+import { fetchAccountQuotas } from "../../src/providers/accounts.js";
+import { quotaJsonReport, renderQuotaToon } from "../../src/render.js";
+import { renderQuotaTui } from "../../src/tui.js";
+import type {
+  ProviderAdapter,
+  ProviderOptions,
+  ProviderQuota,
+  ProviderSource,
+  QuotaWindow,
+} from "../../src/types.js";
+
+const OPTIONS: ProviderOptions = {
+  allowKeychainPrompt: false,
+  refreshCredentials: false,
+};
+
+const GENERATED_AT = "2026-07-15T12:00:00.000Z";
+
+describe("verified subscription coalescing", () => {
+  it("reports native and Pi access to the same subscription once beside a distinct one", async () => {
+    const reports = await fetchAccountQuotas(
+      adapter([
+        ["native", live("acct-a", 20, "oauth")],
+        ["pi-standard", live("acct-a", 20, "cli")],
+        ["pi-work", live("acct-b", 80, "api")],
+      ]),
+      OPTIONS,
+    );
+
+    expect(summarize(reports)).toEqual([
+      ["native", "acct-a", "fresh", 20],
+      ["pi-work", "acct-b", "fresh", 80],
+    ]);
+    expect(reports[0]?.windows).toHaveLength(1);
+    expect(percentages(reports)).toEqual([20, 80]);
+  });
+
+  it("coalesces when a successful response supplies the identity that was missing locally", async () => {
+    const reports = await fetchAccountQuotas(
+      adapter([
+        ["native", live("acct-a", 20, "oauth")],
+        ["pi-work", live("acct-a", 20, "cli")],
+      ]),
+      OPTIONS,
+    );
+
+    expect(reports).toHaveLength(1);
+    expect(reports[0]).toMatchObject({
+      accountKey: "native",
+      account: { accountId: "acct-a" },
+      state: { status: "fresh" },
+      windows: [{ percentUsed: 20 }],
+    });
+  });
+
+  it("keeps a usable sibling when the same subscription's other source is rejected", async () => {
+    const reports = await fetchAccountQuotas(
+      adapter([
+        ["native", rejected("acct-a", "oauth")],
+        ["pi-work", live("acct-a", 20, "cli")],
+      ]),
+      OPTIONS,
+    );
+
+    expect(reports).toHaveLength(1);
+    expect(reports[0]).toMatchObject({
+      accountKey: "pi-work",
+      source: "cli",
+      account: { accountId: "acct-a" },
+      state: { status: "fresh" },
+      windows: [{ percentUsed: 20, percentRemaining: 80 }],
+    });
+    expect(reports[0]?.state.status).not.toBe("auth_required");
+    expect(reports[0]?.attempts?.map((attempt) => attempt.source)).toEqual([
+      "oauth",
+      "cli",
+    ]);
+  });
+
+  it("does not guess that a rejected reading without identity shares a live sibling", async () => {
+    const reports = await fetchAccountQuotas(
+      adapter([
+        ["native", rejected(undefined, "oauth")],
+        ["pi-work", live("acct-a", 20, "cli")],
+      ]),
+      OPTIONS,
+    );
+
+    expect(summarize(reports)).toEqual([
+      ["native", undefined, "auth_required", undefined],
+      ["pi-work", "acct-a", "fresh", 20],
+    ]);
+  });
+
+  it("does not treat matching email as subscription identity", async () => {
+    const reports = await fetchAccountQuotas(
+      adapter([
+        ["native", live(undefined, 20, "oauth", "same@example.invalid")],
+        ["pi-work", live(undefined, 60, "cli", "same@example.invalid")],
+      ]),
+      OPTIONS,
+    );
+
+    expect(reports).toHaveLength(2);
+    expect(percentages(reports)).toEqual([20, 60]);
+  });
+
+  it("keeps distinct account ids separate even when the email matches", async () => {
+    const reports = await fetchAccountQuotas(
+      adapter([
+        ["native", live("acct-home", 20, "oauth", "same@example.invalid")],
+        ["pi-work", live("acct-work", 60, "cli", "same@example.invalid")],
+      ]),
+      OPTIONS,
+    );
+
+    expect(summarize(reports)).toEqual([
+      ["native", "acct-home", "fresh", 20],
+      ["pi-work", "acct-work", "fresh", 60],
+    ]);
+  });
+
+  it("leaves unverified identity unmerged", async () => {
+    const reports = await fetchAccountQuotas(
+      adapter([
+        ["native", live("acct-a", 20, "oauth", undefined, "unverified")],
+        ["pi-work", live("acct-a", 20, "cli")],
+      ]),
+      OPTIONS,
+    );
+
+    expect(reports).toHaveLength(2);
+  });
+
+  it("does not merge two readings that both lack comparable identity", async () => {
+    const reports = await fetchAccountQuotas(
+      adapter([
+        ["native", live(undefined, 20, "oauth")],
+        ["pi-work", live(undefined, 20, "cli")],
+      ]),
+      OPTIONS,
+    );
+
+    expect(reports).toHaveLength(2);
+  });
+
+  it("never sums duplicated percentages into invented capacity", async () => {
+    const reports = await fetchAccountQuotas(
+      adapter([
+        ["native", live("acct-a", 40, "oauth")],
+        ["pi-standard", live("acct-a", 40, "cli")],
+      ]),
+      OPTIONS,
+    );
+
+    expect(reports).toHaveLength(1);
+    expect(reports[0]?.windows).toHaveLength(1);
+    expect(reports[0]?.windows[0]?.percentUsed).toBe(40);
+    expect(reports[0]?.windows[0]?.percentRemaining).toBe(60);
+  });
+
+  it("prefers a fresh reading over a stale copy of the same subscription", async () => {
+    const reports = await fetchAccountQuotas(
+      adapter([
+        ["native", stale("acct-a", 10, "oauth")],
+        ["pi-work", live("acct-a", 20, "cli")],
+      ]),
+      OPTIONS,
+    );
+
+    expect(reports).toHaveLength(1);
+    expect(reports[0]).toMatchObject({
+      accountKey: "pi-work",
+      source: "cli",
+      state: { status: "fresh" },
+      windows: [{ percentUsed: 20 }],
+    });
+  });
+
+  it("publishes the same coalesced lanes to JSON, TOON, and the TUI", async () => {
+    const reports = await fetchAccountQuotas(
+      adapter([
+        ["native", live("acct-a", 20, "oauth")],
+        ["pi-standard", live("acct-a", 20, "cli")],
+        ["pi-work", live("acct-b", 80, "api")],
+      ]),
+      OPTIONS,
+    );
+    const response = annotateQuotaAdvice({
+      generatedAt: GENERATED_AT,
+      providers: reports.map((report) =>
+        withQuotaSemantics(report, GENERATED_AT),
+      ),
+    });
+
+    expect(response.schemaVersion).toBe(6);
+    expect(response.providers.map((provider) => provider.accountKey)).toEqual([
+      "native",
+      "pi-work",
+    ]);
+
+    const json = quotaJsonReport(response, true);
+    expect(json.providers.map((provider) => provider.accountKey)).toEqual([
+      "native",
+      "pi-work",
+    ]);
+    expect(
+      json.providers.map((provider) => provider.account?.accountId),
+    ).toEqual(["acct-a", "acct-b"]);
+
+    const toon = renderQuotaToon(response, "/quota-axi", false);
+    expect(toon).toContain("native");
+    expect(toon).toContain("pi-work");
+    expect(toon).not.toContain("pi-standard");
+
+    const tui = renderQuotaTui(response, { columns: 100 });
+    expect(tui).toContain("account native");
+    expect(tui).toContain("account pi-work");
+    expect(tui).not.toContain("account pi-standard");
+    expect(tui).not.toContain("sign-in required");
+  });
+
+  it("does not expand a single selected account", async () => {
+    const reports = await fetchAccountQuotas(
+      {
+        ...adapter([["native", live("acct-a", 20, "oauth")]]),
+        discoverAccounts: undefined,
+        async fetchQuota() {
+          return live("acct-a", 20, "oauth");
+        },
+      },
+      OPTIONS,
+    );
+
+    expect(reports).toHaveLength(1);
+    expect(reports[0]?.accountKey).toBeUndefined();
+  });
+});
+
+function adapter(lanes: [string, ProviderQuota][]): ProviderAdapter {
+  return {
+    id: "claude",
+    label: "Claude",
+    async discoverAccounts() {
+      return lanes.map(([accountKey, quota]) => ({
+        accountKey,
+        async fetchQuota() {
+          return quota;
+        },
+        async inspectAuth() {
+          return { provider: quota.provider, sources: [] };
+        },
+      }));
+    },
+    async fetchQuota() {
+      throw new Error("single-lane fetchQuota should not run when lanes exist");
+    },
+    async inspectAuth() {
+      return { provider: "claude", sources: [] };
+    },
+  };
+}
+
+function live(
+  accountId: string | undefined,
+  percentUsed: number,
+  source: ProviderSource,
+  email?: string,
+  identityStatus?: "verified" | "unverified",
+): ProviderQuota {
+  return {
+    provider: "claude",
+    label: "Claude",
+    source,
+    account: {
+      ...(accountId !== undefined ? { accountId } : {}),
+      ...(email !== undefined ? { email } : {}),
+      ...(identityStatus !== undefined ? { identityStatus } : {}),
+    },
+    windows: [windowAt(percentUsed)],
+    state: {
+      status: "fresh",
+      stale: false,
+      sourcesTried: [source],
+    },
+    attempts: [{ source, status: "success" }],
+  };
+}
+
+function stale(
+  accountId: string,
+  percentUsed: number,
+  source: ProviderSource,
+): ProviderQuota {
+  return {
+    ...live(accountId, percentUsed, source),
+    source: "cache",
+    state: {
+      status: "stale",
+      stale: true,
+      error: "fetch failed",
+      sourcesTried: [source, "cache"],
+    },
+    attempts: [{ source, status: "failed", error: "fetch failed" }],
+  };
+}
+
+function rejected(
+  accountId: string | undefined,
+  source: ProviderSource,
+): ProviderQuota {
+  return {
+    provider: "claude",
+    label: "Claude",
+    source,
+    account: accountId !== undefined ? { accountId } : undefined,
+    windows: [],
+    state: {
+      status: "auth_required",
+      stale: false,
+      error: "sign-in required",
+      sourcesTried: [source],
+    },
+    attempts: [{ source, status: "failed", error: "unauthorized" }],
+  };
+}
+
+function windowAt(percentUsed: number): QuotaWindow {
+  return {
+    id: "five_hour",
+    label: "session",
+    kind: "session",
+    percentUsed,
+    percentRemaining: 100 - percentUsed,
+  };
+}
+
+function summarize(reports: ProviderQuota[]) {
+  return reports.map((report) => [
+    report.accountKey,
+    report.account?.accountId,
+    report.state.status,
+    report.windows[0]?.percentUsed,
+  ]);
+}
+
+function percentages(reports: ProviderQuota[]) {
+  return reports.map((report) => report.windows[0]?.percentUsed);
+}

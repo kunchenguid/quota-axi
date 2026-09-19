@@ -353,6 +353,7 @@ CODEX_HOME=/path/to/codex-profile quota-axi --provider codex --profile-only --fu
 
 ## Multiple accounts
 
+The reporting unit is the verified underlying subscription, not each credential route that can read it.
 A normal invocation reports every Codex ChatGPT subscription it can discover from sibling entries in one Pi `auth.json`.
 It keeps each account's quota windows, resets, plan, effective availability, runway, and `spendPriority` separate.
 Each account gets its own TUI card, naming its key on an `account <key>` line under the card title, including accounts whose quota cannot be read.
@@ -386,6 +387,18 @@ That Pi lane keeps its own reading when fresh, and shows the native reading when
 A proven sign-out, or a native login that coalesces into a Pi lane with a fresh reading on either side, removes the cached `codex-home` snapshot so a later failed probe cannot bring that account back.
 `--profile-only` still reads one native Codex file and never opens Pi auth.
 
+### Same subscription across sources
+
+After a provider's lanes have been read, collection coalesces readings that share a provider-supported subscription identity.
+That identity is `account.accountId` when it is present and not marked `identityStatus: unverified`.
+Email, token, credential path, profile label, and runner name do not establish equality or distinctness.
+Missing or incomparable identity stays its own lane so the uncertainty stays visible: quota-axi does not guess a merge, and it does not invent extra capacity by summing those lanes.
+A successful response that supplies comparable identity missing from the local store is enough to coalesce the resulting cards.
+When two readings share an identity, the usable one is published (fresh over stale over a rejected source) and the other is not a second card.
+Windows are never summed, averaged, or concatenated across those readings.
+Machine-readable output and the TUI share the same coalesced provider list.
+Codex still discovers and folds its own native and Pi lanes as described above; this collection step is the shared contract any multi-account provider goes through.
+
 ### Account keys and compatibility
 
 When a provider expands to multiple accounts, the report uses quota `schemaVersion: 6` (auth and models use version 2).
@@ -393,7 +406,7 @@ Every provider record then has an `accountKey`; providers still using one select
 Every flat TOON block adds `accountKey` immediately after `provider`, and the quota/exhaustion/attention join becomes **`provider` + `accountKey` + `scope`**.
 Models and model sort ties use **`provider` + `accountKey` + `id`**.
 Models `unmatchedWindowIds` entries gain the same key, so an unmapped window reads `provider/accountKey/scope` instead of `provider/scope`; the key keeps two accounts of one provider from reporting the same unmapped window indistinguishably.
-Declaration order remains non-preferential; quotas are never combined across accounts.
+Declaration order remains non-preferential; quotas are never combined across accounts, and never summed across coalesced routes of one subscription.
 
 A Codex Pi lane's key is the auth.json provider id (`openai-codex`, `openai-codex-work`); the native Codex lane's key is `codex-home`.
 It is stable across refreshes and discovery order and contains no token, email, or path, and it also names the account's cache slot.
