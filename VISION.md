@@ -22,7 +22,7 @@ The default report stays in declaration order and carries no preference, so no c
 ## Least action on someone else's credentials
 
 quota-axi acts on credentials other tools own, and it takes the least action that yields a true reading.
-It never logs in, never creates an identity, and never runs anything that spends the quota being measured.
+It never logs in or creates an identity. Default quota reads spend no inference; the narrowly scoped opt-in exception is defined in [README Provider notes](README.md#provider-notes).
 It never drives a browser or imports browser state or cookies, because a surface built for a human page is flaky and yields numbers it cannot verify.
 Running a vendor's own non-interactive command is allowed when that is what stands between quota-axi and an accurate report, and only under the limits below.
 Renewing a short-lived credential is such a case, and it is always the vendor's own CLI that renews it: quota-axi runs the smallest non-interactive command that already owns rotation, then re-reads the store that CLI just rewrote.
@@ -73,4 +73,4 @@ Adapter behavior is clean-room from a vendor's own observable behavior, and thir
 The repo holds itself to the standard it asks of contributors, with no exemption for the contributions it most wants: every human pull request goes through the no-mistakes pipeline, generated files are regenerated rather than hand-edited, and tests exercise the published interface rather than the source text.
 
 A change aligns when it makes a real quota fact readable that was previously unreadable or wrong, keeps every existing path working, and leaves the decision with the caller.
-A change should be resisted when it publishes a number no provider supports, holds a boundary at the cost of a false report, spends the quota it is measuring, mints or rotates a credential quota-axi does not own, or grows the surface into a product this is not.
+A change should be resisted when it publishes a number no provider supports, holds a boundary at the cost of a false report, spends the quota it is measuring without the documented explicit opt-in, mints or rotates a credential quota-axi does not own, or grows the surface into a product this is not.
