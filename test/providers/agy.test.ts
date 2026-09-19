@@ -611,52 +611,6 @@ describe("Antigravity provider", () => {
 
   it("does not serve stale quota when protected loopback and print usage fail", async () => {
     writeCachedProviders([cachedAgyQuota()]);
-    const commands: Array<{
-      command: string;
-      args: string[];
-      timeoutMs: number;
-    }> = [];
-    const port = await startServer((response) => {
-      response.writeHead(401, { "content-type": "application/json" });
-      response.end(
-        JSON.stringify({
-          code: "unauthenticated",
-          message: "missing CSRF token",
-        }),
-      );
-    });
-
-    const result = await fetchQuotaWithRuntime(
-      runtimeWith({
-        ps: "123 /Users/test/.local/bin/agy\n",
-        lsof: lsofFor(123, port),
-        agyPath: "/Users/test/.local/bin/agy",
-        agyOutput: JSON.stringify(fixture("usage-print-v1.2.2.json")),
-        requestJson: requestLoopbackJson,
-        onExec(command, args, timeoutMs) {
-          commands.push({ command, args, timeoutMs });
-        },
-      }),
-    );
-
-    expect(result.state.status).toBe("fresh");
-    expect(result.source).toBe("cli");
-    expect(result.account).toBeUndefined();
-    expect(result.windows.map((window) => window.id)).toEqual([
-      "gemini_5h",
-      "gemini_weekly",
-      "claude_gpt_5h",
-      "claude_gpt_weekly",
-    ]);
-    expect(commands.at(-1)).toEqual({
-      command: "/Users/test/.local/bin/agy",
-      args: ["--print", "/usage", "--output-format", "json"],
-      timeoutMs: 15_000,
-    });
-  });
-
-  it("does not serve stale quota when protected loopback and print usage fail", async () => {
-    writeCachedProviders([cachedAgyQuota()]);
     const port = await startServer((response) => {
       response.writeHead(401, { "content-type": "application/json" });
       response.end(
@@ -672,26 +626,6 @@ describe("Antigravity provider", () => {
         ps: "123 /Users/test/.local/bin/agy\n",
         lsof: lsofFor(123, port),
         requestJson: requestLoopbackJson,
-      }),
-    );
-
-    expect(result.state).toMatchObject({
-      status: "unavailable",
-      error:
-        "Antigravity CLI quota unavailable because its runtime CSRF token is not exposed; use Antigravity /usage",
-    });
-    expect(result.windows).toEqual([]);
-    expect(readCachedProvider("agy")).toBeDefined();
-  });
-
-  it("sanitizes failures from structured print usage", async () => {
-    const result = await fetchQuotaWithRuntime(
-      runtimeWith({
-        ps: "",
-        agyPath: "/Users/test/.local/bin/agy",
-        agyError: Object.assign(new Error("private-account@example.test"), {
-          code: "EFAIL",
-        }),
       }),
     );
 

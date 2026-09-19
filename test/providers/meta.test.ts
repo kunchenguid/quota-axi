@@ -389,6 +389,7 @@ describe("Meta Muse provider", () => {
       },
     };
     const report = await testAdapter({
+      now: () => NOW,
       credential: async () => credential(),
       fetch: vi.fn(async () => {
         throw new Error("offline includes sensitive network detail");

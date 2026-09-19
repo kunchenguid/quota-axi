@@ -105,6 +105,22 @@ describe("live report viewport", () => {
     }
   });
 
+  it("keeps every provider reachable in a narrow three-row terminal", () => {
+    const columns = 20;
+    const body = renderQuotaTui(fixtureResponse(), { columns });
+    const reached = [...reachableLines(body, 3)].join("\n");
+    for (const provider of fixtureResponse().providers) {
+      expect(reached).toContain(provider.provider);
+    }
+    for (let offset = 0; offset <= body.split("\n").length; offset++) {
+      const frame = scrollFrame(body, { rows: 3, columns, offset });
+      expect(frame.text.split("\n").length).toBeLessThanOrEqual(3);
+      for (const line of frame.text.split("\n")) {
+        expect(line.length).toBeLessThanOrEqual(columns);
+      }
+    }
+  });
+
   it("clamps the offset to the ends of the report", () => {
     const body = reportBody();
     const top = scrollFrame(body, { rows: 12, offset: -50, status: status() });

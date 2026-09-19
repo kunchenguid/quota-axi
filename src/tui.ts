@@ -16,7 +16,7 @@ import type {
 export type TuiColorDepth = "none" | "16" | "256" | "truecolor";
 
 export type TuiOptions = {
-  /** Raw terminal width; at least 80 columns, defaults to 100. */
+  /** Raw terminal width; defaults to 100 when unknown. */
   columns?: number;
   colorDepth?: TuiColorDepth;
   /** Mirrors `--full`: appends account identity and source-attempt footers. */
@@ -28,7 +28,6 @@ export type TuiOptions = {
 const MIN_CARD_WIDTH = 49;
 const CARD_GUTTER = 2;
 const TWO_COLUMN_MIN = MIN_CARD_WIDTH * 2 + CARD_GUTTER;
-const MIN_COLUMNS = 80;
 const GRAPHEME_SEGMENTER = new Intl.Segmenter("en", {
   granularity: "grapheme",
 });
@@ -130,12 +129,52 @@ export function renderQuotaTui(
     ...response.providers.filter(isLive),
     ...response.providers.filter((provider) => !isLive(provider)),
   ];
+  if (columns < MIN_CARD_WIDTH) {
+    const lines: Line[] = [
+      [
+        {
+          text: truncate(`  ${headerText(response, timeZone)}`, columns),
+          style: "dim",
+        },
+      ],
+      [],
+    ];
+    for (const provider of ordered) {
+      const state = provider.state.status;
+      lines.push([
+        {
+          text: truncate(`  ${provider.provider} · ${state}`, columns),
+          style: `accent:${provider.provider}`,
+        },
+      ]);
+      for (const window of provider.windows) {
+        const percent =
+          window.percentRemaining === undefined
+            ? "?"
+            : `${Math.round(window.percentRemaining)}%`;
+        lines.push([
+          {
+            text: truncate(`    ${window.label} · ${percent}`, columns),
+            style: "label",
+          },
+        ]);
+      }
+    }
+    return lines
+      .map((line) => renderLine(trimRight(line), options.colorDepth ?? "none"))
+      .join("\n");
+  }
   const cards = ordered.map((provider) =>
     buildCard(provider, generatedAtMs, cardWidth),
   );
 
   const lines: Line[] = [];
-  lines.push([{ text: `  ${headerText(response, timeZone)}`, style: "dim" }]);
+  lines.push([
+    {
+      text: truncate(`  ${headerText(response, timeZone)}`, columns),
+      style: "dim",
+    },
+  ]);
   lines.push([]);
   lines.push(...layoutCards(cards, twoColumn));
   if (options.full) {
@@ -167,7 +206,7 @@ export function renderTuiHintLine(
 }
 
 function resolveColumns(columns: number | undefined): number {
-  return Math.max(MIN_COLUMNS, columns ?? TWO_COLUMN_MIN);
+  return Math.max(1, Math.trunc(columns ?? TWO_COLUMN_MIN));
 }
 
 function isLive(provider: ProviderQuota): boolean {

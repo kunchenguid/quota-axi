@@ -98,6 +98,7 @@ const CHARACTER_KEYS: Readonly<Record<string, ScrollCommand>> = {
 };
 
 type WakeReason = "tick" | "resize" | "scroll" | "quit";
+const QUIT_DURING_LOAD = Symbol("quit-during-load");
 
 /**
  * Run the live report until the operator quits, and return the last snapshot
@@ -112,6 +113,10 @@ export async function runLiveTui<T>({
 }: LiveTuiOptions<T>): Promise<T | undefined> {
   let quit = false;
   let wake: ((reason: WakeReason) => void) | undefined;
+  let resolveQuit: () => void = () => {};
+  const quitPromise = new Promise<typeof QUIT_DURING_LOAD>((resolve) => {
+    resolveQuit = () => resolve(QUIT_DURING_LOAD);
+  });
   // Resize and scroll bursts coalesce: every wake-up repaints from the current
   // terminal size and scroll offset, so an event that lands with no waiter
   // armed is already covered by the next paint rather than needing its own.
@@ -122,6 +127,7 @@ export async function runLiveTui<T>({
   };
   const requestQuit = (): void => {
     quit = true;
+    resolveQuit();
     notify("quit");
   };
 
@@ -161,8 +167,9 @@ export async function runLiveTui<T>({
   try {
     while (!quit) {
       if (value === undefined) io.stdout.write(`${CLEAR_SCREEN}\n  loading…\n`);
-      value = await load();
-      if (quit) break;
+      const loaded = await Promise.race([load(), quitPromise]);
+      if (quit || loaded === QUIT_DURING_LOAD) break;
+      value = loaded;
       const snapshot = value;
       const paint = (): void => {
         const body = render(snapshot);

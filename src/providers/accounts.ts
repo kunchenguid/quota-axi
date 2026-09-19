@@ -6,6 +6,49 @@ import type {
   ProviderQuota,
 } from "../types.js";
 
+/** Keeps ordinary reads finite while allowing an explicitly requested Keychain prompt. */
+const DEFAULT_PROBE_TIMEOUT_MS = 75_000;
+
+async function boundedProbe<T>(
+  read: () => Promise<T>,
+  timeoutMs: number,
+): Promise<
+  { value: T } | { error: "provider_probe_timeout" | "provider_probe_failed" }
+> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      Promise.resolve()
+        .then(read)
+        .then(
+          (value) => ({ value }) as const,
+          () => ({ error: "provider_probe_failed" }) as const,
+        ),
+      new Promise<{ error: "provider_probe_timeout" }>((resolve) => {
+        timer = setTimeout(
+          () => resolve({ error: "provider_probe_timeout" }),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+function unavailableQuota(
+  adapter: ProviderAdapter,
+  error: string,
+): ProviderQuota {
+  return {
+    provider: adapter.id,
+    label: adapter.label,
+    source: "unavailable",
+    windows: [],
+    state: { status: "unavailable", stale: false, error, sourcesTried: [] },
+  };
+}
+
 /**
  * Discovery belongs to the adapter; collection never interprets credentials.
  *
@@ -44,6 +87,19 @@ export async function fetchAccountQuotas(
   adapter: ProviderAdapter,
   options: ProviderOptions,
 ): Promise<ProviderQuota[]> {
+  const result = await boundedProbe(
+    () => fetchAccountQuotasUnbounded(adapter, options),
+    options.probeTimeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS,
+  );
+  return "value" in result
+    ? result.value
+    : [unavailableQuota(adapter, result.error)];
+}
+
+async function fetchAccountQuotasUnbounded(
+  adapter: ProviderAdapter,
+  options: ProviderOptions,
+): Promise<ProviderQuota[]> {
   const accounts = await accountsFor(adapter, options);
   if (!accounts) return [await adapter.fetchQuota(options)];
   // Keep each adapter's declaration order, including failed accounts. Readers
@@ -79,6 +135,26 @@ export async function fetchAccountQuotas(
 }
 
 export async function inspectAccountAuth(
+  adapter: ProviderAdapter,
+  options: ProviderOptions,
+): Promise<AuthProviderReport[]> {
+  const result = await boundedProbe(
+    () => inspectAccountAuthUnbounded(adapter, options),
+    options.probeTimeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS,
+  );
+  return "value" in result
+    ? result.value
+    : [
+        {
+          provider: adapter.id,
+          sources: [
+            { source: "provider-probe", status: "error", error: result.error },
+          ],
+        },
+      ];
+}
+
+async function inspectAccountAuthUnbounded(
   adapter: ProviderAdapter,
   options: ProviderOptions,
 ): Promise<AuthProviderReport[]> {

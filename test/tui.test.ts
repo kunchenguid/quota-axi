@@ -149,6 +149,19 @@ describe("renderQuotaTui structure", () => {
     },
   );
 
+  it.each([20, 40, 48])(
+    "fits a narrow terminal and keeps absent credentials visible at %i columns",
+    (columns) => {
+      const lines = render({ columns });
+      expect(lines.join("\n")).toContain("copilot");
+      for (const line of lines)
+        expect(displayColumns(line)).toBeLessThanOrEqual(columns);
+      expect(
+        displayColumns(renderTuiHintLine("Press q to quit", { columns })),
+      ).toBeLessThanOrEqual(columns);
+    },
+  );
+
   it("promotes effective headroom with the runway verdict on the headline", () => {
     const lines = render();
     expect(findLine(lines, "72% week")).toContain("on pace ✓");

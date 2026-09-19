@@ -250,14 +250,8 @@ describe("live terminal report loop", () => {
 
   it("skips the frame when a quit lands while a refresh is in flight", async () => {
     const io = harness();
-    let release: (() => void) | undefined;
     const run = runLiveTui<string>({
-      load: async () => {
-        await new Promise<void>((resolve) => {
-          release = resolve;
-        });
-        return "loaded";
-      },
+      load: () => new Promise<string>(() => {}),
       render: () => "frame",
       intervalMillis: 300_000,
       io: io.io,
@@ -265,9 +259,8 @@ describe("live terminal report loop", () => {
     await flush();
 
     io.press("q");
-    release?.();
 
-    await expect(run).resolves.toBe("loaded");
+    await expect(run).resolves.toBeUndefined();
     expect(io.output()).not.toContain("frame");
     expect(io.writes.at(-1)).toContain(LEAVE_SCREEN);
     expect(io.rawModes).toEqual([true, false]);

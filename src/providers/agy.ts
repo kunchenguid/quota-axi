@@ -38,9 +38,7 @@ const PORT_TIMEOUT_MS = 2_000;
 const REQUEST_TIMEOUT_MS = 3_000;
 const CLI_QUOTA_TIMEOUT_MS = 15_000;
 const PROBE_BUDGET_MS = 10_000;
-const PRINT_TIMEOUT_MS = 15_000;
 const MAX_RESPONSE_BYTES = 1024 * 1024;
-const AGY_PRINT_ARGS = ["--print", "/usage", "--output-format", "json"];
 
 type AgyProcessSource = "agy" | "app";
 

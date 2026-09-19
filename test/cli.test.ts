@@ -916,6 +916,24 @@ describe("CLI quota rendering", () => {
     expect(output).not.toContain("\x1b[?1049h");
     expect(process.exitCode).toBeUndefined();
   });
+
+  it("renders --tui --once when another provider has no credential", async () => {
+    useTempCache();
+    PROVIDERS.codex = providerWithQuota(freshCodexQuota());
+    PROVIDERS.copilot = providerWithQuota(signedOutCopilotQuota());
+
+    const output = await capture([
+      "--tui",
+      "--once",
+      "--provider",
+      "codex,copilot",
+    ]);
+
+    expect(output).toContain("● codex");
+    expect(output).toContain("○ copilot");
+    expect(output).toContain("1 signed out");
+    expect(process.exitCode).toBeUndefined();
+  });
 });
 
 describe("default TOON decision blocks", () => {

@@ -319,6 +319,8 @@ export type QuotaAxiResponse = {
 
 export type ProviderOptions = {
   allowKeychainPrompt: boolean;
+  /** Total wall-clock bound for one provider read, including credential discovery. */
+  probeTimeoutMs?: number;
   /** Restrict discovery to the provider's selected native profile file. */
   credentialMode?: "profile-only";
   /**

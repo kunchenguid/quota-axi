@@ -38,6 +38,7 @@ export type QuotaContext = {
 };
 
 const DEFAULT_REFRESH_SECONDS = 300;
+const LIVE_PROBE_TIMEOUT_MS = 5_000;
 
 export async function quotaCommand(
   args: string[],
@@ -92,7 +93,12 @@ async function quotaTuiReport(
   const refreshSeconds = flags.refreshSeconds ?? DEFAULT_REFRESH_SECONDS;
   const hint = `Press q to quit · refreshing every ${formatInterval(refreshSeconds)}`;
   const last = await runLiveTui<QuotaAxiResponse>({
-    load: () => loadQuota(flags.providers, options, true),
+    load: () =>
+      loadQuota(
+        flags.providers,
+        { ...options, probeTimeoutMs: LIVE_PROBE_TIMEOUT_MS },
+        true,
+      ),
     render: frame,
     status: (scroll) => renderTuiHintLine(scrollHint(scroll, hint), terminal()),
     intervalMillis: refreshSeconds * 1000,
