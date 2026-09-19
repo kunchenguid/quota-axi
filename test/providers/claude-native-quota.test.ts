@@ -268,16 +268,47 @@ describe("Claude native quota process contract", () => {
     },
   );
 
-  it("still reports a timeout when the truncated output holds no rate-limit observation", async () => {
+  it.each([
+    [
+      "timeout",
+      { timedOut: true, outputLimited: false },
+      "claude_native_timeout",
+    ],
+    [
+      "output limit",
+      { timedOut: false, outputLimited: true },
+      "claude_native_output_limit",
+    ],
+  ])(
+    "keeps the %s when a truncated 429 carries no Retry-After or windows",
+    async (_label, outcome, error) => {
+      const result = await fetchClaudeNativeQuota({
+        findClaude: async () => "/synthetic/claude",
+        now: () => NOW,
+        run: async () => ({
+          stdout: "",
+          stderr: `[log_fixture] response start {"status":429,"hea${SECRET}`,
+          exitCode: null,
+          signal: "SIGTERM" as const,
+          ...outcome,
+        }),
+      });
+
+      expect(result).toEqual({ kind: "failure", error, status: "unavailable" });
+      expect(JSON.stringify(result)).not.toContain(SECRET);
+    },
+  );
+
+  it("still reports a bare 429 as rate limited when no bound was hit", async () => {
     const result = await fetchClaudeNativeQuota({
       findClaude: async () => "/synthetic/claude",
       now: () => NOW,
       run: async () => ({
         stdout: "",
-        stderr: `[log_fixture] response start {"status":429,"hea${SECRET}`,
-        exitCode: null,
-        signal: "SIGTERM" as const,
-        timedOut: true,
+        stderr: responseLog(429),
+        exitCode: 1,
+        signal: null,
+        timedOut: false,
         outputLimited: false,
       }),
     });

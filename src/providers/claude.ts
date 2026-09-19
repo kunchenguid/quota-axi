@@ -813,6 +813,8 @@ function failureReport(
     }
   }
 
+  const observedWindows =
+    failure.windows && failure.windows.length > 0 ? failure.windows : undefined;
   const report = failedProvider({
     provider: "claude",
     label: "Claude",
@@ -821,11 +823,10 @@ function failureReport(
     retryAfter: failure.retryAfter,
     sourcesTried: sourceNames(attempts),
     attempts,
+    ...(observedWindows ? { source: "cli" } : {}),
   });
   if (failure.authUsable) report.state.authStatus = "usable";
-  if (failure.windows && failure.windows.length > 0) {
-    report.windows = failure.windows;
-  }
+  if (observedWindows) report.windows = observedWindows;
   return report;
 }
 

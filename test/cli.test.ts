@@ -634,6 +634,46 @@ describe("CLI quota rendering", () => {
     expect(output.help).toBeUndefined();
   });
 
+  it("renders a native 429's observed windows as quota and exhaustion rows beside the rate limit", async () => {
+    useTempCache();
+    PROVIDERS.claude = providerWithQuota(nativeRateLimitedClaudeQuota());
+
+    const toon = await capture(["--provider", "claude"]);
+    const quota = toonRows(toon, "quota");
+    expect(quota).toHaveLength(1);
+    expect(quota[0]?.slice(0, 3)).toEqual(["claude", "all_models", "0"]);
+    expect(toonRows(toon, "exhaustion").map((row) => row.slice(0, 2))).toEqual([
+      ["claude", "all_models"],
+    ]);
+    expect(toonRows(toon, "attention")).toContainEqual([
+      "claude",
+      "all",
+      "rate_limited",
+      "claude_native_rate_limited retry after 2026-09-19T06:01:00.000Z",
+      "none",
+    ]);
+
+    const json = JSON.parse(
+      await capture(["--provider", "claude", "--json", "--full"]),
+    ) as QuotaAxiResponse;
+    const claude = json.providers[0];
+    expect(claude?.source).toBe("cli");
+    expect(claude?.state).toMatchObject({
+      status: "rate_limited",
+      stale: false,
+      authStatus: "usable",
+      retryAfter: "2026-09-19T06:01:00.000Z",
+    });
+    expect(claude?.windows.map((window) => window.percentUsed)).toEqual([100]);
+    expect(
+      claude?.quotaSemantics?.effectiveAvailability[0]
+        ?.effectivePercentRemaining,
+    ).toBe(0);
+    expect(existsSync(join(process.env.XDG_CACHE_HOME!, "quota-axi"))).toBe(
+      false,
+    );
+  });
+
   it("renders the inference opt-in remedy on the TOON attention row", async () => {
     useTempCache();
     PROVIDERS.claude = providerWithQuota(envScopeDeniedClaudeQuota());
@@ -1837,6 +1877,47 @@ function envScopeDeniedClaudeQuota(): ProviderQuota {
         source: "env",
         status: "failed",
         error: "claude_env_usage_scope_unavailable",
+        degraded: false,
+      },
+    ],
+  };
+}
+
+function nativeRateLimitedClaudeQuota(): ProviderQuota {
+  return {
+    provider: "claude",
+    label: "Claude",
+    source: "cli",
+    windows: [
+      {
+        id: "five_hour",
+        label: "session",
+        kind: "session",
+        percentUsed: 100,
+        percentRemaining: 0,
+        resetsAt: "2099-01-01T05:00:00.000Z",
+        windowSeconds: 18_000,
+      },
+    ],
+    state: {
+      status: "rate_limited",
+      stale: false,
+      authStatus: "usable",
+      error: "claude_native_rate_limited",
+      retryAfter: "2026-09-19T06:01:00.000Z",
+      sourcesTried: ["env", "claude-native-inference"],
+    },
+    attempts: [
+      {
+        source: "env",
+        status: "failed",
+        error: "claude_env_usage_scope_unavailable",
+        degraded: false,
+      },
+      {
+        source: "claude-native-inference",
+        status: "failed",
+        error: "claude_native_rate_limited",
         degraded: false,
       },
     ],

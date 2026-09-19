@@ -114,12 +114,11 @@ export async function fetchClaudeNativeQuota(
     }
 
     const parsed = parseClaudeNativeDebug(result.stderr, dependencies.now?.());
-    if (parsed.kind === "failure" && parsed.status === "rate_limited") {
-      return parsed;
-    }
+    if (isCompleteRateLimitObservation(parsed)) return parsed;
     if (result.timedOut) return failure("claude_native_timeout");
     if (result.outputLimited) return failure("claude_native_output_limit");
     if (parsed.kind === "failure") {
+      if (parsed.status === "rate_limited") return parsed;
       if (result.exitCode !== 0 || result.signal !== null) {
         return failure("claude_native_process_failed");
       }
@@ -134,6 +133,21 @@ export async function fetchClaudeNativeQuota(
       rmSync(scratch, { recursive: true, force: true });
     }
   }
+}
+
+/**
+ * A 429 outranks a later execution or output bound only when the observation
+ * is complete: bare status digits from a truncated block prove nothing about
+ * the limit, so they must not replace an honest timeout verdict.
+ */
+function isCompleteRateLimitObservation(
+  parsed: ClaudeNativeQuotaResult,
+): boolean {
+  return (
+    parsed.kind === "failure" &&
+    parsed.status === "rate_limited" &&
+    (parsed.retryAfter !== undefined || parsed.windows !== undefined)
+  );
 }
 
 function makeScratchDirectory(): string {

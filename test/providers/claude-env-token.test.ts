@@ -399,7 +399,7 @@ describe("Claude CLAUDE_CODE_OAUTH_TOKEN credential source", () => {
     });
 
     expect(report).toMatchObject({
-      source: "unavailable",
+      source: "cli",
       windows: [exhausted],
       state: {
         status: "rate_limited",
