@@ -691,6 +691,7 @@ describe("quota semantics", () => {
       label: "code month",
       kind: "monthly",
       percentUsed: 25,
+      shareOf: "month_total",
     };
     const result = withQuotaSemantics(
       provider("kimi", [
@@ -710,6 +711,32 @@ describe("quota semantics", () => {
         effectivePercentRemaining: 50,
         boundedBy: ["five_hour", "month_total"],
         limitingWindowIds: ["five_hour"],
+      }),
+    ]);
+  });
+
+  it("recognizes any Kimi window marked as a used-share without bounding by it", () => {
+    const result = withQuotaSemantics(
+      provider("kimi", [
+        window("weekly", "weekly", 59),
+        {
+          id: "future_share",
+          label: "future share",
+          kind: "monthly",
+          percentUsed: 10,
+          shareOf: "weekly",
+        },
+      ]),
+      GENERATED_AT,
+    );
+
+    expect(result.quotaSemantics?.status).toBe("known");
+    expect(result.quotaSemantics?.unresolvedWindowIds).toBeUndefined();
+    expect(result.quotaSemantics?.effectiveAvailability).toEqual([
+      expect.objectContaining({
+        scope: "all_models",
+        boundedBy: ["weekly"],
+        effectivePercentRemaining: 59,
       }),
     ]);
   });

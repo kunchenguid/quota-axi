@@ -359,9 +359,7 @@ function missingRequiredContext(provider: ProviderId): boolean {
   // when the current reading has no published context identity.
   if (provider === "codex") return false;
   const scope = CONTEXT_SCOPED_PROVIDERS[provider];
-  return (
-    scope !== undefined && !scope({ provider } as ProviderQuota)
-  );
+  return scope !== undefined && !scope({ provider } as ProviderQuota);
 }
 
 function serializeCachedProvider(
@@ -588,6 +586,7 @@ function normalizeCachedWindow(raw: unknown): QuotaWindow | undefined {
   const result: QuotaWindow = { id, label, kind };
   assignNumber(result, "percentUsed", data.percentUsed);
   assignNumber(result, "percentRemaining", data.percentRemaining);
+  assignString(result, "shareOf", data.shareOf);
   assignString(result, "startsAt", data.startsAt);
   assignString(result, "resetsAt", data.resetsAt);
   assignString(result, "resetText", data.resetText);

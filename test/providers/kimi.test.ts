@@ -660,6 +660,43 @@ describe("Kimi request transport", () => {
     ).toBe(60);
   });
 
+  it("names the monthly code share in default TOON without inventing remaining or a code scope", async () => {
+    const report = await testAdapter({
+      fetch: vi.fn(async () => jsonResponse(CURRENT_USAGES_PAYLOAD)),
+    }).fetchQuota(OPTIONS);
+
+    const generatedAt = new Date(NOW).toISOString();
+    const response = {
+      generatedAt,
+      schemaVersion: 5 as const,
+      providers: [withQuotaSemantics(report, generatedAt)],
+    };
+    const toon = renderQuotaToon(response, "quota-axi", false);
+    expect(toon).toContain(
+      "kimi,all,share,month_code of month_total · 25,none",
+    );
+    expect(toon).toContain("kimi,all_models,60,");
+    expect(toon).not.toMatch(/kimi,code[_,]/);
+
+    const lean = quotaJsonReport(response, false);
+    const leanShare = lean.providers[0]?.windows.find(
+      (window) => window.id === "month_code",
+    );
+    expect(leanShare?.shareOf).toBe("month_total");
+    expect(leanShare?.percentRemaining).toBeUndefined();
+    expect(leanShare?.percentUsed).toBeUndefined();
+
+    const full = quotaJsonReport(response, true);
+    const fullShare = full.providers[0]?.windows.find(
+      (window) => window.id === "month_code",
+    );
+    expect(fullShare).toMatchObject({
+      percentUsed: 25,
+      shareOf: "month_total",
+    });
+    expect(fullShare?.percentRemaining).toBeUndefined();
+  });
+
   it("leaves the account bound unresolved when a declared usages limit is unparsed", async () => {
     const report = await testAdapter({
       fetch: vi.fn(async () =>
@@ -843,6 +880,7 @@ describe("Kimi payload normalization", () => {
           label: "code month",
           kind: "monthly",
           percentUsed: 25,
+          shareOf: "month_total",
           resetsAt: "2026-10-01T00:00:00.000Z",
         },
       ],
@@ -940,6 +978,7 @@ describe("Kimi payload normalization", () => {
         label: "code month",
         kind: "monthly",
         percentUsed: 25,
+        shareOf: "month_total",
         resetsAt: "2026-10-01T00:00:00.000Z",
       },
     ]);
@@ -969,6 +1008,7 @@ describe("Kimi payload normalization", () => {
     });
     expect(monthCode?.percentUsed).toBe(25);
     expect(monthCode?.percentRemaining).toBeUndefined();
+    expect(monthCode?.shareOf).toBe("month_total");
   });
 
   it("reads only the snake_case wire ratio", () => {

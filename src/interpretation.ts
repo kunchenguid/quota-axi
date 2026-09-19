@@ -451,8 +451,10 @@ function kimiSemantics(
 ): QuotaSemantics {
   const bounds = windows.filter(({ id }) => KIMI_ACCOUNT_WINDOW_IDS.has(id));
   const unresolved = windows.filter(
-    ({ id }) =>
-      !KIMI_ACCOUNT_WINDOW_IDS.has(id) && !KIMI_SHARE_WINDOW_IDS.has(id),
+    ({ id, shareOf }) =>
+      !KIMI_ACCOUNT_WINDOW_IDS.has(id) &&
+      !KIMI_SHARE_WINDOW_IDS.has(id) &&
+      shareOf === undefined,
   );
   const unresolvedWindowIds = [
     ...new Set([...unresolved.map(({ id }) => id), ...untrustedWindowIds]),
