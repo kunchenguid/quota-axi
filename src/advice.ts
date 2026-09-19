@@ -14,7 +14,6 @@ export const INFERENCE_OPT_IN_REASON = "inference_opt_in_required";
 export const CLAUDE_INFERENCE_REMEDY_COMMAND =
   "quota-axi --provider claude --allow-claude-inference";
 const CLAUDE_ENV_SCOPE_DENIAL_ERROR = "claude_env_usage_scope_unavailable";
-const CLAUDE_NATIVE_INFERENCE_SOURCE = "claude-native-inference";
 
 export function annotateQuotaAdvice(
   response: Omit<QuotaAxiResponse, "schemaVersion">,
@@ -48,6 +47,16 @@ export function quotaHelpLines(response: QuotaAxiResponse): string[] {
 }
 
 function annotateProviderAdvice(provider: ProviderQuota): ProviderQuota {
+  if (needsClaudeInferenceAdvice(provider)) {
+    return {
+      ...provider,
+      state: {
+        ...provider.state,
+        reason: INFERENCE_OPT_IN_REASON,
+        remedyCommand: CLAUDE_INFERENCE_REMEDY_COMMAND,
+      },
+    };
+  }
   if (needsKeychainAccessAdvice(provider)) {
     return {
       ...provider,
@@ -68,38 +77,27 @@ function annotateProviderAdvice(provider: ProviderQuota): ProviderQuota {
       },
     };
   }
-  if (needsClaudeInferenceAdvice(provider)) {
-    return {
-      ...provider,
-      state: {
-        ...provider.state,
-        reason: INFERENCE_OPT_IN_REASON,
-        remedyCommand: CLAUDE_INFERENCE_REMEDY_COMMAND,
-      },
-    };
-  }
   return provider;
 }
 
 /**
  * The env token's exact `user:profile` scope denial leaves a usable session
- * with no numeric quota. The paid native fallback is advertised only while it
- * has not already been attempted, so an enabled run never re-advertises it.
+ * with no numeric quota. It is checked ahead of Keychain advice because the
+ * env token is consulted first and that denial ends discovery, so a stored
+ * Keychain grant could never have helped this reading. A run that already
+ * attempted the native fallback reports that fallback's own error instead, so
+ * the exact error equality alone keeps an enabled run from re-advertising it.
  */
 function needsClaudeInferenceAdvice(provider: ProviderQuota): boolean {
-  const attempts = provider.attempts ?? [];
   return (
     provider.provider === "claude" &&
     provider.state.status !== "fresh" &&
     provider.state.error === CLAUDE_ENV_SCOPE_DENIAL_ERROR &&
-    attempts.some(
+    (provider.attempts ?? []).some(
       (attempt) =>
         attempt.source === "env" &&
         attempt.status === "failed" &&
         attempt.error === CLAUDE_ENV_SCOPE_DENIAL_ERROR,
-    ) &&
-    !attempts.some(
-      (attempt) => attempt.source === CLAUDE_NATIVE_INFERENCE_SOURCE,
     )
   );
 }

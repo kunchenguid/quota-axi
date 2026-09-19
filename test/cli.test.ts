@@ -536,6 +536,50 @@ describe("CLI quota rendering", () => {
     expect(output.help?.[0]).toMatch(/never does this by default/);
   });
 
+  it("prefers the inference opt-in over Keychain advice when the env scope denial ended discovery", async () => {
+    useTempCache();
+    const macos = envScopeDeniedClaudeQuota();
+    macos.state.sourcesTried = ["oauth-file", "keychain", "env"];
+    macos.attempts = [
+      {
+        source: "oauth-file",
+        status: "skipped",
+        error: "credentials_missing",
+      },
+      {
+        source: "keychain",
+        status: "skipped",
+        error: "keychain_prompt_required",
+        credentialPresent: true,
+      },
+      ...(macos.attempts ?? []),
+    ];
+    PROVIDERS.claude = providerWithQuota(macos);
+    const chunks: string[] = [];
+
+    await main({
+      argv: ["--provider", "claude", "--json"],
+      binPath: "quota-axi",
+      stdout: {
+        write(chunk) {
+          chunks.push(String(chunk));
+          return true;
+        },
+      },
+    });
+
+    const output = JSON.parse(chunks.join("")) as QuotaAxiResponse;
+    const claude = output.providers.find(
+      (provider) => provider.provider === "claude",
+    );
+    expect(claude?.state).toMatchObject({
+      reason: "inference_opt_in_required",
+      remedyCommand: "quota-axi --provider claude --allow-claude-inference",
+    });
+    expect(output.help).toHaveLength(1);
+    expect(output.help?.[0]).not.toContain("--allow-keychain-prompt");
+  });
+
   it("renders the inference opt-in remedy on the TOON attention row", async () => {
     useTempCache();
     PROVIDERS.claude = providerWithQuota(envScopeDeniedClaudeQuota());
