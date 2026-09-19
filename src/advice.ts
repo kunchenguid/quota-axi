@@ -10,6 +10,11 @@ export const KEYCHAIN_ACCESS_REMEDY_COMMAND =
   "quota-axi --allow-keychain-prompt";
 export const CREDENTIALS_EXPIRED_REASON = "credentials_expired";
 export const GROK_TOKEN_REFRESH_REMEDY_COMMAND = "grok";
+export const INFERENCE_OPT_IN_REASON = "inference_opt_in_required";
+export const CLAUDE_INFERENCE_REMEDY_COMMAND =
+  "quota-axi --provider claude --allow-claude-inference";
+const CLAUDE_ENV_SCOPE_DENIAL_ERROR = "claude_env_usage_scope_unavailable";
+const CLAUDE_NATIVE_INFERENCE_SOURCE = "claude-native-inference";
 
 export function annotateQuotaAdvice(
   response: Omit<QuotaAxiResponse, "schemaVersion">,
@@ -63,7 +68,40 @@ function annotateProviderAdvice(provider: ProviderQuota): ProviderQuota {
       },
     };
   }
+  if (needsClaudeInferenceAdvice(provider)) {
+    return {
+      ...provider,
+      state: {
+        ...provider.state,
+        reason: INFERENCE_OPT_IN_REASON,
+        remedyCommand: CLAUDE_INFERENCE_REMEDY_COMMAND,
+      },
+    };
+  }
   return provider;
+}
+
+/**
+ * The env token's exact `user:profile` scope denial leaves a usable session
+ * with no numeric quota. The paid native fallback is advertised only while it
+ * has not already been attempted, so an enabled run never re-advertises it.
+ */
+function needsClaudeInferenceAdvice(provider: ProviderQuota): boolean {
+  const attempts = provider.attempts ?? [];
+  return (
+    provider.provider === "claude" &&
+    provider.state.status !== "fresh" &&
+    provider.state.error === CLAUDE_ENV_SCOPE_DENIAL_ERROR &&
+    attempts.some(
+      (attempt) =>
+        attempt.source === "env" &&
+        attempt.status === "failed" &&
+        attempt.error === CLAUDE_ENV_SCOPE_DENIAL_ERROR,
+    ) &&
+    !attempts.some(
+      (attempt) => attempt.source === CLAUDE_NATIVE_INFERENCE_SOURCE,
+    )
+  );
 }
 
 function needsKeychainAccessAdvice(provider: ProviderQuota): boolean {
@@ -137,7 +175,15 @@ function providerHelpLines(provider: ProviderQuota): string[] {
   if (hasKeychainAccessAdvice(provider))
     return [keychainAccessHelpLine(provider)];
   if (hasGrokTokenRefreshAdvice(provider)) return [grokTokenRefreshHelpLine()];
+  if (hasClaudeInferenceAdvice(provider)) return [claudeInferenceHelpLine()];
   return [];
+}
+
+function hasClaudeInferenceAdvice(provider: ProviderQuota): boolean {
+  return (
+    provider.state.reason === INFERENCE_OPT_IN_REASON &&
+    provider.state.remedyCommand === CLAUDE_INFERENCE_REMEDY_COMMAND
+  );
 }
 
 function hasKeychainAccessAdvice(provider: ProviderQuota): boolean {
@@ -156,6 +202,10 @@ function hasGrokTokenRefreshAdvice(provider: ProviderQuota): boolean {
 
 function keychainAccessHelpLine(provider: ProviderQuota): string {
   return `Tell your user: run \`${KEYCHAIN_ACCESS_REMEDY_COMMAND}\` once and approve Keychain access ("Always Allow") so quota-axi can read ${provider.provider}'s live quota.`;
+}
+
+function claudeInferenceHelpLine(): string {
+  return `Tell your user: the CLAUDE_CODE_OAUTH_TOKEN session is usable but its token cannot read the quota endpoint. Running \`${CLAUDE_INFERENCE_REMEDY_COMMAND}\` once reads its five-hour and seven-day quota by spending one bounded native Claude Code startup plus a small inference request; quota-axi never does this by default.`;
 }
 
 function grokTokenRefreshHelpLine(): string {
