@@ -395,6 +395,7 @@ Email, token, credential path, profile label, and runner name do not establish e
 Missing or incomparable identity stays its own lane so the uncertainty stays visible: quota-axi does not guess a merge, and it does not invent extra capacity by summing those lanes.
 A successful response that supplies comparable identity missing from the local store is enough to coalesce the resulting cards.
 When two readings share an identity, the usable one is published (fresh over stale over a rejected source) and the other is not a second card.
+Between two stale readings, the one refreshed more recently is published.
 Windows are never summed, averaged, or concatenated across those readings.
 When the published reading is fresh, another lane's snapshot is removed if that lane also read fresh, so a later run in which every route fails cannot serve that subscription twice from cache.
 A lane that was already failing and served its own stale snapshot keeps it, so while that route keeps failing it still joins the fresh reading instead of reappearing as a separate unavailable report.

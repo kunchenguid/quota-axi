@@ -266,13 +266,16 @@ describe("verified subscription coalescing", () => {
 
     const coalesced = await fetchAccountQuotas(
       laneAdapter(keys, (key) =>
-        live(
-          accountFor(key),
-          key === "openai-codex-other" ? 80 : 25,
-          "oauth",
-          undefined,
-          undefined,
-          "codex",
+        refreshedAt(
+          live(
+            accountFor(key),
+            key === "openai-codex-other" ? 80 : 25,
+            "oauth",
+            undefined,
+            undefined,
+            "codex",
+          ),
+          "2026-07-15T09:00:00.000Z",
         ),
       ),
       OPTIONS,
@@ -292,7 +295,10 @@ describe("verified subscription coalescing", () => {
     const partialOutage = await fetchAccountQuotas(
       laneAdapter(keys, (key) => {
         if (key === "openai-codex-2")
-          return live("acct-a", 30, "oauth", undefined, undefined, "codex");
+          return refreshedAt(
+            live("acct-a", 30, "oauth", undefined, undefined, "codex"),
+            "2026-07-15T10:00:00.000Z",
+          );
         const cached = readCachedProvider("codex", key);
         return cached
           ? staleFromCache(cached, "fetch failed", ["oauth", "cache"], [])
@@ -317,7 +323,10 @@ describe("verified subscription coalescing", () => {
     const continuedOutage = await fetchAccountQuotas(
       laneAdapter(keys, (key) => {
         if (key === "openai-codex-2")
-          return live("acct-a", 35, "oauth", undefined, undefined, "codex");
+          return refreshedAt(
+            live("acct-a", 35, "oauth", undefined, undefined, "codex"),
+            "2026-07-15T11:00:00.000Z",
+          );
         const cached = readCachedProvider("codex", key);
         return cached
           ? staleFromCache(cached, "fetch failed", ["oauth", "cache"], [])
@@ -335,6 +344,29 @@ describe("verified subscription coalescing", () => {
     ).toEqual([
       ["openai-codex-2", "fresh", 35],
       ["openai-codex-other", "stale", 80],
+    ]);
+    writeCachedProviders(continuedOutage);
+
+    const fullOutage = await fetchAccountQuotas(
+      laneAdapter(keys, (key) => {
+        const cached = readCachedProvider("codex", key);
+        return cached
+          ? staleFromCache(cached, "fetch failed", ["oauth", "cache"], [])
+          : failed(key);
+      }),
+      OPTIONS,
+    );
+
+    expect(
+      fullOutage.map((report) => [
+        report.accountKey,
+        report.state.status,
+        report.windows[0]?.percentUsed,
+        report.state.refreshedAt,
+      ]),
+    ).toEqual([
+      ["openai-codex-2", "stale", 35, "2026-07-15T11:00:00.000Z"],
+      ["openai-codex-other", "stale", 80, "2026-07-15T09:00:00.000Z"],
     ]);
   });
 
@@ -510,6 +542,10 @@ function live(
     },
     attempts: [{ source, status: "success" }],
   };
+}
+
+function refreshedAt(report: ProviderQuota, at: string): ProviderQuota {
+  return { ...report, state: { ...report.state, refreshedAt: at } };
 }
 
 function stale(
