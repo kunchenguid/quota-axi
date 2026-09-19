@@ -6,7 +6,7 @@ import type {
   ProviderQuota,
   SourceAttempt,
 } from "../types.js";
-import { deleteCachedProvider } from "../cache.js";
+import { deleteCachedProvider, subscriptionIdentity } from "../cache.js";
 import { sourceNames } from "./common.js";
 
 /**
@@ -133,27 +133,27 @@ export function accountColumns(report: {
  * One published reading per verified subscription, in first-seen order.
  *
  * Identity is `account.accountId` when it is present and not marked
- * unverified. Email, path, profile label, and runner name never participate.
- * Missing or incomparable identity stays its own lane: two unknowns are not
- * equal, and a known id is not guessed onto a reading that lacks one.
+ * unverified, or the stamp a cached snapshot recorded from such a reading.
+ * Email, path, profile label, and runner name never participate. Missing or
+ * incomparable identity stays its own lane: two unknowns are not equal, and a
+ * known id is not guessed onto a reading that lacks one.
  *
  * A fresh winner retires the superseded lane's cache slot, so a later run in
- * which both routes fail cannot serve the same subscription twice from cache,
- * where stale readings no longer carry the identity that coalesced them.
+ * which both routes fail cannot serve the same subscription twice from cache.
  */
 function coalesceVerifiedSubscriptions(
   reports: ProviderQuota[],
 ): ProviderQuota[] {
   const result: ProviderQuota[] = [];
   for (const report of reports) {
-    const identity = verifiedSubscriptionIdentity(report);
+    const identity = subscriptionIdentity(report);
     const existingIndex =
       identity === undefined
         ? -1
         : result.findIndex(
             (candidate) =>
               candidate.provider === report.provider &&
-              verifiedSubscriptionIdentity(candidate) === identity,
+              subscriptionIdentity(candidate) === identity,
           );
     if (existingIndex < 0) {
       result.push(report);
@@ -180,16 +180,6 @@ function retireSupersededSnapshot(
   } catch {
     return;
   }
-}
-
-function verifiedSubscriptionIdentity(
-  report: ProviderQuota,
-): string | undefined {
-  if (report.account?.identityStatus === "unverified") return undefined;
-  const accountId = report.account?.accountId;
-  if (typeof accountId !== "string") return undefined;
-  const identity = accountId.trim();
-  return identity.length > 0 ? identity : undefined;
 }
 
 function mergeSubscriptionReadings(

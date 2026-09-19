@@ -397,6 +397,7 @@ A successful response that supplies comparable identity missing from the local s
 When two readings share an identity, the usable one is published (fresh over stale over a rejected source) and the other is not a second card.
 Windows are never summed, averaged, or concatenated across those readings.
 When the published reading is fresh, the other lane's cached snapshot is removed, so a later run in which every route fails cannot serve that subscription twice from cache.
+A cached snapshot also records a SHA-256 hash of the verified subscription identity it was read from (never the id itself), so a stale reading served from one lane still coalesces with a fresh reading of the same subscription from another.
 Machine-readable output and the TUI share the same coalesced provider list.
 Codex still discovers and folds its own native and Pi lanes as described above; this collection step is the shared contract any multi-account provider goes through.
 

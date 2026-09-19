@@ -122,6 +122,38 @@ function codexAccountContextId(accountId?: string): string | undefined {
     : undefined;
 }
 
+/**
+ * The verified subscription a snapshot was read from, hashed because the cache
+ * holds no account identity in the clear. A symbol key carries it onto the
+ * snapshot, and from there through `staleFromCache`, while keeping it off every
+ * serialized surface, so a stale reading can still be recognised as the same
+ * subscription as a fresh sibling route.
+ */
+const SUBSCRIPTION_IDENTITY = Symbol("subscriptionIdentity");
+
+type SubscriptionStampedQuota = ProviderQuota & {
+  [SUBSCRIPTION_IDENTITY]?: string;
+};
+
+/**
+ * One comparable subscription identity per reading: the verified
+ * `account.accountId` a live reading reports, else the stamp a cached snapshot
+ * carried. Missing or unverified identity yields nothing, never a guess.
+ */
+export function subscriptionIdentity(
+  report: ProviderQuota,
+): string | undefined {
+  const accountId =
+    report.account?.identityStatus === "unverified"
+      ? undefined
+      : report.account?.accountId?.trim();
+  if (accountId)
+    return createHash("sha256")
+      .update(JSON.stringify(["subscription-v1", report.provider, accountId]))
+      .digest("hex");
+  return (report as SubscriptionStampedQuota)[SUBSCRIPTION_IDENTITY];
+}
+
 type CachedProvider = {
   snapshot: ProviderQuota;
   credentialContextId?: string;
@@ -343,6 +375,10 @@ function toCacheProvider(provider: ProviderQuota): CachedProvider | undefined {
     CACHE_SCHEMA_VERSION,
   )?.snapshot;
   if (!snapshot) return undefined;
+  const subscription = subscriptionIdentity(provider);
+  if (subscription)
+    (snapshot as SubscriptionStampedQuota)[SUBSCRIPTION_IDENTITY] =
+      subscription;
   const contextId = CONTEXT_SCOPED_PROVIDERS[provider.provider]?.(provider);
   // Claude, Kimi, and Command Code require a published identity; Codex stamps
   // are optional and withheld only on proven mismatch at read time.
@@ -369,8 +405,12 @@ function missingRequiredContext(provider: ProviderId): boolean {
 function serializeCachedProvider(
   provider: CachedProvider,
 ): Record<string, unknown> {
+  const subscription = (provider.snapshot as SubscriptionStampedQuota)[
+    SUBSCRIPTION_IDENTITY
+  ];
   return {
     ...provider.snapshot,
+    ...(subscription ? { subscription } : {}),
     ...(provider.credentialContextId
       ? { credentialContext: provider.credentialContextId }
       : {}),
@@ -435,6 +475,10 @@ function normalizeCachedProvider(
   if (untrustedWindowIds)
     snapshot.state.untrustedWindowIds = untrustedWindowIds;
   if (credits) snapshot.credits = credits;
+  const subscription = stringValue(data.subscription);
+  if (subscription && CREDENTIAL_CONTEXT_ID.test(subscription))
+    (snapshot as SubscriptionStampedQuota)[SUBSCRIPTION_IDENTITY] =
+      subscription;
   const credentialContext = stringValue(data.credentialContext);
   return {
     snapshot,
