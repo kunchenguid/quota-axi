@@ -367,14 +367,13 @@ function selectionFailureFor(
         ({ name }) => name === OPENCODE_GO_CREDENTIAL_SOURCE,
       );
       if (opencode && opencode.resolution.status !== "missing") {
-        return opencodeLocalFailure(opencode.resolution);
+        return localCredentialFailure(opencode.resolution);
       }
       const pi = resolved.find(({ name }) => name === PI_OPENCODE_GO_SOURCE);
-      return pi
-        ? piLocalFailure(pi.resolution)
-        : opencodeLocalFailure(
-            opencode?.resolution ?? { status: "missing", path: "" },
-          );
+      return localCredentialFailure(
+        pi?.resolution ??
+          opencode?.resolution ?? { status: "missing", path: "" },
+      );
     }
   }
 }
@@ -386,20 +385,9 @@ function transientFailure(code: string): LocalFailure {
   };
 }
 
-function piLocalFailure(resolution: CredentialResolution): LocalFailure {
-  if (resolution.status === "missing") {
-    return {
-      status: "auth_required",
-      code: "opencode_go_credential_unavailable",
-    };
-  }
-  if (resolution.status === "error") {
-    return { status: "error", code: "credential_resolution_failed" };
-  }
-  return { status: "auth_required", code: "opencode_go_credential_invalid" };
-}
-
-function opencodeLocalFailure(resolution: CredentialResolution): LocalFailure {
+function localCredentialFailure(
+  resolution: CredentialResolution,
+): LocalFailure {
   if (resolution.status === "missing") {
     return {
       status: "auth_required",
