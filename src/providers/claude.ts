@@ -148,7 +148,6 @@ type ClaudeFailureOptions = {
 
 export type ClaudeUsage403Classification =
   | "scope_requirement_user_profile"
-  | "oauth_scope_insufficient"
   | "other_structured_403"
   | "non_json_403"
   | "oversized_403"
@@ -1623,10 +1622,7 @@ async function rejectUnusableUsageResponse(
   }
   if (response.status === 403 && envSelected) {
     const classification = await classifyClaudeUsage403Response(response);
-    if (
-      classification === "scope_requirement_user_profile" ||
-      classification === "oauth_scope_insufficient"
-    ) {
+    if (classification === "scope_requirement_user_profile") {
       throw new ClaudeFailure("claude_env_usage_scope_unavailable", {
         status: "unavailable",
         authUsable: true,
@@ -1642,7 +1638,7 @@ async function rejectUnusableUsageResponse(
 }
 
 /**
- * Read a bounded 403 envelope and recognize only the two scope-denial shapes
+ * Read a bounded 403 envelope and recognize only the scope-denial shape
  * established by the vendor response. The body never leaves this function.
  */
 export async function classifyClaudeUsage403Response(
@@ -1668,9 +1664,7 @@ export async function classifyClaudeUsage403Response(
   const envelope = objectValue(parsed);
   const error = objectValue(envelope?.error);
   const type = stringValue(error?.type);
-  const code = stringValue(error?.code);
   const message = stringValue(error?.message);
-  if (code === "oauth_scope_insufficient") return "oauth_scope_insufficient";
   if (
     type === "permission_error" &&
     message !== undefined &&

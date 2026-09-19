@@ -150,11 +150,20 @@ describe("Claude usage 403 classification", () => {
       },
     ],
     [
-      "oauth_scope_insufficient",
+      "other_structured_403",
       {
         error: {
           code: "oauth_scope_insufficient",
           message: "SYNTHETIC_SECRET_MUST_NOT_ESCAPE",
+        },
+      },
+    ],
+    [
+      "other_structured_403",
+      {
+        error: {
+          type: "permission_error",
+          message: "OAuth token does not meet scope requirement user:inference",
         },
       },
     ],

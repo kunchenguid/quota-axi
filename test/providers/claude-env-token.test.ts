@@ -275,8 +275,8 @@ describe("Claude CLAUDE_CODE_OAUTH_TOKEN credential source", () => {
       Response.json(
         {
           error: {
-            code: "oauth_scope_insufficient",
-            message: "private synthetic detail",
+            type: "permission_error",
+            message: "OAuth token does not meet scope requirement user:profile",
           },
         },
         { status: 403 },

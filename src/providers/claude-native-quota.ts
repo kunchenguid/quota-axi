@@ -119,9 +119,6 @@ export async function fetchClaudeNativeQuota(
     if (result.exitCode !== 0 || result.signal !== null) {
       return failure("claude_native_process_failed");
     }
-    if (result.stdout.trim() !== "OK") {
-      return failure("claude_native_unexpected_reply");
-    }
     return parsed;
   } finally {
     rmSync(scratch, { recursive: true, force: true });
@@ -243,9 +240,13 @@ function numericHeader(block: string, name: string): number | undefined {
 function stringHeader(block: string, name: string): string | undefined {
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const match = block.match(
-    new RegExp(`${escaped}["']?\\s*[:=]\\s*["']?([^"',}\\s]+)`, "i"),
+    new RegExp(
+      `${escaped}["']?\\s*[:=]\\s*(?:"([^"]*)"|'([^']*)'|([^"',}\\s]+))`,
+      "i",
+    ),
   );
-  return match?.[1];
+  if (!match) return undefined;
+  return match[1] ?? match[2] ?? match[3];
 }
 
 function boundedRetryAfter(

@@ -84,17 +84,36 @@ describe("Claude native quota debug parsing", () => {
     expect(JSON.stringify(result)).not.toContain(SECRET);
   });
 
-  it("preserves a bounded Retry-After from a native 429", () => {
-    const result = parseClaudeNativeDebug(
-      responseLog(429, { "retry-after": "60" }),
-      NOW,
-    );
+  it.each([
+    ["numeric seconds", "60", "2026-09-19T06:01:00.000Z"],
+    ["HTTP-date", "Sat, 19 Sep 2026 06:05:00 GMT", "2026-09-19T06:05:00.000Z"],
+  ])(
+    "preserves a bounded %s Retry-After from a native 429",
+    (_label, retryAfterHeader, retryAfter) => {
+      const result = parseClaudeNativeDebug(
+        responseLog(429, { "retry-after": retryAfterHeader }),
+        NOW,
+      );
 
-    expect(result).toEqual({
+      expect(result).toEqual({
+        kind: "failure",
+        error: "claude_native_rate_limited",
+        status: "rate_limited",
+        retryAfter,
+      });
+    },
+  );
+
+  it.each([
+    ["out-of-bound seconds", "604801"],
+    ["past HTTP-date", "Fri, 18 Sep 2026 06:00:00 GMT"],
+  ])("drops an %s Retry-After but keeps the rate limit", (_label, header) => {
+    expect(
+      parseClaudeNativeDebug(responseLog(429, { "retry-after": header }), NOW),
+    ).toEqual({
       kind: "failure",
       error: "claude_native_rate_limited",
       status: "rate_limited",
-      retryAfter: "2026-09-19T06:01:00.000Z",
     });
   });
 });
@@ -144,6 +163,27 @@ describe("Claude native quota process contract", () => {
       DISABLE_AUTOUPDATER: "1",
     });
   });
+
+  it.each(["OK.\n", "Ok\n", "", "Sure, OK!\n"])(
+    "keeps a validated reading regardless of the model reply %j",
+    async (stdout) => {
+      const result = await fetchClaudeNativeQuota({
+        findClaude: async () => "/synthetic/claude",
+        now: () => NOW,
+        run: async () => ({
+          stdout,
+          stderr: responseLog(200, validHeaders()),
+          exitCode: 0,
+          signal: null,
+          timedOut: false,
+          outputLimited: false,
+        }),
+      });
+
+      expect(result.kind).toBe("success");
+      expect(JSON.stringify(result)).not.toContain(SECRET);
+    },
+  );
 
   it.each([
     [
