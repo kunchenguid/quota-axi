@@ -389,6 +389,9 @@ function normalizeCachedProvider(
     ? data.windows
         .map(normalizeCachedWindow)
         .filter((window): window is QuotaWindow => Boolean(window))
+        .map((window) =>
+          provider === "kimi" ? upgradeLegacyKimiShareWindow(window) : window,
+        )
     : [];
   if (
     !provider ||
@@ -594,6 +597,14 @@ function normalizeCachedWindow(raw: unknown): QuotaWindow | undefined {
   assignNumber(result, "spentUsd", data.spentUsd);
   assignNumber(result, "limitUsd", data.limitUsd);
   return result;
+}
+
+function upgradeLegacyKimiShareWindow(window: QuotaWindow): QuotaWindow {
+  return window.id === "month_code" &&
+    window.shareOf === undefined &&
+    window.percentUsed !== undefined
+    ? { ...window, shareOf: "month_total" }
+    : window;
 }
 
 function normalizeCachedCredits(

@@ -25,6 +25,7 @@ import {
   publishCommandCodeReadingContextId,
 } from "../src/providers/commandcode-cache-context.js";
 import { staleFromCache } from "../src/providers/common.js";
+import { withQuotaSemantics } from "../src/interpretation.js";
 import { createKimiCodeCliCredentialSource } from "../src/providers/kimi-code-cli-credential.js";
 import type { ProviderId, ProviderQuota } from "../src/types.js";
 
@@ -456,6 +457,66 @@ oauth_host = "https://auth.kimi.ai"
       shareOf: "month_total",
     });
     expect(cached?.percentRemaining).toBeUndefined();
+  });
+
+  it("presents a 0.1.47 Kimi month_code snapshot as a share of month_total", () => {
+    useTempCache();
+    const file = cacheFilePath();
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(
+      file,
+      JSON.stringify({
+        generatedAt: "2026-07-06T18:10:00Z",
+        schemaVersion: 3,
+        providers: [
+          {
+            provider: "kimi",
+            label: "Kimi",
+            source: "api",
+            windows: [
+              {
+                id: "month_total",
+                label: "month",
+                kind: "monthly",
+                percentUsed: 40,
+                percentRemaining: 60,
+              },
+              {
+                id: "month_code",
+                label: "code month",
+                kind: "monthly",
+                percentUsed: 25,
+              },
+            ],
+            state: {
+              status: "fresh",
+              stale: false,
+              refreshedAt: "2026-07-06T18:10:00Z",
+              sourcesTried: ["kimi-code"],
+            },
+          },
+        ],
+      }),
+    );
+
+    const stale = staleFromCache(
+      readCachedProvider("kimi")!,
+      "fetch failed: synthetic outage",
+      ["kimi-code"],
+      [],
+    );
+    const monthCode = stale.windows.find(
+      (window) => window.id === "month_code",
+    );
+    expect(monthCode).toMatchObject({
+      percentUsed: 25,
+      shareOf: "month_total",
+    });
+    expect(monthCode?.percentRemaining).toBeUndefined();
+    expect(
+      withQuotaSemantics(stale, "2026-07-06T18:20:00Z").quotaSemantics
+        ?.unresolvedWindowIds,
+    ).toBeUndefined();
   });
 
   it("deletes a definitive-auth provider while retaining other snapshots", () => {
