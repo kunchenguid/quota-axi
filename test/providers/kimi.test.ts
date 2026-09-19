@@ -684,7 +684,7 @@ describe("Kimi request transport", () => {
     );
     expect(leanShare?.shareOf).toBe("month_total");
     expect(leanShare?.percentRemaining).toBeUndefined();
-    expect(leanShare?.percentUsed).toBeUndefined();
+    expect(leanShare?.percentUsed).toBe(25);
 
     const full = quotaJsonReport(response, true);
     const fullShare = full.providers[0]?.windows.find(

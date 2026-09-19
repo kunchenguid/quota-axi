@@ -464,17 +464,17 @@ An unknown or stale scope deliberately gets **no** `quota[]` row: the absence of
 
 `--full` adds; it never subtracts. Default TOON carries the three decision blocks; `--full` TOON adds the `providers[]`, `windows[]`, `scopeAudit[]`, `accounts[]`, and `attempts[]` audit blocks. Default `--json` carries the normalized model with derivation inputs demoted; `--full` restores them with **no renames and no re-nesting** - a demoted field is simply absent until `--full`, in the exact position and under the exact name it has there.
 
-| Demoted to `--full` in `--json`                                                                                                       |
-| ------------------------------------------------------------------------------------------------------------------------------------- |
-| `providers[].label`, `providers[].source`                                                                                             |
-| `state.refreshedAt`, `state.sourcesTried`                                                                                             |
-| `windows[].percentUsed`, `windows[].startsAt`, `windows[].windowSeconds`                                                              |
-| `windows[].pace.timeRemainingPercent`, `elapsedPercent`, `cycleBasis`, `cycleSeconds`, `projectedExhaustedAt`, `projectionConfidence` |
-| `quotaSemantics.description`                                                                                                          |
-| `effectiveAvailability[].pace.behindWindowIds`, `onPaceWindowIds`                                                                     |
-| Account identity (`account`) and per-source `attempts`                                                                                |
+| Demoted to `--full` in `--json`                                                                                                                |
+| ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `providers[].label`, `providers[].source`                                                                                                      |
+| `state.refreshedAt`, `state.sourcesTried`                                                                                                      |
+| `windows[].percentUsed` (kept when the window carries `shareOf`, where it is the only figure), `windows[].startsAt`, `windows[].windowSeconds` |
+| `windows[].pace.timeRemainingPercent`, `elapsedPercent`, `cycleBasis`, `cycleSeconds`, `projectedExhaustedAt`, `projectionConfidence`          |
+| `quotaSemantics.description`                                                                                                                   |
+| `effectiveAvailability[].pace.behindWindowIds`, `onPaceWindowIds`                                                                              |
+| Account identity (`account`) and per-source `attempts`                                                                                         |
 
-Everything a consumer branches on stays in the default tier: `state.status`, `stale`, `authStatus`, `error`, `reason`, `remedyCommand`, `retryAfter`, `untrustedWindowIds`, and `degradedSources`; window `pace.status`, `reason`, `reservePercentPoints`, `burnMultiple`, and `shareOf`; `quotaSemantics.status` and `unresolvedWindowIds`; and every scope's `effectivePercentRemaining`, `boundedBy`, `limitingWindowIds`, `boundConflict`, `runway`, `selection`, and pace `aheadWindowIds` / `unknownWindowIds` / `worstReservePercentPoints`. `credits` also stays, so a consumer can avoid misreading it as exhaustion.
+Everything a consumer branches on stays in the default tier: `state.status`, `stale`, `authStatus`, `error`, `reason`, `remedyCommand`, `retryAfter`, `untrustedWindowIds`, and `degradedSources`; window `pace.status`, `reason`, `reservePercentPoints`, `burnMultiple`, and `shareOf` together with that share window's `percentUsed`; `quotaSemantics.status` and `unresolvedWindowIds`; and every scope's `effectivePercentRemaining`, `boundedBy`, `limitingWindowIds`, `boundConflict`, `runway`, `selection`, and pace `aheadWindowIds` / `unknownWindowIds` / `worstReservePercentPoints`. `credits` also stays, so a consumer can avoid misreading it as exhaustion.
 
 `--tui` renders from the complete in-memory model, so demotion never changes what the human report draws.
 

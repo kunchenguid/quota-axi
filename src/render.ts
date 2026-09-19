@@ -622,7 +622,7 @@ export function quotaJsonReport(
 function demotedWindow(window: QuotaWindow): QuotaWindow {
   return {
     ...window,
-    percentUsed: undefined,
+    percentUsed: window.shareOf === undefined ? undefined : window.percentUsed,
     startsAt: undefined,
     windowSeconds: undefined,
     ...(window.pace

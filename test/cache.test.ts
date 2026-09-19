@@ -480,6 +480,7 @@ oauth_host = "https://auth.kimi.ai"
   it("presents a 0.1.47 Kimi month_code snapshot as a share of month_total", () => {
     useTempCache();
     const file = cacheFilePath();
+    const contextId = "b".repeat(64);
     mkdirSync(dirname(file), { recursive: true });
     writeFileSync(
       file,
@@ -489,6 +490,7 @@ oauth_host = "https://auth.kimi.ai"
         providers: [
           {
             provider: "kimi",
+            credentialContext: contextId,
             label: "Kimi",
             source: "api",
             windows: [
@@ -518,7 +520,7 @@ oauth_host = "https://auth.kimi.ai"
     );
 
     const stale = staleFromCache(
-      readCachedProvider("kimi")!,
+      readCachedKimiProvider(contextId)!,
       "fetch failed: synthetic outage",
       ["kimi-code"],
       [],
