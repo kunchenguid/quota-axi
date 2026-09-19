@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { findCommandPath } from "../lib/process.js";
 import type { ProviderStatus, QuotaWindow } from "../types.js";
 import { withRemaining } from "./common.js";
@@ -91,10 +91,14 @@ export async function fetchClaudeNativeQuota(
   if ((process.env.ANTHROPIC_AUTH_TOKEN ?? "").trim() !== "") {
     return failure("claude_native_auth_token_present");
   }
-  const command = await (
+  const callerCwd = process.cwd();
+  const discoveredCommand = await (
     dependencies.findClaude ?? (() => findCommandPath("claude"))
   )();
-  if (!command) return incompatible();
+  if (!discoveredCommand) return incompatible();
+  const command = isAbsolute(discoveredCommand)
+    ? discoveredCommand
+    : resolve(callerCwd, discoveredCommand);
 
   let scratch: string | undefined;
   try {
@@ -155,9 +159,16 @@ function selectNativeObservation(
   stderr: ClaudeNativeQuotaResult,
 ): ClaudeNativeQuotaResult {
   const observed = [stdout, stderr].filter(
-    (result) => result.kind === "success" || result.status === "rate_limited",
+    (result) =>
+      result.kind === "success" || isCompleteRateLimitObservation(result),
   );
-  if (observed.length === 0) return failure("claude_native_quota_unavailable");
+  if (observed.length === 0) {
+    return (
+      [stdout, stderr].find(
+        (result) => result.kind === "failure" && result.status === "rate_limited",
+      ) ?? failure("claude_native_quota_unavailable")
+    );
+  }
   if (observed.length === 1) return observed[0]!;
   return JSON.stringify(observed[0]) === JSON.stringify(observed[1])
     ? observed[0]!

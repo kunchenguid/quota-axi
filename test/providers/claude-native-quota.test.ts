@@ -9,7 +9,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join, relative } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   fetchClaudeNativeQuota,
@@ -263,49 +263,55 @@ describe("Claude native quota process contract", () => {
     },
   );
 
-  it("rejects conflicting complete observations across streams", async () => {
-    const result = await fetchClaudeNativeQuota({
-      findClaude: async () => "/synthetic/claude",
-      now: () => NOW,
-      run: async () => ({
-        stdout: responseLog(200, validHeaders()),
-        stderr: responseLog(200, {
-          ...validHeaders(),
-          "anthropic-ratelimit-unified-5h-utilization": "0.75",
+  it.each([200, 429])(
+    "rejects conflicting complete %s observations across streams",
+    async (status) => {
+      const result = await fetchClaudeNativeQuota({
+        findClaude: async () => "/synthetic/claude",
+        now: () => NOW,
+        run: async () => ({
+          stdout: responseLog(status, validHeaders()),
+          stderr: responseLog(status, {
+            ...validHeaders(),
+            "anthropic-ratelimit-unified-5h-utilization": "0.75",
+          }),
+          exitCode: 0,
+          signal: null,
+          timedOut: false,
+          outputLimited: false,
         }),
-        exitCode: 0,
-        signal: null,
-        timedOut: false,
-        outputLimited: false,
-      }),
-    });
+      });
 
-    expect(result).toEqual({
-      kind: "failure",
-      error: "claude_native_quota_unavailable",
-      status: "unavailable",
-    });
-    expect(JSON.stringify(result)).not.toContain(SECRET);
-  });
+      expect(result).toEqual({
+        kind: "failure",
+        error: "claude_native_quota_unavailable",
+        status: "unavailable",
+      });
+      expect(JSON.stringify(result)).not.toContain(SECRET);
+    },
+  );
 
-  it("accepts the same complete observation from both streams", async () => {
-    const raw = responseLog(200, validHeaders());
-    const result = await fetchClaudeNativeQuota({
-      findClaude: async () => "/synthetic/claude",
-      now: () => NOW,
-      run: async () => ({
-        stdout: raw,
-        stderr: raw,
-        exitCode: 0,
-        signal: null,
-        timedOut: false,
-        outputLimited: false,
-      }),
-    });
+  it.each([200, 429])(
+    "accepts the same complete %s observation from both streams",
+    async (status) => {
+      const raw = responseLog(status, validHeaders());
+      const result = await fetchClaudeNativeQuota({
+        findClaude: async () => "/synthetic/claude",
+        now: () => NOW,
+        run: async () => ({
+          stdout: raw,
+          stderr: raw,
+          exitCode: 0,
+          signal: null,
+          timedOut: false,
+          outputLimited: false,
+        }),
+      });
 
-    expect(result).toMatchObject({ kind: "success" });
-    expect(JSON.stringify(result)).not.toContain(SECRET);
-  });
+      expect(result).toEqual(parseClaudeNativeDebug(raw, NOW));
+      expect(JSON.stringify(result)).not.toContain(SECRET);
+    },
+  );
 
   it("ignores an incomplete sibling stream", async () => {
     const result = await fetchClaudeNativeQuota({
@@ -325,31 +331,45 @@ describe("Claude native quota process contract", () => {
     expect(JSON.stringify(result)).not.toContain(SECRET);
   });
 
-  it("keeps a complete stdout 429 when the child later times out", async () => {
-    const result = await fetchClaudeNativeQuota({
-      findClaude: async () => "/synthetic/claude",
-      now: () => NOW,
-      run: async () => ({
-        stdout: responseLog(429, {
-          ...validHeaders(),
-          "retry-after": "45",
+  it.each([
+    ["stdout", "timeout"],
+    ["stderr", "timeout"],
+    ["stdout", "output limit"],
+    ["stderr", "output limit"],
+  ])(
+    "keeps a complete %s 429 over a truncated sibling and %s",
+    async (stream, bound) => {
+      const complete = responseLog(429, {
+        ...validHeaders(),
+        "retry-after": "45",
+      });
+      const truncated = `[log_fixture] response start {"status":429,"hea${SECRET}`;
+      const result = await fetchClaudeNativeQuota({
+        findClaude: async () => "/synthetic/claude",
+        now: () => NOW,
+        run: async () => ({
+          stdout: stream === "stdout" ? complete : truncated,
+          stderr: stream === "stderr" ? complete : truncated,
+          exitCode: null,
+          signal: "SIGTERM",
+          timedOut: bound === "timeout",
+          outputLimited: bound === "output limit",
         }),
-        stderr: `application log ${SECRET}`,
-        exitCode: null,
-        signal: "SIGTERM",
-        timedOut: true,
-        outputLimited: false,
-      }),
-    });
+      });
 
-    expect(result).toMatchObject({
-      kind: "failure",
-      error: "claude_native_rate_limited",
-      status: "rate_limited",
-      retryAfter: "2026-09-19T06:00:45.000Z",
-    });
-    expect(JSON.stringify(result)).not.toContain(SECRET);
-  });
+      expect(result).toEqual({
+        kind: "failure",
+        error: "claude_native_rate_limited",
+        status: "rate_limited",
+        retryAfter: "2026-09-19T06:00:45.000Z",
+        windows: [
+          expect.objectContaining({ id: "five_hour", percentUsed: 25 }),
+          expect.objectContaining({ id: "seven_day", percentUsed: 50 }),
+        ],
+      });
+      expect(JSON.stringify(result)).not.toContain(SECRET);
+    },
+  );
 
   it.each([
     ["ANTHROPIC_API_KEY", "claude_native_api_key_present"],
@@ -552,6 +572,56 @@ describe("Claude native quota process contract", () => {
     });
   });
 
+  it.each(["relative", "absolute"])(
+    "launches the first Claude on a %s PATH from an empty scratch directory",
+    async (pathKind) => {
+      const directory = mkdtempSync(join(process.cwd(), ".native-path-"));
+      const fallback = mkdtempSync(join(directory, "fallback-"));
+      const scratch = mkdtempSync(join(directory, "scratch-"));
+      const raw = responseLog(200, validHeaders());
+      writeFileSync(
+        join(directory, "claude"),
+        `#!${process.execPath}
+import { readdirSync, realpathSync } from "node:fs";
+if (process.cwd() !== realpathSync(${JSON.stringify(scratch)})) process.exit(1);
+if (readdirSync(process.cwd()).length !== 0) process.exit(2);
+if (process.env.CLAUDE_CODE_OAUTH_TOKEN !== ${JSON.stringify(SECRET)}) process.exit(3);
+if (process.env.ANTHROPIC_BASE_URL !== "https://fixture.invalid") process.exit(4);
+process.stdout.write(${JSON.stringify(raw)});
+`,
+        { mode: 0o700 },
+      );
+      writeFileSync(
+        join(fallback, "claude"),
+        `#!${process.execPath}\nprocess.exit(5);\n`,
+        { mode: 0o700 },
+      );
+      vi.stubEnv(
+        "PATH",
+        [
+          pathKind === "relative"
+            ? `./${relative(process.cwd(), directory)}`
+            : directory,
+          fallback,
+        ].join(delimiter),
+      );
+      vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", SECRET);
+      vi.stubEnv("ANTHROPIC_BASE_URL", "https://fixture.invalid");
+      try {
+        const result = await fetchClaudeNativeQuota({
+          makeScratch: () => scratch,
+          now: () => NOW,
+        });
+
+        expect(result).toEqual(parseClaudeNativeDebug(raw, NOW));
+        expect(existsSync(scratch)).toBe(false);
+        expect(JSON.stringify(result)).not.toContain(SECRET);
+      } finally {
+        rmSync(directory, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("uses an empty scratch directory and the disclosed bounded command", async () => {
     vi.stubEnv("CLAUDE_CODE_MAX_RETRIES", "9");
     vi.stubEnv("CLAUDE_CODE_RETRY_WATCHDOG", "1");
@@ -563,7 +633,8 @@ describe("Claude native quota process contract", () => {
     const dependencies: ClaudeNativeQuotaDependencies = {
       findClaude: async () => "/synthetic/claude",
       now: () => NOW,
-      run: async (_command, receivedArgs, options) => {
+      run: async (command, receivedArgs, options) => {
+        expect(command).toBe("/synthetic/claude");
         cwd = options.cwd;
         args = receivedArgs;
         env = options.env;
