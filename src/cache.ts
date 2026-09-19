@@ -603,6 +603,9 @@ function normalizeCachedWindow(raw: unknown): QuotaWindow | undefined {
   return result;
 }
 
+// Kimi snapshots cached before `shareOf` existed store `month_code` with only
+// `percentUsed`. `shareOf` is the sole share rule, so restore the marker on
+// read; otherwise a stale fallback would render that share as missing data.
 function upgradeLegacyKimiShareWindow(window: QuotaWindow): QuotaWindow {
   return window.id === "month_code" &&
     window.shareOf === undefined &&
