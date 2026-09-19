@@ -163,6 +163,16 @@ function semanticsFor(
         provider.state.untrustedWindowIds ?? [],
         generatedAt,
       );
+    case "minimax":
+      return unknownSemantics(
+        provider.windows,
+        "MiniMax reports per-model Coding Plan meters, but does not establish whether those meters are independent or jointly bound, so quota-axi does not claim an effective remaining percentage.",
+      );
+    case "openrouter":
+      return unknownSemantics(
+        provider.windows,
+        "OpenRouter does not publish per-window reset or bound evidence, so quota-axi reports the credentials and credits it observed but no effective remaining percentage.",
+      );
   }
 }
 

@@ -9,9 +9,40 @@ export type ProviderId =
   | "agy"
   | "alibaba"
   | "opencode-go"
-  | "commandcode";
+  | "commandcode"
+  | "minimax"
+  | "openrouter";
 
+/**
+ * Every provider a caller can explicitly select via `--provider`. Includes
+ * opt-in adapters (`minimax`, `openrouter`) that are not part of the default
+ * probe set, so the selector itself stays the single source of truth for what
+ * the CLI is willing to talk to.
+ */
 export const PROVIDER_IDS = [
+  "claude",
+  "codex",
+  "cursor",
+  "copilot",
+  "grok",
+  "kimi",
+  "zai",
+  "agy",
+  "alibaba",
+  "opencode-go",
+  "commandcode",
+  "minimax",
+  "openrouter",
+] as const satisfies readonly ProviderId[];
+
+/**
+ * Providers queried by a bare `quota-axi` invocation (no `--provider` flag).
+ * Opt-in adapters deliberately sit outside this list: a default run must never
+ * touch their credential stores or endpoints, and the caller opts into them
+ * explicitly with `--provider minimax,openrouter` (or any single name from
+ * {@link PROVIDER_IDS}).
+ */
+export const DEFAULT_PROVIDER_IDS = [
   "claude",
   "codex",
   "cursor",

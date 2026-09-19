@@ -76,6 +76,8 @@ const ACCENTS: Record<ProviderId, StyleSpec> = {
   alibaba: { rgb: [255, 155, 120], ansi16: "91", bold: true },
   "opencode-go": { rgb: [160, 210, 255], ansi16: "96", bold: true },
   commandcode: { rgb: [110, 210, 168], ansi16: "92", bold: true },
+  minimax: { rgb: [220, 170, 200], ansi16: "95", bold: true },
+  openrouter: { rgb: [200, 220, 255], ansi16: "94", bold: true },
 };
 
 const STYLES: Record<Exclude<StyleName, `accent:${ProviderId}`>, StyleSpec> = {
