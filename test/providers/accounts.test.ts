@@ -199,7 +199,7 @@ describe("verified subscription coalescing", () => {
     });
   });
 
-  it("retires the superseded lane's snapshot so a later outage serves the subscription once", async () => {
+  it("serves a coalesced subscription once when every route falls back to cache", async () => {
     writeCachedProviders([
       {
         ...live("acct-a", 20, "oauth", undefined, undefined, "codex"),
@@ -259,7 +259,7 @@ describe("verified subscription coalescing", () => {
     ]);
   });
 
-  it("retires the superseded slot only in the cache write that saves the winner", async () => {
+  it("stores the superseded lane's snapshot only in the cache write that saves the winner", async () => {
     writeCachedProviders([
       {
         ...live("acct-a", 20, "oauth", undefined, undefined, "codex"),
@@ -301,10 +301,42 @@ describe("verified subscription coalescing", () => {
 
     rmSync(blockedTemp, { recursive: true });
     writeCachedProviders(published);
-    expect(readCachedProvider("codex", "openai-codex-work")).toBeUndefined();
+    expect(
+      readCachedProvider("codex", "openai-codex-work")?.windows[0]?.percentUsed,
+    ).toBe(25);
     expect(
       readCachedProvider("codex", "codex-home")?.windows[0]?.percentUsed,
     ).toBe(25);
+  });
+
+  it("keeps one card when the superseded route fails on the next run", async () => {
+    const keys = ["openai-codex", "openai-codex-2"];
+    const coalesced = await fetchAccountQuotas(
+      laneAdapter(keys, () =>
+        live("acct-a", 25, "oauth", undefined, undefined, "codex"),
+      ),
+      OPTIONS,
+    );
+    expect(summarize(coalesced)).toEqual([
+      ["openai-codex", "acct-a", "fresh", 25],
+    ]);
+    writeCachedProviders(coalesced);
+
+    const loserFails = await fetchAccountQuotas(
+      laneAdapter(keys, (key) => {
+        if (key === "openai-codex")
+          return live("acct-a", 30, "oauth", undefined, undefined, "codex");
+        const cached = readCachedProvider("codex", key);
+        return cached
+          ? staleFromCache(cached, "fetch failed", ["oauth", "cache"], [])
+          : failed(key);
+      }),
+      OPTIONS,
+    );
+
+    expect(summarize(loserFails)).toEqual([
+      ["openai-codex", "acct-a", "fresh", 30],
+    ]);
   });
 
   it("recognises a stale lane as the same subscription as a fresh sibling after a prior coalesce", async () => {

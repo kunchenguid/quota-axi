@@ -7,9 +7,9 @@ import type {
   SourceAttempt,
 } from "../types.js";
 import {
-  markRetiredAccountKeys,
-  retiredAccountKeys,
+  markSupersededReadings,
   subscriptionIdentity,
+  supersededReadings,
 } from "../cache.js";
 import { sourceNames } from "./common.js";
 
@@ -142,12 +142,10 @@ export function accountColumns(report: {
  * incomparable identity stays its own lane: two unknowns are not equal, and a
  * known id is not guessed onto a reading that lacks one.
  *
- * A fresh winner retires a superseded fresh lane's cache slot, so a later run
- * in which both routes fail cannot serve the same subscription twice from
- * cache. That slot is only marked here and retired by the same cache write
- * that persists the winner, never ahead of it. A superseded stale lane keeps
- * its stamped snapshot: that stamp is what lets the still-failing route
- * coalesce again instead of resurfacing as a separate unavailable card.
+ * Every lane keeps its own cache slot. A superseded fresh reading rides on the
+ * winner so the same cache write stores its stamped snapshot, and a superseded
+ * stale lane keeps the snapshot it has: that stamp is what lets a route that
+ * fails later coalesce again instead of resurfacing as a separate card.
  */
 function coalesceVerifiedSubscriptions(
   reports: ProviderQuota[],
@@ -167,29 +165,25 @@ function coalesceVerifiedSubscriptions(
       result.push(report);
       continue;
     }
-    const merged = mergeSubscriptionReadings(result[existingIndex], report);
-    if (merged.state.status === "fresh")
-      markRetiredAccountKeys(
-        merged,
-        supersededSlots(merged, [result[existingIndex], report]),
-      );
+    const readings = [result[existingIndex], report];
+    const merged = mergeSubscriptionReadings(readings[0], report);
+    markSupersededReadings(merged, freshSuperseded(merged, readings));
     result[existingIndex] = merged;
   }
   return result;
 }
 
-function supersededSlots(
+function freshSuperseded(
   winner: ProviderQuota,
   readings: ProviderQuota[],
-): string[] {
-  const keys = new Set<string>();
-  for (const reading of readings) {
-    for (const key of retiredAccountKeys(reading)) keys.add(key);
-    if (reading.state.status === "fresh" && reading.accountKey)
-      keys.add(reading.accountKey);
-  }
-  if (winner.accountKey) keys.delete(winner.accountKey);
-  return [...keys];
+): ProviderQuota[] {
+  return readings.flatMap((reading) => [
+    ...supersededReadings(reading),
+    ...(reading.state.status === "fresh" &&
+    reading.accountKey !== winner.accountKey
+      ? [reading]
+      : []),
+  ]);
 }
 
 function mergeSubscriptionReadings(

@@ -155,27 +155,29 @@ export function subscriptionIdentity(
 }
 
 /**
- * Cache slots a published reading superseded when it coalesced lanes of one
- * subscription. Collection only marks them; `writeCachedProviders` retires
- * them in the same file write that persists the winner, so a failed write
- * cannot leave the superseded snapshot deleted while the winner went unsaved.
- * A symbol key keeps the mark off every serialized surface.
+ * Fresh lane readings a published reading superseded when it coalesced lanes
+ * of one subscription. `writeCachedProviders` persists each in its own slot in
+ * the same write as the winner, so a route that later fails still serves its
+ * own stamped snapshot and coalesces again instead of surfacing as a separate
+ * card. A symbol key keeps them off every serialized surface.
  */
-const RETIRED_ACCOUNT_KEYS = Symbol("retiredAccountKeys");
+const SUPERSEDED_READINGS = Symbol("supersededReadings");
 
-type RetiringQuota = ProviderQuota & {
-  [RETIRED_ACCOUNT_KEYS]?: readonly string[];
+type SupersedingQuota = ProviderQuota & {
+  [SUPERSEDED_READINGS]?: readonly ProviderQuota[];
 };
 
-export function retiredAccountKeys(report: ProviderQuota): readonly string[] {
-  return (report as RetiringQuota)[RETIRED_ACCOUNT_KEYS] ?? [];
+export function supersededReadings(
+  report: ProviderQuota,
+): readonly ProviderQuota[] {
+  return (report as SupersedingQuota)[SUPERSEDED_READINGS] ?? [];
 }
 
-export function markRetiredAccountKeys(
+export function markSupersededReadings(
   report: ProviderQuota,
-  accountKeys: readonly string[],
+  readings: readonly ProviderQuota[],
 ): void {
-  (report as RetiringQuota)[RETIRED_ACCOUNT_KEYS] = accountKeys;
+  (report as SupersedingQuota)[SUPERSEDED_READINGS] = readings;
 }
 
 type CachedProvider = {
@@ -272,11 +274,13 @@ function readCachedProviderInContext(
   )?.snapshot;
 }
 
-export function writeCachedProviders(providers: ProviderQuota[]): void {
-  providers = providers.filter(
-    (provider) =>
-      !(provider.provider === "claude" && provider.source === "cli"),
-  );
+export function writeCachedProviders(published: ProviderQuota[]): void {
+  const providers = published
+    .flatMap((provider) => [provider, ...supersededReadings(provider)])
+    .filter(
+      (provider) =>
+        !(provider.provider === "claude" && provider.source === "cli"),
+    );
   const clearProviders = new Set(
     providers
       .filter(
@@ -287,9 +291,6 @@ export function writeCachedProviders(providers: ProviderQuota[]): void {
       )
       .map(cacheIdentity),
   );
-  for (const provider of providers)
-    for (const accountKey of retiredAccountKeys(provider))
-      clearProviders.add(cacheIdentity({ ...provider, accountKey }));
   const cacheable = providers
     .map(toCacheProvider)
     .filter((provider): provider is CachedProvider => Boolean(provider));
