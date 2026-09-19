@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -257,6 +257,61 @@ describe("verified subscription coalescing", () => {
       ["codex-home", "stale", 25],
       ["openai-codex-other", "stale", 80],
     ]);
+  });
+
+  it("recognises a stale lane as the same subscription as a fresh sibling after a prior coalesce", async () => {
+    const keys = ["openai-codex", "openai-codex-2", "openai-codex-other"];
+    const accountFor = (key: string) =>
+      key === "openai-codex-other" ? "acct-b" : "acct-a";
+
+    const coalesced = await fetchAccountQuotas(
+      laneAdapter(keys, (key) =>
+        live(
+          accountFor(key),
+          key === "openai-codex-other" ? 80 : 25,
+          "oauth",
+          undefined,
+          undefined,
+          "codex",
+        ),
+      ),
+      OPTIONS,
+    );
+    writeCachedProviders(coalesced);
+    expect(summarize(coalesced)).toEqual([
+      ["openai-codex", "acct-a", "fresh", 25],
+      ["openai-codex-other", "acct-b", "fresh", 80],
+    ]);
+    const cacheFile = readFileSync(
+      join(cacheHome, "quota-axi", "quotas.json"),
+      "utf8",
+    );
+    expect(cacheFile).not.toContain("acct-a");
+    expect(cacheFile).not.toContain("acct-b");
+
+    const partialOutage = await fetchAccountQuotas(
+      laneAdapter(keys, (key) => {
+        if (key === "openai-codex-2")
+          return live("acct-a", 30, "oauth", undefined, undefined, "codex");
+        const cached = readCachedProvider("codex", key);
+        return cached
+          ? staleFromCache(cached, "fetch failed", ["oauth", "cache"], [])
+          : failed(key);
+      }),
+      OPTIONS,
+    );
+
+    expect(
+      partialOutage.map((report) => [
+        report.accountKey,
+        report.state.status,
+        report.windows[0]?.percentUsed,
+      ]),
+    ).toEqual([
+      ["openai-codex-2", "fresh", 30],
+      ["openai-codex-other", "stale", 80],
+    ]);
+    expect(JSON.stringify(partialOutage)).not.toContain("subscription");
   });
 
   it("keeps the superseded lane's snapshot when no coalesced reading is fresh", async () => {
