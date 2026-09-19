@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  classifyClaudeUsage403Response,
   normalizeClaudeApiUsage,
   normalizeClaudeProfile,
 } from "../../src/providers/claude.js";
@@ -132,5 +133,67 @@ describe("Claude OAuth profile parsing", () => {
         emailAddress: "person@example.invalid",
       }),
     ).toBeUndefined();
+  });
+});
+
+describe("Claude usage 403 classification", () => {
+  it.each([
+    [
+      "scope_requirement_user_profile",
+      {
+        type: "error",
+        error: {
+          type: "permission_error",
+          message: "OAuth token does not meet scope requirement user:profile",
+          detail: "SYNTHETIC_SECRET_MUST_NOT_ESCAPE",
+        },
+      },
+    ],
+    [
+      "oauth_scope_insufficient",
+      {
+        error: {
+          code: "oauth_scope_insufficient",
+          message: "SYNTHETIC_SECRET_MUST_NOT_ESCAPE",
+        },
+      },
+    ],
+    [
+      "other_structured_403",
+      {
+        error: {
+          type: "permission_error",
+          message: "A generic message mentions user:profile but proves nothing",
+        },
+      },
+    ],
+  ])("returns only the fixed %s category", async (expected, body) => {
+    await expect(
+      classifyClaudeUsage403Response(Response.json(body, { status: 403 })),
+    ).resolves.toBe(expected);
+  });
+
+  it("bounds malformed and oversized bodies", async () => {
+    await expect(
+      classifyClaudeUsage403Response(new Response("not-json", { status: 403 })),
+    ).resolves.toBe("non_json_403");
+    await expect(
+      classifyClaudeUsage403Response(
+        new Response("x".repeat(129), { status: 403 }),
+        { maxBytes: 128 },
+      ),
+    ).resolves.toBe("oversized_403");
+  });
+
+  it("bounds a response body that never completes", async () => {
+    const body = new ReadableStream({
+      pull: () => new Promise(() => undefined),
+    });
+
+    await expect(
+      classifyClaudeUsage403Response(new Response(body, { status: 403 }), {
+        deadlineMs: 5,
+      }),
+    ).resolves.toBe("read_timeout");
   });
 });

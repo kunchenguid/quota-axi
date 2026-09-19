@@ -113,6 +113,7 @@ describe("CLI flag parsing", () => {
         tui: false,
         once: false,
         allowKeychainPrompt: true,
+        allowClaudeInference: false,
         noCredentialRefresh: false,
         profileOnly: false,
       },
@@ -240,6 +241,41 @@ describe("delegated credential refresh wiring", () => {
       true,
       false,
     ]);
+  });
+
+  it("passes the explicit Claude inference opt-in only when requested", async () => {
+    const seen: ProviderOptions[] = [];
+    PROVIDERS.claude = recordingProvider(seen);
+
+    await quotaCommand(["--provider", "claude"], undefined);
+    await quotaCommand(
+      ["--provider", "claude", "--allow-claude-inference"],
+      undefined,
+    );
+
+    expect(seen[0]?.allowClaudeInference).toBeUndefined();
+    expect(seen[1]?.allowClaudeInference).toBe(true);
+  });
+
+  it("rejects recurring or unrelated Claude inference opt-ins", async () => {
+    await expect(
+      quotaCommand(
+        ["--provider", "claude", "--tui", "--allow-claude-inference"],
+        undefined,
+      ),
+    ).rejects.toThrow("requires --once with --tui");
+    await expect(
+      quotaCommand(
+        ["--provider", "codex", "--allow-claude-inference"],
+        undefined,
+      ),
+    ).rejects.toThrow("requires the claude provider");
+    await expect(
+      authCommand(
+        ["--provider", "claude", "--allow-claude-inference"],
+        undefined,
+      ),
+    ).rejects.toThrow("only supported by the quota command");
   });
 
   it("never delegates a refresh from the read-only auth report", async () => {

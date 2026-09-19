@@ -14,6 +14,8 @@ export type QuotaFlags = {
   full: boolean;
   tui: boolean;
   allowKeychainPrompt: boolean;
+  /** Permit one bounded Claude inference to recover env-token quota headers. */
+  allowClaudeInference: boolean;
   /**
    * Opt out of delegated credential refresh: never run a vendor CLI's own
    * non-interactive refresh command, even when a stored access token is
@@ -57,6 +59,13 @@ export function parseFlags(args: string[]): QuotaFlags {
 /** Parse flags accepted by the `models` evidence-join command. */
 export function parseModelsFlags(args: string[]): ModelsFlags {
   const flags = parseCommonFlags(args, MODEL_CATALOG_PROVIDER_IDS);
+  if (flags.allowClaudeInference) {
+    throw new AxiError(
+      "--allow-claude-inference is only supported by the quota command",
+      "VALIDATION_ERROR",
+      ["Run `quota-axi --provider claude --allow-claude-inference`"],
+    );
+  }
   if (flags.profileOnly) {
     throw new AxiError(
       "--profile-only is only supported by the quota command",
@@ -97,6 +106,7 @@ function parseCommonFlags(
   let once = false;
   let refreshSeconds: number | undefined;
   let allowKeychainPrompt = false;
+  let allowClaudeInference = false;
   let noCredentialRefresh = false;
   let profileOnly = false;
   let intelligence: IntelligenceBucket | undefined;
@@ -134,6 +144,10 @@ function parseCommonFlags(
     }
     if (arg === "--allow-keychain-prompt") {
       allowKeychainPrompt = true;
+      continue;
+    }
+    if (arg === "--allow-claude-inference") {
+      allowClaudeInference = true;
       continue;
     }
     if (arg === "--no-credential-refresh") {
@@ -216,6 +230,7 @@ function parseCommonFlags(
     tui,
     once,
     allowKeychainPrompt,
+    allowClaudeInference,
     noCredentialRefresh,
     profileOnly,
     ...(refreshSeconds !== undefined ? { refreshSeconds } : {}),

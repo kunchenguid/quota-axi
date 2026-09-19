@@ -316,6 +316,11 @@ export type QuotaAxiResponse = {
 
 export type ProviderOptions = {
   allowKeychainPrompt: boolean;
+  /**
+   * Explicitly permit one bounded Claude Code inference to read quota response
+   * headers when an env bearer cannot use the zero-spend usage endpoint.
+   */
+  allowClaudeInference?: boolean;
   /** Restrict discovery to the provider's selected native profile file. */
   credentialMode?: "profile-only";
   /**

@@ -359,9 +359,7 @@ function missingRequiredContext(provider: ProviderId): boolean {
   // when the current reading has no published context identity.
   if (provider === "codex") return false;
   const scope = CONTEXT_SCOPED_PROVIDERS[provider];
-  return (
-    scope !== undefined && !scope({ provider } as ProviderQuota)
-  );
+  return scope !== undefined && !scope({ provider } as ProviderQuota);
 }
 
 function serializeCachedProvider(

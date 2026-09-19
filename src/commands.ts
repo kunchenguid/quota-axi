@@ -46,9 +46,11 @@ export async function quotaCommand(
   const binPath = context?.binPath ?? "quota-axi";
   const flags = parseFlags(args);
   validateProfileOnly(flags);
+  validateClaudeInference(flags);
   const options: ProviderOptions = {
     allowKeychainPrompt: flags.profileOnly ? false : flags.allowKeychainPrompt,
     refreshCredentials: flags.profileOnly ? false : !flags.noCredentialRefresh,
+    ...(flags.allowClaudeInference ? { allowClaudeInference: true } : {}),
     ...(flags.profileOnly ? { credentialMode: "profile-only" as const } : {}),
   };
 
@@ -183,6 +185,13 @@ export async function authCommand(
 ): Promise<string> {
   const binPath = context?.binPath ?? "quota-axi";
   const flags = parseFlags(args);
+  if (flags.allowClaudeInference) {
+    throw new AxiError(
+      "--allow-claude-inference is only supported by the quota command",
+      "VALIDATION_ERROR",
+      ["Run `quota-axi --provider claude --allow-claude-inference`"],
+    );
+  }
   if (flags.profileOnly) {
     throw new AxiError(
       "--profile-only is only supported by the quota command",
@@ -218,6 +227,31 @@ export async function authCommand(
         2,
       )
     : renderAuthToon(reports, binPath);
+}
+
+function validateClaudeInference(flags: QuotaFlags): void {
+  if (!flags.allowClaudeInference) return;
+  if (!flags.providers.includes("claude")) {
+    throw new AxiError(
+      "--allow-claude-inference requires the claude provider",
+      "VALIDATION_ERROR",
+      ["Run `quota-axi --provider claude --allow-claude-inference`"],
+    );
+  }
+  if (flags.profileOnly) {
+    throw new AxiError(
+      "--allow-claude-inference cannot be combined with --profile-only",
+      "VALIDATION_ERROR",
+      ["Remove --profile-only to use the selected env credential"],
+    );
+  }
+  if (flags.tui && !flags.once) {
+    throw new AxiError(
+      "--allow-claude-inference requires --once with --tui",
+      "VALIDATION_ERROR",
+      ["Recurring TUI refreshes would repeatedly spend inference quota"],
+    );
+  }
 }
 
 export async function fetchQuota(

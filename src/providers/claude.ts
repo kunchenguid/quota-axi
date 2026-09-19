@@ -46,6 +46,7 @@ import {
   type RefreshDelegate,
 } from "./delegated-refresh.js";
 import { withUsageFetchFailure } from "./usage-fetch-failure.js";
+import { fetchClaudeNativeQuota } from "./claude-native-quota.js";
 
 const API_URL = "https://api.anthropic.com/api/oauth/usage";
 const PROFILE_API_URL = "https://api.anthropic.com/api/oauth/profile";
@@ -141,7 +142,17 @@ type ClaudeFailureOptions = {
   definitiveAuth?: boolean;
   staleEligible?: boolean;
   retryAfter?: string;
+  authUsable?: boolean;
+  envProfileScopeDenied?: boolean;
 };
+
+export type ClaudeUsage403Classification =
+  | "scope_requirement_user_profile"
+  | "oauth_scope_insufficient"
+  | "other_structured_403"
+  | "non_json_403"
+  | "oversized_403"
+  | "read_timeout";
 
 // A scoped-limit entry as returned in the `limits` array of the OAuth usage
 // response. Unlike the fixed top-level fields (five_hour, seven_day, ...),
@@ -627,6 +638,48 @@ async function attemptClaudeQuota(
           status: "failed",
           error: failure.code,
         };
+        if (credential.source === "env" && failure.envProfileScopeDenied) {
+          attempts[attempts.length - 1]!.degraded = false;
+          if (options.allowClaudeInference) {
+            attempts.push({
+              source: "claude-native-inference",
+              status: "failed",
+            });
+            const native = await fetchClaudeNativeQuota();
+            if (native.kind === "success") {
+              attempts[attempts.length - 1] = {
+                source: "claude-native-inference",
+                status: "success",
+              };
+              const report = successProvider({
+                provider: "claude",
+                label: "Claude",
+                source: "cli",
+                windows: native.windows,
+                refreshedAt: native.refreshedAt,
+                sourcesTried: sourceNames(attempts),
+                attempts,
+              });
+              report.state.authStatus = "usable";
+              return { kind: "success", report };
+            }
+            attempts[attempts.length - 1] = {
+              source: "claude-native-inference",
+              status: "failed",
+              error: native.error,
+              degraded: false,
+            };
+            transientFailure = new ClaudeFailure(native.error, {
+              status: native.status,
+              retryAfter: native.retryAfter,
+              authUsable: true,
+            });
+          } else {
+            transientFailure = failure;
+          }
+          transientFailureIsEnv = true;
+          break;
+        }
         if (failure.definitiveAuth) {
           if (!definitiveFailure) {
             definitiveFailure = failure;
@@ -766,7 +819,7 @@ function failureReport(
     }
   }
 
-  return failedProvider({
+  const report = failedProvider({
     provider: "claude",
     label: "Claude",
     status: failure.status,
@@ -775,6 +828,8 @@ function failureReport(
     sourcesTried: sourceNames(attempts),
     attempts,
   });
+  if (failure.authUsable) report.state.authStatus = "usable";
+  return report;
 }
 
 function staleClaudeReport(
@@ -1486,7 +1541,7 @@ async function fetchOauthUsage(credentials: ClaudeCredentials): Promise<{
       },
       signal: controller.signal,
     });
-    rejectUnusableUsageResponse(response);
+    await rejectUnusableUsageResponse(response, credentials.source === "env");
     const quota = normalizeClaudeApiUsage(
       await response.json(),
       credentials.plan,
@@ -1549,7 +1604,10 @@ function unverifiedClaudeIdentity(error: string): ClaudeIdentityResult {
 // Anthropic's OAuth usage endpoint uses 401 for failed authentication. A 403
 // can also be a network-policy or WAF denial, so it is not sufficient evidence
 // for a sign-out verdict. 429 follows standard Retry-After semantics (RFC 9110).
-function rejectUnusableUsageResponse(response: Response): void {
+async function rejectUnusableUsageResponse(
+  response: Response,
+  envSelected: boolean,
+): Promise<void> {
   if (response.status === 401) {
     throw new ClaudeFailure("Claude sign-in required", {
       status: "auth_required",
@@ -1563,10 +1621,115 @@ function rejectUnusableUsageResponse(response: Response): void {
       retryAfter: retryAfterToIso(response.headers.get("retry-after")),
     });
   }
+  if (response.status === 403 && envSelected) {
+    const classification = await classifyClaudeUsage403Response(response);
+    if (
+      classification === "scope_requirement_user_profile" ||
+      classification === "oauth_scope_insufficient"
+    ) {
+      throw new ClaudeFailure("claude_env_usage_scope_unavailable", {
+        status: "unavailable",
+        authUsable: true,
+        envProfileScopeDenied: true,
+      });
+    }
+  }
   if (!response.ok) {
     throw new ClaudeFailure(`Claude quota unavailable (${response.status})`, {
       staleEligible: true,
     });
+  }
+}
+
+/**
+ * Read a bounded 403 envelope and recognize only the two scope-denial shapes
+ * established by the vendor response. The body never leaves this function.
+ */
+export async function classifyClaudeUsage403Response(
+  response: Response,
+  options: { maxBytes?: number; deadlineMs?: number } = {},
+): Promise<ClaudeUsage403Classification> {
+  const maxBytes = options.maxBytes ?? 16 * 1024;
+  const deadlineMs = options.deadlineMs ?? 1_000;
+  const contentLength = Number(response.headers.get("content-length"));
+  if (Number.isFinite(contentLength) && contentLength > maxBytes) {
+    return "oversized_403";
+  }
+
+  const body = await readBoundedResponseBody(response, maxBytes, deadlineMs);
+  if (body === "read_timeout" || body === "oversized_403") return body;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return "non_json_403";
+  }
+  const envelope = objectValue(parsed);
+  const error = objectValue(envelope?.error);
+  const type = stringValue(error?.type);
+  const code = stringValue(error?.code);
+  const message = stringValue(error?.message);
+  if (code === "oauth_scope_insufficient") return "oauth_scope_insufficient";
+  if (
+    type === "permission_error" &&
+    message !== undefined &&
+    /^OAuth token does not meet scope requirement user:profile\.?$/i.test(
+      message.trim(),
+    )
+  ) {
+    return "scope_requirement_user_profile";
+  }
+  return "other_structured_403";
+}
+
+async function readBoundedResponseBody(
+  response: Response,
+  maxBytes: number,
+  deadlineMs: number,
+): Promise<string | "oversized_403" | "read_timeout"> {
+  if (!response.body) return "";
+  const reader = response.body.getReader();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const read = async (): Promise<string | "oversized_403"> => {
+    const chunks: Uint8Array[] = [];
+    let bytes = 0;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        bytes += value.byteLength;
+        if (bytes > maxBytes) {
+          await reader.cancel();
+          return "oversized_403";
+        }
+        chunks.push(value);
+      }
+    } finally {
+      reader.releaseLock();
+    }
+    const joined = new Uint8Array(bytes);
+    let offset = 0;
+    for (const chunk of chunks) {
+      joined.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return new TextDecoder().decode(joined);
+  };
+
+  try {
+    return await Promise.race([
+      read(),
+      new Promise<"read_timeout">((resolve) => {
+        timer = setTimeout(() => {
+          resolve("read_timeout");
+          void reader.cancel().catch(() => undefined);
+        }, deadlineMs);
+        timer.unref();
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }
 
@@ -1671,6 +1834,8 @@ class ClaudeFailure extends Error {
   readonly definitiveAuth: boolean;
   readonly staleEligible: boolean;
   readonly retryAfter: string | undefined;
+  readonly authUsable: boolean;
+  readonly envProfileScopeDenied: boolean;
   usageFetchFailure = false;
 
   constructor(
@@ -1683,6 +1848,8 @@ class ClaudeFailure extends Error {
     this.definitiveAuth = options.definitiveAuth ?? false;
     this.staleEligible = options.staleEligible ?? false;
     this.retryAfter = options.retryAfter;
+    this.authUsable = options.authUsable ?? false;
+    this.envProfileScopeDenied = options.envProfileScopeDenied ?? false;
   }
 
   withUsageFetchFailure(): this {
