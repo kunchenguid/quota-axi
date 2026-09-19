@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   fetchClaudeNativeQuota,
   parseClaudeNativeDebug,
@@ -119,6 +119,79 @@ describe("Claude native quota debug parsing", () => {
 });
 
 describe("Claude native quota process contract", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("refuses before spawning when a nonblank ANTHROPIC_API_KEY is present", async () => {
+    vi.stubEnv("ANTHROPIC_API_KEY", SECRET);
+    let looked = false;
+    let spawned = false;
+    const result = await fetchClaudeNativeQuota({
+      findClaude: async () => {
+        looked = true;
+        return "/synthetic/claude";
+      },
+      run: async () => {
+        spawned = true;
+        throw new Error("must not run");
+      },
+    });
+
+    expect(looked).toBe(false);
+    expect(spawned).toBe(false);
+    expect(result).toEqual({
+      kind: "failure",
+      error: "claude_native_api_key_present",
+      status: "unavailable",
+    });
+    expect(JSON.stringify(result)).not.toContain(SECRET);
+    expect(process.env.ANTHROPIC_API_KEY).toBe(SECRET);
+  });
+
+  it.each(["", "   "])(
+    "treats a blank ANTHROPIC_API_KEY %j as absent",
+    async (value) => {
+      vi.stubEnv("ANTHROPIC_API_KEY", value);
+      const result = await fetchClaudeNativeQuota({
+        findClaude: async () => "/synthetic/claude",
+        now: () => NOW,
+        run: async () => ({
+          stdout: "OK\n",
+          stderr: responseLog(200, validHeaders()),
+          exitCode: 0,
+          signal: null,
+          timedOut: false,
+          outputLimited: false,
+        }),
+      });
+
+      expect(result.kind).toBe("success");
+      expect(process.env.ANTHROPIC_API_KEY).toBe(value);
+    },
+  );
+
+  it("reports a scratch directory creation failure as a process failure", async () => {
+    let spawned = false;
+    const result = await fetchClaudeNativeQuota({
+      findClaude: async () => "/synthetic/claude",
+      makeScratch: () => {
+        throw new Error("EACCES: synthetic tmpdir failure");
+      },
+      run: async () => {
+        spawned = true;
+        throw new Error("must not run");
+      },
+    });
+
+    expect(spawned).toBe(false);
+    expect(result).toEqual({
+      kind: "failure",
+      error: "claude_native_process_failed",
+      status: "unavailable",
+    });
+  });
+
   it("uses an empty scratch directory and the disclosed bounded command", async () => {
     let cwd = "";
     let args: readonly string[] = [];

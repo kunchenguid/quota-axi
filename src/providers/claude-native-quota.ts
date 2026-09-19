@@ -65,6 +65,7 @@ type NativeProcessResult = {
 
 export type ClaudeNativeQuotaDependencies = {
   findClaude?: () => Promise<string | undefined>;
+  makeScratch?: () => string;
   run?: (
     command: string,
     args: readonly string[],
@@ -82,16 +83,20 @@ export async function fetchClaudeNativeQuota(
   dependencies: ClaudeNativeQuotaDependencies = {},
 ): Promise<ClaudeNativeQuotaResult> {
   if (process.platform === "win32") return incompatible();
+  if ((process.env.ANTHROPIC_API_KEY ?? "").trim() !== "") {
+    return failure("claude_native_api_key_present");
+  }
   const command = await (
     dependencies.findClaude ?? (() => findCommandPath("claude"))
   )();
   if (!command) return incompatible();
 
-  const scratch = mkdtempSync(join(tmpdir(), "quota-axi-claude-"));
+  let scratch: string | undefined;
   try {
     const run = dependencies.run ?? runNativeProcess;
     let result: NativeProcessResult;
     try {
+      scratch = (dependencies.makeScratch ?? makeScratchDirectory)();
       result = await run(command, CLAUDE_ARGS, {
         cwd: scratch,
         env: {
@@ -121,8 +126,14 @@ export async function fetchClaudeNativeQuota(
     }
     return parsed;
   } finally {
-    rmSync(scratch, { recursive: true, force: true });
+    if (scratch !== undefined) {
+      rmSync(scratch, { recursive: true, force: true });
+    }
   }
+}
+
+function makeScratchDirectory(): string {
+  return mkdtempSync(join(tmpdir(), "quota-axi-claude-"));
 }
 
 /** Parse only status, Retry-After, and unified 5h/7d quota headers. */
