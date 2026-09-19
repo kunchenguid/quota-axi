@@ -144,14 +144,8 @@ type ClaudeFailureOptions = {
   retryAfter?: string;
   authUsable?: boolean;
   envProfileScopeDenied?: boolean;
+  windows?: QuotaWindow[];
 };
-
-export type ClaudeUsage403Classification =
-  | "scope_requirement_user_profile"
-  | "other_structured_403"
-  | "non_json_403"
-  | "oversized_403"
-  | "read_timeout";
 
 // A scoped-limit entry as returned in the `limits` array of the OAuth usage
 // response. Unlike the fixed top-level fields (five_hour, seven_day, ...),
@@ -672,6 +666,7 @@ async function attemptClaudeQuota(
               status: native.status,
               retryAfter: native.retryAfter,
               authUsable: true,
+              windows: native.windows,
             });
           } else {
             transientFailure = failure;
@@ -828,6 +823,9 @@ function failureReport(
     attempts,
   });
   if (failure.authUsable) report.state.authStatus = "usable";
+  if (failure.windows && failure.windows.length > 0) {
+    report.windows = failure.windows;
+  }
   return report;
 }
 
@@ -1620,15 +1618,16 @@ async function rejectUnusableUsageResponse(
       retryAfter: retryAfterToIso(response.headers.get("retry-after")),
     });
   }
-  if (response.status === 403 && envSelected) {
-    const classification = await classifyClaudeUsage403Response(response);
-    if (classification === "scope_requirement_user_profile") {
-      throw new ClaudeFailure("claude_env_usage_scope_unavailable", {
-        status: "unavailable",
-        authUsable: true,
-        envProfileScopeDenied: true,
-      });
-    }
+  if (
+    response.status === 403 &&
+    envSelected &&
+    (await isClaudeEnvProfileScopeDenial(response))
+  ) {
+    throw new ClaudeFailure("claude_env_usage_scope_unavailable", {
+      status: "unavailable",
+      authUsable: true,
+      envProfileScopeDenied: true,
+    });
   }
   if (!response.ok) {
     throw new ClaudeFailure(`Claude quota unavailable (${response.status})`, {
@@ -1638,54 +1637,50 @@ async function rejectUnusableUsageResponse(
 }
 
 /**
- * Read a bounded 403 envelope and recognize only the scope-denial shape
- * established by the vendor response. The body never leaves this function.
+ * Read a bounded 403 envelope and recognize only the exact `user:profile`
+ * scope-denial shape established by the vendor response. Any other body -
+ * another scope, a generic envelope, non-JSON, oversized, or one that never
+ * completes - is simply not that denial. The body never leaves this function.
  */
-export async function classifyClaudeUsage403Response(
+export async function isClaudeEnvProfileScopeDenial(
   response: Response,
   options: { maxBytes?: number; deadlineMs?: number } = {},
-): Promise<ClaudeUsage403Classification> {
+): Promise<boolean> {
   const maxBytes = options.maxBytes ?? 16 * 1024;
   const deadlineMs = options.deadlineMs ?? 1_000;
   const contentLength = Number(response.headers.get("content-length"));
-  if (Number.isFinite(contentLength) && contentLength > maxBytes) {
-    return "oversized_403";
-  }
+  if (Number.isFinite(contentLength) && contentLength > maxBytes) return false;
 
   const body = await readBoundedResponseBody(response, maxBytes, deadlineMs);
-  if (body === "read_timeout" || body === "oversized_403") return body;
+  if (body === undefined) return false;
 
   let parsed: unknown;
   try {
     parsed = JSON.parse(body);
   } catch {
-    return "non_json_403";
+    return false;
   }
-  const envelope = objectValue(parsed);
-  const error = objectValue(envelope?.error);
-  const type = stringValue(error?.type);
+  const error = objectValue(objectValue(parsed)?.error);
   const message = stringValue(error?.message);
-  if (
-    type === "permission_error" &&
+  return (
+    stringValue(error?.type) === "permission_error" &&
     message !== undefined &&
     /^OAuth token does not meet scope requirement user:profile\.?$/i.test(
       message.trim(),
     )
-  ) {
-    return "scope_requirement_user_profile";
-  }
-  return "other_structured_403";
+  );
 }
 
+/** Resolves undefined when the body is oversized or does not complete in time. */
 async function readBoundedResponseBody(
   response: Response,
   maxBytes: number,
   deadlineMs: number,
-): Promise<string | "oversized_403" | "read_timeout"> {
+): Promise<string | undefined> {
   if (!response.body) return "";
   const reader = response.body.getReader();
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const read = async (): Promise<string | "oversized_403"> => {
+  const read = async (): Promise<string | undefined> => {
     const chunks: Uint8Array[] = [];
     let bytes = 0;
     try {
@@ -1695,7 +1690,7 @@ async function readBoundedResponseBody(
         bytes += value.byteLength;
         if (bytes > maxBytes) {
           await reader.cancel();
-          return "oversized_403";
+          return undefined;
         }
         chunks.push(value);
       }
@@ -1714,9 +1709,9 @@ async function readBoundedResponseBody(
   try {
     return await Promise.race([
       read(),
-      new Promise<"read_timeout">((resolve) => {
+      new Promise<undefined>((resolve) => {
         timer = setTimeout(() => {
-          resolve("read_timeout");
+          resolve(undefined);
           void reader.cancel().catch(() => undefined);
         }, deadlineMs);
         timer.unref();
@@ -1830,6 +1825,7 @@ class ClaudeFailure extends Error {
   readonly retryAfter: string | undefined;
   readonly authUsable: boolean;
   readonly envProfileScopeDenied: boolean;
+  readonly windows: QuotaWindow[] | undefined;
   usageFetchFailure = false;
 
   constructor(
@@ -1844,6 +1840,7 @@ class ClaudeFailure extends Error {
     this.retryAfter = options.retryAfter;
     this.authUsable = options.authUsable ?? false;
     this.envProfileScopeDenied = options.envProfileScopeDenied ?? false;
+    this.windows = options.windows;
   }
 
   withUsageFetchFailure(): this {

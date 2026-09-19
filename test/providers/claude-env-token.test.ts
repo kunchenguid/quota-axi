@@ -361,6 +361,56 @@ describe("Claude CLAUDE_CODE_OAUTH_TOKEN credential source", () => {
     });
   });
 
+  it("keeps the windows a native 429 carried without masking the rate limit", async () => {
+    vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", ENV_TOKEN);
+    mockStore({ accessToken: STORED_TOKEN });
+    fetchMock.mockResolvedValue(
+      Response.json(
+        {
+          error: {
+            type: "permission_error",
+            message: "OAuth token does not meet scope requirement user:profile",
+          },
+        },
+        { status: 403 },
+      ),
+    );
+    const exhausted = {
+      id: "five_hour",
+      label: "session",
+      kind: "session" as const,
+      percentUsed: 100,
+      percentRemaining: 0,
+      resetsAt: "2026-09-19T07:00:00.000Z",
+      windowSeconds: 18_000,
+    };
+    fetchClaudeNativeQuota.mockResolvedValue({
+      kind: "failure",
+      error: "claude_native_rate_limited",
+      status: "rate_limited",
+      retryAfter: "2026-09-19T06:01:00.000Z",
+      windows: [exhausted],
+    });
+    const { fetchQuota } = await import("../../src/providers/claude.js");
+
+    const report = await fetchQuota({
+      ...options,
+      allowClaudeInference: true,
+    });
+
+    expect(report).toMatchObject({
+      source: "unavailable",
+      windows: [exhausted],
+      state: {
+        status: "rate_limited",
+        stale: false,
+        authStatus: "usable",
+        error: "claude_native_rate_limited",
+        retryAfter: "2026-09-19T06:01:00.000Z",
+      },
+    });
+  });
+
   it("stops on a definitive 401 without trying a healthy stored credential", async () => {
     vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", ENV_TOKEN);
     mockStore({ accessToken: STORED_TOKEN });

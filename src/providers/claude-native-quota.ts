@@ -52,6 +52,8 @@ export type ClaudeNativeQuotaResult =
       error: string;
       status: ProviderStatus;
       retryAfter?: string;
+      /** Validated unified windows the rate-limited response itself carried. */
+      windows?: QuotaWindow[];
     };
 
 type NativeProcessResult = {
@@ -111,11 +113,13 @@ export async function fetchClaudeNativeQuota(
       return failure("claude_native_process_failed");
     }
 
+    const parsed = parseClaudeNativeDebug(result.stderr, dependencies.now?.());
+    if (parsed.kind === "failure" && parsed.status === "rate_limited") {
+      return parsed;
+    }
     if (result.timedOut) return failure("claude_native_timeout");
     if (result.outputLimited) return failure("claude_native_output_limit");
-    const parsed = parseClaudeNativeDebug(result.stderr, dependencies.now?.());
     if (parsed.kind === "failure") {
-      if (parsed.status === "rate_limited") return parsed;
       if (result.exitCode !== 0 || result.signal !== null) {
         return failure("claude_native_process_failed");
       }
@@ -166,11 +170,13 @@ export function parseClaudeNativeDebug(
   if (rateLimitBlock) {
     const retryAfter = stringHeader(rateLimitBlock, "retry-after");
     const retryAfterAt = boundedRetryAfter(retryAfter, now);
+    const windows = parsedWindows(rateLimitBlock, now);
     return {
       kind: "failure",
       error: "claude_native_rate_limited",
       status: "rate_limited",
       ...(retryAfterAt ? { retryAfter: retryAfterAt } : {}),
+      ...(windows.length > 0 ? { windows } : {}),
     };
   }
   return failure("claude_native_quota_unavailable");

@@ -580,6 +580,60 @@ describe("CLI quota rendering", () => {
     expect(output.help?.[0]).not.toContain("--allow-keychain-prompt");
   });
 
+  it("never falls back to Keychain advice after the opt-in native run fails", async () => {
+    useTempCache();
+    const macos = envScopeDeniedClaudeQuota();
+    macos.state.error = "claude_native_quota_unavailable";
+    macos.state.sourcesTried = [
+      "oauth-file",
+      "keychain",
+      "env",
+      "claude-native-inference",
+    ];
+    macos.attempts = [
+      {
+        source: "oauth-file",
+        status: "skipped",
+        error: "credentials_missing",
+      },
+      {
+        source: "keychain",
+        status: "skipped",
+        error: "keychain_prompt_required",
+        credentialPresent: true,
+      },
+      ...(macos.attempts ?? []),
+      {
+        source: "claude-native-inference",
+        status: "failed",
+        error: "claude_native_quota_unavailable",
+        degraded: false,
+      },
+    ];
+    PROVIDERS.claude = providerWithQuota(macos);
+    const chunks: string[] = [];
+
+    await main({
+      argv: ["--provider", "claude", "--json"],
+      binPath: "quota-axi",
+      stdout: {
+        write(chunk) {
+          chunks.push(String(chunk));
+          return true;
+        },
+      },
+    });
+
+    const output = JSON.parse(chunks.join("")) as QuotaAxiResponse;
+    const claude = output.providers.find(
+      (provider) => provider.provider === "claude",
+    );
+    expect(claude?.state.error).toBe("claude_native_quota_unavailable");
+    expect(claude?.state.reason).toBeUndefined();
+    expect(claude?.state.remedyCommand).toBeUndefined();
+    expect(output.help).toBeUndefined();
+  });
+
   it("renders the inference opt-in remedy on the TOON attention row", async () => {
     useTempCache();
     PROVIDERS.claude = providerWithQuota(envScopeDeniedClaudeQuota());

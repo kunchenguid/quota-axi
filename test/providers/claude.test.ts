@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
-  classifyClaudeUsage403Response,
+  isClaudeEnvProfileScopeDenial,
   normalizeClaudeApiUsage,
   normalizeClaudeProfile,
 } from "../../src/providers/claude.js";
@@ -139,7 +139,7 @@ describe("Claude OAuth profile parsing", () => {
 describe("Claude usage 403 classification", () => {
   it.each([
     [
-      "scope_requirement_user_profile",
+      true,
       {
         type: "error",
         error: {
@@ -150,7 +150,7 @@ describe("Claude usage 403 classification", () => {
       },
     ],
     [
-      "other_structured_403",
+      false,
       {
         error: {
           code: "oauth_scope_insufficient",
@@ -159,7 +159,7 @@ describe("Claude usage 403 classification", () => {
       },
     ],
     [
-      "other_structured_403",
+      false,
       {
         error: {
           type: "permission_error",
@@ -168,7 +168,7 @@ describe("Claude usage 403 classification", () => {
       },
     ],
     [
-      "other_structured_403",
+      false,
       {
         error: {
           type: "permission_error",
@@ -176,33 +176,36 @@ describe("Claude usage 403 classification", () => {
         },
       },
     ],
-  ])("returns only the fixed %s category", async (expected, body) => {
-    await expect(
-      classifyClaudeUsage403Response(Response.json(body, { status: 403 })),
-    ).resolves.toBe(expected);
-  });
+  ])(
+    "recognizes only the exact user:profile denial (%s)",
+    async (expected, body) => {
+      await expect(
+        isClaudeEnvProfileScopeDenial(Response.json(body, { status: 403 })),
+      ).resolves.toBe(expected);
+    },
+  );
 
-  it("bounds malformed and oversized bodies", async () => {
+  it("does not recognize malformed or oversized bodies", async () => {
     await expect(
-      classifyClaudeUsage403Response(new Response("not-json", { status: 403 })),
-    ).resolves.toBe("non_json_403");
+      isClaudeEnvProfileScopeDenial(new Response("not-json", { status: 403 })),
+    ).resolves.toBe(false);
     await expect(
-      classifyClaudeUsage403Response(
+      isClaudeEnvProfileScopeDenial(
         new Response("x".repeat(129), { status: 403 }),
         { maxBytes: 128 },
       ),
-    ).resolves.toBe("oversized_403");
+    ).resolves.toBe(false);
   });
 
-  it("bounds a response body that never completes", async () => {
+  it("does not recognize a response body that never completes", async () => {
     const body = new ReadableStream({
       pull: () => new Promise(() => undefined),
     });
 
     await expect(
-      classifyClaudeUsage403Response(new Response(body, { status: 403 }), {
+      isClaudeEnvProfileScopeDenial(new Response(body, { status: 403 }), {
         deadlineMs: 5,
       }),
-    ).resolves.toBe("read_timeout");
+    ).resolves.toBe(false);
   });
 });

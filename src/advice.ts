@@ -93,12 +93,22 @@ function needsClaudeInferenceAdvice(provider: ProviderQuota): boolean {
     provider.provider === "claude" &&
     provider.state.status !== "fresh" &&
     provider.state.error === CLAUDE_ENV_SCOPE_DENIAL_ERROR &&
-    (provider.attempts ?? []).some(
-      (attempt) =>
-        attempt.source === "env" &&
-        attempt.status === "failed" &&
-        attempt.error === CLAUDE_ENV_SCOPE_DENIAL_ERROR,
-    )
+    envScopeDenialEndedDiscovery(provider.attempts ?? [])
+  );
+}
+
+/**
+ * The env token is consulted first and its exact scope denial ends discovery,
+ * so no stored source was consulted on that reading and a Keychain grant could
+ * not have changed it - whether the denial itself or a later native fallback
+ * failure ended up as the report's error.
+ */
+function envScopeDenialEndedDiscovery(attempts: SourceAttempt[]): boolean {
+  return attempts.some(
+    (attempt) =>
+      attempt.source === "env" &&
+      attempt.status === "failed" &&
+      attempt.error === CLAUDE_ENV_SCOPE_DENIAL_ERROR,
   );
 }
 
@@ -106,6 +116,7 @@ function needsKeychainAccessAdvice(provider: ProviderQuota): boolean {
   const attempts = provider.attempts ?? [];
   return (
     provider.state.status !== "fresh" &&
+    !envScopeDenialEndedDiscovery(attempts) &&
     !attempts.some(isCredentialSourceReading) &&
     attempts.some(isBlockedCredentialAttempt) &&
     attempts.some(isPromptBlockedKeychainAttempt)
