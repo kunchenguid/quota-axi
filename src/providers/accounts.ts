@@ -4,7 +4,14 @@ import type {
   ProviderAdapter,
   ProviderOptions,
   ProviderQuota,
+  SourceAttempt,
 } from "../types.js";
+import {
+  markSupersededReadings,
+  subscriptionIdentity,
+  supersededReadings,
+} from "../cache.js";
+import { sourceNames } from "./common.js";
 
 /**
  * Discovery belongs to the adapter; collection never interprets credentials.
@@ -48,6 +55,8 @@ export async function fetchAccountQuotas(
   if (!accounts) return [await adapter.fetchQuota(options)];
   // Keep each adapter's declaration order, including failed accounts. Readers
   // return their own structured failure; no account selects a sibling's token.
+  // After every lane has been read, collection coalesces readings that share a
+  // verified subscription identity so a second route is not extra capacity.
   const readings: { account: ProviderAccount; report: ProviderQuota }[] = [];
   for (const account of accounts) {
     let report: ProviderQuota | undefined;
@@ -75,7 +84,7 @@ export async function fetchAccountQuotas(
       report.accountKey = account.accountKey;
     }
   }
-  return readings.map(({ report }) => report);
+  return coalesceVerifiedSubscriptions(readings.map(({ report }) => report));
 }
 
 export async function inspectAccountAuth(
@@ -122,4 +131,118 @@ export function accountColumns(report: {
   accountKey?: string;
 }): { accountKey?: string } {
   return report.accountKey ? { accountKey: report.accountKey } : {};
+}
+
+/**
+ * One published reading per verified subscription, in first-seen order.
+ *
+ * Identity is `account.accountId` when it is present and not marked
+ * unverified, or the stamp a cached snapshot recorded from such a reading.
+ * Email, path, profile label, and runner name never participate. Missing or
+ * incomparable identity stays its own lane: two unknowns are not equal, and a
+ * known id is not guessed onto a reading that lacks one.
+ *
+ * Every lane keeps its own cache slot. A superseded fresh reading rides on the
+ * winner so the same cache write stores its stamped snapshot, and a superseded
+ * stale lane keeps the snapshot it has: that stamp is what lets a route that
+ * fails later coalesce again instead of resurfacing as a separate card.
+ */
+function coalesceVerifiedSubscriptions(
+  reports: ProviderQuota[],
+): ProviderQuota[] {
+  const result: ProviderQuota[] = [];
+  for (const report of reports) {
+    const identity = subscriptionIdentity(report);
+    const existingIndex =
+      identity === undefined
+        ? -1
+        : result.findIndex(
+            (candidate) =>
+              candidate.provider === report.provider &&
+              subscriptionIdentity(candidate) === identity,
+          );
+    if (existingIndex < 0) {
+      result.push(report);
+      continue;
+    }
+    const readings = [result[existingIndex], report];
+    const merged = mergeSubscriptionReadings(readings[0], report);
+    markSupersededReadings(merged, freshSuperseded(merged, readings));
+    result[existingIndex] = merged;
+  }
+  return result;
+}
+
+function freshSuperseded(
+  winner: ProviderQuota,
+  readings: ProviderQuota[],
+): ProviderQuota[] {
+  return readings.flatMap((reading) => [
+    ...supersededReadings(reading),
+    ...(reading.state.status === "fresh" &&
+    reading.accountKey !== winner.accountKey
+      ? [reading]
+      : []),
+  ]);
+}
+
+function mergeSubscriptionReadings(
+  earlier: ProviderQuota,
+  later: ProviderQuota,
+): ProviderQuota {
+  const winner = outranks(later, earlier) ? later : earlier;
+  const attempts = mergedAttempts(earlier, later);
+  const sourcesTried = mergedSourcesTried(earlier, later, attempts);
+  return {
+    ...winner,
+    ...(attempts ? { attempts } : {}),
+    state: {
+      ...winner.state,
+      ...(sourcesTried ? { sourcesTried } : {}),
+    },
+  };
+}
+
+/**
+ * Fresh beats stale beats a rejected or failed reading so a usable sibling is
+ * never discarded for a sign-out. Two stale readings prefer the later
+ * `refreshedAt`; other ties keep declaration order. Windows stay the winner's:
+ * coalescing must not sum, average, or concatenate them.
+ */
+function outranks(later: ProviderQuota, earlier: ProviderQuota): boolean {
+  const rank = readingRank(later);
+  if (rank !== readingRank(earlier)) return rank < readingRank(earlier);
+  return rank === 1 && refreshedTime(later) > refreshedTime(earlier);
+}
+
+function refreshedTime(report: ProviderQuota): number {
+  const time = Date.parse(report.state.refreshedAt ?? "");
+  return Number.isNaN(time) ? Number.NEGATIVE_INFINITY : time;
+}
+
+function readingRank(report: ProviderQuota): number {
+  if (report.state.status === "fresh") return 0;
+  if (report.state.status === "stale" || report.state.stale) return 1;
+  return 2;
+}
+
+function mergedAttempts(
+  earlier: ProviderQuota,
+  later: ProviderQuota,
+): SourceAttempt[] | undefined {
+  const attempts = [...(earlier.attempts ?? []), ...(later.attempts ?? [])];
+  return attempts.length > 0 ? attempts : undefined;
+}
+
+function mergedSourcesTried(
+  earlier: ProviderQuota,
+  later: ProviderQuota,
+  attempts: SourceAttempt[] | undefined,
+): string[] | undefined {
+  if (attempts && attempts.length > 0) return sourceNames(attempts);
+  const names = [
+    ...(earlier.state.sourcesTried ?? []),
+    ...(later.state.sourcesTried ?? []),
+  ];
+  return names.length > 0 ? [...new Set(names)] : undefined;
 }
