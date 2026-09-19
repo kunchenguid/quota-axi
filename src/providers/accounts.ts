@@ -138,8 +138,11 @@ export function accountColumns(report: {
  * incomparable identity stays its own lane: two unknowns are not equal, and a
  * known id is not guessed onto a reading that lacks one.
  *
- * A fresh winner retires the superseded lane's cache slot, so a later run in
- * which both routes fail cannot serve the same subscription twice from cache.
+ * A fresh winner retires a superseded fresh lane's cache slot, so a later run
+ * in which both routes fail cannot serve the same subscription twice from
+ * cache. A superseded stale lane keeps its stamped snapshot: that stamp is what
+ * lets the still-failing route coalesce again instead of resurfacing as a
+ * separate unavailable card.
  */
 function coalesceVerifiedSubscriptions(
   reports: ProviderQuota[],
@@ -173,7 +176,11 @@ function retireSupersededSnapshot(
   superseded: ProviderQuota,
   winner: ProviderQuota,
 ): void {
-  if (!superseded.accountKey || superseded.accountKey === winner.accountKey)
+  if (
+    superseded.state.status !== "fresh" ||
+    !superseded.accountKey ||
+    superseded.accountKey === winner.accountKey
+  )
     return;
   try {
     deleteCachedProvider(superseded.provider, superseded.accountKey);
