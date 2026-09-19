@@ -312,6 +312,30 @@ describe("verified subscription coalescing", () => {
       ["openai-codex-other", "stale", 80],
     ]);
     expect(JSON.stringify(partialOutage)).not.toContain("subscription");
+    writeCachedProviders(partialOutage);
+
+    const continuedOutage = await fetchAccountQuotas(
+      laneAdapter(keys, (key) => {
+        if (key === "openai-codex-2")
+          return live("acct-a", 35, "oauth", undefined, undefined, "codex");
+        const cached = readCachedProvider("codex", key);
+        return cached
+          ? staleFromCache(cached, "fetch failed", ["oauth", "cache"], [])
+          : failed(key);
+      }),
+      OPTIONS,
+    );
+
+    expect(
+      continuedOutage.map((report) => [
+        report.accountKey,
+        report.state.status,
+        report.windows[0]?.percentUsed,
+      ]),
+    ).toEqual([
+      ["openai-codex-2", "fresh", 35],
+      ["openai-codex-other", "stale", 80],
+    ]);
   });
 
   it("keeps the superseded lane's snapshot when no coalesced reading is fresh", async () => {
