@@ -1,7 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { annotateQuotaAdvice } from "../../src/advice.js";
+import { readCachedProvider, writeCachedProviders } from "../../src/cache.js";
 import { withQuotaSemantics } from "../../src/interpretation.js";
 import { fetchAccountQuotas } from "../../src/providers/accounts.js";
+import { staleFromCache } from "../../src/providers/common.js";
 import { quotaJsonReport, renderQuotaToon } from "../../src/render.js";
 import { renderQuotaTui } from "../../src/tui.js";
 import type {
@@ -18,6 +23,20 @@ const OPTIONS: ProviderOptions = {
 };
 
 const GENERATED_AT = "2026-07-15T12:00:00.000Z";
+
+const originalXdgCacheHome = process.env.XDG_CACHE_HOME;
+let cacheHome: string;
+
+beforeEach(() => {
+  cacheHome = mkdtempSync(join(tmpdir(), "quota-axi-accounts-"));
+  process.env.XDG_CACHE_HOME = cacheHome;
+});
+
+afterEach(() => {
+  if (originalXdgCacheHome === undefined) delete process.env.XDG_CACHE_HOME;
+  else process.env.XDG_CACHE_HOME = originalXdgCacheHome;
+  rmSync(cacheHome, { recursive: true, force: true });
+});
 
 describe("verified subscription coalescing", () => {
   it("reports native and Pi access to the same subscription once beside a distinct one", async () => {
@@ -180,6 +199,86 @@ describe("verified subscription coalescing", () => {
     });
   });
 
+  it("retires the superseded lane's snapshot so a later outage serves the subscription once", async () => {
+    writeCachedProviders([
+      {
+        ...live("acct-a", 20, "oauth", undefined, undefined, "codex"),
+        accountKey: "codex-home",
+      },
+      {
+        ...live("acct-a", 20, "cli", undefined, undefined, "codex"),
+        accountKey: "openai-codex-work",
+      },
+      {
+        ...live("acct-b", 80, "api", undefined, undefined, "codex"),
+        accountKey: "openai-codex-other",
+      },
+    ]);
+    const keys = ["codex-home", "openai-codex-work", "openai-codex-other"];
+
+    const coalesced = await fetchAccountQuotas(
+      laneAdapter(keys, (key) =>
+        live(
+          key === "openai-codex-other" ? "acct-b" : "acct-a",
+          key === "openai-codex-other" ? 80 : 25,
+          "oauth",
+          undefined,
+          undefined,
+          "codex",
+        ),
+      ),
+      OPTIONS,
+    );
+    writeCachedProviders(coalesced);
+    expect(summarize(coalesced)).toEqual([
+      ["codex-home", "acct-a", "fresh", 25],
+      ["openai-codex-other", "acct-b", "fresh", 80],
+    ]);
+
+    const outage = await fetchAccountQuotas(
+      laneAdapter(keys, (key) => {
+        const cached = readCachedProvider("codex", key);
+        return cached
+          ? staleFromCache(cached, "fetch failed", ["oauth", "cache"], [])
+          : failed(key);
+      }),
+      OPTIONS,
+    );
+
+    expect(
+      outage
+        .filter((report) => report.windows.length > 0)
+        .map((report) => [
+          report.accountKey,
+          report.state.status,
+          report.windows[0]?.percentUsed,
+        ]),
+    ).toEqual([
+      ["codex-home", "stale", 25],
+      ["openai-codex-other", "stale", 80],
+    ]);
+  });
+
+  it("keeps the superseded lane's snapshot when no coalesced reading is fresh", async () => {
+    writeCachedProviders([
+      {
+        ...live("acct-a", 20, "cli", undefined, undefined, "codex"),
+        accountKey: "openai-codex-work",
+      },
+    ]);
+
+    await fetchAccountQuotas(
+      laneAdapter(["codex-home", "openai-codex-work"], () => ({
+        ...rejected("acct-a", "oauth"),
+        provider: "codex",
+        label: "Codex",
+      })),
+      OPTIONS,
+    );
+
+    expect(readCachedProvider("codex", "openai-codex-work")).toBeDefined();
+  });
+
   it("publishes the same coalesced lanes to JSON, TOON, and the TUI", async () => {
     const reports = await fetchAccountQuotas(
       adapter([
@@ -264,16 +363,60 @@ function adapter(lanes: [string, ProviderQuota][]): ProviderAdapter {
   };
 }
 
+function laneAdapter(
+  keys: string[],
+  read: (accountKey: string) => ProviderQuota,
+): ProviderAdapter {
+  return {
+    id: "codex",
+    label: "Codex",
+    async discoverAccounts() {
+      return keys.map((accountKey) => ({
+        accountKey,
+        async fetchQuota() {
+          return read(accountKey);
+        },
+        async inspectAuth() {
+          return { provider: "codex", sources: [] };
+        },
+      }));
+    },
+    async fetchQuota() {
+      throw new Error("single-lane fetchQuota should not run when lanes exist");
+    },
+    async inspectAuth() {
+      return { provider: "codex", sources: [] };
+    },
+  };
+}
+
+function failed(accountKey: string): ProviderQuota {
+  return {
+    provider: "codex",
+    label: "Codex",
+    source: "oauth",
+    accountKey,
+    windows: [],
+    state: {
+      status: "error",
+      stale: false,
+      error: "fetch failed",
+      sourcesTried: ["oauth"],
+    },
+  };
+}
+
 function live(
   accountId: string | undefined,
   percentUsed: number,
   source: ProviderSource,
   email?: string,
   identityStatus?: "verified" | "unverified",
+  provider: "claude" | "codex" = "claude",
 ): ProviderQuota {
   return {
-    provider: "claude",
-    label: "Claude",
+    provider,
+    label: provider === "codex" ? "Codex" : "Claude",
     source,
     account: {
       ...(accountId !== undefined ? { accountId } : {}),

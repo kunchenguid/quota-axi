@@ -6,6 +6,7 @@ import type {
   ProviderQuota,
   SourceAttempt,
 } from "../types.js";
+import { deleteCachedProvider } from "../cache.js";
 import { sourceNames } from "./common.js";
 
 /**
@@ -135,6 +136,10 @@ export function accountColumns(report: {
  * unverified. Email, path, profile label, and runner name never participate.
  * Missing or incomparable identity stays its own lane: two unknowns are not
  * equal, and a known id is not guessed onto a reading that lacks one.
+ *
+ * A fresh winner retires the superseded lane's cache slot, so a later run in
+ * which both routes fail cannot serve the same subscription twice from cache,
+ * where stale readings no longer carry the identity that coalesced them.
  */
 function coalesceVerifiedSubscriptions(
   reports: ProviderQuota[],
@@ -154,12 +159,27 @@ function coalesceVerifiedSubscriptions(
       result.push(report);
       continue;
     }
-    result[existingIndex] = mergeSubscriptionReadings(
-      result[existingIndex],
-      report,
-    );
+    const merged = mergeSubscriptionReadings(result[existingIndex], report);
+    if (merged.state.status === "fresh") {
+      for (const superseded of [result[existingIndex], report])
+        retireSupersededSnapshot(superseded, merged);
+    }
+    result[existingIndex] = merged;
   }
   return result;
+}
+
+function retireSupersededSnapshot(
+  superseded: ProviderQuota,
+  winner: ProviderQuota,
+): void {
+  if (!superseded.accountKey || superseded.accountKey === winner.accountKey)
+    return;
+  try {
+    deleteCachedProvider(superseded.provider, superseded.accountKey);
+  } catch {
+    return;
+  }
 }
 
 function verifiedSubscriptionIdentity(

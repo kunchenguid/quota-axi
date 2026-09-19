@@ -395,6 +395,7 @@ Missing or incomparable identity stays its own lane so the uncertainty stays vis
 A successful response that supplies comparable identity missing from the local store is enough to coalesce the resulting cards.
 When two readings share an identity, the usable one is published (fresh over stale over a rejected source) and the other is not a second card.
 Windows are never summed, averaged, or concatenated across those readings.
+When the published reading is fresh, the other lane's cached snapshot is removed, so a later run in which every route fails cannot serve that subscription twice from cache.
 Machine-readable output and the TUI share the same coalesced provider list.
 Codex still discovers and folds its own native and Pi lanes as described above; this collection step is the shared contract any multi-account provider goes through.
 
