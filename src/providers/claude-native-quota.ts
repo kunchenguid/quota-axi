@@ -2,6 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
+import { stripVTControlCharacters } from "node:util";
 import { findCommandPath } from "../lib/process.js";
 import type { ProviderStatus, QuotaWindow } from "../types.js";
 import { withRemaining } from "./common.js";
@@ -11,11 +12,6 @@ const NATIVE_KILL_GRACE_MS = 2_000;
 const MAX_DEBUG_BYTES = 4 * 1024 * 1024;
 const FIVE_HOURS_SECONDS = 18_000;
 const SEVEN_DAYS_SECONDS = 604_800;
-const ANSI_ESCAPE = String.fromCharCode(27);
-const ANSI_ESCAPE_PATTERN = new RegExp(
-  `${ANSI_ESCAPE}(?:[@-_]|\\[[0-?]*[ -/]*[@-~])`,
-  "g",
-);
 
 const CLAUDE_ARGS = [
   "--debug",
@@ -199,7 +195,7 @@ export function parseClaudeNativeDebug(
   raw: string,
   now = Date.now(),
 ): ClaudeNativeQuotaResult {
-  const clean = raw.replace(ANSI_ESCAPE_PATTERN, "");
+  const clean = stripVTControlCharacters(raw);
   const responsePattern =
     /\[(log_[^\]]+)\] response start([\s\S]{0,12000}?)(?=\[log_|$)/g;
   let latestBlock: string | undefined;

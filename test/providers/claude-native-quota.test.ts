@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join, relative } from "node:path";
+import { inspect } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   fetchClaudeNativeQuota,
@@ -72,6 +73,39 @@ describe("Claude native quota debug parsing", () => {
     });
     expect(JSON.stringify(result)).not.toContain(SECRET);
   });
+
+  it.each([200, 429])(
+    "reads colored SDK status and quota headers from a %s response",
+    (status) => {
+      const headers = {
+        ...validHeaders(),
+        "retry-after": "60",
+      };
+      const raw = `[log_fixture] response start ${inspect(
+        {
+          status,
+          headers: { ...headers, authorization: `Bearer ${SECRET}` },
+        },
+        { colors: true, depth: null },
+      )}\n`;
+
+      const result = parseClaudeNativeDebug(raw, NOW);
+
+      expect(result).toEqual(
+        parseClaudeNativeDebug(responseLog(status, headers), NOW),
+      );
+      expect(result).toMatchObject({
+        windows: [
+          expect.objectContaining({ id: "five_hour", percentUsed: 25 }),
+          expect.objectContaining({ id: "seven_day", percentUsed: 50 }),
+        ],
+        ...(status === 429
+          ? { status: "rate_limited", retryAfter: "2026-09-19T06:01:00.000Z" }
+          : { kind: "success" }),
+      });
+      expect(JSON.stringify(result)).not.toContain(SECRET);
+    },
+  );
 
   it.each([
     ["missing", responseLog(200)],
