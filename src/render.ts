@@ -146,6 +146,7 @@ function quotaBlocks(response: QuotaAxiResponse): ProviderBlocks {
     blocks.attention.push(
       ...providerAttention(provider, measured, scopeAttention.length),
     );
+    blocks.attention.push(...shareRows(provider));
     blocks.attention.push(...scopeAttention);
   }
   return blocks;
@@ -205,6 +206,25 @@ function providerAttention(
     ...providerStateRows(provider, measured, scopeRows),
     ...degradedSourceRows(provider),
   ];
+}
+
+function shareRows(provider: ProviderQuota): AttentionRow[] {
+  return provider.windows
+    .filter((window) => window.shareOf)
+    .map((window) => ({
+      ...providerColumns(provider),
+      scope: "all",
+      kind: "share",
+      detail: shareDetail(window),
+      remedy: NONE,
+    }));
+}
+
+function shareDetail(window: QuotaWindow): string {
+  const relationship = `${window.id} of ${window.shareOf}`;
+  return window.percentUsed === undefined
+    ? relationship
+    : `${relationship}${DETAIL_SEPARATOR}${window.percentUsed}`;
 }
 
 /**

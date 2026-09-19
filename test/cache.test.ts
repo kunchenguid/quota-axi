@@ -454,6 +454,28 @@ oauth_host = "https://auth.kimi.ai"
     expect(cachedWindow?.pace).toBeUndefined();
   });
 
+  it("retains a used-share parent marker without inventing remaining", () => {
+    useTempCache();
+    const provider = quota("copilot", 40);
+    provider.windows.push({
+      id: "month_code",
+      label: "code month",
+      kind: "monthly",
+      percentUsed: 25,
+      shareOf: "month_total",
+    });
+
+    writeCachedProviders([provider]);
+
+    const cached = readCachedProvider("copilot")?.windows[1];
+    expect(cached).toMatchObject({
+      id: "month_code",
+      percentUsed: 25,
+      shareOf: "month_total",
+    });
+    expect(cached?.percentRemaining).toBeUndefined();
+  });
+
   it("deletes a definitive-auth provider while retaining other snapshots", () => {
     useTempCache();
     writeCachedProviders([quota("claude", 10), quota("kimi", 20)]);

@@ -185,6 +185,12 @@ export type QuotaWindow = {
   kind: "session" | "weekly" | "monthly" | "model" | "credits" | "unknown";
   percentUsed?: number;
   percentRemaining?: number;
+  /**
+   * Parent window this used-share belongs to. Present only when the window is
+   * not an independent allowance: `percentUsed` is the share of that parent,
+   * and `percentRemaining` is omitted rather than derived.
+   */
+  shareOf?: string;
   startsAt?: string;
   resetsAt?: string;
   resetText?: string;

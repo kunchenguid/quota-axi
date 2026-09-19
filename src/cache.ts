@@ -590,6 +590,7 @@ function normalizeCachedWindow(raw: unknown): QuotaWindow | undefined {
   const result: QuotaWindow = { id, label, kind };
   assignNumber(result, "percentUsed", data.percentUsed);
   assignNumber(result, "percentRemaining", data.percentRemaining);
+  assignString(result, "shareOf", data.shareOf);
   assignString(result, "startsAt", data.startsAt);
   assignString(result, "resetsAt", data.resetsAt);
   assignString(result, "resetText", data.resetText);
