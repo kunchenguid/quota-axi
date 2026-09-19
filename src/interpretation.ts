@@ -163,7 +163,33 @@ function semanticsFor(
         provider.state.untrustedWindowIds ?? [],
         generatedAt,
       );
+    case "elevenlabs":
+      return elevenLabsSemantics(provider.windows, generatedAt);
   }
+}
+
+/**
+ * ElevenLabs meters one thing: the characters the subscription plan includes
+ * for the current refresh period. It is scoped `included_characters` rather
+ * than `all_models` for the same reason Command Code's windows are scoped
+ * `included_credits` - the vendor's `can_extend_character_limit` plans bill
+ * usage past the included allowance, so a zeroed window says that allowance is
+ * spent, not that requests stop. It is a speech allowance rather than a
+ * coding-agent lane, so it never binds a model scope either.
+ */
+function elevenLabsSemantics(
+  windows: QuotaWindow[],
+  generatedAt: string,
+): QuotaSemantics {
+  const characters = windows.filter(({ id }) => id === "characters");
+  const description =
+    "ElevenLabs' characters window is the subscription plan's included character allowance for the current refresh period, so it bounds the included_characters scope only. Plans that can extend the character limit bill usage past it, so a zeroed window means the included allowance is spent, not that requests are refused.";
+  return knownSemantics(
+    characters.length > 0
+      ? [availability("included_characters", characters, generatedAt)]
+      : [],
+    description,
+  );
 }
 
 /**
