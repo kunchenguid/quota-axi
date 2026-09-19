@@ -434,13 +434,6 @@ function grokSemantics(
 
 const KIMI_ACCOUNT_WINDOW_IDS = new Set(["weekly", "five_hour", "month_total"]);
 
-/**
- * `month_code` is the code-typed share of `month_total` as the vendor serves
- * it, not a cap of its own, so it is recognized - never unresolved - but it
- * bounds nothing and no remaining is derived from it.
- */
-const KIMI_SHARE_WINDOW_IDS = new Set(["month_code"]);
-
 const KIMI_CODE_SHARE_NOTE =
   "The monthly code window is the code-typed share of that monthly total rather than a separate allowance, so it adds no bound.";
 
@@ -450,11 +443,11 @@ function kimiSemantics(
   generatedAt: string,
 ): QuotaSemantics {
   const bounds = windows.filter(({ id }) => KIMI_ACCOUNT_WINDOW_IDS.has(id));
+  // A window marked `shareOf` is a used-share of a parent window, not a cap
+  // of its own, so it is recognized - never unresolved - but bounds nothing.
   const unresolved = windows.filter(
     ({ id, shareOf }) =>
-      !KIMI_ACCOUNT_WINDOW_IDS.has(id) &&
-      !KIMI_SHARE_WINDOW_IDS.has(id) &&
-      shareOf === undefined,
+      !KIMI_ACCOUNT_WINDOW_IDS.has(id) && shareOf === undefined,
   );
   const unresolvedWindowIds = [
     ...new Set([...unresolved.map(({ id }) => id), ...untrustedWindowIds]),

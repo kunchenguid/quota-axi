@@ -741,6 +741,19 @@ describe("quota semantics", () => {
     ]);
   });
 
+  it("treats a Kimi month_code window without a share marker as unresolved", () => {
+    const result = withQuotaSemantics(
+      provider("kimi", [
+        window("weekly", "weekly", 59),
+        window("month_code", "monthly", 75),
+      ]),
+      GENERATED_AT,
+    );
+
+    expect(result.quotaSemantics?.status).toBe("partial");
+    expect(result.quotaSemantics?.unresolvedWindowIds).toEqual(["month_code"]);
+  });
+
   it("keeps valid Kimi bounds while marking unparsed limits partial", () => {
     const kimi = provider("kimi", [window("weekly", "weekly", 59)]);
     kimi.state.untrustedWindowIds = ["limit:2"];
