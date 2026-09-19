@@ -154,6 +154,30 @@ export function subscriptionIdentity(
   return (report as SubscriptionStampedQuota)[SUBSCRIPTION_IDENTITY];
 }
 
+/**
+ * Cache slots a published reading superseded when it coalesced lanes of one
+ * subscription. Collection only marks them; `writeCachedProviders` retires
+ * them in the same file write that persists the winner, so a failed write
+ * cannot leave the superseded snapshot deleted while the winner went unsaved.
+ * A symbol key keeps the mark off every serialized surface.
+ */
+const RETIRED_ACCOUNT_KEYS = Symbol("retiredAccountKeys");
+
+type RetiringQuota = ProviderQuota & {
+  [RETIRED_ACCOUNT_KEYS]?: readonly string[];
+};
+
+export function retiredAccountKeys(report: ProviderQuota): readonly string[] {
+  return (report as RetiringQuota)[RETIRED_ACCOUNT_KEYS] ?? [];
+}
+
+export function markRetiredAccountKeys(
+  report: ProviderQuota,
+  accountKeys: readonly string[],
+): void {
+  (report as RetiringQuota)[RETIRED_ACCOUNT_KEYS] = accountKeys;
+}
+
 type CachedProvider = {
   snapshot: ProviderQuota;
   credentialContextId?: string;
@@ -259,6 +283,9 @@ export function writeCachedProviders(providers: ProviderQuota[]): void {
       )
       .map(cacheIdentity),
   );
+  for (const provider of providers)
+    for (const accountKey of retiredAccountKeys(provider))
+      clearProviders.add(cacheIdentity({ ...provider, accountKey }));
   const cacheable = providers
     .map(toCacheProvider)
     .filter((provider): provider is CachedProvider => Boolean(provider));

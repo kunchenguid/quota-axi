@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -257,6 +257,54 @@ describe("verified subscription coalescing", () => {
       ["codex-home", "stale", 25],
       ["openai-codex-other", "stale", 80],
     ]);
+  });
+
+  it("retires the superseded slot only in the cache write that saves the winner", async () => {
+    writeCachedProviders([
+      {
+        ...live("acct-a", 20, "oauth", undefined, undefined, "codex"),
+        accountKey: "codex-home",
+      },
+      {
+        ...live("acct-a", 20, "cli", undefined, undefined, "codex"),
+        accountKey: "openai-codex-work",
+      },
+    ]);
+    const coalesced = await fetchAccountQuotas(
+      laneAdapter(["codex-home", "openai-codex-work"], () =>
+        live("acct-a", 25, "oauth", undefined, undefined, "codex"),
+      ),
+      OPTIONS,
+    );
+    expect(summarize(coalesced)).toEqual([
+      ["codex-home", "acct-a", "fresh", 25],
+    ]);
+    expect(readCachedProvider("codex", "openai-codex-work")).toBeDefined();
+
+    const published = annotateQuotaAdvice({
+      generatedAt: GENERATED_AT,
+      providers: coalesced.map((report) =>
+        withQuotaSemantics(report, GENERATED_AT),
+      ),
+    }).providers;
+
+    const cacheDir = join(cacheHome, "quota-axi");
+    const blockedTemp = join(cacheDir, `quotas.json.${process.pid}.tmp`);
+    mkdirSync(blockedTemp);
+    expect(() => writeCachedProviders(published)).toThrow();
+    expect(
+      readCachedProvider("codex", "openai-codex-work")?.windows[0]?.percentUsed,
+    ).toBe(20);
+    expect(
+      readCachedProvider("codex", "codex-home")?.windows[0]?.percentUsed,
+    ).toBe(20);
+
+    rmSync(blockedTemp, { recursive: true });
+    writeCachedProviders(published);
+    expect(readCachedProvider("codex", "openai-codex-work")).toBeUndefined();
+    expect(
+      readCachedProvider("codex", "codex-home")?.windows[0]?.percentUsed,
+    ).toBe(25);
   });
 
   it("recognises a stale lane as the same subscription as a fresh sibling after a prior coalesce", async () => {
