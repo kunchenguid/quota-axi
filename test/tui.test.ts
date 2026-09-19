@@ -834,6 +834,85 @@ describe("cards for providers with no combinable bound", () => {
   );
 });
 
+describe("used-share window rows", () => {
+  it("prints percentUsed of the parent instead of a remaining bar or ?", () => {
+    const kimi = withQuotaSemantics(
+      {
+        provider: "kimi",
+        label: "Kimi",
+        source: "api",
+        windows: [
+          {
+            id: "five_hour",
+            label: "session",
+            kind: "session",
+            percentUsed: 30,
+            percentRemaining: 70,
+            resetsAt: "2026-08-07T04:00:00.000Z",
+            windowSeconds: 18_000,
+          },
+          {
+            id: "month_total",
+            label: "month",
+            kind: "monthly",
+            percentUsed: 40,
+            percentRemaining: 60,
+            resetsAt: "2026-09-01T00:00:00.000Z",
+          },
+          {
+            id: "month_code",
+            label: "code month",
+            kind: "monthly",
+            percentUsed: 25,
+            shareOf: "month_total",
+            resetsAt: "2026-09-01T00:00:00.000Z",
+          },
+        ],
+        state: { status: "fresh", stale: false, sourcesTried: ["api"] },
+      },
+      GENERATED_AT,
+    );
+    const lines = renderQuotaTui(
+      { generatedAt: GENERATED_AT, schemaVersion: 5, providers: [kimi] },
+      { timeZone: "America/Los_Angeles" },
+    ).split("\n");
+    const code = findLine(lines, "│   code");
+    expect(code).toContain("25% of month");
+    expect(code).not.toContain("?");
+    expect(code).not.toContain("━");
+    expect(code).not.toContain("─");
+    expect(findLine(lines, "│   session")).toContain(" 70%");
+    expect(findLine(lines, "│   month")).toContain(" 60%");
+  });
+
+  it("still shows ? when remaining is absent on a window that is not a share", () => {
+    const copilot = withQuotaSemantics(
+      {
+        provider: "copilot",
+        label: "Copilot",
+        source: "api",
+        windows: [
+          {
+            id: "chat",
+            label: "chat",
+            kind: "monthly",
+            percentUsed: 42,
+          },
+        ],
+        state: { status: "fresh", stale: false, sourcesTried: ["apps-json"] },
+      },
+      GENERATED_AT,
+    );
+    const lines = renderQuotaTui(
+      { generatedAt: GENERATED_AT, schemaVersion: 5, providers: [copilot] },
+      { timeZone: "America/Los_Angeles" },
+    ).split("\n");
+    const chat = findLine(lines, "│   chat");
+    expect(chat).toContain("?");
+    expect(chat).not.toContain("% of");
+  });
+});
+
 describe("thin bars with pace markers", () => {
   it("places the marker at the linear-pace position over the fill", () => {
     expect(barText(thinBar(97, 92.9, 13))).toBe("━━━━━━━━━━━━┃");

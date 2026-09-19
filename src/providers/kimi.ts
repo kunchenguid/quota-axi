@@ -1088,7 +1088,7 @@ const KIMI_USAGES_WINDOWS: ReadonlyArray<{
   label: string;
   kind: QuotaWindow["kind"];
   windowSeconds?: number;
-  shareOfTotal?: true;
+  shareOf?: string;
 }> = [
   {
     key: "limit_5h",
@@ -1115,7 +1115,7 @@ const KIMI_USAGES_WINDOWS: ReadonlyArray<{
     id: "month_code",
     label: "code month",
     kind: "monthly",
-    shareOfTotal: true,
+    shareOf: "month_total",
   },
 ];
 
@@ -1202,8 +1202,8 @@ function normalizeUsagesMap(value: unknown): NormalizedKimiPayload | undefined {
       label: spec.label,
       kind: spec.kind,
       percentUsed: detail.percentUsed,
-      ...(spec.shareOfTotal
-        ? {}
+      ...(spec.shareOf
+        ? { shareOf: spec.shareOf }
         : { percentRemaining: detail.percentRemaining }),
       ...(typeof spec.windowSeconds === "number"
         ? { windowSeconds: spec.windowSeconds }

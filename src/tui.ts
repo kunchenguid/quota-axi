@@ -235,7 +235,9 @@ function buildLiveCard(provider: ProviderQuota, generatedAtMs: number): Card {
   if (provider.windows.length > 0) {
     lines.push(interior([], "border"));
     for (const window of provider.windows) {
-      lines.push(interior(windowRow(window, generatedAtMs), "border"));
+      lines.push(
+        interior(windowRow(window, generatedAtMs, provider.windows), "border"),
+      );
     }
   }
 
@@ -484,7 +486,14 @@ function interior(content: Line, borderStyle: StyleName): Line {
   ];
 }
 
-function windowRow(window: QuotaWindow, generatedAtMs: number): Line {
+function windowRow(
+  window: QuotaWindow,
+  generatedAtMs: number,
+  windows: QuotaWindow[],
+): Line {
+  if (window.shareOf) {
+    return shareWindowRow(window, generatedAtMs, windows);
+  }
   const pct = window.percentRemaining;
   const marker = window.pace?.timeRemainingPercent;
   const reset = resetCountdown(window, generatedAtMs);
@@ -501,6 +510,42 @@ function windowRow(window: QuotaWindow, generatedAtMs: number): Line {
     { text: padEndDisplay(reset, 6), style: "dim" },
     { text: " " },
   ];
+}
+
+/**
+ * A used-share has no own remaining, so the remaining bar and `?` would make
+ * it look unmeasured. Print the used percent of the parent instead.
+ */
+function shareWindowRow(
+  window: QuotaWindow,
+  generatedAtMs: number,
+  windows: QuotaWindow[],
+): Line {
+  const reset = resetCountdown(window, generatedAtMs);
+  const captionWidth = WINDOW_BAR_WIDTH + 1 + 4;
+  return [
+    { text: "   " },
+    { text: padEndDisplay(shortWindowLabel(window), 8), style: "label" },
+    {
+      text: padEndDisplay(
+        truncate(shareCaption(window, windows), captionWidth),
+        captionWidth,
+      ),
+      style: "label",
+    },
+    { text: "  " },
+    { text: padEndDisplay(reset, 6), style: "dim" },
+    { text: " " },
+  ];
+}
+
+function shareCaption(window: QuotaWindow, windows: QuotaWindow[]): string {
+  const parent = windows.find((candidate) => candidate.id === window.shareOf);
+  const parentLabel = parent
+    ? shortWindowLabel(parent)
+    : truncate(window.shareOf ?? "", 7);
+  if (window.percentUsed === undefined) return `share of ${parentLabel}`;
+  return `${Math.round(window.percentUsed)}% of ${parentLabel}`;
 }
 
 /**

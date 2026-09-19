@@ -835,6 +835,54 @@ describe("CLI quota rendering", () => {
     );
   });
 
+  it("names a used-share window in attention[] without a code quota[] row", async () => {
+    useTempCache();
+    PROVIDERS.kimi = providerWithQuota({
+      ...freshKimiQuota(),
+      windows: [
+        ...freshKimiQuota().windows,
+        {
+          id: "month_total",
+          label: "month",
+          kind: "monthly",
+          percentUsed: 40,
+          percentRemaining: 60,
+          resetsAt: "2027-03-01T00:00:00.000Z",
+        },
+        {
+          id: "month_code",
+          label: "code month",
+          kind: "monthly",
+          percentUsed: 25,
+          shareOf: "month_total",
+          resetsAt: "2027-03-01T00:00:00.000Z",
+        },
+      ],
+    });
+
+    const toon = await capture(["--provider", "kimi"]);
+    expect(toonRows(toon, "attention")).toContainEqual([
+      "kimi",
+      "all",
+      "share",
+      "month_code of month_total · 25",
+      "none",
+    ]);
+    expect(toonRows(toon, "quota").map((row) => row[1])).toEqual([
+      "all_models",
+    ]);
+    expect(toon).not.toMatch(/kimi,code[_,]/);
+
+    const json = JSON.parse(
+      await capture(["--provider", "kimi", "--json"]),
+    ) as QuotaAxiResponse;
+    const monthCode = json.providers[0]?.windows.find(
+      (window) => window.id === "month_code",
+    );
+    expect(monthCode?.shareOf).toBe("month_total");
+    expect(monthCode?.percentRemaining).toBeUndefined();
+  });
+
   it("renders the card-grid report for --tui and composes with --provider", async () => {
     useTempCache();
     PROVIDERS.codex = providerWithQuota(freshCodexQuota());
