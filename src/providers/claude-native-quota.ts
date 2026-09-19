@@ -161,7 +161,8 @@ function selectNativeObservation(
   if (observed.length === 0) {
     return (
       [stdout, stderr].find(
-        (result) => result.kind === "failure" && result.status === "rate_limited",
+        (result) =>
+          result.kind === "failure" && result.status === "rate_limited",
       ) ?? failure("claude_native_quota_unavailable")
     );
   }
