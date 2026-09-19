@@ -21,13 +21,16 @@ import type { ProviderQuota, SourceAttempt } from "../src/types.js";
  */
 
 type PiProviderCase = {
-  provider: "codex" | "kimi" | "grok";
+  provider: "codex" | "kimi" | "grok" | "opencode-go";
   /** Property name Pi stores this provider's credential under. */
   piKey: string;
   /** Attempt source name the adapter reports for its Pi store. */
   piSource: string;
-  /** A structurally complete, unexpired entry for this provider. */
-  liveEntry: Record<string, unknown>;
+  /** Credential used to exercise advisory stored expiry, when applicable. */
+  expiredProbe?: {
+    entry: Record<string, unknown>;
+    token: string;
+  };
 };
 
 const CASES: PiProviderCase[] = [
@@ -35,35 +38,46 @@ const CASES: PiProviderCase[] = [
     provider: "codex",
     piKey: "openai-codex",
     piSource: "pi:openai-codex",
-    liveEntry: {
-      type: "oauth",
-      access: "pi-codex-probe-token",
-      refresh: "must-not-be-read",
-      expires: Date.now() + 3_600_000,
-      accountId: "acct-contract-fixture",
+    expiredProbe: {
+      token: "pi-codex-probe-token",
+      entry: {
+        type: "oauth",
+        access: "pi-codex-probe-token",
+        refresh: "must-not-be-read",
+        accountId: "acct-contract-fixture",
+      },
     },
   },
   {
     provider: "kimi",
     piKey: "kimi-coding",
     piSource: "pi:kimi-coding",
-    liveEntry: {
-      type: "oauth",
-      access: "pi-kimi-probe-token",
-      refresh: "must-not-be-read",
-      expires: Date.now() + 3_600_000,
+    expiredProbe: {
+      token: "pi-kimi-probe-token",
+      entry: {
+        type: "oauth",
+        access: "pi-kimi-probe-token",
+        refresh: "must-not-be-read",
+      },
     },
   },
   {
     provider: "grok",
     piKey: "xai",
     piSource: "pi:xai",
-    liveEntry: {
-      type: "oauth",
-      access: "pi-xai-probe-token",
-      refresh: "must-not-be-read",
-      expires: Date.now() + 3_600_000,
+    expiredProbe: {
+      token: "pi-xai-probe-token",
+      entry: {
+        type: "oauth",
+        access: "pi-xai-probe-token",
+        refresh: "must-not-be-read",
+      },
     },
+  },
+  {
+    provider: "opencode-go",
+    piKey: "opencode-go",
+    piSource: "pi:opencode-go",
   },
 ];
 
@@ -198,19 +212,24 @@ describe("credential source contract", { timeout: 30_000 }, () => {
       },
     );
 
-    it("probes a stored-expired Pi credential instead of skipping it", async () => {
-      // Stored expiry is advisory ordering. The endpoint, not the `expires`
-      // field, is the only thing allowed to produce an auth verdict.
-      writePiStore({
-        [testCase.piKey]: { ...testCase.liveEntry, expires: Date.now() - 1 },
+    const expiredProbe = testCase.expiredProbe;
+    if (expiredProbe) {
+      it("probes a stored-expired Pi credential instead of skipping it", async () => {
+        // Stored expiry is advisory ordering. The endpoint, not the `expires`
+        // field, is the only thing allowed to produce an auth verdict.
+        writePiStore({
+          [testCase.piKey]: {
+            ...expiredProbe.entry,
+            expires: Date.now() - 1,
+          },
+        });
+        const api = stubRejectingApi();
+
+        await readQuota(testCase.provider);
+
+        expect(api.bearers).toContain(`Bearer ${expiredProbe.token}`);
       });
-      const api = stubRejectingApi();
-
-      await readQuota(testCase.provider);
-
-      const token = testCase.liveEntry.access as string;
-      expect(api.bearers).toContain(`Bearer ${token}`);
-    });
+    }
   });
 
   /**
