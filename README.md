@@ -398,6 +398,7 @@ When two readings share an identity, the usable one is published (fresh over sta
 Between two stale readings, the one refreshed more recently is published.
 Windows are never summed, averaged, or concatenated across those readings.
 When the published reading is fresh, another lane's snapshot is removed if that lane also read fresh, so a later run in which every route fails cannot serve that subscription twice from cache.
+That removal is part of the same cache write that saves the published reading, so if that write fails, the other lane's snapshot is still there.
 A lane that was already failing and served its own stale snapshot keeps it, so while that route keeps failing it still joins the fresh reading instead of reappearing as a separate unavailable report.
 A cached snapshot also records a SHA-256 hash of the verified subscription identity it was read from (never the id itself), so a stale reading served from one lane still coalesces with a fresh reading of the same subscription from another.
 Machine-readable output and the TUI share the same coalesced provider list.
