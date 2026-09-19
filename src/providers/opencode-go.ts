@@ -197,14 +197,8 @@ type ResolvedCredentialSource = {
 };
 
 async function fetchQuota(dependencies: Dependencies): Promise<ProviderQuota> {
-  const resolved = dependencies.credentialSources.map(({ name, source }) => ({
-    name,
-    resolution: resolveSafely(source),
-  }));
-  const selection = await selectCredential(
-    credentialCandidates(resolved),
-    (candidate) => attemptCandidate(candidate, dependencies),
-  );
+  const { resolved, selection } =
+    await selectOpenCodeGoCredential(dependencies);
   const attempts = sourceAttempts(resolved, selection);
 
   if (selection.outcome === "quota" && selection.result) {
@@ -253,20 +247,51 @@ function inspectSafely(
   }
 }
 
-function credentialCandidates(
-  resolved: readonly ResolvedCredentialSource[],
-): readonly SelectionCandidate<string>[] {
-  const candidates: SelectionCandidate<string>[] = [];
-  for (const { name, resolution } of resolved) {
-    if (resolution.status === "available") {
-      candidates.push({
-        source: name,
-        localState: "valid",
-        credential: resolution.key,
-      });
+async function selectOpenCodeGoCredential(
+  dependencies: Dependencies,
+): Promise<{
+  resolved: ResolvedCredentialSource[];
+  selection: CredentialSelection<NormalizedOpenCodeGoPayload>;
+}> {
+  const resolved: ResolvedCredentialSource[] = [];
+  const results: CandidateResult[] = [];
+
+  for (const { name, source } of dependencies.credentialSources) {
+    const resolution = resolveSafely(source);
+    resolved.push({ name, resolution });
+    if (resolution.status !== "available") continue;
+
+    const selection = await selectCredential(
+      [
+        {
+          source: name,
+          localState: "valid",
+          credential: resolution.key,
+        },
+      ],
+      (candidate) => attemptCandidate(candidate, dependencies),
+    );
+    results.push(...selection.results);
+    if (
+      selection.outcome === "quota" ||
+      selection.outcome === "transient" ||
+      selection.outcome === "live_no_quota"
+    ) {
+      return {
+        resolved,
+        selection: { ...selection, results },
+      };
     }
   }
-  return candidates;
+
+  return {
+    resolved,
+    selection: {
+      outcome: results.length > 0 ? "all_rejected" : "no_candidates",
+      refreshable: false,
+      results,
+    },
+  };
 }
 
 async function attemptCandidate(
@@ -309,6 +334,9 @@ function sourceAttempts(
       source: name,
       status: resolution.status === "error" ? "failed" : "skipped",
       error: credentialError(resolution),
+      ...(resolution.status === "invalid"
+        ? { credentialPresent: true }
+        : {}),
     };
   });
 }
@@ -346,35 +374,23 @@ function selectionFailureFor(
       return transientFailure(
         selection.transientError ?? "quota_request_failed",
       );
-    case "all_rejected":
-      // A source that could not be read leaves the credential set
-      // indeterminate: never a definitive sign-out (or cache retirement)
-      // while a usable credential may sit behind an unreadable store.
-      if (resolved.some(({ resolution }) => resolution.status === "error")) {
-        return { status: "error", code: "credential_resolution_failed" };
-      }
-      return { status: "auth_required", code: "provider_auth_rejected" };
+    case "all_rejected": {
+      const indeterminate = indeterminateFailureFor(resolved);
+      return (
+        indeterminate ?? {
+          status: "auth_required",
+          code: "provider_auth_rejected",
+        }
+      );
+    }
     case "live_no_quota":
       // Unreachable: every attempt yields windows or throws.
       return { status: "error", code: "quota_missing" };
-    default: {
-      if (resolved.some(({ resolution }) => resolution.status === "error")) {
-        return { status: "error", code: "credential_resolution_failed" };
-      }
-      // The opencode store's own state wins unless it is plain missing; a
-      // missing fallback defers to the Pi source's distinct state.
-      const opencode = resolved.find(
-        ({ name }) => name === OPENCODE_GO_CREDENTIAL_SOURCE,
+    default:
+      return (
+        indeterminateFailureFor(resolved) ??
+        localCredentialFailure({ status: "missing", path: "" })
       );
-      if (opencode && opencode.resolution.status !== "missing") {
-        return localCredentialFailure(opencode.resolution);
-      }
-      const pi = resolved.find(({ name }) => name === PI_OPENCODE_GO_SOURCE);
-      return localCredentialFailure(
-        pi?.resolution ??
-          opencode?.resolution ?? { status: "missing", path: "" },
-      );
-    }
   }
 }
 
@@ -383,6 +399,23 @@ function transientFailure(code: string): LocalFailure {
     status: code === "provider_rate_limited" ? "rate_limited" : "error",
     code,
   };
+}
+
+function indeterminateFailureFor(
+  resolved: readonly ResolvedCredentialSource[],
+): LocalFailure | undefined {
+  const fallback = resolved.find(
+    ({ name, resolution }) =>
+      name === OPENCODE_GO_CREDENTIAL_SOURCE &&
+      (resolution.status === "invalid" || resolution.status === "error"),
+  );
+  const preferred = resolved.find(
+    ({ name, resolution }) =>
+      name === PI_OPENCODE_GO_SOURCE &&
+      (resolution.status === "invalid" || resolution.status === "error"),
+  );
+  const failure = fallback ?? preferred;
+  return failure ? localCredentialFailure(failure.resolution) : undefined;
 }
 
 function localCredentialFailure(
@@ -397,7 +430,7 @@ function localCredentialFailure(
   if (resolution.status === "error") {
     return { status: "error", code: "credential_resolution_failed" };
   }
-  return { status: "auth_required", code: "opencode_go_credential_invalid" };
+  return { status: "error", code: "opencode_go_credential_invalid" };
 }
 
 async function inspectAuth(

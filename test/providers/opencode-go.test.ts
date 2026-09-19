@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { withQuotaSemantics } from "../../src/interpretation.js";
 import {
   createOpenCodeGoAdapter,
   createPiOpenCodeGoCredentialSource,
@@ -686,13 +687,32 @@ describe("OpenCode Go provider", () => {
 });
 
 describe("OpenCode Go multi-source credentials", () => {
-  it("uses Pi auth when the opencode store is missing", async () => {
+  it("uses Pi auth without resolving the fallback store", async () => {
     const request = vi.fn(async () => usageResponse());
+    const fallbackResolve = vi.fn(
+      (): CredentialResolution => ({
+        status: "error",
+        path: "/oc/auth.json",
+      }),
+    );
     const report = await createOpenCodeGoAdapter({
-      credentialSources: sources(
-        { status: "missing", path: "/oc/auth.json" },
-        { status: "available", key: PI_KEY, path: PI_AUTH_PATH },
-      ),
+      credentialSources: [
+        {
+          name: "pi:opencode-go",
+          source: fakeSource({
+            status: "available",
+            key: PI_KEY,
+            path: PI_AUTH_PATH,
+          }),
+        },
+        {
+          name: "opencode:auth.json",
+          source: {
+            resolve: fallbackResolve,
+            inspect: () => ({ status: "error", path: "/oc/auth.json" }),
+          },
+        },
+      ],
       fetch: request,
       now: () => Date.parse("2026-08-28T00:00:00Z"),
     }).fetchQuota(OPTIONS);
@@ -700,17 +720,13 @@ describe("OpenCode Go multi-source credentials", () => {
     expect(
       new Headers(request.mock.calls[0][1]?.headers).get("authorization"),
     ).toBe(`Bearer ${PI_KEY}`);
+    expect(fallbackResolve).not.toHaveBeenCalled();
     expect(report.state).toMatchObject({
       status: "fresh",
-      sourcesTried: ["pi:opencode-go", "opencode:auth.json"],
+      sourcesTried: ["pi:opencode-go"],
     });
     expect(report.attempts).toEqual([
       { source: "pi:opencode-go", status: "success" },
-      {
-        source: "opencode:auth.json",
-        status: "skipped",
-        error: "opencode_go_credential_unavailable",
-      },
     ]);
     expect(JSON.stringify(report)).not.toContain(PI_KEY);
   });
@@ -749,19 +765,40 @@ describe("OpenCode Go multi-source credentials", () => {
 
   it("does not switch credentials after a transient Pi failure", async () => {
     const request = vi.fn(async () => new Response(null, { status: 500 }));
+    const fallbackResolve = vi.fn(
+      (): CredentialResolution => ({
+        status: "available",
+        key: KEY,
+        path: "/oc/auth.json",
+      }),
+    );
     const report = await createOpenCodeGoAdapter({
-      credentialSources: sources(
-        { status: "available", key: KEY, path: "/oc/auth.json" },
-        { status: "available", key: PI_KEY, path: PI_AUTH_PATH },
-      ),
+      credentialSources: [
+        {
+          name: "pi:opencode-go",
+          source: fakeSource({
+            status: "available",
+            key: PI_KEY,
+            path: PI_AUTH_PATH,
+          }),
+        },
+        {
+          name: "opencode:auth.json",
+          source: {
+            resolve: fallbackResolve,
+            inspect: () => ({ status: "available", path: "/oc/auth.json" }),
+          },
+        },
+      ],
       fetch: request,
     }).fetchQuota(OPTIONS);
 
     expect(request).toHaveBeenCalledTimes(1);
+    expect(fallbackResolve).not.toHaveBeenCalled();
     expect(report.state).toMatchObject({
       status: "error",
       error: "provider_request_rejected",
-      sourcesTried: ["pi:opencode-go", "opencode:auth.json"],
+      sourcesTried: ["pi:opencode-go"],
     });
     expect(report.attempts).toEqual([
       {
@@ -769,12 +806,63 @@ describe("OpenCode Go multi-source credentials", () => {
         status: "failed",
         error: "provider_request_rejected",
       },
+    ]);
+  });
+
+  it("marks an invalid Pi source degraded when the fallback works", async () => {
+    const report = await createOpenCodeGoAdapter({
+      credentialSources: sources(
+        { status: "available", key: KEY, path: "/oc/auth.json" },
+        { status: "invalid", path: PI_AUTH_PATH },
+      ),
+      fetch: vi.fn(async () => usageResponse()),
+    }).fetchQuota(OPTIONS);
+    const interpreted = withQuotaSemantics(
+      report,
+      "2026-08-28T00:00:00.000Z",
+    );
+
+    expect(report.attempts).toEqual([
       {
-        source: "opencode:auth.json",
+        source: "pi:opencode-go",
         status: "skipped",
-        error: "provider_request_rejected",
+        error: "opencode_go_credential_invalid",
+        credentialPresent: true,
+      },
+      { source: "opencode:auth.json", status: "success" },
+    ]);
+    expect(interpreted.state.degradedSources).toEqual([
+      {
+        source: "pi:opencode-go",
+        error: "opencode_go_credential_invalid",
       },
     ]);
+  });
+
+  it("keeps invalid stores indeterminate unless another source works", async () => {
+    const invalidPi = await createOpenCodeGoAdapter({
+      credentialSources: sources(
+        { status: "missing", path: "/oc/auth.json" },
+        { status: "invalid", path: PI_AUTH_PATH },
+      ),
+      fetch: vi.fn(async () => usageResponse()),
+    }).fetchQuota(OPTIONS);
+    expect(invalidPi.state).toMatchObject({
+      status: "error",
+      error: "opencode_go_credential_invalid",
+    });
+
+    const rejectedPi = await createOpenCodeGoAdapter({
+      credentialSources: sources(
+        { status: "invalid", path: "/oc/auth.json" },
+        { status: "available", key: PI_KEY, path: PI_AUTH_PATH },
+      ),
+      fetch: vi.fn(async () => new Response(null, { status: 403 })),
+    }).fetchQuota(OPTIONS);
+    expect(rejectedPi.state).toMatchObject({
+      status: "error",
+      error: "opencode_go_credential_invalid",
+    });
   });
 
   it("reports auth_required only after every candidate is rejected", async () => {
