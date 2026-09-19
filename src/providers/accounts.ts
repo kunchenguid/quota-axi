@@ -193,7 +193,7 @@ function mergeSubscriptionReadings(
   earlier: ProviderQuota,
   later: ProviderQuota,
 ): ProviderQuota {
-  const winner = readingRank(later) < readingRank(earlier) ? later : earlier;
+  const winner = outranks(later, earlier) ? later : earlier;
   const attempts = mergedAttempts(earlier, later);
   const sourcesTried = mergedSourcesTried(earlier, later, attempts);
   return {
@@ -208,9 +208,21 @@ function mergeSubscriptionReadings(
 
 /**
  * Fresh beats stale beats a rejected or failed reading so a usable sibling is
- * never discarded for a sign-out. Ties keep declaration order. Windows stay
- * the winner's: coalescing must not sum, average, or concatenate them.
+ * never discarded for a sign-out. Two stale readings prefer the later
+ * `refreshedAt`; other ties keep declaration order. Windows stay the winner's:
+ * coalescing must not sum, average, or concatenate them.
  */
+function outranks(later: ProviderQuota, earlier: ProviderQuota): boolean {
+  const rank = readingRank(later);
+  if (rank !== readingRank(earlier)) return rank < readingRank(earlier);
+  return rank === 1 && refreshedTime(later) > refreshedTime(earlier);
+}
+
+function refreshedTime(report: ProviderQuota): number {
+  const time = Date.parse(report.state.refreshedAt ?? "");
+  return Number.isNaN(time) ? Number.NEGATIVE_INFINITY : time;
+}
+
 function readingRank(report: ProviderQuota): number {
   if (report.state.status === "fresh") return 0;
   if (report.state.status === "stale" || report.state.stale) return 1;
