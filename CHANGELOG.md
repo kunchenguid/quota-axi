@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.1.48](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.47...quota-axi-v0.1.48) (2026-09-20)
+
+
+### Features
+
+* **providers:** add MiniMax, MiMo, DeepSeek, and OpenRouter quota adapters ([#138](https://github.com/kunchenguid/quota-axi/issues/138)) ([e22c713](https://github.com/kunchenguid/quota-axi/commit/e22c71304cf96beb19abcf48a1a80ea141f8b1a7))
+* **providers:** add read-only ElevenLabs subscription quota provider ([#221](https://github.com/kunchenguid/quota-axi/issues/221)) ([c4b4aa4](https://github.com/kunchenguid/quota-axi/commit/c4b4aa43178423f91d662ec44c91baa8ca572f33))
+
+
+### Bug Fixes
+
+* **claude:** don't treat prose 'claude' args as a live session ([#231](https://github.com/kunchenguid/quota-axi/issues/231)) ([02e808e](https://github.com/kunchenguid/quota-axi/commit/02e808e5481d69ebd9effe0f40ba018763ccc4f6))
+* **kimi:** report month_code as a share of month_total, not missing data ([#222](https://github.com/kunchenguid/quota-axi/issues/222)) ([fcb5497](https://github.com/kunchenguid/quota-axi/commit/fcb549718025139b11ee105071884ace3040f389))
+* **providers:** recover quota for Claude env-token sessions ([#227](https://github.com/kunchenguid/quota-axi/issues/227)) ([bc34d86](https://github.com/kunchenguid/quota-axi/commit/bc34d86e1e755ec412dddb946d654c51198e5b0f))
+* **providers:** support opt-in Pi auth for OpenCode Go ([#226](https://github.com/kunchenguid/quota-axi/issues/226)) ([a6cb137](https://github.com/kunchenguid/quota-axi/commit/a6cb137fe435f50201cbfd6b6a597d733128b46a))
+
 ## [0.1.47](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.46...quota-axi-v0.1.47) (2026-09-18)
 
 
