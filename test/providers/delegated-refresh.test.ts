@@ -730,6 +730,27 @@ describe.skipIf(process.platform === "win32")(
       expect(result.state.status).toBe("fresh");
     });
 
+    it("still delegates when another process's arguments merely mention claude", async () => {
+      // A bare `claude` token inside an unrelated process's arguments is
+      // prose, not a Claude Code session holding the credential store.
+      withRunningProcesses(
+        "/usr/bin/node /usr/local/bin/worker.js run a job that mentions claude in passing",
+      );
+      writeExpiredClaudeCredential();
+      const cli = stubClaudeCli({ rotateTo: "rotated-access-token" });
+      stubBearerAwareFetch("rotated-access-token");
+
+      const { fetchQuota } = await import("../../src/providers/claude.js");
+      const result = await fetchQuota({
+        allowKeychainPrompt: false,
+        refreshCredentials: true,
+      });
+
+      expect(cli.invocationCount()).toBe(1);
+      expect(cli.arguments()).toEqual(["doctor"]);
+      expect(result.state.status).toBe("fresh");
+    });
+
     it("delegates when only quota-axi's own Claude argument is present", async () => {
       withRunningProcessEntries({
         pid: process.pid,

@@ -485,16 +485,26 @@ async function liveClaudeRefreshBlocker(): Promise<string | undefined> {
  * command line. The PID check in the caller is essential because quota-axi's
  * own argv may contain a standalone `claude` provider argument.
  *
- * The installed
- * `claude` executable (native installer or a versioned shim) or the npm
- * package running under a Node runtime. Every whitespace-separated token is
- * checked rather than only the first, because a `ps` command line splits an
- * installation path that contains a space. Matching is deliberately generous -
- * over-matching only means quota-axi stays read-only, which is the safe side.
+ * Matches the installed `claude` executable (native installer or a versioned
+ * shim) and the npm package running under a Node runtime. The executable is
+ * argv[0], so a token whose basename is `claude` names it only in that
+ * position: either the first token (a bare `claude` resolved on PATH) or a
+ * later path fragment when an installation path contains a space and `ps`
+ * splits it across tokens. A bare `claude` token inside another process's
+ * arguments is ordinary prose, not a session, and must not stand the refresh
+ * down.
  */
 function isLiveClaudeCodeProcess(commandLine: string): boolean {
   const tokens = commandLine.split(/\s+/);
-  if (tokens.some((token) => token.split("/").pop() === "claude")) return true;
+  if (
+    tokens.some(
+      (token, index) =>
+        token.split("/").pop() === "claude" &&
+        (index === 0 || token.includes("/")),
+    )
+  ) {
+    return true;
+  }
   return commandLine.includes("@anthropic-ai/claude-code/");
 }
 
