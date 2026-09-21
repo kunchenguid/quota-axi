@@ -1056,6 +1056,29 @@ describe("summarizeEffectiveSelection", () => {
     ).toEqual({ status: "unknown", unmeasurableWindowIds: ["five_hour"] });
   });
 
+  it("clamps spendPriorityAtCost at both ends like the base scalar", () => {
+    // Affordable 5000 / 3 still far exceeds the clamp, so both hit +100.
+    expect(
+      summarizeEffectiveSelection(
+        [
+          bounded("weekly", 100, {
+            timeRemainingPercent: 0.02,
+            burnMultiple: 0,
+          }),
+        ],
+        3,
+      ).spendPriorityAtCost,
+    ).toBe(SELECTION_CLAMP_PERCENT_POINTS);
+
+    // Burn 500 dominates: 0 / 3 - 500 clamps to -100.
+    expect(
+      summarizeEffectiveSelection(
+        [bounded("weekly", 0, { timeRemainingPercent: 50, burnMultiple: 500 })],
+        3,
+      ).spendPriorityAtCost,
+    ).toBe(-SELECTION_CLAMP_PERCENT_POINTS);
+  });
+
   it("emits no at-cost field when no multiplier is passed", () => {
     const summary = summarizeEffectiveSelection([
       bounded("weekly", 80, { timeRemainingPercent: 40, burnMultiple: 1 }),
