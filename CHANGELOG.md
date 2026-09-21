@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.1.49](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.48...quota-axi-v0.1.49) (2026-09-21)
+
+
+### Features
+
+* **copilot:** read standalone Copilot CLI sign-ins from the native secure store ([#234](https://github.com/kunchenguid/quota-axi/issues/234)) ([64474ed](https://github.com/kunchenguid/quota-axi/commit/64474eda35dc578eae4199baa1684343ff70d5a6))
+
+
+### Bug Fixes
+
+* **claude:** report refreshable expired sessions as soft expiry ([#238](https://github.com/kunchenguid/quota-axi/issues/238)) ([e26043d](https://github.com/kunchenguid/quota-axi/commit/e26043deceb35bbc082bc95d17a15aa45c29d613))
+* **providers:** decode Grok weekly and monthly quota periods ([#237](https://github.com/kunchenguid/quota-axi/issues/237)) ([d3807aa](https://github.com/kunchenguid/quota-axi/commit/d3807aaaf98ed19b1bed40c8ae34343367fb00fb))
+
 ## [0.1.48](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.47...quota-axi-v0.1.48) (2026-09-20)
 
 
