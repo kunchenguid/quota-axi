@@ -454,6 +454,31 @@ describe("OpenCode Go provider", () => {
     ).not.toHaveProperty("startsAt");
   });
 
+  it("treats a non-positive payload duration as absent for every window", () => {
+    expect(
+      normalizeOpenCodeGoPayload({
+        usage: {
+          rolling: {
+            percent: 5,
+            windowSeconds: 0,
+            resetsAt: "2026-09-22T02:51:00Z",
+          },
+          monthly: {
+            percent: 5,
+            windowSeconds: 0,
+            resetsAt: "2026-10-20T17:17:39Z",
+          },
+        },
+      }).windows,
+    ).toEqual([
+      expect.objectContaining({ id: "rolling", windowSeconds: 18_000 }),
+      expect.objectContaining({
+        id: "monthly",
+        startsAt: "2026-09-20T17:17:39.000Z",
+      }),
+    ]);
+  });
+
   it("still promotes only a payload-supplied 18,000 s rolling duration to the session identity", () => {
     expect(
       normalizeOpenCodeGoPayload({

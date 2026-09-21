@@ -758,29 +758,23 @@ function normalizeWindow(
   // Only a payload-supplied 18,000 s rolling duration promotes the window to
   // the `five_hour` identity; plan-declared fallbacks below never do.
   const hasAuthoritativeDuration = windowSeconds === FIVE_HOURS_SECONDS;
-  const payloadStartsAt = safeParseReset(
-    firstValue(record, ["startsAt", "starts_at"]),
-  );
+  const hasPayloadDuration = windowSeconds !== undefined && windowSeconds > 0;
   // Plan-declared cycle lengths fill in only when the payload names none;
   // a payload duration always wins. The monthly cap is one calendar month
   // ending at the reported reset, so only its start is derived.
-  const effectiveWindowSeconds =
-    windowSeconds !== undefined && windowSeconds > 0
-      ? windowSeconds
-      : parsedReset === undefined
-        ? undefined
-        : id === "five_hour"
-          ? FIVE_HOURS_SECONDS
-          : id === "weekly"
-            ? WEEK_SECONDS
-            : undefined;
+  const effectiveWindowSeconds = hasPayloadDuration
+    ? windowSeconds
+    : parsedReset === undefined
+      ? undefined
+      : id === "five_hour"
+        ? FIVE_HOURS_SECONDS
+        : id === "weekly"
+          ? WEEK_SECONDS
+          : undefined;
   const derivedStartsAt =
-    id === "monthly" &&
-    windowSeconds === undefined &&
-    parsedReset !== undefined &&
-    payloadStartsAt === undefined
+    id === "monthly" && !hasPayloadDuration && parsedReset !== undefined
       ? isoFromTimestamp(oneCalendarMonthBefore(Date.parse(parsedReset)))
-      : payloadStartsAt;
+      : undefined;
   const normalizedIdentity =
     id === "five_hour" && !hasAuthoritativeDuration
       ? { id: "rolling", label: "rolling", kind: "unknown" as const }
