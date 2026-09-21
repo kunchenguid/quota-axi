@@ -14,6 +14,7 @@ import { failedProvider, sourceNames, successProvider } from "./common.js";
 const HIGGSFIELD_COMMAND = "higgsfield";
 const HIGGSFIELD_SOURCE = "higgsfield-cli";
 const TRANSACTIONS_SOURCE = "higgsfield-transactions";
+const JOBS_SOURCE = "higgsfield-jobs";
 const STATUS_ARGS = ["account", "status", "--json"] as const;
 const TRANSACTIONS_ARGS = [
   "account",
@@ -114,12 +115,20 @@ async function fetchQuotaWithDependencies(
       throw new Error("higgsfield_status_malformed_json");
     }
 
-    const transactions = await readOptionalCommand(
-      dependencies,
-      commandPath,
-      TRANSACTIONS_ARGS,
-      "higgsfield_transactions",
-    );
+    const [transactions, jobs] = await Promise.all([
+      readOptionalCommand(
+        dependencies,
+        commandPath,
+        TRANSACTIONS_ARGS,
+        "higgsfield_transactions",
+      ),
+      readOptionalCommand(
+        dependencies,
+        commandPath,
+        JOBS_ARGS,
+        "higgsfield_jobs",
+      ),
+    ]);
     attempts.push(
       transactions.error === undefined
         ? { source: TRANSACTIONS_SOURCE, status: "success" }
@@ -129,11 +138,14 @@ async function fetchQuotaWithDependencies(
             error: transactions.error,
           },
     );
-    const jobs = await readOptionalCommand(
-      dependencies,
-      commandPath,
-      JOBS_ARGS,
-      "higgsfield_jobs",
+    attempts.push(
+      jobs.error === undefined
+        ? { source: JOBS_SOURCE, status: "success" }
+        : {
+            source: JOBS_SOURCE,
+            status: "failed",
+            error: jobs.error,
+          },
     );
 
     const normalized = normalizeHiggsfieldQuota({

@@ -39,11 +39,15 @@ describe("Higgsfield CLI quota provider", () => {
 
     const report = await createHiggsfieldAdapter().fetchQuota(OPTIONS);
 
-    expect(recordedArgs(argsFile)).toEqual([
-      ["account", "status", "--json"],
-      ["account", "transactions", "--json", "--size", "100"],
-      ["generate", "list", "--json", "--size", "20"],
-    ]);
+    const recorded = recordedArgs(argsFile);
+    expect(recorded[0]).toEqual(["account", "status", "--json"]);
+    expect(recorded.slice(1)).toEqual(
+      expect.arrayContaining([
+        ["account", "transactions", "--json", "--size", "100"],
+        ["generate", "list", "--json", "--size", "20"],
+      ]),
+    );
+    expect(recorded).toHaveLength(3);
     expect(report).toMatchObject({
       provider: "higgsfield",
       label: "Higgsfield",
@@ -55,11 +59,16 @@ describe("Higgsfield CLI quota provider", () => {
         status: "fresh",
         stale: false,
         authStatus: "usable",
-        sourcesTried: ["higgsfield-cli", "higgsfield-transactions"],
+        sourcesTried: [
+          "higgsfield-cli",
+          "higgsfield-transactions",
+          "higgsfield-jobs",
+        ],
       },
       attempts: [
         { source: "higgsfield-cli", status: "success" },
         { source: "higgsfield-transactions", status: "success" },
+        { source: "higgsfield-jobs", status: "success" },
       ],
     });
     expect(report.windows).toEqual([
@@ -177,6 +186,11 @@ describe("Higgsfield CLI quota provider", () => {
           status: "failed",
           error: "higgsfield_transactions_failed: auxiliary unavailable",
         },
+        {
+          source: "higgsfield-jobs",
+          status: "failed",
+          error: "higgsfield_jobs_failed: auxiliary unavailable",
+        },
       ],
     });
     expect(report.jobs).toBeUndefined();
@@ -241,7 +255,95 @@ describe("Higgsfield CLI quota provider", () => {
         status: "failed",
         error: "higgsfield_transactions_malformed_json",
       },
+      { source: "higgsfield-jobs", status: "success" },
     ]);
+  });
+
+  it("names a failed jobs read in default TOON attention", async () => {
+    const report = await createHiggsfieldAdapter({
+      findCommandPath: async () => "/mock/higgsfield",
+      execFileText: async (_command, args) => {
+        if (args[0] === "account" && args[1] === "status") {
+          return readFixture("status.json");
+        }
+        if (args[0] === "account" && args[1] === "transactions") {
+          return readFixture("transactions.json");
+        }
+        throw new Error("auxiliary unavailable");
+      },
+    }).fetchQuota(OPTIONS);
+
+    const withSemantics = withQuotaSemantics(report, GENERATED_AT);
+    expect(withSemantics.state.degradedSources).toEqual([
+      {
+        source: "higgsfield-jobs",
+        error: "higgsfield_jobs_failed: auxiliary unavailable",
+      },
+    ]);
+    const toon = renderQuotaToon(
+      {
+        generatedAt: GENERATED_AT,
+        schemaVersion: 5,
+        providers: [withSemantics],
+      },
+      "quota-axi",
+      false,
+    );
+    expect(toon).toContain(
+      'higgsfield,all,degraded_source,"higgsfield-jobs · ' +
+        'higgsfield_jobs_failed: auxiliary unavailable",none',
+    );
+  });
+
+  it("names malformed jobs JSON instead of omitting it silently", async () => {
+    const report = await createHiggsfieldAdapter({
+      findCommandPath: async () => "/mock/higgsfield",
+      execFileText: async (_command, args) => {
+        if (args[0] === "account" && args[1] === "status") {
+          return readFixture("status.json");
+        }
+        if (args[0] === "account" && args[1] === "transactions") {
+          return readFixture("transactions.json");
+        }
+        return "<html>gateway error</html>";
+      },
+    }).fetchQuota(OPTIONS);
+
+    expect(report.state.status).toBe("fresh");
+    expect(report.jobs).toBeUndefined();
+    expect(report.attempts).toEqual([
+      { source: "higgsfield-cli", status: "success" },
+      { source: "higgsfield-transactions", status: "success" },
+      {
+        source: "higgsfield-jobs",
+        status: "failed",
+        error: "higgsfield_jobs_malformed_json",
+      },
+    ]);
+  });
+
+  it("runs auxiliary CLI commands concurrently", async () => {
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const report = await createHiggsfieldAdapter({
+      findCommandPath: async () => "/mock/higgsfield",
+      execFileText: async (_command, args) => {
+        if (args[0] === "account" && args[1] === "status") {
+          return readFixture("status.json");
+        }
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        inFlight -= 1;
+        if (args[0] === "account" && args[1] === "transactions") {
+          return readFixture("transactions.json");
+        }
+        return readFixture("jobs.json");
+      },
+    }).fetchQuota(OPTIONS);
+
+    expect(report.state.status).toBe("fresh");
+    expect(maxInFlight).toBe(2);
   });
 
   it("does not read auth or rate-limit keywords out of wrapped CLI stderr", async () => {
