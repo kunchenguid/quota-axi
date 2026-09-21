@@ -1926,7 +1926,9 @@ describe("report generatedAt", () => {
       }),
     ) as {
       generatedAt: string;
-      providers: { windows: { id: string; pace?: Record<string, unknown> }[] }[];
+      providers: {
+        windows: { id: string; pace?: Record<string, unknown> }[];
+      }[];
     };
 
     const rolling = output.providers[0]?.windows.find(
