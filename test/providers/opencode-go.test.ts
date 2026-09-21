@@ -331,7 +331,7 @@ describe("OpenCode Go provider", () => {
     ]);
   });
 
-  it("keeps rolling windows unknown when the provider omits duration", () => {
+  it("keeps rolling windows unknown when the payload has neither duration nor reset", () => {
     expect(
       normalizeOpenCodeGoPayload({
         usage: { rolling: { percent: 9 } },
@@ -345,6 +345,191 @@ describe("OpenCode Go provider", () => {
         percentRemaining: 91,
       },
     ]);
+  });
+
+  it("falls back to plan-declared cycle lengths when the payload carries none", () => {
+    expect(
+      normalizeOpenCodeGoPayload({
+        usage: {
+          rolling: { percent: 9, resetsAt: "2026-09-22T02:51:00Z" },
+          weekly: { percent: 21, resetsAt: "2026-09-28T00:00:00Z" },
+          monthly: { percent: 4, resetsAt: "2026-10-20T17:17:39Z" },
+        },
+      }).windows,
+    ).toEqual([
+      {
+        id: "rolling",
+        label: "rolling",
+        kind: "unknown",
+        percentUsed: 9,
+        percentRemaining: 91,
+        windowSeconds: 18_000,
+        resetsAt: "2026-09-22T02:51:00.000Z",
+      },
+      {
+        id: "weekly",
+        label: "weekly",
+        kind: "weekly",
+        percentUsed: 21,
+        percentRemaining: 79,
+        windowSeconds: 604_800,
+        resetsAt: "2026-09-28T00:00:00.000Z",
+      },
+      {
+        id: "monthly",
+        label: "monthly",
+        kind: "monthly",
+        percentUsed: 4,
+        percentRemaining: 96,
+        startsAt: "2026-09-20T17:17:39.000Z",
+        resetsAt: "2026-10-20T17:17:39.000Z",
+      },
+    ]);
+  });
+
+  it("derives the monthly start one calendar month before the reset, clamping month ends", () => {
+    expect(
+      normalizeOpenCodeGoPayload({
+        usage: {
+          monthly: { percent: 4, resetsAt: "2026-03-31T12:00:00Z" },
+        },
+      }).windows[0]?.startsAt,
+    ).toBe("2026-02-28T12:00:00.000Z");
+    expect(
+      normalizeOpenCodeGoPayload({
+        usage: {
+          monthly: { percent: 4, resetsAt: "2024-03-31T12:00:00Z" },
+        },
+      }).windows[0]?.startsAt,
+    ).toBe("2024-02-29T12:00:00.000Z");
+  });
+
+  it("keeps payload-supplied cycle durations ahead of the plan-declared fallbacks", () => {
+    expect(
+      normalizeOpenCodeGoPayload({
+        usage: {
+          rolling: {
+            percent: 5,
+            windowSeconds: 3_600,
+            resetsAt: "2026-09-22T02:51:00Z",
+          },
+          weekly: {
+            percent: 5,
+            windowSeconds: 7_200,
+            resetsAt: "2026-09-28T00:00:00Z",
+          },
+          monthly: {
+            percent: 5,
+            windowSeconds: 2_592_000,
+            resetsAt: "2026-10-20T17:17:39Z",
+          },
+        },
+      }).windows,
+    ).toEqual([
+      expect.objectContaining({
+        id: "rolling",
+        label: "rolling",
+        kind: "unknown",
+        windowSeconds: 3_600,
+      }),
+      expect.objectContaining({
+        id: "weekly",
+        windowSeconds: 7_200,
+      }),
+      expect.objectContaining({
+        id: "monthly",
+        windowSeconds: 2_592_000,
+      }),
+    ]);
+    expect(
+      normalizeOpenCodeGoPayload({
+        usage: {
+          monthly: {
+            percent: 5,
+            windowSeconds: 2_592_000,
+            resetsAt: "2026-10-20T17:17:39Z",
+          },
+        },
+      }).windows[0],
+    ).not.toHaveProperty("startsAt");
+  });
+
+  it("still promotes only a payload-supplied 18,000 s rolling duration to the session identity", () => {
+    expect(
+      normalizeOpenCodeGoPayload({
+        usage: {
+          rolling: {
+            percent: 5,
+            windowSeconds: 18_000,
+            resetsAt: "2026-09-22T02:51:00Z",
+          },
+        },
+      }).windows[0],
+    ).toEqual({
+      id: "five_hour",
+      label: "session",
+      kind: "session",
+      percentUsed: 5,
+      percentRemaining: 95,
+      windowSeconds: 18_000,
+      resetsAt: "2026-09-22T02:51:00.000Z",
+    });
+  });
+
+  it("makes pace, runway, and selection measurable for the live absent-duration shape", async () => {
+    const report = await createOpenCodeGoAdapter({
+      credentialSources: sources({
+        status: "available",
+        key: KEY,
+        path: "/auth.json",
+      }),
+      fetch: vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              usage: {
+                rolling: {
+                  percent: 0,
+                  resetsAt: "2026-09-22T02:51:00Z",
+                },
+                weekly: { percent: 12, resetsAt: "2026-09-28T00:00:00Z" },
+                monthly: { percent: 3, resetsAt: "2026-10-20T17:17:39Z" },
+              },
+            }),
+            { status: 200 },
+          ),
+      ),
+      now: () => Date.parse("2026-09-21T21:51:00Z"),
+    }).fetchQuota(OPTIONS);
+    const interpreted = withQuotaSemantics(report, "2026-09-21T21:51:00.000Z");
+
+    expect(report.windows?.map(({ id }) => id)).toEqual([
+      "rolling",
+      "weekly",
+      "monthly",
+    ]);
+    expect(report.windows?.[0]).toMatchObject({
+      id: "rolling",
+      kind: "unknown",
+      windowSeconds: 18_000,
+    });
+    const [scope] = interpreted.quotaSemantics.effectiveAvailability;
+    expect(scope).toMatchObject({
+      status: "known",
+      boundedBy: ["rolling", "weekly", "monthly"],
+      runway: { status: "through_reset" },
+      selection: { status: "known" },
+    });
+    expect(scope?.selection?.spendPriority).toEqual(expect.any(Number));
+    const rollingPace = interpreted.windows?.find(
+      ({ id }) => id === "rolling",
+    )?.pace;
+    expect(rollingPace).toMatchObject({
+      status: "on_pace",
+      elapsedPercent: 0,
+      cycleSeconds: 18_000,
+    });
+    expect(rollingPace).not.toHaveProperty("burnMultiple");
   });
 
   it("clears request deadline timers after a fast response", async () => {

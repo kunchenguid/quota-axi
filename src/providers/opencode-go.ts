@@ -39,6 +39,10 @@ const LABEL = "OpenCode Go";
 const RESPONSE_LIMIT_BYTES = 262_144;
 const BODY_CLEANUP_TIMEOUT_MS = 100;
 const DEADLINE_MS = 15_000;
+/** Plan-declared rolling cap: $12 per rolling 5 hours. */
+const FIVE_HOURS_SECONDS = 18_000;
+/** Plan-declared weekly cap: $30 per week. */
+const WEEK_SECONDS = 7 * 24 * 60 * 60;
 
 export type CredentialResolution =
   | { status: "available"; key: string; path: string }
@@ -751,7 +755,32 @@ function normalizeWindow(
     (resetInSec !== undefined && resetInSec >= 0
       ? isoFromTimestamp(now + resetInSec * 1_000)
       : undefined);
-  const hasAuthoritativeDuration = windowSeconds === 18_000;
+  // Only a payload-supplied 18,000 s rolling duration promotes the window to
+  // the `five_hour` identity; plan-declared fallbacks below never do.
+  const hasAuthoritativeDuration = windowSeconds === FIVE_HOURS_SECONDS;
+  const payloadStartsAt = safeParseReset(
+    firstValue(record, ["startsAt", "starts_at"]),
+  );
+  // Plan-declared cycle lengths fill in only when the payload names none;
+  // a payload duration always wins. The monthly cap is one calendar month
+  // ending at the reported reset, so only its start is derived.
+  const effectiveWindowSeconds =
+    windowSeconds !== undefined && windowSeconds > 0
+      ? windowSeconds
+      : parsedReset === undefined
+        ? undefined
+        : id === "five_hour"
+          ? FIVE_HOURS_SECONDS
+          : id === "weekly"
+            ? WEEK_SECONDS
+            : undefined;
+  const derivedStartsAt =
+    id === "monthly" &&
+    windowSeconds === undefined &&
+    parsedReset !== undefined &&
+    payloadStartsAt === undefined
+      ? isoFromTimestamp(oneCalendarMonthBefore(Date.parse(parsedReset)))
+      : payloadStartsAt;
   const normalizedIdentity =
     id === "five_hour" && !hasAuthoritativeDuration
       ? { id: "rolling", label: "rolling", kind: "unknown" as const }
@@ -760,9 +789,10 @@ function normalizeWindow(
     ...normalizedIdentity,
     percentUsed: clampPercent(100 - percentRemaining),
     percentRemaining,
-    ...(windowSeconds !== undefined && windowSeconds > 0
-      ? { windowSeconds }
+    ...(effectiveWindowSeconds !== undefined
+      ? { windowSeconds: effectiveWindowSeconds }
       : {}),
+    ...(derivedStartsAt ? { startsAt: derivedStartsAt } : {}),
     ...(parsedReset ? { resetsAt: parsedReset } : {}),
   };
 }
@@ -780,6 +810,27 @@ function isoFromTimestamp(timestamp: number): string | undefined {
   if (!Number.isFinite(timestamp)) return undefined;
   const date = new Date(timestamp);
   return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
+}
+
+function oneCalendarMonthBefore(timestampMs: number): number {
+  const date = new Date(timestampMs);
+  // Clamp the day of month (e.g. Mar 31 steps back to Feb 28/29) so the UTC
+  // month arithmetic stays deterministic across month lengths.
+  const day = Math.min(
+    date.getUTCDate(),
+    new Date(
+      Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 0),
+    ).getUTCDate(),
+  );
+  return Date.UTC(
+    date.getUTCFullYear(),
+    date.getUTCMonth() - 1,
+    day,
+    date.getUTCHours(),
+    date.getUTCMinutes(),
+    date.getUTCSeconds(),
+    date.getUTCMilliseconds(),
+  );
 }
 
 function credentialError(
