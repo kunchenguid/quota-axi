@@ -5,18 +5,15 @@ import type {
   ProviderAdapter,
   ProviderOptions,
   ProviderQuota,
+  ProviderStatus,
   QuotaWindow,
   SourceAttempt,
 } from "../types.js";
-import {
-  failedProvider,
-  sourceNames,
-  statusFromError,
-  successProvider,
-} from "./common.js";
+import { failedProvider, sourceNames, successProvider } from "./common.js";
 
 const HIGGSFIELD_COMMAND = "higgsfield";
 const HIGGSFIELD_SOURCE = "higgsfield-cli";
+const TRANSACTIONS_SOURCE = "higgsfield-transactions";
 const STATUS_ARGS = ["account", "status", "--json"] as const;
 const TRANSACTIONS_ARGS = [
   "account",
@@ -117,21 +114,32 @@ async function fetchQuotaWithDependencies(
       throw new Error("higgsfield_status_malformed_json");
     }
 
-    const transactionsOutput = await readOptionalCommand(
+    const transactions = await readOptionalCommand(
       dependencies,
       commandPath,
       TRANSACTIONS_ARGS,
+      "higgsfield_transactions",
     );
-    const jobsOutput = await readOptionalCommand(
+    attempts.push(
+      transactions.error === undefined
+        ? { source: TRANSACTIONS_SOURCE, status: "success" }
+        : {
+            source: TRANSACTIONS_SOURCE,
+            status: "failed",
+            error: transactions.error,
+          },
+    );
+    const jobs = await readOptionalCommand(
       dependencies,
       commandPath,
       JOBS_ARGS,
+      "higgsfield_jobs",
     );
 
     const normalized = normalizeHiggsfieldQuota({
       status: statusPayload,
-      transactions: transactionsOutput,
-      jobs: jobsOutput,
+      transactions: transactions.output,
+      jobs: jobs.output,
     });
 
     attempts[0] = { source: HIGGSFIELD_SOURCE, status: "success" };
@@ -163,10 +171,7 @@ async function fetchQuotaWithDependencies(
     return failedProvider({
       provider: "higgsfield",
       label: LABEL,
-      status:
-        message === "higgsfield_cli_unavailable"
-          ? "unavailable"
-          : statusFromError(message),
+      status: statusFromSentinel(message),
       error: message,
       sourcesTried: sourceNames(attempts),
       attempts,
@@ -332,25 +337,31 @@ function parseJson(text: string): unknown {
   return JSON.parse(text) as unknown;
 }
 
+type OptionalCommandOutcome = { output?: unknown; error?: string };
+
 async function readOptionalCommand(
   dependencies: HiggsfieldDependencies,
   commandPath: string,
   args: readonly string[],
-): Promise<unknown> {
+  failurePrefix: string,
+): Promise<OptionalCommandOutcome> {
   try {
-    return parseJsonQuiet(
-      await dependencies.execFileText(commandPath, [...args], CLI_TIMEOUT_MS),
-    );
-  } catch {
-    return undefined;
-  }
-}
-
-function parseJsonQuiet(text: string): unknown {
-  try {
-    return parseJson(text);
-  } catch {
-    return undefined;
+    return {
+      output: parseJson(
+        await dependencies.execFileText(commandPath, [...args], CLI_TIMEOUT_MS),
+      ),
+    };
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      return { error: `${failurePrefix}_malformed_json` };
+    }
+    const message = error instanceof Error ? error.message.trim() : "";
+    return {
+      error:
+        message === ""
+          ? `${failurePrefix}_failed`
+          : `${failurePrefix}_failed: ${message.slice(0, 240)}`,
+    };
   }
 }
 
@@ -415,4 +426,15 @@ function isAuthFailure(message: string): boolean {
   return /not logged|unauthori[sz]ed|unauthenticated|please log in|sign[- ]?in|access token expired|reauth/i.test(
     message,
   );
+}
+
+function statusFromSentinel(message: string): ProviderStatus {
+  switch (message) {
+    case "higgsfield_cli_unavailable":
+      return "unavailable";
+    case "higgsfield_sign_in_required":
+      return "auth_required";
+    default:
+      return "error";
+  }
 }

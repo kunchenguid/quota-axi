@@ -55,9 +55,12 @@ describe("Higgsfield CLI quota provider", () => {
         status: "fresh",
         stale: false,
         authStatus: "usable",
-        sourcesTried: ["higgsfield-cli"],
+        sourcesTried: ["higgsfield-cli", "higgsfield-transactions"],
       },
-      attempts: [{ source: "higgsfield-cli", status: "success" }],
+      attempts: [
+        { source: "higgsfield-cli", status: "success" },
+        { source: "higgsfield-transactions", status: "success" },
+      ],
     });
     expect(report.windows).toEqual([
       {
@@ -167,8 +170,104 @@ describe("Higgsfield CLI quota provider", () => {
       credits: { remaining: 5992, unit: "credits" },
       windows: [],
       state: { status: "fresh", authStatus: "usable" },
+      attempts: [
+        { source: "higgsfield-cli", status: "success" },
+        {
+          source: "higgsfield-transactions",
+          status: "failed",
+          error: "higgsfield_transactions_failed: auxiliary unavailable",
+        },
+      ],
     });
     expect(report.jobs).toBeUndefined();
+  });
+
+  it("names a failed transactions read in default TOON attention", async () => {
+    const report = await createHiggsfieldAdapter({
+      findCommandPath: async () => "/mock/higgsfield",
+      execFileText: async (_command, args) => {
+        if (args[0] === "account" && args[1] === "status") {
+          return readFixture("status.json");
+        }
+        if (args[0] === "account" && args[1] === "transactions") {
+          throw new Error("auxiliary unavailable");
+        }
+        return readFixture("jobs.json");
+      },
+    }).fetchQuota(OPTIONS);
+
+    const withSemantics = withQuotaSemantics(report, GENERATED_AT);
+    expect(withSemantics.state.degradedSources).toEqual([
+      {
+        source: "higgsfield-transactions",
+        error: "higgsfield_transactions_failed: auxiliary unavailable",
+      },
+    ]);
+    const toon = renderQuotaToon(
+      {
+        generatedAt: GENERATED_AT,
+        schemaVersion: 5,
+        providers: [withSemantics],
+      },
+      "quota-axi",
+      false,
+    );
+    expect(toon).toContain(
+      'higgsfield,all,degraded_source,"higgsfield-transactions · ' +
+        'higgsfield_transactions_failed: auxiliary unavailable",none',
+    );
+  });
+
+  it("names malformed transactions JSON instead of omitting it silently", async () => {
+    const report = await createHiggsfieldAdapter({
+      findCommandPath: async () => "/mock/higgsfield",
+      execFileText: async (_command, args) => {
+        if (args[0] === "account" && args[1] === "status") {
+          return readFixture("status.json");
+        }
+        if (args[0] === "account" && args[1] === "transactions") {
+          return "<html>gateway error</html>";
+        }
+        return readFixture("jobs.json");
+      },
+    }).fetchQuota(OPTIONS);
+
+    expect(report.state.status).toBe("fresh");
+    expect(report.windows).toEqual([]);
+    expect(report.attempts).toEqual([
+      { source: "higgsfield-cli", status: "success" },
+      {
+        source: "higgsfield-transactions",
+        status: "failed",
+        error: "higgsfield_transactions_malformed_json",
+      },
+    ]);
+  });
+
+  it("does not read auth or rate-limit keywords out of wrapped CLI stderr", async () => {
+    const fetchWithError = async (message: string) =>
+      createHiggsfieldAdapter({
+        findCommandPath: async () => "/mock/higgsfield",
+        execFileText: async () => {
+          throw new Error(message);
+        },
+      }).fetchQuota(OPTIONS);
+
+    const missingArg = await fetchWithError(
+      "Error: required argument '--output' missing",
+    );
+    expect(missingArg.state.status).toBe("error");
+    expect(missingArg.state.error).toBe(
+      "higgsfield_status_failed: Error: required argument '--output' missing",
+    );
+
+    const vendorRateLimit = await fetchWithError(
+      "rate limit reached, retry later",
+    );
+    expect(vendorRateLimit.state.status).toBe("error");
+    expect(vendorRateLimit.state.error).toBe(
+      "higgsfield_status_failed: rate limit reached, retry later",
+    );
   });
 
   it("rolls up job statuses including unknown values as other", () => {
@@ -212,6 +311,13 @@ describe("Higgsfield CLI quota provider", () => {
         status: "auth_required",
         error: "higgsfield_sign_in_required",
       },
+      attempts: [
+        {
+          source: "higgsfield-cli",
+          status: "failed",
+          error: "higgsfield_sign_in_required",
+        },
+      ],
     });
   });
 
