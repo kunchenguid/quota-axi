@@ -1893,6 +1893,54 @@ describe("default TOON decision blocks", () => {
   });
 });
 
+describe("report generatedAt", () => {
+  it("stamps generatedAt after every fetch so a reset computed at response time opens its cycle", async () => {
+    useTempCache();
+    PROVIDERS["opencode-go"] = {
+      ...providerWithQuota(freshOpenCodeGoQuota()),
+      async fetchQuota() {
+        // Vendor computes the rolling reset as "now + 5 h" at response time,
+        // strictly after the command started.
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        const resetsAt = new Date(Date.now() + 18_000 * 1000).toISOString();
+        return {
+          ...freshOpenCodeGoQuota(),
+          windows: [
+            {
+              id: "rolling",
+              label: "rolling",
+              kind: "unknown",
+              percentUsed: 0,
+              percentRemaining: 100,
+              windowSeconds: 18_000,
+              resetsAt,
+            },
+          ],
+        };
+      },
+    };
+
+    const output = JSON.parse(
+      await quotaCommand(["--provider", "opencode-go", "--json", "--full"], {
+        binPath: "quota-axi",
+      }),
+    ) as {
+      generatedAt: string;
+      providers: { windows: { id: string; pace?: Record<string, unknown> }[] }[];
+    };
+
+    const rolling = output.providers[0]?.windows.find(
+      ({ id }) => id === "rolling",
+    );
+    expect(rolling?.pace).toMatchObject({
+      status: "on_pace",
+      elapsedPercent: 0,
+    });
+    // Zero burn: absent when no time has elapsed, 0 once a millisecond has.
+    expect(rolling?.pace?.burnMultiple ?? 0).toBe(0);
+  });
+});
+
 describe("--json tiering", () => {
   it("demotes derivation inputs without renaming or re-nesting anything", async () => {
     useTempCache();

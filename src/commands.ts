@@ -258,16 +258,21 @@ export async function fetchQuota(
   providers: ProviderId[],
   options: ProviderOptions,
 ): Promise<QuotaAxiResponse> {
-  const generatedAt = nowIso();
-  const results = (
+  const fetched = (
     await Promise.all(
       providers.map((provider) =>
         fetchAccountQuotas(PROVIDERS[provider], options),
       ),
     )
-  )
-    .flat()
-    .map((provider) => withQuotaSemantics(provider, generatedAt));
+  ).flat();
+  // Stamp after every fetch returns: a vendor that computes a reset at
+  // response time implies a cycle start no earlier than that instant, so a
+  // stamp taken before the request would read an unopened window as
+  // `future_cycle_start` by the request latency.
+  const generatedAt = nowIso();
+  const results = fetched.map((provider) =>
+    withQuotaSemantics(provider, generatedAt),
+  );
   return annotateQuotaAdvice({
     generatedAt,
     providers: results,
