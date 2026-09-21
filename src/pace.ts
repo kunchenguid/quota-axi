@@ -340,25 +340,17 @@ export function summarizeEffectiveSelection(
   let cycleSecondsSum = 0;
 
   for (const window of windows) {
-    const gap = windowSelectionGap(window);
+    const term = windowSelectionTerm(window);
     const cycleSeconds = finiteNumber(window.pace?.cycleSeconds);
-    if (gap === undefined || cycleSeconds === undefined || cycleSeconds <= 0) {
+    if (term === undefined || cycleSeconds === undefined || cycleSeconds <= 0) {
       unmeasurableWindowIds.push(window.id);
       continue;
     }
-    weightedGapSum += gap * cycleSeconds;
+    weightedGapSum += (term.affordable - term.burnMultiple) * cycleSeconds;
     cycleSecondsSum += cycleSeconds;
     if (multiplier !== undefined) {
-      // The same gates pass at any positive multiplier, so only an absurd
-      // multiplier can lose the term; that fails closed like any other gap.
-      const atCostGap = windowSelectionGap(window, multiplier);
-      if (atCostGap === undefined) {
-        return {
-          status: "unknown",
-          unmeasurableWindowIds: windows.map(({ id }) => id),
-        };
-      }
-      weightedAtCostGapSum += atCostGap * cycleSeconds;
+      weightedAtCostGapSum +=
+        (term.affordable / multiplier - term.burnMultiple) * cycleSeconds;
     }
   }
 
@@ -379,15 +371,11 @@ export function summarizeEffectiveSelection(
     ),
   };
   if (multiplier !== undefined) {
-    const atCostMetric = weightedAtCostGapSum / cycleSecondsSum;
-    if (!Number.isFinite(atCostMetric)) {
-      return {
-        status: "unknown",
-        unmeasurableWindowIds: windows.map(({ id }) => id),
-      };
-    }
     selection.spendPriorityAtCost = roundPace(
-      clamp(atCostMetric, SELECTION_CLAMP_PERCENT_POINTS),
+      clamp(
+        weightedAtCostGapSum / cycleSecondsSum,
+        SELECTION_CLAMP_PERCENT_POINTS,
+      ),
     );
   }
   return selection;
@@ -443,11 +431,14 @@ export function peakCostAt(
   return { multiplier: 1, untilMs: generatedAtMs };
 }
 
-/** The per-window selection term, or undefined when the window is unmeasurable. */
-function windowSelectionGap(
+/**
+ * The per-window selection term split into its affordable allowance rate and
+ * observed burn, or undefined when the window is unmeasurable. The gap is
+ * `affordable - burnMultiple`; a cost multiplier divides only `affordable`.
+ */
+function windowSelectionTerm(
   window: QuotaWindow,
-  costMultiplier = 1,
-): number | undefined {
+): { affordable: number; burnMultiple: number } | undefined {
   const pace = window.pace;
   if (pace === undefined || pace.status === "unknown") return undefined;
 
@@ -464,9 +455,8 @@ function windowSelectionGap(
   const burnMultiple = resolveSelectionBurnMultiple(window, percentRemaining);
   if (burnMultiple === undefined) return undefined;
 
-  const gap =
-    percentRemaining / (timeRemainingPercent * costMultiplier) - burnMultiple;
-  return Number.isFinite(gap) ? gap : undefined;
+  const affordable = percentRemaining / timeRemainingPercent;
+  return Number.isFinite(affordable) ? { affordable, burnMultiple } : undefined;
 }
 
 /**
