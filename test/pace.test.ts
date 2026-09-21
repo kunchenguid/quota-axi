@@ -4,12 +4,14 @@ import {
   computeWindowPace,
   PACE_EARLY_ELAPSED_PERCENT,
   PACE_ON_PACE_DEADBAND_PERCENT_POINTS,
+  peakCostAt,
   SELECTION_CLAMP_PERCENT_POINTS,
   SELECTION_MIN_TIME_REMAINING_PERCENT,
   summarizeEffectivePace,
   summarizeEffectiveSelection,
   UNOPENED_WINDOW_MAX_FUTURE_START_SKEW_SECONDS,
 } from "../src/pace.js";
+import { ZAI_PEAK_COST_SCHEDULE } from "../src/providers/zai.js";
 import { SELECTION_SCALAR_KEY } from "../src/types.js";
 import type { QuotaPace, QuotaWindow } from "../src/types.js";
 
@@ -988,5 +990,160 @@ describe("summarizeEffectiveSelection", () => {
 
   it("reports unknown without inventing bounds for an empty scope", () => {
     expect(summarizeEffectiveSelection([])).toEqual({ status: "unknown" });
+  });
+
+  it("emits spendPriorityAtCost equal to the scalar at multiplier 1", () => {
+    const summary = summarizeEffectiveSelection(
+      [bounded("weekly", 80, { timeRemainingPercent: 40, burnMultiple: 1 })],
+      1,
+    );
+    expect(summary).toEqual({
+      status: "known",
+      [SELECTION_SCALAR_KEY]: 1,
+      spendPriorityAtCost: 1,
+    });
+  });
+
+  it("divides each window's affordable term by the peak multiplier", () => {
+    // 80 / (40 * 3) - 1 = -1/3: the same window that reads +1 off-peak.
+    const summary = summarizeEffectiveSelection(
+      [bounded("weekly", 80, { timeRemainingPercent: 40, burnMultiple: 1 })],
+      3,
+    );
+    expect(summary.status).toBe("known");
+    // The base scalar is untouched by the multiplier.
+    expect(summary[SELECTION_SCALAR_KEY]).toBe(1);
+    expect(summary.spendPriorityAtCost).toBeCloseTo(-1 / 3, 4);
+  });
+
+  it("keeps the cycle-weighted mean under the multiplier", () => {
+    const session = bounded("five_hour", 90, {
+      timeRemainingPercent: 60,
+      burnMultiple: 0.25,
+      cycleSeconds: FIVE_HOURS_SECONDS,
+    });
+    const weekly = bounded("seven_day", 80, {
+      timeRemainingPercent: 50,
+      burnMultiple: 0.7,
+      cycleSeconds: WEEK_SECONDS,
+    });
+    const atCostMetric =
+      ((90 / (60 * 3) - 0.25) * FIVE_HOURS_SECONDS +
+        (80 / (50 * 3) - 0.7) * WEEK_SECONDS) /
+      (FIVE_HOURS_SECONDS + WEEK_SECONDS);
+
+    const summary = summarizeEffectiveSelection([session, weekly], 3);
+    expect(summary.status).toBe("known");
+    expect(summary.spendPriorityAtCost).toBeCloseTo(atCostMetric, 4);
+    expect(summary.spendPriorityAtCost).toBeLessThan(
+      summary[SELECTION_SCALAR_KEY] as number,
+    );
+  });
+
+  it("stays absent when the scope is unmeasurable even with a multiplier", () => {
+    expect(
+      summarizeEffectiveSelection(
+        [
+          bounded("seven_day", 80, { timeRemainingPercent: 50 }),
+          window({
+            id: "five_hour",
+            percentRemaining: 90,
+            pace: { status: "unknown", reason: "missing_cycle" },
+          }),
+        ],
+        3,
+      ),
+    ).toEqual({ status: "unknown", unmeasurableWindowIds: ["five_hour"] });
+  });
+
+  it("emits no at-cost field when no multiplier is passed", () => {
+    const summary = summarizeEffectiveSelection([
+      bounded("weekly", 80, { timeRemainingPercent: 40, burnMultiple: 1 }),
+    ]);
+    expect(Object.hasOwn(summary, "spendPriorityAtCost")).toBe(false);
+    expect(summary).toEqual({
+      status: "known",
+      [SELECTION_SCALAR_KEY]: 1,
+    });
+  });
+});
+
+describe("peakCostAt", () => {
+  // Z.AI: Mon-Fri 14:00-18:00 UTC+8, so 06:00-10:00 UTC; peak multiplier 3.
+  const schedule = ZAI_PEAK_COST_SCHEDULE;
+
+  it("reads peak on a weekday inside the published window", () => {
+    // Wednesday 2026-09-23, 15:00 Singapore time.
+    expect(
+      peakCostAt(schedule, Date.parse("2026-09-23T07:00:00.000Z")),
+    ).toEqual({
+      multiplier: 3,
+      untilMs: Date.parse("2026-09-23T10:00:00.000Z"),
+    });
+  });
+
+  it("reads off-peak on a weekday evening with the next morning as the boundary", () => {
+    // Wednesday 19:00 Singapore time: today's window has closed.
+    expect(
+      peakCostAt(schedule, Date.parse("2026-09-23T11:00:00.000Z")),
+    ).toEqual({
+      multiplier: 1,
+      untilMs: Date.parse("2026-09-24T06:00:00.000Z"),
+    });
+  });
+
+  it("reads off-peak all day on a weekend and skips to Monday", () => {
+    expect(
+      peakCostAt(schedule, Date.parse("2026-09-26T08:00:00.000Z")),
+    ).toEqual({
+      multiplier: 1,
+      untilMs: Date.parse("2026-09-28T06:00:00.000Z"),
+    });
+  });
+
+  it("turns peak exactly at the local 14:00 boundary", () => {
+    expect(
+      peakCostAt(schedule, Date.parse("2026-09-23T05:59:59.000Z")),
+    ).toEqual({
+      multiplier: 1,
+      untilMs: Date.parse("2026-09-23T06:00:00.000Z"),
+    });
+    expect(
+      peakCostAt(schedule, Date.parse("2026-09-23T06:00:00.000Z")),
+    ).toEqual({
+      multiplier: 3,
+      untilMs: Date.parse("2026-09-23T10:00:00.000Z"),
+    });
+  });
+
+  it("turns off-peak exactly at the local 18:00 boundary", () => {
+    expect(
+      peakCostAt(schedule, Date.parse("2026-09-23T09:59:59.000Z")),
+    ).toEqual({
+      multiplier: 3,
+      untilMs: Date.parse("2026-09-23T10:00:00.000Z"),
+    });
+    expect(
+      peakCostAt(schedule, Date.parse("2026-09-23T10:00:00.000Z")),
+    ).toEqual({
+      multiplier: 1,
+      untilMs: Date.parse("2026-09-24T06:00:00.000Z"),
+    });
+  });
+
+  it("carries the next boundary across a weekend: Friday 10:00Z gives Monday 06:00Z", () => {
+    expect(
+      peakCostAt(schedule, Date.parse("2026-09-25T10:00:00.000Z")),
+    ).toEqual({
+      multiplier: 1,
+      untilMs: Date.parse("2026-09-28T06:00:00.000Z"),
+    });
+    // Friday still inside the peak window ends at Friday 10:00Z itself.
+    expect(
+      peakCostAt(schedule, Date.parse("2026-09-25T09:59:59.000Z")),
+    ).toEqual({
+      multiplier: 3,
+      untilMs: Date.parse("2026-09-25T10:00:00.000Z"),
+    });
   });
 });

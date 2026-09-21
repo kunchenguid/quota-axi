@@ -17,6 +17,7 @@ import { usableLiteralSecret } from "../lib/secret.js";
 import type {
   AuthProviderReport,
   AuthSourceReport,
+  PeakCostSchedule,
   ProviderAdapter,
   ProviderOptions,
   ProviderQuota,
@@ -32,6 +33,27 @@ const RESPONSE_LIMIT_BYTES = 262_144;
 const FIVE_HOURS_SECONDS = 18_000;
 const WEEK_SECONDS = 7 * 24 * 60 * 60;
 const MONTH_SECONDS = 30 * 24 * 60 * 60;
+/**
+ * Z.AI's published peak-hour cost schedule, held beside the trusted window
+ * durations as provider-owned data. Peak hours are Monday to Friday,
+ * 14:00-18:00 Singapore Standard Time (UTC+8); usage on weekends is deducted
+ * at off-peak rates all day; every published model deducts 3x the off-peak
+ * rate at peak (GLM-5.3: 1x off-peak / 3x peak; GLM-5.3-Flash: 0.4x / 1.2x -
+ * the same 3x peak-to-off-peak ratio). The per-model base rates are static
+ * model facts, not time-of-day facts, and stay out of this schedule. Public
+ * holidays are not mentioned in the notice and are treated as ordinary
+ * weekdays. Asia/Singapore has no daylight saving, so the window is a fixed
+ * 06:00-10:00 UTC shift.
+ * Source: Z.AI, "Plan Update Announcement", published 2026-07-30,
+ * https://docs.z.ai/devpack/notice/usage-revision
+ */
+export const ZAI_PEAK_COST_SCHEDULE: PeakCostSchedule = {
+  utcOffsetSeconds: 8 * 60 * 60,
+  peakWeekdays: [1, 2, 3, 4, 5],
+  peakStartHour: 14,
+  peakEndHour: 18,
+  peakMultiplier: 3,
+};
 const ZAI_HOST = "api.z.ai";
 const ZHIPU_HOST = "open.bigmodel.cn";
 const OPENCODE_AUTH_SOURCE = "opencode:auth.json";

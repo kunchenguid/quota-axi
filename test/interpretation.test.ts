@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { withQuotaSemantics } from "../src/interpretation.js";
 import {
   SELECTION_SCALAR_KEY,
+  type EffectiveAvailability,
   type ProviderQuota,
   type QuotaWindow,
 } from "../src/types.js";
@@ -1376,5 +1377,146 @@ describe("per-scope selection signal", () => {
     expect(result.state.status).toBe("stale");
     expect(result.state.stale).toBe(true);
     expect(result.quotaSemantics?.status).toBe("unknown");
+  });
+});
+
+describe("published peak cost", () => {
+  // Wednesday 2026-07-15 14:30 Singapore time: inside the published
+  // Mon-Fri 14:00-18:00 UTC+8 peak window.
+  const PEAK_GENERATED_AT = "2026-07-15T06:30:00.000Z";
+  const PEAK_END = "2026-07-15T10:00:00.000Z"; // 18:00 Singapore time.
+  const NEXT_PEAK_START = "2026-07-16T06:00:00.000Z"; // Thu 14:00 Singapore.
+
+  function peakAnchoredWindow(
+    id: string,
+    kind: QuotaWindow["kind"],
+    percentRemaining: number,
+    cycleSeconds: number,
+  ): QuotaWindow {
+    return window(id, kind, percentRemaining, {
+      windowSeconds: cycleSeconds,
+      resetsAt: new Date(
+        Date.parse(PEAK_GENERATED_AT) + (cycleSeconds / 2) * 1000,
+      ).toISOString(),
+    });
+  }
+
+  function scopeOf(
+    result: ProviderQuota,
+    scope: string,
+  ): EffectiveAvailability | undefined {
+    return result.quotaSemantics?.effectiveAvailability.find(
+      (entry) => entry.scope === scope,
+    );
+  }
+
+  it("carries cost and spendPriorityAtCost on a successful peak reading", () => {
+    const result = withQuotaSemantics(
+      provider("zai", [
+        peakAnchoredWindow("five_hour", "session", 40, 18_000),
+        peakAnchoredWindow("weekly", "weekly", 30, 604_800),
+        peakAnchoredWindow("mcp_month", "monthly", 10, MONTH_SECONDS),
+      ]),
+      PEAK_GENERATED_AT,
+    );
+
+    expect(result.cost).toEqual({
+      multiplier: 3,
+      until: PEAK_END,
+      source: "published",
+    });
+    const allModels = scopeOf(result, "all_models");
+    expect(allModels?.selection?.status).toBe("known");
+    expect(allModels?.selection?.[SELECTION_SCALAR_KEY]).toBeTypeOf("number");
+    // Peak pricing lowers the at-cost scalar below the untouched base scalar.
+    expect(allModels?.selection?.spendPriorityAtCost).toBeLessThan(
+      allModels?.selection?.[SELECTION_SCALAR_KEY] as number,
+    );
+    // The schedule prices model usage; the tool window carries no at-cost term.
+    const tools = scopeOf(result, "tools");
+    expect(tools?.selection?.status).toBe("known");
+    expect(tools?.selection?.spendPriorityAtCost).toBeUndefined();
+  });
+
+  it("equals spendPriority off-peak and names the next peak start", () => {
+    const result = withQuotaSemantics(
+      provider("zai", [zaiSessionWindow(), zaiWeeklyWindow(), zaiToolWindow()]),
+      GENERATED_AT, // Wednesday 20:00 Singapore time.
+    );
+
+    expect(result.cost).toEqual({
+      multiplier: 1,
+      until: NEXT_PEAK_START,
+      source: "published",
+    });
+    const allModels = scopeOf(result, "all_models");
+    expect(allModels?.selection?.[SELECTION_SCALAR_KEY]).toBeTypeOf("number");
+    expect(allModels?.selection?.spendPriorityAtCost).toBe(
+      allModels?.selection?.[SELECTION_SCALAR_KEY],
+    );
+  });
+
+  it("keeps spendPriorityAtCost absent when the Z.AI scalar is unmeasurable", () => {
+    const result = withQuotaSemantics(
+      provider("zai", [
+        zaiSessionWindow(),
+        zaiWeeklyWindow(),
+        window("limit:9", "unknown", 50),
+      ]),
+      PEAK_GENERATED_AT,
+    );
+
+    expect(result.cost).toEqual({
+      multiplier: 3,
+      until: PEAK_END,
+      source: "published",
+    });
+    const allModels = scopeOf(result, "all_models");
+    expect(allModels?.status).toBe("unknown");
+    expect(allModels?.selection?.spendPriorityAtCost).toBeUndefined();
+  });
+
+  it("omits both fields when the reading failed", () => {
+    const failed = provider("zai", [zaiSessionWindow(), zaiWeeklyWindow()]);
+    failed.state = {
+      status: "unavailable",
+      stale: false,
+      error: "no usable credential",
+    };
+
+    const result = withQuotaSemantics(failed, GENERATED_AT);
+    expect(Object.hasOwn(result, "cost")).toBe(false);
+    expect(
+      scopeOf(result, "all_models")?.selection?.spendPriorityAtCost,
+    ).toBeUndefined();
+  });
+
+  it("omits both fields when the reading is stale", () => {
+    const stale = provider("zai", [zaiSessionWindow(), zaiWeeklyWindow()]);
+    stale.state = { status: "stale", stale: true };
+
+    const result = withQuotaSemantics(stale, GENERATED_AT);
+    expect(result.cost).toBeUndefined();
+    const selection = scopeOf(result, "all_models")?.selection;
+    expect(selection?.status).toBe("unknown");
+    expect(selection?.spendPriorityAtCost).toBeUndefined();
+  });
+
+  it("omits both fields for a provider without a published schedule", () => {
+    const result = withQuotaSemantics(
+      provider("claude", [
+        window("five_hour", "session", 40, {
+          windowSeconds: 18_000,
+          resetsAt: offsetFromGeneratedAt(9_000),
+        }),
+      ]),
+      GENERATED_AT,
+    );
+
+    expect(result.cost).toBeUndefined();
+    const selection =
+      result.quotaSemantics?.effectiveAvailability[0]?.selection;
+    expect(selection?.[SELECTION_SCALAR_KEY]).toBeTypeOf("number");
+    expect(selection?.spendPriorityAtCost).toBeUndefined();
   });
 });

@@ -5,6 +5,7 @@ import {
   type ModelQuotaRecord,
   type ModelsResponse,
   type ProviderOptions,
+  type ProviderQuota,
   type QuotaAxiResponse,
 } from "quota-axi";
 
@@ -45,6 +46,15 @@ const scope: EffectiveAvailability = {
 const spendPriority: number | undefined =
   scope.selection?.[SELECTION_SCALAR_KEY];
 
+// Peak-cost fields are additive optional data in the published contract.
+const cost: ProviderQuota["cost"] = {
+  multiplier: 3,
+  until: "2026-09-28T06:00:00.000Z",
+  source: "published",
+};
+const spendPriorityAtCost: number | undefined =
+  scope.selection?.spendPriorityAtCost;
+
 // Demoted fields are optional in the published contract: default `--json`
 // omits them and `--full` supplies them.
 const demoted: Array<string | undefined> = [
@@ -57,5 +67,7 @@ const demoted: Array<string | undefined> = [
 void models;
 void profileOnlyOptions;
 void spendPriority;
+void cost;
+void spendPriorityAtCost;
 void demoted;
 void compareModelsByRunway(model, model);
