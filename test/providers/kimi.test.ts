@@ -911,6 +911,131 @@ describe("Kimi request transport", () => {
   });
 });
 
+describe("Kimi monthly subscription cycle", () => {
+  const generatedAt = new Date(NOW).toISOString();
+  const hoursFromNow = (hours: number) =>
+    new Date(NOW + hours * 3_600_000).toISOString();
+  const monthlyUsages = (withWeekly: boolean) => ({
+    usages: {
+      limit_5h: { used_ratio: 0.1, reset_time: hoursFromNow(3) },
+      ...(withWeekly
+        ? { limit_7d: { used_ratio: 0.2, reset_time: hoursFromNow(72) } }
+        : {}),
+      limit_month_total: {
+        used_ratio: 0.4,
+        reset_time: "2027-02-10T00:00:00Z",
+      },
+      limit_month_code: {
+        used_ratio: 0.25,
+        reset_time: "2027-02-10T00:00:00Z",
+      },
+    },
+  });
+
+  it.each([
+    ["with a weekly window", true],
+    ["without a weekly window", false],
+  ])(
+    "measures runway and spendPriority for a fresh reading %s",
+    async (_label, withWeekly) => {
+      const report = await testAdapter({
+        fetch: vi.fn(async () => jsonResponse(monthlyUsages(withWeekly))),
+      }).fetchQuota(OPTIONS);
+      expect(report.state).toMatchObject({ status: "fresh", stale: false });
+
+      const interpreted = withQuotaSemantics(report, generatedAt);
+      const monthTotal = interpreted.windows.find(
+        ({ id }) => id === "month_total",
+      );
+      expect(monthTotal).toMatchObject({
+        startsAt: "2027-01-10T00:00:00.000Z",
+        resetsAt: "2027-02-10T00:00:00.000Z",
+      });
+      expect(monthTotal?.windowSeconds).toBeUndefined();
+      expect(monthTotal?.pace).toMatchObject({ cycleSeconds: 31 * 86_400 });
+      expect(monthTotal?.pace?.status).not.toBe("unknown");
+
+      const [scope] = interpreted.quotaSemantics?.effectiveAvailability ?? [];
+      expect(scope?.boundedBy).toEqual(
+        withWeekly
+          ? ["five_hour", "weekly", "month_total"]
+          : ["five_hour", "month_total"],
+      );
+      expect(scope?.runway?.status).not.toBe("unknown");
+      expect(scope?.selection).toMatchObject({ status: "known" });
+      expect(scope?.selection?.spendPriority).toEqual(expect.any(Number));
+
+      const toon = renderQuotaToon(
+        { generatedAt, schemaVersion: 5, providers: [interpreted] },
+        "quota-axi",
+        false,
+      );
+      expect(toon).toMatch(/kimi,all_models,60,\d/);
+      expect(toon).not.toContain("unmeasurable");
+      expect(toon).toContain(
+        "kimi,all,share,month_code of month_total · 25,none",
+      );
+    },
+  );
+
+  it("clamps a month-end reset into the shorter previous month", () => {
+    const start = (resetTime: string) =>
+      normalizeKimiPayload({
+        usages: {
+          limit_month_total: { used_ratio: 0.4, reset_time: resetTime },
+        },
+      }).windows[0]?.startsAt;
+    expect(start("2027-03-31T07:00:00Z")).toBe("2027-02-28T07:00:00.000Z");
+    expect(start("2028-03-31T07:00:00Z")).toBe("2028-02-29T07:00:00.000Z");
+    expect(start("2027-01-31T07:00:00Z")).toBe("2026-12-31T07:00:00.000Z");
+  });
+
+  it("invents no cycle for a monthly total without a reset", async () => {
+    const report = await testAdapter({
+      fetch: vi.fn(async () =>
+        jsonResponse({
+          usages: {
+            limit_5h: { used_ratio: 0.1, reset_time: hoursFromNow(3) },
+            limit_month_total: { used_ratio: 0.4 },
+          },
+        }),
+      ),
+    }).fetchQuota(OPTIONS);
+
+    const interpreted = withQuotaSemantics(report, generatedAt);
+    const monthTotal = interpreted.windows.find(
+      ({ id }) => id === "month_total",
+    );
+    expect(monthTotal?.startsAt).toBeUndefined();
+    expect(monthTotal?.windowSeconds).toBeUndefined();
+    expect(monthTotal?.pace).toEqual({
+      status: "unknown",
+      reason: "missing_cycle",
+    });
+    expect(
+      interpreted.quotaSemantics?.effectiveAvailability[0]?.selection,
+    ).toMatchObject({
+      status: "unknown",
+      unmeasurableWindowIds: ["month_total"],
+    });
+  });
+
+  it("keeps a stale reading's monthly pace unknown", async () => {
+    const report = await testAdapter({
+      fetch: vi.fn(async () => jsonResponse(monthlyUsages(false))),
+    }).fetchQuota(OPTIONS);
+    const stale: ProviderQuota = {
+      ...report,
+      state: { ...report.state, status: "stale", stale: true },
+    };
+
+    const monthTotal = withQuotaSemantics(stale, generatedAt).windows.find(
+      ({ id }) => id === "month_total",
+    );
+    expect(monthTotal?.pace).toEqual({ status: "unknown", reason: "stale" });
+  });
+});
+
 describe("Kimi payload normalization", () => {
   it("normalizes a principal weekly detail and flags omitted limits", () => {
     expect(normalizeKimiPayload({ usage: { limit: 250, used: 55 } })).toEqual({
@@ -957,6 +1082,7 @@ describe("Kimi payload normalization", () => {
           kind: "monthly",
           percentUsed: 40,
           percentRemaining: 60,
+          startsAt: "2026-09-01T00:00:00.000Z",
           resetsAt: "2026-10-01T00:00:00.000Z",
         },
         {
@@ -1035,7 +1161,7 @@ describe("Kimi payload normalization", () => {
     ).toMatchObject({ percentUsed: 87.3, percentRemaining: 12.7 });
   });
 
-  it("keeps monthly total and code as distinct windows and omits a monthly duration", () => {
+  it("keeps monthly total and code as distinct windows and starts the total one subscription month before its reset", () => {
     const normalized = normalizeKimiPayload({
       usages: {
         limit_month_total: {
@@ -1055,6 +1181,7 @@ describe("Kimi payload normalization", () => {
         kind: "monthly",
         percentUsed: 40,
         percentRemaining: 60,
+        startsAt: "2026-09-01T00:00:00.000Z",
         resetsAt: "2026-10-01T00:00:00.000Z",
       },
       {
