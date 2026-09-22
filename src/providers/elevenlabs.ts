@@ -4,7 +4,7 @@ import {
 } from "../cache.js";
 import { providerFetch } from "../lib/http.js";
 import { usableLiteralSecret } from "../lib/secret.js";
-import { retryAfterToIso } from "../lib/time.js";
+import { calendarMonthsBefore, retryAfterToIso } from "../lib/time.js";
 import type {
   AuthProviderReport,
   AuthSourceReport,
@@ -565,7 +565,7 @@ export function normalizeElevenLabsPayload(
     const months = refreshPeriodMonths(root.character_refresh_period);
     const startsAt =
       resetsAt && months !== undefined
-        ? stepBackMonths(resetsAt, months)
+        ? calendarMonthsBefore(resetsAt, months)
         : undefined;
     if (!expired)
       windows.push({
@@ -594,27 +594,6 @@ function parseResetUnix(value: unknown): string | undefined {
   if (!Number.isFinite(ms) || ms < minResetMs) return undefined;
   const date = new Date(ms);
   return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
-}
-
-/**
- * Cycle start = the reported reset stepped back by the vendor's declared
- * refresh period, clamped into a shorter month so 31 March never becomes
- * 3 March. Same rule as Cursor's renewal-dated monthly pools; never a fixed
- * day count.
- */
-function stepBackMonths(resetsAt: string, months: number): string | undefined {
-  const reset = new Date(resetsAt);
-  const time = reset.getTime();
-  if (!Number.isFinite(time)) return undefined;
-  const day = reset.getUTCDate();
-  const start = new Date(time);
-  start.setUTCDate(1);
-  start.setUTCMonth(start.getUTCMonth() - months);
-  const daysInMonth = new Date(
-    Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + 1, 0),
-  ).getUTCDate();
-  start.setUTCDate(Math.min(day, daysInMonth));
-  return start.getTime() < time ? start.toISOString() : undefined;
 }
 
 async function readBoundedBody(

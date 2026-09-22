@@ -3,7 +3,12 @@ import { join } from "node:path";
 import { readCachedProvider } from "../cache.js";
 import { providerFetch } from "../lib/http.js";
 import { execFileText, commandExists } from "../lib/process.js";
-import { clampPercent, nowIso, retryAfterToIso } from "../lib/time.js";
+import {
+  calendarMonthsBefore,
+  clampPercent,
+  nowIso,
+  retryAfterToIso,
+} from "../lib/time.js";
 import type {
   AuthProviderReport,
   AuthSourceReport,
@@ -591,29 +596,7 @@ function billingCycleStart(
     parseEpochMillisOrIso(data.billingCycleStart) ??
     parseEpochMillisOrIso(plan?.billingCycleStart);
   if (reported !== undefined) return reported;
-  return cycleEnd === undefined ? undefined : previousCalendarMonth(cycleEnd);
-}
-
-/**
- * The same civil (UTC) date one month earlier, clamped to the last day of that
- * month when the day does not exist there (a 31st renewal lands on Feb 28/29).
- */
-function previousCalendarMonth(iso: string): string | undefined {
-  const end = new Date(iso);
-  if (Number.isNaN(end.getTime())) return undefined;
-  const month = end.getUTCMonth();
-  const year = month === 0 ? end.getUTCFullYear() - 1 : end.getUTCFullYear();
-  const targetMonth = month === 0 ? 11 : month - 1;
-  const daysInTargetMonth = new Date(
-    Date.UTC(year, targetMonth + 1, 0),
-  ).getUTCDate();
-  const start = new Date(end.getTime());
-  start.setUTCFullYear(
-    year,
-    targetMonth,
-    Math.min(end.getUTCDate(), daysInTargetMonth),
-  );
-  return Number.isNaN(start.getTime()) ? undefined : start.toISOString();
+  return cycleEnd === undefined ? undefined : calendarMonthsBefore(cycleEnd, 1);
 }
 
 function parseEpochMillisOrIso(value: unknown): string | undefined {
