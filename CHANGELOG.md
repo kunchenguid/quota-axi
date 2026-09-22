@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.1.50](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.49...quota-axi-v0.1.50) (2026-09-22)
+
+
+### Bug Fixes
+
+* **claude:** correct inverted quota percentages ([#248](https://github.com/kunchenguid/quota-axi/issues/248)) ([60c22ba](https://github.com/kunchenguid/quota-axi/commit/60c22bad2d3ab9e07e4f1cb5b122abe9f9a81a7b)), closes [#209](https://github.com/kunchenguid/quota-axi/issues/209)
+* **providers:** apply plan-declared cycle lengths to OpenCode Go windows ([#242](https://github.com/kunchenguid/quota-axi/issues/242)) ([6084f24](https://github.com/kunchenguid/quota-axi/commit/6084f2447ca4895dbe99f64e94b08f66effb5e4f))
+* **zai:** report coding plan quota over a reachable route ([#249](https://github.com/kunchenguid/quota-axi/issues/249)) ([110f11f](https://github.com/kunchenguid/quota-axi/commit/110f11f33d253cab70f6b5f8fa8e58f2ff9ab495))
+
 ## [0.1.49](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.48...quota-axi-v0.1.49) (2026-09-21)
 
 
