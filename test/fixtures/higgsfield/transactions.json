@@ -1,0 +1,23 @@
+{
+  "cursor": "3",
+  "items": [
+    {
+      "action": "spend",
+      "created_at": "2026-09-21T04:36:02.177Z",
+      "credits": -2,
+      "display_name": "Example Image Model"
+    },
+    {
+      "action": "spend",
+      "created_at": "2026-09-21T04:36:01.643Z",
+      "credits": -2,
+      "display_name": "Example Image Model"
+    },
+    {
+      "action": "grant",
+      "created_at": "2026-08-25T12:23:04.620Z",
+      "credits": 6000,
+      "display_name": "Subscription Credits"
+    }
+  ]
+}

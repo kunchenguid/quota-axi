@@ -182,6 +182,8 @@ function semanticsFor(
       );
     case "elevenlabs":
       return elevenLabsSemantics(provider.windows, generatedAt);
+    case "higgsfield":
+      return higgsfieldSemantics(provider.windows, generatedAt);
   }
 }
 
@@ -204,6 +206,27 @@ function elevenLabsSemantics(
   return knownSemantics(
     characters.length > 0
       ? [availability("included_characters", characters, generatedAt)]
+      : [],
+    description,
+  );
+}
+
+/**
+ * Higgsfield meters plan generation credits, not a coding-agent model lane.
+ * The credits window is only published when a subscription grant supplies the
+ * cap, so it bounds `included_credits` rather than `all_models`. Pace stays
+ * unknown until the vendor reports a reset.
+ */
+function higgsfieldSemantics(
+  windows: QuotaWindow[],
+  generatedAt: string,
+): QuotaSemantics {
+  const credits = windows.filter(({ id }) => id === "credits");
+  const description =
+    "Higgsfield's credits window is the subscription plan's included generation-credit allowance when a subscription grant supplies that cap, so it bounds the included_credits scope only. It is not a model lane, and extra purchases can add credits, so a zeroed window means the included allowance is spent, not that every request is refused. Pace, runway, and selection stay unknown until the vendor reports a reset.";
+  return knownSemantics(
+    credits.length > 0
+      ? [availability("included_credits", credits, generatedAt)]
       : [],
     description,
   );

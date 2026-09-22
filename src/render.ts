@@ -147,6 +147,7 @@ function quotaBlocks(response: QuotaAxiResponse): ProviderBlocks {
       ...providerAttention(provider, measured, scopeAttention.length),
     );
     blocks.attention.push(...shareRows(provider));
+    blocks.attention.push(...jobRows(provider));
     blocks.attention.push(...scopeAttention);
   }
   return blocks;
@@ -218,6 +219,20 @@ function shareRows(provider: ProviderQuota): AttentionRow[] {
       detail: shareDetail(window),
       remedy: NONE,
     }));
+}
+
+function jobRows(provider: ProviderQuota): AttentionRow[] {
+  const jobs = provider.jobs;
+  if (!jobs) return [];
+  return [
+    {
+      ...providerColumns(provider),
+      scope: "all",
+      kind: "jobs",
+      detail: `sampled ${jobs.sampled}${DETAIL_SEPARATOR}completed ${jobs.completed}${DETAIL_SEPARATOR}failed ${jobs.failed}${DETAIL_SEPARATOR}other ${jobs.other}`,
+      remedy: NONE,
+    },
+  ];
 }
 
 function shareDetail(window: QuotaWindow): string {

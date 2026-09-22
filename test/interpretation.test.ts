@@ -1377,4 +1377,25 @@ describe("per-scope selection signal", () => {
     expect(result.state.stale).toBe(true);
     expect(result.quotaSemantics?.status).toBe("unknown");
   });
+
+  it("bounds Higgsfield credits at included_credits and does not invent a model lane", () => {
+    const result = withQuotaSemantics(
+      provider("higgsfield", [window("credits", "credits", 99)]),
+      GENERATED_AT,
+    );
+
+    expect(result.quotaSemantics?.effectiveAvailability).toEqual([
+      expect.objectContaining({
+        scope: "included_credits",
+        status: "known",
+        effectivePercentRemaining: 99,
+        boundedBy: ["credits"],
+      }),
+    ]);
+    expect(result.quotaSemantics?.effectiveAvailability).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ scope: "all_models" }),
+      ]),
+    );
+  });
 });
