@@ -438,7 +438,7 @@ The `quota` command's `--json` emits `schemaVersion: 5`, or `6` when a provider 
 
 The package publishes TypeScript declarations from its package root, so consumers can use `import type { QuotaAxiResponse, ModelsResponse } from "quota-axi"`. The adapter contract is `ProviderAdapter` in and normalized `ProviderQuota` out: adapters report observed quota data, never rank, mint credentials, or retain raw responses. The narrowly bounded vendor-owned renewal path is documented under [Delegated credential refresh](#delegated-credential-refresh).
 
-`schemaVersion` is command-specific. Additive optional fields do not bump it. A semantic or incompatible shape change does. The legacy single-account `quota` report is version 5, `auth` is version 1, and `models` is version 1. When account discovery expands a provider, those versions are 6, 2, and 2 respectively.
+`schemaVersion` is command-specific. Additive optional fields do not bump it. A semantic or incompatible shape change does. The legacy single-account `quota` report is version 5, `auth` is version 1, and `models` is version 1. When account discovery expands a provider, those versions are 6, 2, and 2 respectively. Z.AI's published peak-hour cost data (`providers[].cost`, `selection.spendPriorityAtCost`, and the `cost` attention kind) is additive optional data under the current quota version; `spendPriority`, `runway`, `pace`, and the `quota[]` column set are unchanged.
 
 ### Default report blocks
 
@@ -454,19 +454,20 @@ A `quota[]` row whose `runway` is `projected_exhaustion` or `exhausted_now` has 
 
 `attention[]` kinds:
 
-| `kind`                                                  | `scope` | Meaning                                                                                                                                                                                   |
-| ------------------------------------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `stale`                                                 | `all`   | The report is stale diagnostic data. `detail` names the last refresh, `fetch failed` plus `state.error` when a usage fetch failed, and any `state.reason`; no scope gets a `quota[]` row. |
-| `auth_required`, `rate_limited`, `unavailable`, `error` | `all`   | The provider state status. `detail` is `state.error`, any `state.reason`, plus the retry-after instant for a rate limit.                                                                  |
-| `no_quota`                                              | `all`   | The provider reported no measurable scope and no raw credit balance. Emitted when nothing else names it or when needed to preserve `state.authStatus`.                                    |
-| `credits`                                               | `all`   | The provider reported a raw credit balance but no measurable scope. `detail` states that balance verbatim; no percentage or bound is derived from it.                                     |
-| `unresolved_windows`                                    | `all`   | `quotaSemantics.unresolvedWindowIds`: unfamiliar vendor windows not folded into any bound.                                                                                                |
-| `untrusted_windows`                                     | `all`   | `state.untrustedWindowIds`: limits that could not be parsed authoritatively.                                                                                                              |
-| `share`                                                 | `all`   | A window is a used-share of another window, not an independent allowance. `detail` is `<id> of <parent>` plus ` · <percentUsed>` when that figure is present. It bounds no scope.         |
-| `headroom_unknown`                                      | scope   | The scope reports no effective percentage for a reason other than a bound conflict. `detail` names the windows that block it and any finite runway verdict with its limiting window.      |
-| `bound_conflict`                                        | scope   | A window the scope only inherits reads zero while the scope's own windows still report allowance. `detail` names both sides. The scope gets no `quota[]` row and no `exhaustion[]` row.   |
-| `unmeasurable`                                          | scope   | Headroom is known but a bound blocks `runway`, `spendPriority`, or both. `detail` names which.                                                                                            |
-| `degraded_source`                                       | `all`   | A credential source was superseded: it was broken or unreadable while a sibling source answered. `detail` is `<source> · <error>`. One row per source, only on a fresh reading.           |
+| `kind`                                                  | `scope` | Meaning                                                                                                                                                                                                                                                                                                  |
+| ------------------------------------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `stale`                                                 | `all`   | The report is stale diagnostic data. `detail` names the last refresh, `fetch failed` plus `state.error` when a usage fetch failed, and any `state.reason`; no scope gets a `quota[]` row.                                                                                                                |
+| `auth_required`, `rate_limited`, `unavailable`, `error` | `all`   | The provider state status. `detail` is `state.error`, any `state.reason`, plus the retry-after instant for a rate limit.                                                                                                                                                                                 |
+| `no_quota`                                              | `all`   | The provider reported no measurable scope and no raw credit balance. Emitted when nothing else names it or when needed to preserve `state.authStatus`.                                                                                                                                                   |
+| `credits`                                               | `all`   | The provider reported a raw credit balance but no measurable scope. `detail` states that balance verbatim; no percentage or bound is derived from it.                                                                                                                                                    |
+| `unresolved_windows`                                    | `all`   | `quotaSemantics.unresolvedWindowIds`: unfamiliar vendor windows not folded into any bound.                                                                                                                                                                                                               |
+| `untrusted_windows`                                     | `all`   | `state.untrustedWindowIds`: limits that could not be parsed authoritatively.                                                                                                                                                                                                                             |
+| `share`                                                 | `all`   | A window is a used-share of another window, not an independent allowance. `detail` is `<id> of <parent>` plus ` · <percentUsed>` when that figure is present. It bounds no scope.                                                                                                                        |
+| `cost`                                                  | scope   | A published peak-hour cost schedule prices this scope's quota differently right now: `detail` is `peak <multiplier>x until <instant>`. Emitted only while the multiplier is not 1; the provider's `cost` field carries the figure at every time. Z.AI's `all_models` scope is the only one priced today. |
+| `headroom_unknown`                                      | scope   | The scope reports no effective percentage for a reason other than a bound conflict. `detail` names the windows that block it and any finite runway verdict with its limiting window.                                                                                                                     |
+| `bound_conflict`                                        | scope   | A window the scope only inherits reads zero while the scope's own windows still report allowance. `detail` names both sides. The scope gets no `quota[]` row and no `exhaustion[]` row.                                                                                                                  |
+| `unmeasurable`                                          | scope   | Headroom is known but a bound blocks `runway`, `spendPriority`, or both. `detail` names which.                                                                                                                                                                                                           |
+| `degraded_source`                                       | `all`   | A credential source was superseded: it was broken or unreadable while a sibling source answered. `detail` is `<source> · <error>`. One row per source, only on a fresh reading.                                                                                                                          |
 
 `remedy` carries `state.remedyCommand` when one exists, and situational agent-directed advice is still prepended to `help`.
 
@@ -491,18 +492,18 @@ An unknown or stale scope deliberately gets **no** `quota[]` row: the absence of
 | `effectiveAvailability[].pace.behindWindowIds`, `onPaceWindowIds`                                                                              |
 | Account identity (`account`) and per-source `attempts`                                                                                         |
 
-Everything a consumer branches on stays in the default tier: `state.status`, `stale`, `authStatus`, `error`, `reason`, `remedyCommand`, `retryAfter`, `untrustedWindowIds`, and `degradedSources`; window `pace.status`, `reason`, `reservePercentPoints`, `burnMultiple`, and `shareOf` together with that share window's `percentUsed`; `quotaSemantics.status` and `unresolvedWindowIds`; and every scope's `effectivePercentRemaining`, `boundedBy`, `limitingWindowIds`, `boundConflict`, `runway`, `selection`, and pace `aheadWindowIds` / `unknownWindowIds` / `worstReservePercentPoints`. `credits` also stays, so a consumer can avoid misreading it as exhaustion.
+Everything a consumer branches on stays in the default tier: `state.status`, `stale`, `authStatus`, `error`, `reason`, `remedyCommand`, `retryAfter`, `untrustedWindowIds`, `degradedSources`, and `cost`; window `pace.status`, `reason`, `reservePercentPoints`, `burnMultiple`, and `shareOf` together with that share window's `percentUsed`; `quotaSemantics.status` and `unresolvedWindowIds`; and every scope's `effectivePercentRemaining`, `boundedBy`, `limitingWindowIds`, `boundConflict`, `runway`, `selection` (including `spendPriorityAtCost`), and pace `aheadWindowIds` / `unknownWindowIds` / `worstReservePercentPoints`. `credits` also stays, so a consumer can avoid misreading it as exhaustion.
 
 `--tui` renders from the complete in-memory model, so demotion never changes what the human report draws.
 
 ### Quota report shape
 
-| Object                        | Fields                                                                                                           |
-| ----------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| Quota report                  | `providers`                                                                                                      |
-| Provider report               | `provider`, optional `accountKey`, `windows`, `quotaSemantics`, `state`, optional `plan`, and optional `credits` |
-| Provider report with `--full` | Also `label`, `source`, optional `account` identity, and per-source `attempts`                                   |
-| Account identity (`--full`)   | Optional `email`, `organization`, `accountId`, and `identityStatus`                                              |
+| Object                        | Fields                                                                                                                            |
+| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| Quota report                  | `providers`                                                                                                                       |
+| Provider report               | `provider`, optional `accountKey`, `windows`, `quotaSemantics`, `state`, optional `plan`, optional `cost`, and optional `credits` |
+| Provider report with `--full` | Also `label`, `source`, optional `account` identity, and per-source `attempts`                                                    |
+| Account identity (`--full`)   | Optional `email`, `organization`, `accountId`, and `identityStatus`                                                               |
 
 Account identity and per-source `attempts` are omitted unless `--full` is passed.
 Claude `identityStatus` is `verified` only when Anthropic returns an authoritative account identifier; `email` and `organization` are display-only and must not be used for duplicate detection.
@@ -630,11 +631,12 @@ A bounding window with no `resetsAt` at all has not been triggered yet (e.g. a C
 
 In default TOON the scalar is the `spendPriority` column of the scope's `quota[]` row - there is no separate `selection[]` block, at any tier, because the column already carries it. An unmeasurable scalar renders the literal `unknown`, never `0`: `0` is exact utilization, a completely different claim.
 
-| Field                   | Meaning                                                                                                                     |
-| ----------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `status`                | `known` when every bounding window is measurable and no [`boundConflict`](#quota-windows) is disclosed; otherwise `unknown` |
-| `spendPriority`         | The clamped scope scalar. Present only when `status` is `known`                                                             |
-| `unmeasurableWindowIds` | The bounding windows that blocked the scalar. Present whenever one made the scope `unknown`                                 |
+| Field                   | Meaning                                                                                                                                                                                                 |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `status`                | `known` when every bounding window is measurable and no [`boundConflict`](#quota-windows) is disclosed; otherwise `unknown`                                                                             |
+| `spendPriority`         | The clamped scope scalar. Present only when `status` is `known`                                                                                                                                         |
+| `spendPriorityAtCost`   | The same clamped cycle-weighted mean with each window's affordable term divided by the provider's current cost multiplier. Present only when `spendPriority` is present and the provider carries `cost` |
+| `unmeasurableWindowIds` | The bounding windows that blocked the scalar. Present whenever one made the scope `unknown`                                                                                                             |
 
 For each bounding window `w` of the scope:
 
@@ -653,6 +655,8 @@ scopeMetric = SUM(gap_w * cycleSeconds_w) / SUM(cycleSeconds_w)
 | Negative        | Overdrawn against the reset clock                                                                                           |
 
 A higher `spendPriority` therefore marks the scope where spending recovers the most paid allowance that would otherwise expire unused. At `burnMultiple` 1, `S_w` reduces exactly to that window's `reservePercentPoints`; the metric generalizes reserve to projected forfeiture at the observed burn pace.
+
+Z.AI's published peak-hour schedule prices the same work at 3× the off-peak quota rate during Monday-to-Friday 14:00–18:00 Singapore time, with weekends deducted at off-peak rates all day. A provider with such a published schedule carries a `cost` field on its report - `multiplier` (quota deducted per unit of work now, relative to off-peak), `until` (the next UTC schedule boundary), and `source: "published"` - and the scope the schedule prices carries `selection.spendPriorityAtCost` beside `spendPriority`: the same clamped cycle-weighted mean with each window's affordable term divided by the current multiplier, so it equals `spendPriority` exactly off-peak and is lower at peak. `spendPriority` itself is unchanged - it never divides by the multiplier - and the observed `burnMultiple` is used as is, without correcting the burn history's past peak/off-peak mix.
 
 Any bounding window without usable pace makes the **whole scope** unmeasurable: `status` is `unknown`, no scalar is emitted, and `unmeasurableWindowIds` names the blockers. An unknown window is never assumed healthy and never treated as zero. A window whose remaining cycle time has effectively run out is unmeasurable rather than infinite. The one case where an absent `burnMultiple` is not a gap is a window with zero elapsed cycle time and zero usage: nothing can have been consumed yet, so its observed burn is `0` and the scope stays measurable.
 
