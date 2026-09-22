@@ -602,7 +602,7 @@ Pace is calculated only from trusted cycle evidence:
 
 Every projection quota-axi publishes is cycle-average. There is deliberately no `projectionBasis` field: its absence means `cycle_average`, and a future non-cycle-average basis would name itself.
 
-Default TOON keeps token cost low: `quota[]` puts `spendPriority` immediately after effective headroom and carries the runway verdict, its confidence, and the binding window's reset, while per-window rows and raw numeric reserve live in `--full`. Default `--json` keeps `pace.status`, `reason`, `reservePercentPoints`, and `burnMultiple`, and demotes the cycle-progress inputs those are derived from. Pace, runway, and `selection` are recomputed on every report from `generatedAt` and are not written to the quota cache.
+Default TOON keeps token cost low: `quota[]` puts `spendPriority` immediately after effective headroom and carries the runway verdict, its confidence, and the binding window's reset, while per-window rows and raw numeric reserve live in `--full`. Default `--json` keeps `pace.status`, `reason`, `reservePercentPoints`, and `burnMultiple`, and demotes the cycle-progress inputs those are derived from. Pace, runway, `selection`, and `cost` are recomputed on every report from `generatedAt` and are not written to the quota cache.
 
 Each `effectiveAvailability` entry also carries a compact `pace` summary over **every** bounding window for that scope (not only the current lowest-remaining limiter): per-status window lists, including `aheadWindowIds` and `unknownWindowIds`, plus `worstReservePercentPoints` / `worstReserveWindowId` (most negative signed reserve among known-pace windows). Different windows keep their own reset horizons; quota-axi does not invent one synthetic reset for a scope. This is factual inspectable data, never a provider/model routing recommendation.
 
@@ -660,7 +660,7 @@ Z.AI's published peak-hour schedule prices the same work at 3× the off-peak quo
 
 Any bounding window without usable pace makes the **whole scope** unmeasurable: `status` is `unknown`, no scalar is emitted, and `unmeasurableWindowIds` names the blockers. An unknown window is never assumed healthy and never treated as zero. A window whose remaining cycle time has effectively run out is unmeasurable rather than infinite. The one case where an absent `burnMultiple` is not a gap is a window with zero elapsed cycle time and zero usage: nothing can have been consumed yet, so its observed burn is `0` and the scope stays measurable.
 
-`selection` is derived per report from the same `generatedAt` clock as `pace` and `runway`, and is not cached.
+`selection` and the provider's `cost` are derived per report from the same `generatedAt` clock as `pace` and `runway`, and are not cached.
 
 **This is data, not routing.** quota-axi still never routes, ranks a winner, orders providers preferentially, proxies, logs in, or changes provider quota state. `selection` is a derived comparative _data_ signal computed entirely from figures quota-axi already reports; any routing, ranking, or preference is the consumer's decision. It is also advisory only: it never overrides `runway`, which remains the hard completion-risk evidence a consumer checks against its task horizon.
 
@@ -713,7 +713,7 @@ Catalog buckets are coarse editorial classifications relative to the current fro
 
 Every models response includes `catalog.version` and `catalog.provenance`; callers must treat catalog freshness and unmapped `unmatchedWindowIds` as explicit unknowns, never as missing evidence. A model row exposes the applicable effective quota scope and provider state. When no model-specific scope is known, the provider account scope remains the evidence rather than an invented model limit.
 
-Default model order is deterministic and non-preferential: provider, then `accountKey` in an account-expanded report, then model ID. `--sort runway` is an explicit, evidence-preserving comparator only: finite `usableRunwaySeconds` descend, then `through_reset`, then `exhausted_now`, with unknown evidence last. Equal evidence appears in `sort.tieGroups`; no hidden score or model, provider, harness, credential, or route recommendation is implied. The comparator registry is intentionally extensible for a future separately sourced `cost` comparator, which is not shipped in v1.
+Default model order is deterministic and non-preferential: provider, then `accountKey` in an account-expanded report, then model ID. `--sort runway` is an explicit, evidence-preserving comparator only: finite `usableRunwaySeconds` descend, then `through_reset`, then `exhausted_now`, with unknown evidence last. Equal evidence appears in `sort.tieGroups`; no hidden score or model, provider, harness, credential, or route recommendation is implied. The comparator registry is intentionally extensible for a future separately sourced monetary-cost comparator, which is not shipped in v1 (unrelated to the provider's published quota-`cost` multiplier).
 
 ### `auth --json` shape
 
