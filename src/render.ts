@@ -271,7 +271,19 @@ function providerStateRows(
       remedy: NONE,
     });
   }
-  if (measured) return rows;
+  if (measured) {
+    const credits = freshCreditBalance(provider);
+    if (credits) {
+      rows.push({
+        ...providerColumns(provider),
+        scope: "all",
+        kind: "credits",
+        detail: `${credits}`,
+        remedy: primary ? NONE : (provider.state.remedyCommand ?? NONE),
+      });
+    }
+    return rows;
+  }
 
   const authStatus = provider.state.authStatus;
   const suffix = authStatus ? ` (auth ${authStatus})` : "";
@@ -304,10 +316,10 @@ function providerStateRows(
 }
 
 /**
- * A provider that reports a raw credit balance but no measurable scope has a
- * real number to state. Naming it keeps the default report from contradicting
- * the same run's `credits` with a bare `no_quota`, without inventing a
- * percentage or a routing bound from a balance that has no cap.
+ * A provider that reports a raw credit balance has a real number to state.
+ * Naming it keeps the default report from hiding that evidence beside either
+ * measurable or absent scopes, without inventing a percentage or a routing
+ * bound from a balance that has no cap.
  */
 function creditBalance(provider: ProviderQuota): string | undefined {
   const credits = provider.credits;
@@ -315,6 +327,34 @@ function creditBalance(provider: ProviderQuota): string | undefined {
   if (credits.unlimited) return "credits unlimited";
   if (credits.remaining === undefined) return undefined;
   return `remaining ${credits.remaining} ${credits.unit ?? "credits"}`;
+}
+
+function freshCreditBalance(provider: ProviderQuota): string | undefined {
+  if (provider.state.stale || provider.state.status !== "fresh")
+    return undefined;
+  if (
+    provider.credits?.unlimited !== true &&
+    !(
+      provider.credits?.remaining !== undefined &&
+      provider.credits.remaining > 0
+    )
+  ) {
+    return undefined;
+  }
+  return creditBalance(provider);
+}
+
+export function creditWindowMatchesBalance(provider: ProviderQuota): boolean {
+  const remaining = provider.credits?.remaining;
+  if (remaining === undefined) return false;
+  return provider.windows.some(
+    (window) =>
+      window.kind === "credits" &&
+      window.spentUsd !== undefined &&
+      window.limitUsd !== undefined &&
+      Math.abs(window.limitUsd - window.spentUsd - remaining) <=
+        1e-9 * Math.max(1, Math.abs(window.limitUsd)),
+  );
 }
 
 function primaryProviderRow(provider: ProviderQuota): AttentionRow | undefined {
