@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.1.51](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.50...quota-axi-v0.1.51) (2026-09-22)
+
+
+### Features
+
+* **tui:** fold providers that are not set up ([#259](https://github.com/kunchenguid/quota-axi/issues/259)) ([2f05e10](https://github.com/kunchenguid/quota-axi/commit/2f05e10f5ad6d245f854157f015b18a719f2f614))
+
+
+### Bug Fixes
+
+* **claude:** restore correct quota percentage polarity ([#267](https://github.com/kunchenguid/quota-axi/issues/267)) ([36cf431](https://github.com/kunchenguid/quota-axi/commit/36cf431db826daea0f0935815ce98ecd66fb819a))
+* **kimi:** report authenticated empty usage as no quota ([#261](https://github.com/kunchenguid/quota-axi/issues/261)) ([a1f86a6](https://github.com/kunchenguid/quota-axi/commit/a1f86a64d62a1a45328c2180f2855807212c9539))
+* **opencode-go:** stop reporting a false unresolved_windows row for a never-set-up account ([#258](https://github.com/kunchenguid/quota-axi/issues/258)) ([218351c](https://github.com/kunchenguid/quota-axi/commit/218351c6cecf1106415700ea59296528fe028af2))
+* prevent Antigravity quota probes from opening sign-in tabs ([#250](https://github.com/kunchenguid/quota-axi/issues/250)) ([fcad447](https://github.com/kunchenguid/quota-axi/commit/fcad4478669fa6423b2ad97050ff60724a6396d2))
+
 ## [0.1.50](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.49...quota-axi-v0.1.50) (2026-09-22)
 
 
