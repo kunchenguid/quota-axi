@@ -169,6 +169,18 @@ export type EffectiveSelection = Partial<
    * the whole scope unmeasurable and suppresses the scalar.
    */
   unmeasurableWindowIds?: string[];
+  /**
+   * The same clamped cycle-weighted mean as the scalar keyed by
+   * `SELECTION_SCALAR_KEY`, with each window's affordable term divided by the
+   * provider's current cost multiplier:
+   * `percentRemaining / (timeRemainingPercent * costMultiplier) -
+   * burnMultiple`. At multiplier 1 it equals that scalar exactly; at peak it
+   * is lower because the same work costs more quota. The observed
+   * `burnMultiple` is used as is - the burn history's past peak/off-peak mix
+   * is deliberately not corrected. Present only when the base scalar is known
+   * and the provider carries `cost`.
+   */
+  spendPriorityAtCost?: number;
 };
 
 /**
@@ -187,6 +199,47 @@ export type BoundConflict = {
   exhaustedWindowIds: string[];
   /** Windows metered for this scope alone, all still reporting allowance. */
   liveWindowIds: string[];
+};
+
+/**
+ * A provider's published peak-hour cost schedule, declared in this repository
+ * as provider-owned data beside its trusted window durations. Only a fixed
+ * -offset zone (no daylight saving) is eligible, so the daily window is plain
+ * UTC arithmetic. The peak window is start-inclusive and end-exclusive in
+ * local time, and `peakStartHour` must be before `peakEndHour` (no wrap).
+ */
+export type PeakCostSchedule = {
+  /** Fixed UTC offset of the schedule's zone, in seconds. */
+  utcOffsetSeconds: number;
+  /** Local weekdays (0 = Sunday .. 6 = Saturday) the peak window applies to. */
+  peakWeekdays: readonly number[];
+  /** Peak window start, local hour of day, inclusive. */
+  peakStartHour: number;
+  /** Peak window end, local hour of day, exclusive. */
+  peakEndHour: number;
+  /** Quota deducted per unit of work at peak, relative to off-peak (1). */
+  peakMultiplier: number;
+};
+
+/**
+ * Published peak-hour cost data for a provider whose vendor prices quota
+ * differently by time of day. Derived per report from the provider's
+ * repository-declared schedule and the reading's `generatedAt` clock; never
+ * cached.
+ */
+export type ProviderCost = {
+  /**
+   * Quota deducted per unit of work now, relative to off-peak: `1` off-peak
+   * and the schedule's peak multiplier during the published peak window.
+   */
+  multiplier: number;
+  /** ISO 8601 UTC instant at which the multiplier next changes. */
+  until: string;
+  /**
+   * Provenance. `published` means a vendor-published schedule declared in
+   * this repository.
+   */
+  source: "published";
 };
 
 export type QuotaWindow = {
@@ -292,6 +345,12 @@ export type ProviderQuota = {
   };
   windows: QuotaWindow[];
   quotaSemantics?: QuotaSemantics;
+  /**
+   * Published peak-hour cost now, present only for a provider with a
+   * repository-declared schedule and a successful reading. Recomputed per
+   * report from `generatedAt`; never cached.
+   */
+  cost?: ProviderCost;
   credits?: {
     remaining?: number;
     unlimited?: boolean;

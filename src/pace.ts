@@ -3,6 +3,7 @@ import type {
   EffectivePaceSummary,
   EffectiveRunway,
   EffectiveSelection,
+  PeakCostSchedule,
   QuotaPace,
   QuotaPaceReason,
   QuotaWindow,
@@ -323,22 +324,34 @@ export function summarizeEffectivePace(
  */
 export function summarizeEffectiveSelection(
   windows: QuotaWindow[],
+  costMultiplier?: number,
 ): EffectiveSelection {
   if (windows.length === 0) return { status: "unknown" };
 
+  const multiplier =
+    costMultiplier !== undefined &&
+    Number.isFinite(costMultiplier) &&
+    costMultiplier > 0
+      ? costMultiplier
+      : undefined;
   const unmeasurableWindowIds: string[] = [];
   let weightedGapSum = 0;
+  let weightedAtCostGapSum = 0;
   let cycleSecondsSum = 0;
 
   for (const window of windows) {
-    const gap = windowSelectionGap(window);
+    const term = windowSelectionTerm(window);
     const cycleSeconds = finiteNumber(window.pace?.cycleSeconds);
-    if (gap === undefined || cycleSeconds === undefined || cycleSeconds <= 0) {
+    if (term === undefined || cycleSeconds === undefined || cycleSeconds <= 0) {
       unmeasurableWindowIds.push(window.id);
       continue;
     }
-    weightedGapSum += gap * cycleSeconds;
+    weightedGapSum += (term.affordable - term.burnMultiple) * cycleSeconds;
     cycleSecondsSum += cycleSeconds;
+    if (multiplier !== undefined) {
+      weightedAtCostGapSum +=
+        (term.affordable / multiplier - term.burnMultiple) * cycleSeconds;
+    }
   }
 
   if (unmeasurableWindowIds.length > 0) {
@@ -351,16 +364,81 @@ export function summarizeEffectiveSelection(
       unmeasurableWindowIds: windows.map(({ id }) => id),
     };
   }
-  return {
+  const selection: EffectiveSelection = {
     status: "known",
     [SELECTION_SCALAR_KEY]: roundPace(
       clamp(scopeMetric, SELECTION_CLAMP_PERCENT_POINTS),
     ),
   };
+  if (multiplier !== undefined) {
+    selection.spendPriorityAtCost = roundPace(
+      clamp(
+        weightedAtCostGapSum / cycleSecondsSum,
+        SELECTION_CLAMP_PERCENT_POINTS,
+      ),
+    );
+  }
+  return selection;
 }
 
-/** The per-window selection term, or undefined when the window is unmeasurable. */
-function windowSelectionGap(window: QuotaWindow): number | undefined {
+/**
+ * The published peak-hour cost of one provider schedule at one instant: the
+ * multiplier in force at `generatedAtMs` and the UTC millisecond instant at
+ * which it next changes. The peak window is start-inclusive and end-exclusive
+ * in the schedule's local time, so a reading taken exactly at a boundary
+ * already reports the multiplier it changes to. Between peak windows the
+ * multiplier is off-peak (1), and `untilMs` is the next peak start on an
+ * eligible local weekday, skipping ineligible days (weekends) entirely. The
+ * offset is fixed - only no-daylight-saving zones are schedulable - so plain
+ * UTC arithmetic with the offset is exact.
+ */
+export function peakCostAt(
+  schedule: PeakCostSchedule,
+  generatedAtMs: number,
+): { multiplier: number; untilMs: number } {
+  const DAY_MS = 86_400_000;
+  const HOUR_MS = 3_600_000;
+  const localMs = generatedAtMs + schedule.utcOffsetSeconds * 1000;
+  const localDayIndex = Math.floor(localMs / DAY_MS);
+  // Epoch day 0 (1970-01-01) was a Thursday, hence the +4 (0 = Sunday).
+  const localWeekday = (((localDayIndex + 4) % 7) + 7) % 7;
+  const intoDayMs = localMs - localDayIndex * DAY_MS;
+  const peakStartMs = schedule.peakStartHour * HOUR_MS;
+  const peakEndMs = schedule.peakEndHour * HOUR_MS;
+  if (
+    schedule.peakWeekdays.includes(localWeekday) &&
+    intoDayMs >= peakStartMs &&
+    intoDayMs < peakEndMs
+  ) {
+    return {
+      multiplier: schedule.peakMultiplier,
+      untilMs:
+        localDayIndex * DAY_MS + peakEndMs - schedule.utcOffsetSeconds * 1000,
+    };
+  }
+  for (let daysAhead = 0; daysAhead <= 7; daysAhead += 1) {
+    const dayIndex = localDayIndex + daysAhead;
+    const weekday = (((dayIndex + 4) % 7) + 7) % 7;
+    if (!schedule.peakWeekdays.includes(weekday)) continue;
+    const candidateMs =
+      dayIndex * DAY_MS + peakStartMs - schedule.utcOffsetSeconds * 1000;
+    if (candidateMs > generatedAtMs) {
+      return { multiplier: 1, untilMs: candidateMs };
+    }
+  }
+  // Unreachable for a schedule with at least one peak weekday; an empty
+  // weekday set is off-peak forever, pinned to the reading instant.
+  return { multiplier: 1, untilMs: generatedAtMs };
+}
+
+/**
+ * The per-window selection term split into its affordable allowance rate and
+ * observed burn, or undefined when the window is unmeasurable. The gap is
+ * `affordable - burnMultiple`; a cost multiplier divides only `affordable`.
+ */
+function windowSelectionTerm(
+  window: QuotaWindow,
+): { affordable: number; burnMultiple: number } | undefined {
   const pace = window.pace;
   if (pace === undefined || pace.status === "unknown") return undefined;
 
@@ -377,8 +455,8 @@ function windowSelectionGap(window: QuotaWindow): number | undefined {
   const burnMultiple = resolveSelectionBurnMultiple(window, percentRemaining);
   if (burnMultiple === undefined) return undefined;
 
-  const gap = percentRemaining / timeRemainingPercent - burnMultiple;
-  return Number.isFinite(gap) ? gap : undefined;
+  const affordable = percentRemaining / timeRemainingPercent;
+  return Number.isFinite(affordable) ? { affordable, burnMultiple } : undefined;
 }
 
 /**

@@ -2,12 +2,16 @@ import { degradedSources } from "./lib/source-attempts.js";
 import {
   computeEffectiveRunway,
   computeWindowPace,
+  peakCostAt,
   summarizeEffectivePace,
   summarizeEffectiveSelection,
 } from "./pace.js";
+import { ZAI_PEAK_COST_SCHEDULE } from "./providers/zai.js";
 import type {
   BoundConflict,
   EffectiveAvailability,
+  PeakCostSchedule,
+  ProviderCost,
   ProviderQuota,
   QuotaSemantics,
   QuotaWindow,
@@ -52,13 +56,47 @@ export function withQuotaSemantics(
     }),
   }));
   const withWindows = { ...provider, windows };
-  const semantics = semanticsFor(withWindows, generatedAt);
+  const cost = publishedCost(withWindows, generatedAt);
+  const semantics = semanticsFor(withWindows, generatedAt, cost);
   return {
     ...withWindows,
+    ...(cost ? { cost } : {}),
     state: { ...provider.state, ...supersededSources(provider) },
     quotaSemantics: provider.state.stale
       ? staleSemantics(semantics)
       : semantics,
+  };
+}
+
+/** The one published cost schedule declared in this repository, by provider. */
+const PUBLISHED_COST_SCHEDULES: Partial<
+  Record<ProviderQuota["provider"], PeakCostSchedule>
+> = {
+  zai: ZAI_PEAK_COST_SCHEDULE,
+};
+
+/**
+ * Published peak-hour cost data for a provider with a repository-declared
+ * schedule, present only on a successful reading (the same test that lets a
+ * fresh reading supersede sources). Like pace, runway, and selection it is
+ * derived from the report's `generatedAt` clock and never cached.
+ */
+function publishedCost(
+  provider: ProviderQuota,
+  generatedAt: string,
+): ProviderCost | undefined {
+  const schedule = PUBLISHED_COST_SCHEDULES[provider.provider];
+  if (!schedule) return undefined;
+  if (provider.state.stale || provider.state.status !== "fresh") {
+    return undefined;
+  }
+  const generatedAtMs = Date.parse(generatedAt);
+  if (!Number.isFinite(generatedAtMs)) return undefined;
+  const { multiplier, untilMs } = peakCostAt(schedule, generatedAtMs);
+  return {
+    multiplier,
+    until: new Date(untilMs).toISOString(),
+    source: "published",
   };
 }
 
@@ -124,6 +162,7 @@ function staleSemantics(semantics: QuotaSemantics): QuotaSemantics {
 function semanticsFor(
   provider: ProviderQuota,
   generatedAt: string,
+  cost?: ProviderCost,
 ): QuotaSemantics {
   switch (provider.provider) {
     case "claude":
@@ -143,6 +182,7 @@ function semanticsFor(
         provider.windows,
         provider.state.untrustedWindowIds ?? [],
         generatedAt,
+        cost?.multiplier,
       );
     case "cursor":
       return cursorSemantics(provider.windows, generatedAt);
@@ -613,6 +653,7 @@ function zaiSemantics(
   windows: QuotaWindow[],
   untrustedWindowIds: string[],
   generatedAt: string,
+  costMultiplier?: number,
 ): QuotaSemantics {
   const token = windows.filter(
     ({ id }) => id === "five_hour" || id === "weekly",
@@ -646,7 +687,12 @@ function zaiSemantics(
 
   const effectiveAvailability: EffectiveAvailability[] = [];
   if (token.length > 0) {
-    effectiveAvailability.push(availability("all_models", token, generatedAt));
+    // The published peak schedule prices model usage; the tool window is a
+    // separate resource the schedule does not price, so its scalar carries no
+    // cost multiplier.
+    effectiveAvailability.push(
+      availability("all_models", token, generatedAt, undefined, costMultiplier),
+    );
   }
   if (tool.length > 0) {
     effectiveAvailability.push(availability("tools", tool, generatedAt));
@@ -740,11 +786,18 @@ function availability(
    * conflict instead of as exhaustion.
    */
   ownWindows?: QuotaWindow[],
+  /**
+   * The provider's current published cost multiplier, when it publishes a
+   * schedule and this is a scope the schedule prices. Emits
+   * `selection.spendPriorityAtCost` beside the base scalar; other providers
+   * pass nothing and their selection is computed exactly as before.
+   */
+  costMultiplier?: number,
 ): EffectiveAvailability {
   const boundedBy = windows.map(({ id }) => id);
   const remaining = windows.map(({ percentRemaining }) => percentRemaining);
   const pace = summarizeEffectivePace(windows);
-  const selection = summarizeEffectiveSelection(windows);
+  const selection = summarizeEffectiveSelection(windows, costMultiplier);
   const conflict = ownWindows && boundConflict(windows, ownWindows);
   if (conflict) {
     // Both sides of the contradiction block the aggregate: the inherited zero

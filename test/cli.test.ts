@@ -14,11 +14,12 @@ import { main, normalizeArgv } from "../src/cli.js";
 import { authCommand, quotaCommand } from "../src/commands.js";
 import { PROVIDERS } from "../src/providers/index.js";
 import { redactedResponse } from "../src/render.js";
-import type {
-  ProviderAdapter,
-  ProviderOptions,
-  ProviderQuota,
-  QuotaAxiResponse,
+import {
+  SELECTION_SCALAR_KEY,
+  type ProviderAdapter,
+  type ProviderOptions,
+  type ProviderQuota,
+  type QuotaAxiResponse,
 } from "../src/types.js";
 
 const originalClaudeProvider = PROVIDERS.claude;
@@ -1247,6 +1248,76 @@ describe("CLI quota rendering", () => {
     );
     expect(monthCode?.shareOf).toBe("month_total");
     expect(monthCode?.percentRemaining).toBeUndefined();
+  });
+
+  it("surfaces the Z.AI published peak cost as a cost attention row only at peak", async () => {
+    useTempCache();
+    const quota = freshZaiQuota();
+    // Anchor measurable windows to the peak instant so the selection scalar
+    // is known in both runs.
+    const peakInstant = Date.parse("2026-09-23T07:00:00.000Z"); // Wed 15:00 Singapore.
+    quota.windows = quota.windows.map((w) => ({
+      ...w,
+      windowSeconds: w.id === "five_hour" ? 18_000 : 604_800,
+      resetsAt: new Date(
+        peakInstant + (w.id === "five_hour" ? 9_000 : 302_400) * 1000,
+      ).toISOString(),
+    }));
+    PROVIDERS.zai = providerWithQuota(quota);
+
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(peakInstant));
+    const peakToon = await capture(["--provider", "zai"]);
+    expect(toonRows(peakToon, "attention")).toContainEqual([
+      "zai",
+      "all_models",
+      "cost",
+      expect.stringMatching(/^peak 3x until 2026-09-23T10:00:00/),
+      "none",
+    ]);
+    // The quota[] table keeps its exact column set.
+    expect(peakToon).toContain(
+      "quota[1]{provider,scope,effectivePercentRemaining,spendPriority,runway,confidence,limitedBy,resetsAt}:",
+    );
+
+    const peakJson = JSON.parse(
+      await capture(["--provider", "zai", "--json"]),
+    ) as QuotaAxiResponse;
+    expect(peakJson.providers[0]?.cost).toEqual({
+      multiplier: 3,
+      until: "2026-09-23T10:00:00.000Z",
+      source: "published",
+    });
+    const peakSelection =
+      peakJson.providers[0]?.quotaSemantics?.effectiveAvailability[0]
+        ?.selection;
+    expect(peakSelection?.[SELECTION_SCALAR_KEY]).toBeTypeOf("number");
+    expect(peakSelection?.spendPriorityAtCost).toBeLessThan(
+      peakSelection?.[SELECTION_SCALAR_KEY] as number,
+    );
+
+    vi.setSystemTime(new Date("2026-09-23T05:00:00.000Z")); // 13:00 local - off-peak.
+    const offPeakToon = await capture(["--provider", "zai"]);
+    expect(
+      toonRows(offPeakToon, "attention").some((row) => row[2] === "cost"),
+    ).toBe(false);
+    const offPeakJson = JSON.parse(
+      await capture(["--provider", "zai", "--json"]),
+    ) as QuotaAxiResponse;
+    expect(offPeakJson.providers[0]?.cost).toEqual({
+      multiplier: 1,
+      until: "2026-09-23T06:00:00.000Z",
+      source: "published",
+    });
+    const offPeakSelection =
+      offPeakJson.providers[0]?.quotaSemantics?.effectiveAvailability[0]
+        ?.selection;
+    expect(offPeakSelection?.[SELECTION_SCALAR_KEY]).toBeTypeOf("number");
+    expect(offPeakSelection?.spendPriorityAtCost).toBe(
+      offPeakSelection?.[SELECTION_SCALAR_KEY],
+    );
+
+    vi.useRealTimers();
   });
 
   it("renders the card-grid report for --tui and composes with --provider", async () => {
