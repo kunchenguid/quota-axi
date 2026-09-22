@@ -196,7 +196,7 @@ $ quota-axi --provider claude --json
 $ quota-axi auth
 bin: ~/.npm/_npx/.../quota-axi
 description: Inspect local quota auth sources without printing secret values
-auth[31]{provider,source,path,status,error}:
+auth[32]{provider,source,path,status,error}:
   claude,oauth-file,~/.claude/.credentials.json,available,none
   claude,keychain,none,skipped,keychain_prompt_required
   codex,auth-json,~/.codex/auth.json,available,none
