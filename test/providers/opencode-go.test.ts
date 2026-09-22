@@ -1,4 +1,10 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -11,7 +17,6 @@ import {
   normalizeOpenCodeGoPayload,
   opencodeGoAuthFilePath,
   OPENCODE_GO_CREDENTIAL_SOURCE,
-  PI_OPENCODE_GO_AUTH_ENV,
   PI_OPENCODE_GO_SOURCE,
   type CredentialResolution,
   type NamedOpenCodeGoCredentialSource,
@@ -1259,69 +1264,124 @@ describe("OpenCode Go multi-source credentials", () => {
   }
 });
 
-describe("OpenCode Go Pi-auth opt-in", () => {
-  const names = (sources: NamedOpenCodeGoCredentialSource[]) =>
-    sources.map((source) => source.name);
+describe("OpenCode Go default credential sources", () => {
+  it("reads Pi first and keeps the opencode store as the fallback", () => {
+    expect(
+      defaultOpenCodeGoCredentialSources().map((source) => source.name),
+    ).toEqual([PI_OPENCODE_GO_SOURCE, OPENCODE_GO_CREDENTIAL_SOURCE]);
+  });
 
-  it("keeps the opencode store as the only default source", () => {
-    expect(names(defaultOpenCodeGoCredentialSources({}))).toEqual([
-      OPENCODE_GO_CREDENTIAL_SOURCE,
+  type Stores = { pi?: unknown; opencode?: unknown };
+
+  async function readWithStores(stores: Stores) {
+    const directory = mkdtempSync(
+      join(tmpdir(), "quota-axi-opencode-go-default-"),
+    );
+    const originalPiDir = process.env.PI_CODING_AGENT_DIR;
+    const originalDataHome = process.env.XDG_DATA_HOME;
+    try {
+      const piDir = join(directory, "pi-agent");
+      const dataHome = join(directory, "data");
+      mkdirSync(piDir, { recursive: true });
+      mkdirSync(join(dataHome, "opencode"), { recursive: true });
+      process.env.PI_CODING_AGENT_DIR = piDir;
+      process.env.XDG_DATA_HOME = dataHome;
+      if (stores.pi !== undefined) {
+        writeFileSync(join(piDir, "auth.json"), JSON.stringify(stores.pi));
+      }
+      if (stores.opencode !== undefined) {
+        writeFileSync(
+          join(dataHome, "opencode", "auth.json"),
+          JSON.stringify(stores.opencode),
+        );
+      }
+      const request = vi.fn(
+        async (_input: RequestInfo | URL, _init?: RequestInit) =>
+          usageResponse(),
+      );
+      const adapter = createOpenCodeGoAdapter({ fetch: request });
+      const report = await adapter.fetchQuota(OPTIONS);
+      const auth = await adapter.inspectAuth(OPTIONS);
+      const bearers = request.mock.calls.map(([, init]) =>
+        new Headers(init?.headers).get("authorization"),
+      );
+      return { report, auth, bearers };
+    } finally {
+      if (originalPiDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = originalPiDir;
+      if (originalDataHome === undefined) delete process.env.XDG_DATA_HOME;
+      else process.env.XDG_DATA_HOME = originalDataHome;
+      rmSync(directory, { recursive: true, force: true });
+    }
+  }
+
+  const piStore = { "opencode-go": { type: "api_key", key: PI_KEY } };
+  const opencodeStore = { "opencode-go": { type: "api", key: KEY } };
+
+  it("reads a Pi-only login instead of reporting a sign-out", async () => {
+    const { report, auth, bearers } = await readWithStores({ pi: piStore });
+
+    expect(bearers).toEqual([`Bearer ${PI_KEY}`]);
+    expect(report.state).toMatchObject({
+      status: "fresh",
+      sourcesTried: [PI_OPENCODE_GO_SOURCE],
+    });
+    expect(auth.sources.map(({ source, status }) => [source, status])).toEqual([
+      [PI_OPENCODE_GO_SOURCE, "available"],
+      [OPENCODE_GO_CREDENTIAL_SOURCE, "missing"],
+    ]);
+    expect(JSON.stringify({ report, auth })).not.toContain(PI_KEY);
+  });
+
+  it("reads an opencode-only login as before, with Pi absent and not degraded", async () => {
+    const { report, auth, bearers } = await readWithStores({
+      opencode: opencodeStore,
+    });
+    const interpreted = withQuotaSemantics(report, "2026-08-28T00:00:00.000Z");
+
+    expect(bearers).toEqual([`Bearer ${KEY}`]);
+    expect(report.state).toMatchObject({
+      status: "fresh",
+      sourcesTried: [PI_OPENCODE_GO_SOURCE, OPENCODE_GO_CREDENTIAL_SOURCE],
+    });
+    expect(report.attempts).toEqual([
+      {
+        source: PI_OPENCODE_GO_SOURCE,
+        status: "skipped",
+        error: "opencode_go_credential_unavailable",
+      },
+      { source: OPENCODE_GO_CREDENTIAL_SOURCE, status: "success" },
+    ]);
+    expect(interpreted.state.degradedSources).toBeUndefined();
+    expect(auth.sources.map(({ source, status }) => [source, status])).toEqual([
+      [PI_OPENCODE_GO_SOURCE, "missing"],
+      [OPENCODE_GO_CREDENTIAL_SOURCE, "available"],
     ]);
   });
 
-  it.each(["1", "true", "TRUE", " true "])(
-    "reads Pi first when the flag is %j",
-    (value) => {
-      expect(
-        names(
-          defaultOpenCodeGoCredentialSources({
-            [PI_OPENCODE_GO_AUTH_ENV]: value,
-          }),
-        ),
-      ).toEqual([PI_OPENCODE_GO_SOURCE, OPENCODE_GO_CREDENTIAL_SOURCE]);
-    },
-  );
+  it("answers from Pi without reading the opencode store when both hold a key", async () => {
+    const { report, bearers } = await readWithStores({
+      pi: piStore,
+      opencode: opencodeStore,
+    });
 
-  it.each(["0", "yes", "", "false", undefined])(
-    "stays opencode-only when the flag is %j",
-    (value) => {
-      expect(
-        names(
-          defaultOpenCodeGoCredentialSources({
-            [PI_OPENCODE_GO_AUTH_ENV]: value,
-          }),
-        ),
-      ).toEqual([OPENCODE_GO_CREDENTIAL_SOURCE]);
-    },
-  );
+    expect(bearers).toEqual([`Bearer ${PI_KEY}`]);
+    expect(report.attempts).toEqual([
+      { source: PI_OPENCODE_GO_SOURCE, status: "success" },
+    ]);
+  });
 
-  it("reads the real Pi file-to-adapter path once opted in", () => {
-    const directory = mkdtempSync(
-      join(tmpdir(), "quota-axi-opencode-go-optin-"),
-    );
-    const originalDir = process.env.PI_CODING_AGENT_DIR;
-    try {
-      process.env.PI_CODING_AGENT_DIR = directory;
-      const path = join(directory, "auth.json");
-      writeFileSync(
-        path,
-        JSON.stringify({ "opencode-go": { type: "api_key", key: PI_KEY } }),
-      );
+  it("stays auth_required when neither store holds a key", async () => {
+    const { report, auth, bearers } = await readWithStores({});
 
-      const piSource = defaultOpenCodeGoCredentialSources({
-        [PI_OPENCODE_GO_AUTH_ENV]: "1",
-      }).find((source) => source.name === PI_OPENCODE_GO_SOURCE);
-
-      expect(piSource?.source.resolve()).toEqual({
-        status: "available",
-        key: PI_KEY,
-        path,
-      });
-      expect(JSON.stringify(piSource?.source.inspect())).not.toContain(PI_KEY);
-    } finally {
-      if (originalDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
-      else process.env.PI_CODING_AGENT_DIR = originalDir;
-      rmSync(directory, { recursive: true, force: true });
-    }
+    expect(bearers).toEqual([]);
+    expect(report.state).toMatchObject({
+      status: "auth_required",
+      error: "opencode_go_credential_unavailable",
+    });
+    expect(auth.sources.map(({ source, status }) => [source, status])).toEqual([
+      [PI_OPENCODE_GO_SOURCE, "missing"],
+      [OPENCODE_GO_CREDENTIAL_SOURCE, "missing"],
+    ]);
   });
 });
