@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.1.53](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.52...quota-axi-v0.1.53) (2026-09-23)
+
+
+### Features
+
+* **providers:** add read-only Devin quota reporting ([#273](https://github.com/kunchenguid/quota-axi/issues/273)) ([d7e1205](https://github.com/kunchenguid/quota-axi/commit/d7e120545f69eeef8f58453a7ed27524b8b2b0fe))
+* **providers:** expose credential lane membership in quota JSON ([#275](https://github.com/kunchenguid/quota-axi/issues/275)) ([32f91de](https://github.com/kunchenguid/quota-axi/commit/32f91dea5776c82405862fefa9729d019b46cde9))
+
+
+### Bug Fixes
+
+* **docs:** align TUI used-view headline example with rounded used figure ([#271](https://github.com/kunchenguid/quota-axi/issues/271)) ([98224f1](https://github.com/kunchenguid/quota-axi/commit/98224f11efb1edd0f9fd14f7830d5f8d7c5f041e))
+* omit not-set-up providers from default TOON ([#274](https://github.com/kunchenguid/quota-axi/issues/274)) ([569d7cc](https://github.com/kunchenguid/quota-axi/commit/569d7cc2ce8906efae0e6521efa799f30389072c))
+* **tui:** refresh immediately on r ([#187](https://github.com/kunchenguid/quota-axi/issues/187)) ([1da4d0c](https://github.com/kunchenguid/quota-axi/commit/1da4d0cd8d9ce20ee5a733dcc4f4ee5b907cf910))
+
 ## [0.1.52](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.51...quota-axi-v0.1.52) (2026-09-23)
 
 
