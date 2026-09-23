@@ -273,10 +273,10 @@ function mergedSourcesTried(
   later: ProviderQuota,
   attempts: SourceAttempt[] | undefined,
 ): string[] | undefined {
-  if (attempts && attempts.length > 0) return sourceNames(attempts);
   const names = [
     ...(earlier.state.sourcesTried ?? []),
     ...(later.state.sourcesTried ?? []),
+    ...(attempts ? sourceNames(attempts) : []),
   ];
   return names.length > 0 ? [...new Set(names)] : undefined;
 }

@@ -205,6 +205,19 @@ describe("verified subscription coalescing", () => {
     });
   });
 
+  it("keeps every tried source when two stale routes of one subscription coalesce", async () => {
+    const reports = await fetchAccountQuotas(
+      adapter([
+        ["native", stale("acct-a", 10, "oauth")],
+        ["pi-work", stale("acct-a", 20, "cli")],
+      ]),
+      OPTIONS,
+    );
+
+    expect(reports).toHaveLength(1);
+    expect(reports[0]?.state.sourcesTried).toEqual(["oauth", "cache", "cli"]);
+  });
+
   it("serves a coalesced subscription once when every route falls back to cache", async () => {
     writeCachedProviders([
       {
