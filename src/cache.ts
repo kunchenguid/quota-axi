@@ -7,6 +7,7 @@ import {
   readJsonFile,
 } from "./lib/fs.js";
 import { kimiReadingContextId } from "./providers/kimi-cache-context.js";
+import { clineReadingContextId } from "./providers/cline-cache-context.js";
 import { commandCodeReadingContextId } from "./providers/commandcode-cache-context.js";
 import { devinReadingContextId } from "./providers/devin-cache-context.js";
 import { elevenLabsReadingContextId } from "./providers/elevenlabs-cache-context.js";
@@ -65,9 +66,9 @@ const CREDENTIAL_CONTEXT_ID = /^[a-f0-9]{64}$/;
  * Codex slot can be signed in to another ChatGPT account. A snapshot from one
  * such context says nothing about another, so each is stamped on write and
  * checked on stale reuse - strictly for Claude, Kimi, Command Code, MiniMax,
- * ElevenLabs, and Devin, whose identity a reading always has (and which skip
- * write and clear when that identity is missing), and on proven mismatch for Codex,
- * whose stored account id is optional.
+ * ElevenLabs, Devin, and Cline, whose identity a reading always has (and which
+ * skip write and clear when that identity is missing), and on proven mismatch
+ * for Codex, whose stored account id is optional.
  *
  * How that stamp is obtained is not the same question for each. A Claude
  * profile is fixed by this process's own environment, so deriving it here reads
@@ -87,13 +88,16 @@ const CREDENTIAL_CONTEXT_ID = /^[a-f0-9]{64}$/;
  * a one-way digest of the key that answered, because that key is the only thing
  * naming the subscription and its single slot would otherwise be shared by
  * every key. Devin publishes the answering source, host, and a one-way digest
- * of the session token, because a new login replaces that token.
+ * of the session token, because a new login replaces that token. Cline
+ * publishes the answering source and a one-way digest of the Bearer token,
+ * because that token is the account and organization a reading resolved.
  */
 const CONTEXT_SCOPED_PROVIDERS: Partial<
   Record<ProviderId, (provider: ProviderQuota) => string | undefined>
 > = {
   claude: claudeCredentialContextId,
   kimi: kimiReadingContextId,
+  cline: clineReadingContextId,
   commandcode: commandCodeReadingContextId,
   elevenlabs: elevenLabsReadingContextId,
   devin: devinReadingContextId,
@@ -250,6 +254,17 @@ export function readCachedDevinProvider(
   return readCachedProviderInContext("devin", contextId);
 }
 
+/**
+ * Cline stale quota may only be reused when the cache record proves it was
+ * captured with the same Bearer token, so one account or organization's
+ * balance can never stand in for another's.
+ */
+export function readCachedClineProvider(
+  contextId: string,
+): ProviderQuota | undefined {
+  return readCachedProviderInContext("cline", contextId);
+}
+
 function readCachedProviderInContext(
   provider: ProviderId,
   contextId: string,
@@ -393,9 +408,9 @@ function toCacheProvider(provider: ProviderQuota): CachedProvider | undefined {
   )?.snapshot;
   if (!snapshot) return undefined;
   const contextId = CONTEXT_SCOPED_PROVIDERS[provider.provider]?.(provider);
-  // Claude, Kimi, Command Code, MiniMax, ElevenLabs, and Devin require a published
-  // identity; Codex stamps are optional and withheld only on proven mismatch
-  // at read time.
+  // Claude, Kimi, Command Code, MiniMax, ElevenLabs, Devin, and Cline require a
+  // published identity; Codex stamps are optional and withheld only on proven
+  // mismatch at read time.
   if (
     provider.provider !== "codex" &&
     CONTEXT_SCOPED_PROVIDERS[provider.provider] &&
@@ -410,8 +425,8 @@ function toCacheProvider(provider: ProviderQuota): CachedProvider | undefined {
 
 function missingRequiredContext(provider: ProviderId): boolean {
   // Codex stamps are optional; Claude, Kimi, Command Code, MiniMax, ElevenLabs,
-  // and Devin must
-  // not clear when the current reading has no published context identity.
+  // Devin, and Cline must not clear when the current reading has no published
+  // context identity.
   if (provider === "codex") return false;
   const scope = CONTEXT_SCOPED_PROVIDERS[provider];
   return scope !== undefined && !scope({ provider } as ProviderQuota);

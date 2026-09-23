@@ -110,6 +110,7 @@ const ACCENTS: Record<ProviderId, StyleSpec> = {
   openrouter: { rgb: [183, 148, 232], ansi16: "95", bold: true },
   elevenlabs: { rgb: [214, 170, 255], ansi16: "95", bold: true },
   devin: { rgb: [126, 196, 224], ansi16: "96", bold: true },
+  cline: { rgb: [148, 226, 213], ansi16: "96", bold: true },
 };
 
 const STYLES: Record<Exclude<StyleName, `accent:${ProviderId}`>, StyleSpec> = {

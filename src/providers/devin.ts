@@ -249,7 +249,7 @@ export function createDevinAdapter(
     fetch: providerFetch,
     readCachedProvider: readCachedProviderFromDisk,
     deleteCachedProvider: () => deleteCachedProviderFromDisk("devin"),
-    now: Date.now,
+    now: () => Date.now(),
     deadlineMs: OPERATION_DEADLINE_MS,
     ...overrides,
   };

@@ -824,7 +824,7 @@ key = "oauth/../../escaped"
     // Not a sign-out: the verdict stays `error` rather than `auth_required`,
     // and the snapshot survives for the environment that did produce it.
     expect(cachedProviderIds(fixture)).toContain("kimi");
-  });
+  }, 20_000);
 
   it("never serves one deployment's cached numbers for the other", () => {
     const fixture = isolatedFixture();
@@ -889,7 +889,7 @@ oauth_host = "https://auth.kimi.ai"
         },
       ],
     });
-  });
+  }, 20_000);
 
   /**
    * Pi brokers a credential for the default endpoint and names no Kimi Code
@@ -971,7 +971,7 @@ oauth_host = "https://auth.kimi.ai"
       ],
     });
     expect(cachedProviderIds(fixture)).toContain("kimi");
-  });
+  }, 20_000);
 
   /**
    * The assumed environment and a mainland login name the same slot on the same

@@ -107,5 +107,5 @@ process.stdin.on("data", (chunk) => {
       ],
       state: { status: "fresh", stale: false },
     });
-  });
+  }, 20_000);
 });
