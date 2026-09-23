@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.1.52](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.51...quota-axi-v0.1.52) (2026-09-23)
+
+
+### Features
+
+* add a user-configurable TUI quota direction ([#268](https://github.com/kunchenguid/quota-axi/issues/268)) ([654ddd0](https://github.com/kunchenguid/quota-axi/commit/654ddd08653e5f46c80b0d80448cb7a33ab65346))
+
+
+### Bug Fixes
+
+* **kimi:** derive the monthly total's cycle from the subscription reset ([#265](https://github.com/kunchenguid/quota-axi/issues/265)) ([3ac7aac](https://github.com/kunchenguid/quota-axi/commit/3ac7aac9750a68293e2e2410470813373812b55e)), closes [#263](https://github.com/kunchenguid/quota-axi/issues/263)
+* **providers:** never serve stale cached windows that stopped being true ([#270](https://github.com/kunchenguid/quota-axi/issues/270)) ([ec2c865](https://github.com/kunchenguid/quota-axi/commit/ec2c865cb1094b21c7b06061dcd0018956efb1bf))
+
 ## [0.1.51](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.50...quota-axi-v0.1.51) (2026-09-22)
 
 
