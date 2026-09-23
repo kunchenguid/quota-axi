@@ -1,7 +1,14 @@
+import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import * as http from "node:http";
 import * as https from "node:https";
+import { tmpdir } from "node:os";
+import { delimiter, join } from "node:path";
 import { deleteCachedProvider, readCachedProvider } from "../cache.js";
-import { currentUserProcessListArgs, execFileText } from "../lib/process.js";
+import {
+  currentUserProcessListArgs,
+  execFileText,
+  type ExecFileTextOptions,
+} from "../lib/process.js";
 import {
   clampPercent,
   nowIso,
@@ -67,6 +74,7 @@ export type AgyProbeRuntime = {
     command: string,
     args: string[],
     timeoutMs: number,
+    options?: ExecFileTextOptions,
   ): Promise<string>;
   requestJson(
     endpoint: AgyConnectionEndpoint,
@@ -75,9 +83,21 @@ export type AgyProbeRuntime = {
   ): Promise<unknown>;
 };
 
+/**
+ * The only two outcomes that show Antigravity genuinely absent: no `agy` on
+ * PATH, and no Antigravity process listening. Every other skip - an installed
+ * CLI that timed out, a discovered endpoint that would not answer - leaves
+ * presence unknown, so the human report keeps Antigravity in view.
+ */
+export const AGY_CLI_NOT_INSTALLED = "agy CLI is not installed";
+export const AGY_NOT_RUNNING = "Antigravity/agy is not running";
+
 export const agyAdapter: ProviderAdapter = {
   id: "agy",
   label: "Antigravity",
+  isUncertainSkip: (attempt) =>
+    attempt.error !== AGY_CLI_NOT_INSTALLED &&
+    attempt.error !== AGY_NOT_RUNNING,
   fetchQuota,
   inspectAuth,
 };
@@ -156,14 +176,10 @@ export async function fetchQuotaWithRuntime(
   const finalError = errorMessage(finalFailure);
   if (staleEligibleFailure(finalFailure)) {
     const cached = readCachedProvider("agy");
-    if (cached) {
-      return staleFromCache(
-        cached,
-        finalError,
-        sourceNames(attempts),
-        attempts,
-      );
-    }
+    const stale = cached
+      ? staleFromCache(cached, finalError, sourceNames(attempts), attempts)
+      : undefined;
+    if (stale) return stale;
   } else if (isDefinitiveAuthFailure(finalFailure)) {
     try {
       deleteCachedProvider("agy");
@@ -232,18 +248,23 @@ async function fetchCliQuota(runtime: AgyProbeRuntime): Promise<{
     throw new AgyUnavailableError("Antigravity CLI discovery failed");
   }
   if (!commandPath) {
-    throw new AgyUnavailableError("agy CLI is not installed");
+    throw new AgyUnavailableError(AGY_CLI_NOT_INSTALLED);
   }
 
   let text: string;
+  let openerGuard: Awaited<ReturnType<typeof createOpenerGuard>> | undefined;
   try {
+    openerGuard = await createOpenerGuard();
     text = await runtime.execFileText(
       commandPath,
       ["-p", "/quota", "--output-format", "json"],
       CLI_QUOTA_TIMEOUT_MS,
+      { env: openerGuard.env },
     );
   } catch (error) {
     throw sanitizeCliError(error);
+  } finally {
+    await openerGuard?.dispose();
   }
   let parsed: unknown;
   try {
@@ -256,6 +277,53 @@ async function fetchCliQuota(runtime: AgyProbeRuntime): Promise<{
     throw new AgyMalformedResponseError("agy /quota quota summary malformed");
   }
   return summary;
+}
+
+async function createOpenerGuard(): Promise<{
+  env: NodeJS.ProcessEnv;
+  dispose(): Promise<void>;
+}> {
+  const directory = await mkdtemp(join(tmpdir(), "quota-axi-agy-"));
+  try {
+    if (process.platform === "win32") {
+      await Promise.all(
+        ["xdg-open.cmd", "open.cmd"].map((name) =>
+          writeFile(join(directory, name), "@exit /b 1\r\n"),
+        ),
+      );
+    } else {
+      await Promise.all([
+        ...["xdg-open", "open"].map((name) =>
+          writeFile(join(directory, name), "#!/bin/sh\nexit 1\n", {
+            mode: 0o700,
+          }),
+        ),
+        symlink(process.execPath, join(directory, "node")),
+      ]);
+    }
+    const inheritedPath = process.env.PATH;
+    return {
+      env: {
+        ...process.env,
+        ...(process.platform === "win32"
+          ? { NoDefaultCurrentDirectoryInExePath: "1" }
+          : {}),
+        PATH: inheritedPath
+          ? `${directory}${delimiter}${inheritedPath}`
+          : directory,
+      },
+      async dispose() {
+        await rm(directory, { recursive: true, force: true }).catch(
+          () => undefined,
+        );
+      },
+    };
+  } catch (error) {
+    await rm(directory, { recursive: true, force: true }).catch(
+      () => undefined,
+    );
+    throw error;
+  }
 }
 
 function isMissingCommandError(error: unknown): boolean {
@@ -370,8 +438,7 @@ async function fetchLoopbackQuota(runtime: AgyProbeRuntime): Promise<{
 }> {
   const deadline = createProbeDeadline();
   const endpoints = await discoverAgyEndpoints(runtime, deadline);
-  if (endpoints.length === 0)
-    throw new AgyUnavailableError("Antigravity/agy is not running");
+  if (endpoints.length === 0) throw new AgyUnavailableError(AGY_NOT_RUNNING);
 
   let lastError: unknown;
   for (const endpoint of endpoints) {
@@ -1072,8 +1139,7 @@ function sanitizeCliError(error: unknown): Error {
   const code = stringValue(details?.code);
   if (details?.killed === true || code === "ETIMEDOUT")
     return new AgyUnavailableError("Antigravity CLI /quota timed out");
-  if (code === "ENOENT")
-    return new AgyUnavailableError("agy CLI is not installed");
+  if (code === "ENOENT") return new AgyUnavailableError(AGY_CLI_NOT_INSTALLED);
   if (code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER")
     return new AgyMalformedResponseError(
       "Antigravity CLI /quota response too large",

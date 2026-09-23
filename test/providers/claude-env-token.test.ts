@@ -557,7 +557,7 @@ describe("Claude CLAUDE_CODE_OAUTH_TOKEN credential source", () => {
     expect(readCachedProvider("claude")).toBeDefined();
   });
 
-  it("keeps a confirmed stored expiry ahead of an earlier definitive rejection", async () => {
+  it("keeps an earlier definitive rejection ahead of a confirmed stored expiry", async () => {
     // Keychain is tried before the oauth-file sidecar on darwin, and the
     // environment token before both.
     writeOauthFile(OAUTH_FILE_TOKEN, Date.now() - 60_000);
@@ -572,9 +572,7 @@ describe("Claude CLAUDE_CODE_OAUTH_TOKEN credential source", () => {
 
     // The env token fails transiently, the Keychain sibling is definitively
     // rejected, and the stored-expired sidecar that runs last is confirmed
-    // expired against /profile. That confirmation is the reading's own
-    // unresolved outcome, so the earlier 401 must not be promoted to a
-    // sign-out that retires the snapshot above.
+    // expired against /profile. The earlier resolved 401 remains authoritative.
     vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", ENV_TOKEN);
     fetchMock.mockImplementation(async (url: string, init: unknown) => {
       const bearer = (init as { headers: Record<string, string> }).headers
@@ -592,9 +590,8 @@ describe("Claude CLAUDE_CODE_OAUTH_TOKEN credential source", () => {
     });
     const report = await fetchQuota(options);
 
-    expect(report.state.status).not.toBe("auth_required");
-    expect(report.state.error).toBe("Claude credential expired");
-    expect(readCachedProvider("claude")).toBeDefined();
+    expect(report.state.status).toBe("auth_required");
+    expect(readCachedProvider("claude")).toBeUndefined();
   });
 
   it("still offers the Keychain remedy when only the identity probe answered", async () => {

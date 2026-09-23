@@ -4,6 +4,8 @@ import { parseFlags, parseModelsFlags, type QuotaFlags } from "./args.js";
 import { writeCachedProviders } from "./cache.js";
 import { withQuotaSemantics } from "./interpretation.js";
 import { createModelsResponse, MODEL_CATALOG_PROVIDER_IDS } from "./models.js";
+import { providerPresence } from "./lib/source-attempts.js";
+import { readTuiShowPreference } from "./lib/user-config.js";
 import { nowIso } from "./lib/time.js";
 import {
   fetchAccountQuotas,
@@ -57,13 +59,51 @@ export async function quotaCommand(
   if (flags.tui) return quotaTuiReport(flags, options);
 
   const response = await loadQuota(flags.providers, options, false);
-  return flags.json
-    ? JSON.stringify(quotaJsonReport(response, flags.full), null, 2)
-    : renderQuotaToon(
-        redactedResponse(response, flags.full),
-        binPath,
-        flags.full,
-      );
+  // Presence reads source attempts, which redaction removes, so both the JSON
+  // marker and the TOON omission are classified on the complete model first.
+  // The same rule as the human report: an explicit --provider never folds,
+  // and --full adds the omitted rows back instead of counting them.
+  const laneAbsent = response.providers.map(
+    (provider) =>
+      providerPresence(provider, PROVIDERS[provider.provider]) === "absent",
+  );
+  if (flags.json) {
+    return JSON.stringify(
+      quotaJsonReport(response, flags.full, laneAbsent),
+      null,
+      2,
+    );
+  }
+  return renderQuotaToon(
+    redactedResponse(response, flags.full),
+    binPath,
+    flags.full,
+    flags.full || flags.explicitProviders
+      ? []
+      : omittedAbsentProviderIds(response.providers, laneAbsent),
+  );
+}
+
+/**
+ * Provider ids whose every lane is absent, in first-seen order. One live or
+ * uncertain lane keeps the provider's rows; schema 6 folds a provider only
+ * when all of its lanes are absent.
+ */
+function omittedAbsentProviderIds(
+  providers: ProviderQuota[],
+  laneAbsent: readonly boolean[],
+): ProviderId[] {
+  const everyLaneAbsent = new Map<ProviderId, boolean>();
+  providers.forEach((provider, index) => {
+    const absent = laneAbsent[index] === true;
+    everyLaneAbsent.set(
+      provider.provider,
+      (everyLaneAbsent.get(provider.provider) ?? true) && absent,
+    );
+  });
+  return [...everyLaneAbsent.entries()]
+    .filter(([, absent]) => absent)
+    .map(([id]) => id);
 }
 
 /**
@@ -75,28 +115,68 @@ async function quotaTuiReport(
   flags: QuotaFlags,
   options: ProviderOptions,
 ): Promise<string> {
+  // A human display preference, so it is read only on this path: TOON and
+  // JSON never see it.
+  const show = readTuiShowPreference();
   const terminal = (): { columns?: number; colorDepth: TuiColorDepth } => ({
     ...(process.stdout.columns === undefined
       ? {}
       : { columns: process.stdout.columns }),
     colorDepth: detectTuiColorDepth(process.env, process.stdout.isTTY === true),
   });
-  const frame = (response: QuotaAxiResponse): string =>
-    renderQuotaTui(redactedResponse(response, flags.full), {
+  // A provider named with --provider is always drawn in full; otherwise the
+  // providers that are not set up fold into one line until `a` or --all.
+  let showNotSetUp = flags.all || flags.explicitProviders;
+  let notSetUp = 0;
+  const frame = (response: QuotaAxiResponse): string => {
+    // Presence reads the source attempts, which redaction removes, so it is
+    // derived from the complete model before the renderer sees the report.
+    const presence = response.providers.map((provider) =>
+      providerPresence(provider, PROVIDERS[provider.provider]),
+    );
+    notSetUp = presence.filter((entry) => entry === "absent").length;
+    return renderQuotaTui(redactedResponse(response, flags.full), {
       ...terminal(),
       full: flags.full,
+      presence,
+      showNotSetUp,
+      show,
     });
+  };
 
   if (flags.once || !isInteractiveTerminal()) {
     return frame(await loadQuota(flags.providers, options, false));
   }
 
   const refreshSeconds = flags.refreshSeconds ?? DEFAULT_REFRESH_SECONDS;
-  const hint = `Press q to quit · refreshing every ${formatInterval(refreshSeconds)}`;
+  const refreshing = `refreshing every ${formatInterval(refreshSeconds)}`;
+  const keyHints = (): string[] =>
+    flags.explicitProviders || notSetUp === 0
+      ? []
+      : [`a ${showNotSetUp ? "hide" : "show"} not set up`];
   const last = await runLiveTui<QuotaAxiResponse>({
     load: () => loadQuota(flags.providers, options, true),
     render: frame,
-    status: (scroll) => renderTuiHintLine(scrollHint(scroll, hint), terminal()),
+    status: (scroll) =>
+      renderTuiHintLine(
+        scrollHint(
+          scroll,
+          ["Press r to refresh", "q to quit", ...keyHints(), refreshing].join(
+            " · ",
+          ),
+          keyHints(),
+        ),
+        terminal(),
+      ),
+    keys: flags.explicitProviders
+      ? {}
+      : {
+          // Only while something is folded or expanded, so the state never
+          // flips silently behind a hint that is not shown.
+          a: () => {
+            if (notSetUp > 0) showNotSetUp = !showNotSetUp;
+          },
+        },
     intervalMillis: refreshSeconds * 1000,
     io: processLiveTuiIo(),
   });
@@ -258,16 +338,21 @@ export async function fetchQuota(
   providers: ProviderId[],
   options: ProviderOptions,
 ): Promise<QuotaAxiResponse> {
-  const generatedAt = nowIso();
-  const results = (
+  const fetched = (
     await Promise.all(
       providers.map((provider) =>
         fetchAccountQuotas(PROVIDERS[provider], options),
       ),
     )
-  )
-    .flat()
-    .map((provider) => withQuotaSemantics(provider, generatedAt));
+  ).flat();
+  // Stamp after every fetch returns: a vendor that computes a reset at
+  // response time implies a cycle start no earlier than that instant, so a
+  // stamp taken before the request would read an unopened window as
+  // `future_cycle_start` by the request latency.
+  const generatedAt = nowIso();
+  const results = fetched.map((provider) =>
+    withQuotaSemantics(provider, generatedAt),
+  );
   return annotateQuotaAdvice({
     generatedAt,
     providers: results,

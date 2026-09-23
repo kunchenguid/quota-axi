@@ -1,3 +1,7 @@
+import {
+  providerPresence,
+  type ProviderPresence,
+} from "./lib/source-attempts.js";
 import type {
   EffectiveAvailability,
   ProviderId,
@@ -10,10 +14,20 @@ import type {
  * Human terminal report ("Direction D'"): a two-up card grid with thin
  * headroom bars and a linear-pace marker wherever pace is known. This surface is
  * presentation only - it renders the same redacted response the TOON and JSON
- * surfaces receive and derives nothing new from providers or the cache.
+ * surfaces receive, grouped by the caller's presence classification, and
+ * derives nothing new from providers or the cache. Providers with nothing set
+ * up fold into one footer line unless the caller asks to draw them in full.
  */
 
 export type TuiColorDepth = "none" | "16" | "256" | "truecolor";
+
+/**
+ * Which side of each window the human report draws: what is left (the
+ * canonical `percentRemaining` direction, the default) or what has been
+ * consumed. It is a display preference only - the model, cache, TOON, and
+ * JSON keep the canonical direction whatever it is set to.
+ */
+export type TuiShow = "remaining" | "used";
 
 export type TuiOptions = {
   /** Raw terminal width; clamped to [80, 120], defaults to 100. */
@@ -23,6 +37,20 @@ export type TuiOptions = {
   full?: boolean;
   /** IANA time zone for header/absolute times; defaults to the system zone. */
   timeZone?: string;
+  /**
+   * Each provider's presence, aligned with `response.providers`. The caller
+   * derives it from the unredacted source attempts, which a redacted response
+   * no longer carries. Left out, each provider is classified from what it
+   * still holds, so a provider without attempts never folds.
+   */
+  presence?: readonly ProviderPresence[];
+  /**
+   * Draw providers that are not set up as full cards instead of folding them
+   * into one footer line (`a` in the live report, `--all`, or `--provider`).
+   */
+  showNotSetUp?: boolean;
+  /** Draw percentages and bars as what is left (default) or what is used. */
+  show?: TuiShow;
 };
 
 const CARD_WIDTH = 49;
@@ -76,6 +104,12 @@ const ACCENTS: Record<ProviderId, StyleSpec> = {
   alibaba: { rgb: [255, 155, 120], ansi16: "91", bold: true },
   "opencode-go": { rgb: [160, 210, 255], ansi16: "96", bold: true },
   commandcode: { rgb: [110, 210, 168], ansi16: "92", bold: true },
+  minimax: { rgb: [255, 196, 112], ansi16: "93", bold: true },
+  mimo: { rgb: [174, 214, 241], ansi16: "96", bold: true },
+  deepseek: { rgb: [88, 160, 242], ansi16: "94", bold: true },
+  openrouter: { rgb: [183, 148, 232], ansi16: "95", bold: true },
+  elevenlabs: { rgb: [214, 170, 255], ansi16: "95", bold: true },
+  devin: { rgb: [126, 196, 224], ansi16: "96", bold: true },
 };
 
 const STYLES: Record<Exclude<StyleName, `accent:${ProviderId}`>, StyleSpec> = {
@@ -126,20 +160,50 @@ export function renderQuotaTui(
   const twoColumn = columns >= TWO_COLUMN_MIN;
   const generatedAtMs = Date.parse(response.generatedAt);
   const timeZone = options.timeZone;
+  const show = options.show ?? "remaining";
 
-  const ordered = [
-    ...response.providers.filter(isLive),
-    ...response.providers.filter((provider) => !isLive(provider)),
-  ];
-  const cards = ordered.map((provider) => buildCard(provider, generatedAtMs));
+  const tiers: Record<ProviderPresence, ProviderQuota[]> = {
+    live: [],
+    attention: [],
+    absent: [],
+  };
+  response.providers.forEach((provider, index) => {
+    tiers[options.presence?.[index] ?? providerPresence(provider)].push(
+      provider,
+    );
+  });
+  const { live, attention, absent } = tiers;
+  const carded = [...live, ...attention];
+  const card = (provider: ProviderQuota): Card =>
+    buildCard(provider, generatedAtMs, show);
 
   const lines: Line[] = [];
-  lines.push([{ text: `  ${headerText(response, timeZone)}`, style: "dim" }]);
+  lines.push([
+    {
+      text: `  ${headerText(response, tiers, columns - 2, timeZone)}`,
+      style: "dim",
+    },
+  ]);
   lines.push([]);
-  lines.push(...layoutCards(cards, twoColumn));
+  if (carded.length > 0) {
+    lines.push(...layoutCards(carded.map(card), twoColumn));
+  }
+  if (absent.length > 0) {
+    if (lines.length > 2) lines.push([]);
+    if (options.showNotSetUp) {
+      lines.push([
+        { text: "  ○ not set up", style: "dimBold" },
+        { text: ` · ${absent.length}`, style: "dim" },
+      ]);
+      lines.push([]);
+      lines.push(...layoutCards(absent.map(card), twoColumn));
+    } else {
+      lines.push(...notSetUpFooter(absent, columns));
+    }
+  }
   if (options.full) {
     lines.push([]);
-    for (const provider of ordered) {
+    for (const provider of [...carded, ...absent]) {
       for (const footerLine of fullFooterLines(provider, columns - 2)) {
         lines.push([{ text: `  ${footerLine}`, style: "dim" }]);
       }
@@ -148,6 +212,61 @@ export function renderQuotaTui(
   return lines
     .map((line) => renderLine(trimRight(line), options.colorDepth ?? "none"))
     .join("\n");
+}
+
+/**
+ * Providers with nothing set up, folded into one dim line of names wrapped
+ * under a hanging indent, ending with where to look next. Every supported
+ * provider stays named, and the line grows by names, not by cards. A name too
+ * long for a line of its own - an account key on a narrow terminal - is
+ * truncated rather than allowed to run past the terminal, and a line is only
+ * wrapped once it carries a name, so the label never stands alone.
+ */
+function notSetUpFooter(absent: ProviderQuota[], columns: number): Line[] {
+  const label = "○ not set up  ";
+  const indent = 2 + displayWidth(label);
+  const width = columns - 2;
+  const lines: Line[] = [];
+  let current: Line = [{ text: "  " }, { text: label, style: "dimBold" }];
+  let used = indent;
+  const wrap = (): void => {
+    lines.push(current);
+    current = [{ text: " ".repeat(indent) }];
+    used = indent;
+  };
+  const append = (text: string, style: StyleName): void => {
+    const fitted = truncate(text, width - used);
+    if (!fitted) return;
+    current.push({ text: fitted, style });
+    used += displayWidth(fitted);
+  };
+  absent.forEach((provider, index) => {
+    const accountKey = configuredAccountKey(provider);
+    const name = accountKey
+      ? `${provider.provider}/${accountKey}`
+      : provider.provider;
+    const separator = index === 0 ? "" : " · ";
+    if (
+      used > indent &&
+      used + displayWidth(separator) + displayWidth(name) > width
+    ) {
+      wrap();
+    } else if (separator) {
+      current.push({ text: separator, style: "dimmer" });
+      used += displayWidth(separator);
+    }
+    append(name, "dim");
+  });
+  const pointer = "quota-axi auth shows where each is read";
+  if (used + 3 + displayWidth(pointer) > width) {
+    if (used > indent) wrap();
+  } else {
+    current.push({ text: "   " });
+    used += 3;
+  }
+  append(pointer, "dimmer");
+  lines.push(current);
+  return lines;
 }
 
 /**
@@ -176,31 +295,49 @@ function isLive(provider: ProviderQuota): boolean {
   return provider.state.status === "fresh" || provider.state.status === "stale";
 }
 
-function headerText(response: QuotaAxiResponse, timeZone?: string): string {
-  const live = response.providers.filter(isLive).length;
-  const signedOut = response.providers.filter(
-    (provider) => provider.state.status === "auth_required",
-  ).length;
-  const failed = response.providers.length - live - signedOut;
-  const parts = [
-    "quota-axi",
-    formatHeaderTime(response.generatedAt, timeZone),
-    `${live} live`,
-    `${signedOut} signed out`,
+/**
+ * The fleet summary, never wider than the report. Every tier count is
+ * required reading, so a header that does not fit gives up the timestamp -
+ * its time zone, then its date, then the clock - rather than a count.
+ */
+function headerText(
+  response: QuotaAxiResponse,
+  tiers: Record<ProviderPresence, ProviderQuota[]>,
+  width: number,
+  timeZone?: string,
+): string {
+  const attention = tiers.attention.length;
+  const counts = [
+    `${tiers.live.length} live`,
+    `${attention} ${attention === 1 ? "needs" : "need"} attention`,
+    `${tiers.absent.length} not set up`,
   ];
-  if (failed > 0) parts.push(`${failed} unavailable`);
-  return parts.filter(Boolean).join(" · ");
+  const candidates = headerTimes(response.generatedAt, timeZone).map((time) =>
+    ["quota-axi", ...(time ? [time] : []), ...counts].join(" · "),
+  );
+  return (
+    candidates.find((line) => displayWidth(line) <= width) ??
+    candidates[candidates.length - 1]
+  );
 }
 
 type Card = Line[];
 
-function buildCard(provider: ProviderQuota, generatedAtMs: number): Card {
+function buildCard(
+  provider: ProviderQuota,
+  generatedAtMs: number,
+  show: TuiShow,
+): Card {
   return isLive(provider)
-    ? buildLiveCard(provider, generatedAtMs)
+    ? buildLiveCard(provider, generatedAtMs, show)
     : buildFailedCard(provider);
 }
 
-function buildLiveCard(provider: ProviderQuota, generatedAtMs: number): Card {
+function buildLiveCard(
+  provider: ProviderQuota,
+  generatedAtMs: number,
+  show: TuiShow,
+): Card {
   const stale = provider.state.stale;
   const rightTitle = [
     provider.plan,
@@ -229,13 +366,18 @@ function buildLiveCard(provider: ProviderQuota, generatedAtMs: number): Card {
   } else if (hasWhollyUnknownWindowRelationships(provider)) {
     lines.push(...windowsOnlyHeadline(stale));
   } else {
-    lines.push(...effectiveHeadline(provider, headline, stale));
+    lines.push(...effectiveHeadline(provider, headline, stale, show));
   }
 
   if (provider.windows.length > 0) {
     lines.push(interior([], "border"));
     for (const window of provider.windows) {
-      lines.push(interior(windowRow(window, generatedAtMs), "border"));
+      lines.push(
+        interior(
+          windowRow(window, generatedAtMs, provider.windows, show),
+          "border",
+        ),
+      );
     }
   }
 
@@ -262,6 +404,7 @@ function effectiveHeadline(
   provider: ProviderQuota,
   headline: EffectiveAvailability | undefined,
   stale: boolean | undefined,
+  show: TuiShow,
 ): Line[] {
   const lines: Line[] = [];
   const effectivePct = headline?.effectivePercentRemaining;
@@ -269,14 +412,18 @@ function effectiveHeadline(
 
   const verdict = runwayVerdict(headline);
   const percentText =
-    effectivePct === undefined ? undefined : `${Math.round(effectivePct)}%`;
+    effectivePct === undefined ? undefined : shownPercent(effectivePct, show);
+  // The remaining view has always read as bare headroom; the flipped view
+  // says so, because the same number would otherwise read the other way.
+  const direction = show === "used" ? "used · " : "";
   const headlineLabelWidth = Math.max(
     0,
     EFFECTIVE_BAR_WIDTH -
       lineWidth(verdict) -
       1 -
       displayWidth(percentText ?? "") -
-      1,
+      1 -
+      displayWidth(direction),
   );
   const left: Line =
     effectivePct !== undefined && percentText !== undefined
@@ -286,7 +433,7 @@ function effectiveHeadline(
             style: boldHealthStyle(effectivePct),
           },
           {
-            text: ` ${headlineLabel(provider, headline, headlineLabelWidth)}`,
+            text: ` ${direction}${headlineLabel(provider, headline, headlineLabelWidth)}`,
             style: "dim",
           },
         ]
@@ -310,7 +457,7 @@ function effectiveHeadline(
     interior(
       [
         { text: "   " },
-        ...thinBar(effectivePct, markerPct, EFFECTIVE_BAR_WIDTH),
+        ...thinBar(effectivePct, markerPct, EFFECTIVE_BAR_WIDTH, show),
         { text: "   " },
       ],
       "border",
@@ -484,17 +631,28 @@ function interior(content: Line, borderStyle: StyleName): Line {
   ];
 }
 
-function windowRow(window: QuotaWindow, generatedAtMs: number): Line {
+function windowRow(
+  window: QuotaWindow,
+  generatedAtMs: number,
+  windows: QuotaWindow[],
+  show: TuiShow,
+): Line {
+  if (window.shareOf) {
+    return shareWindowRow(window, generatedAtMs, windows);
+  }
   const pct = window.percentRemaining;
   const marker = window.pace?.timeRemainingPercent;
   const reset = resetCountdown(window, generatedAtMs);
   return [
     { text: "   " },
     { text: padEndDisplay(shortWindowLabel(window), 8), style: "label" },
-    ...thinBar(pct, marker, WINDOW_BAR_WIDTH),
+    ...thinBar(pct, marker, WINDOW_BAR_WIDTH, show),
     { text: " " },
     {
-      text: (pct === undefined ? "?" : `${Math.round(pct)}%`).padStart(4),
+      text: (pct === undefined
+        ? "?"
+        : shownPercent(pct, show, window.percentUsed)
+      ).padStart(4),
       style: pct === undefined ? "dim" : healthStyle(pct),
     },
     { text: "  " },
@@ -504,21 +662,74 @@ function windowRow(window: QuotaWindow, generatedAtMs: number): Line {
 }
 
 /**
+ * A used-share has no own remaining, so the remaining bar and `?` would make
+ * it look unmeasured. Print the used percent of the parent instead.
+ */
+function shareWindowRow(
+  window: QuotaWindow,
+  generatedAtMs: number,
+  windows: QuotaWindow[],
+): Line {
+  const reset = resetCountdown(window, generatedAtMs);
+  const captionWidth = WINDOW_BAR_WIDTH + 1 + 4;
+  return [
+    { text: "   " },
+    { text: padEndDisplay(shortWindowLabel(window), 8), style: "label" },
+    {
+      text: padEndDisplay(
+        truncate(shareCaption(window, windows), captionWidth),
+        captionWidth,
+      ),
+      style: "label",
+    },
+    { text: "  " },
+    { text: padEndDisplay(reset, 6), style: "dim" },
+    { text: " " },
+  ];
+}
+
+function shareCaption(window: QuotaWindow, windows: QuotaWindow[]): string {
+  const parent = windows.find((candidate) => candidate.id === window.shareOf);
+  const parentLabel = parent
+    ? shortWindowLabel(parent)
+    : truncate(window.shareOf ?? "", 7);
+  if (window.percentUsed === undefined) return `share of ${parentLabel}`;
+  return `${Math.round(window.percentUsed)}% of ${parentLabel}`;
+}
+
+/**
+ * The percentage a row or headline prints. A window uses its raw consumed
+ * figure; an effective headline derives consumption from raw remaining.
+ */
+function shownPercent(
+  percentRemaining: number,
+  show: TuiShow,
+  percentUsed = 100 - percentRemaining,
+): string {
+  return `${Math.round(show === "used" ? percentUsed : percentRemaining)}%`;
+}
+
+/**
  * Quiet-Ledger thin bar with the linear-pace marker: fill is current
  * headroom at half-cell resolution, `┃` overwrites the cell at
  * `timeRemainingPercent` (the fill position of exactly linear burn), and the
- * marker is omitted when pace is unknown rather than faked.
+ * marker is omitted when pace is unknown rather than faked. The used view
+ * mirrors both: fill is consumption and the marker sits at the elapsed share
+ * of the window, so fill running past the marker means burning ahead of the
+ * reset clock. Color always follows headroom, whichever side is drawn.
  */
 export function thinBar(
   percentRemaining: number | undefined,
   markerPercent: number | undefined,
   width: number,
+  show: TuiShow = "remaining",
 ): Line {
   const fillStyle: StyleName =
     percentRemaining === undefined ? "track" : healthStyle(percentRemaining);
   let halfUnits = 0;
   if (percentRemaining !== undefined) {
-    const pct = Math.min(100, Math.max(0, percentRemaining));
+    const remaining = Math.min(100, Math.max(0, percentRemaining));
+    const pct = show === "used" ? 100 - remaining : remaining;
     halfUnits = Math.round((pct / 100) * width * 2);
     if (pct > 0 && halfUnits === 0) halfUnits = 1;
     if (pct < 100 && halfUnits === width * 2) halfUnits = width * 2 - 1;
@@ -531,9 +742,10 @@ export function thinBar(
     else cells.push({ text: "─", style: "track" });
   }
   if (markerPercent !== undefined && Number.isFinite(markerPercent)) {
+    const position = show === "used" ? 100 - markerPercent : markerPercent;
     const cell = Math.min(
       width - 1,
-      Math.max(0, Math.round((markerPercent / 100) * width)),
+      Math.max(0, Math.round((position / 100) * width)),
     );
     cells[cell] = { text: "┃", style: "marker" };
   }
@@ -717,9 +929,9 @@ export function formatCountdown(seconds: number): string {
   return minutes > 0 ? `${minutes}m` : "<1m";
 }
 
-function formatHeaderTime(iso: string, timeZone?: string): string {
+function headerTimes(iso: string, timeZone?: string): string[] {
   const ms = Date.parse(iso);
-  if (!Number.isFinite(ms)) return iso;
+  if (!Number.isFinite(ms)) return [iso, ""];
   const parts = new Intl.DateTimeFormat("en-US", {
     ...(timeZone ? { timeZone } : {}),
     year: "numeric",
@@ -733,7 +945,14 @@ function formatHeaderTime(iso: string, timeZone?: string): string {
   const get = (type: string): string =>
     parts.find((part) => part.type === type)?.value ?? "";
   const hour = get("hour") === "24" ? "00" : get("hour");
-  return `${get("year")}-${get("month")}-${get("day")} ${hour}:${get("minute")} ${get("timeZoneName")}`.trim();
+  const date = `${get("year")}-${get("month")}-${get("day")}`;
+  const clock = `${hour}:${get("minute")}`;
+  return [
+    `${date} ${clock} ${get("timeZoneName")}`.trim(),
+    `${date} ${clock}`,
+    clock,
+    "",
+  ];
 }
 
 function fullFooterLines(provider: ProviderQuota, width: number): string[] {

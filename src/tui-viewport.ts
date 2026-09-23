@@ -298,16 +298,21 @@ function restingFrame(
 /**
  * Closing-line text: the caller's resting hint while everything fits, and the
  * scroll affordance - how much is off-screen in each direction, plus the keys
- * that move it - once the report is being windowed.
+ * that move it - once the report is being windowed. `keyHints` names the
+ * caller's own keys so the scroll affordance does not hide them.
  */
-export function scrollHint(status: ScrollStatus, restingHint: string): string {
+export function scrollHint(
+  status: ScrollStatus,
+  restingHint: string,
+  keyHints: readonly string[] = [],
+): string {
   if (!status.scrollable) return restingHint;
   const above = status.offset;
   const below = status.maxOffset - status.offset;
   const parts: string[] = [];
   if (above > 0) parts.push(`↑ ${above} more`);
   if (below > 0) parts.push(`↓ ${below} more`);
-  parts.push("j/k PgUp/PgDn g/G scroll", "q quit");
+  parts.push("j/k PgUp/PgDn g/G scroll", "r refresh", ...keyHints, "q quit");
   return parts.join(" · ");
 }
 

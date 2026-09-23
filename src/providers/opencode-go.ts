@@ -1,32 +1,73 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { readJsonFileResult, type JsonFileReadResult } from "../lib/fs.js";
-import { parseEpochOrIso, clampPercent } from "../lib/time.js";
+import { resolvePiAuthFilePath } from "../lib/pi-agent-dir.js";
+import { classifyPiAuthEntry } from "../lib/pi-auth-store.js";
+import {
+  calendarMonthsBefore,
+  parseEpochOrIso,
+  clampPercent,
+} from "../lib/time.js";
 import { usableLiteralSecret } from "../lib/secret.js";
 import type {
   AuthProviderReport,
   AuthSourceReport,
   ProviderAdapter,
   ProviderQuota,
+  ProviderStatus,
   QuotaWindow,
   SourceAttempt,
 } from "../types.js";
 import { failedProvider, sourceNames, successProvider } from "./common.js";
+import {
+  selectCredential,
+  type AttemptOutcome,
+  type CandidateResult,
+  type CredentialCandidate as SelectionCandidate,
+  type CredentialSelection,
+} from "./credential-selection.js";
 
 export const OPENCODE_GO_USAGE_URL = "https://opencode.ai/zen/go/v1/usage";
 export const OPENCODE_GO_CREDENTIAL_SOURCE = "opencode:auth.json";
+export const PI_OPENCODE_GO_SOURCE = "pi:opencode-go";
+/**
+ * Explicit opt-in that lets OpenCode Go read Pi's `opencode-go` entry ahead of
+ * the opencode store. Unset or falsey keeps the long-standing default: the
+ * opencode store is the only source, so an unscoped run never probes Pi.
+ */
+export const PI_OPENCODE_GO_AUTH_ENV = "QUOTA_AXI_OPENCODE_GO_PI_AUTH";
+
+const PI_OPENCODE_GO_PROVIDER_ID = "opencode-go";
 
 const LABEL = "OpenCode Go";
 const RESPONSE_LIMIT_BYTES = 262_144;
 const BODY_CLEANUP_TIMEOUT_MS = 100;
 const DEADLINE_MS = 15_000;
+/** Plan-declared rolling cap: $12 per rolling 5 hours. */
+const FIVE_HOURS_SECONDS = 18_000;
+/** Plan-declared weekly cap: $30 per week. */
+const WEEK_SECONDS = 7 * 24 * 60 * 60;
 
-type CredentialResolution =
+export type CredentialResolution =
   | { status: "available"; key: string; path: string }
   | { status: "missing" | "invalid" | "error"; path: string };
 
+export type CredentialInspection =
+  | { status: "available"; path: string }
+  | { status: "missing" | "invalid" | "error"; path: string };
+
+export type OpenCodeGoCredentialSource = {
+  resolve(): CredentialResolution;
+  inspect(): CredentialInspection;
+};
+
+export type NamedOpenCodeGoCredentialSource = {
+  name: string;
+  source: OpenCodeGoCredentialSource;
+};
+
 type Dependencies = {
-  credential: () => CredentialResolution;
+  credentialSources: NamedOpenCodeGoCredentialSource[];
   fetch: typeof globalThis.fetch;
   now: () => number;
   deadlineMs: number;
@@ -72,25 +113,98 @@ export function extractOpenCodeGoCredential(
   return { status: hasEntry ? "invalid" : "missing", path };
 }
 
+function extractPiOpenCodeGoCredential(
+  value: unknown,
+  path: string,
+): CredentialResolution {
+  const classified = classifyPiAuthEntry(value, PI_OPENCODE_GO_PROVIDER_ID);
+  if (classified.status === "missing") return { status: "missing", path };
+  const key =
+    classified.status === "present" && classified.entry.type === "api_key"
+      ? usableLiteralSecret(classified.entry.key)
+      : undefined;
+  return key ? { status: "available", key, path } : { status: "invalid", path };
+}
+
+function createJsonCredentialSource(
+  filePath: () => string,
+  extract: (value: unknown, path: string) => CredentialResolution,
+): OpenCodeGoCredentialSource {
+  function resolve(): CredentialResolution {
+    const path = filePath();
+    const result: JsonFileReadResult = readJsonFileResult(path);
+    if (result.status === "missing") return { status: "missing", path };
+    if (result.status === "invalid") {
+      return {
+        status: result.error === "file_read_error" ? "error" : "invalid",
+        path,
+      };
+    }
+    return extract(result.value, path);
+  }
+  return {
+    resolve,
+    inspect(): CredentialInspection {
+      const resolution = resolve();
+      return resolution.status === "available"
+        ? { status: "available", path: resolution.path }
+        : resolution;
+    },
+  };
+}
+
+export function createOpencodeGoAuthCredentialSource(
+  filePath: () => string = opencodeGoAuthFilePath,
+): OpenCodeGoCredentialSource {
+  return createJsonCredentialSource(filePath, extractOpenCodeGoCredential);
+}
+
+export function createPiOpenCodeGoCredentialSource(
+  filePath: () => string = resolvePiAuthFilePath,
+): OpenCodeGoCredentialSource {
+  return createJsonCredentialSource(filePath, extractPiOpenCodeGoCredential);
+}
+
+/**
+ * Pi's `opencode-go` entry is added first only when the opt-in environment
+ * flag asks for it; the opencode store stays the default and fallback. See
+ * README "Security Posture > Provider credential sources" for the rationale.
+ */
+export function defaultOpenCodeGoCredentialSources(
+  environment: Readonly<Record<string, string | undefined>> = process.env,
+): NamedOpenCodeGoCredentialSource[] {
+  const sources: NamedOpenCodeGoCredentialSource[] = [];
+  if (piOpenCodeGoAuthEnabled(environment)) {
+    sources.push({
+      name: PI_OPENCODE_GO_SOURCE,
+      source: createPiOpenCodeGoCredentialSource(),
+    });
+  }
+  sources.push({
+    name: OPENCODE_GO_CREDENTIAL_SOURCE,
+    source: createOpencodeGoAuthCredentialSource(),
+  });
+  return sources;
+}
+
+function piOpenCodeGoAuthEnabled(
+  environment: Readonly<Record<string, string | undefined>>,
+): boolean {
+  const value = environment[PI_OPENCODE_GO_AUTH_ENV]?.trim().toLowerCase();
+  return value === "1" || value === "true";
+}
+
 export function resolveOpenCodeGoCredential(
   path = opencodeGoAuthFilePath(),
 ): CredentialResolution {
-  const result: JsonFileReadResult = readJsonFileResult(path);
-  if (result.status === "missing") return { status: "missing", path };
-  if (result.status === "invalid") {
-    return {
-      status: result.error === "file_read_error" ? "error" : "invalid",
-      path,
-    };
-  }
-  return extractOpenCodeGoCredential(result.value, path);
+  return createOpencodeGoAuthCredentialSource(() => path).resolve();
 }
 
 export function createOpenCodeGoAdapter(
   overrides: Partial<Dependencies> = {},
 ): ProviderAdapter {
   const dependencies: Dependencies = {
-    credential: () => resolveOpenCodeGoCredential(),
+    credentialSources: defaultOpenCodeGoCredentialSources(),
     fetch: globalThis.fetch,
     now: Date.now,
     deadlineMs: DEADLINE_MS,
@@ -106,37 +220,18 @@ export function createOpenCodeGoAdapter(
 
 export const opencodeGoAdapter = createOpenCodeGoAdapter();
 
+type ResolvedCredentialSource = {
+  name: string;
+  resolution: CredentialResolution;
+};
+
 async function fetchQuota(dependencies: Dependencies): Promise<ProviderQuota> {
-  const resolution = dependencies.credential();
-  const attempts: SourceAttempt[] = [
-    {
-      source: OPENCODE_GO_CREDENTIAL_SOURCE,
-      status: resolution.status === "available" ? "failed" : "skipped",
-      ...(resolution.status !== "available"
-        ? { error: credentialError(resolution) }
-        : {}),
-    },
-  ];
-  if (resolution.status !== "available") {
-    return failedProvider({
-      provider: "opencode-go",
-      label: LABEL,
-      status: resolution.status === "missing" ? "auth_required" : "error",
-      error: credentialError(resolution),
-      source: "api",
-      sourcesTried: sourceNames(attempts),
-      attempts,
-    });
-  }
-  try {
-    const payload = await requestUsage(
-      resolution.key,
-      dependencies.fetch,
-      dependencies.deadlineMs,
-    );
-    const normalized = normalizeOpenCodeGoPayload(payload);
-    if (normalized.windows.length === 0) throw new Error("quota_missing");
-    attempts[0] = { source: OPENCODE_GO_CREDENTIAL_SOURCE, status: "success" };
+  const { resolved, selection } =
+    await selectOpenCodeGoCredential(dependencies);
+  const attempts = sourceAttempts(resolved, selection);
+
+  if (selection.outcome === "quota" && selection.result) {
+    const normalized = selection.result;
     return successProvider({
       provider: "opencode-go",
       label: LABEL,
@@ -147,50 +242,246 @@ async function fetchQuota(dependencies: Dependencies): Promise<ProviderQuota> {
       sourcesTried: sourceNames(attempts),
       attempts,
     });
+  }
+
+  const failure = selectionFailureFor(selection, resolved);
+  return failedProvider({
+    provider: "opencode-go",
+    label: LABEL,
+    status: failure.status,
+    error: failure.code,
+    source: "api",
+    sourcesTried: sourceNames(attempts),
+    attempts,
+  });
+}
+
+function resolveSafely(
+  source: OpenCodeGoCredentialSource,
+): CredentialResolution {
+  try {
+    return source.resolve();
+  } catch {
+    return { status: "error", path: "" };
+  }
+}
+
+function inspectSafely(
+  source: OpenCodeGoCredentialSource,
+): CredentialInspection {
+  try {
+    return source.inspect();
+  } catch {
+    return { status: "error", path: "" };
+  }
+}
+
+async function selectOpenCodeGoCredential(dependencies: Dependencies): Promise<{
+  resolved: ResolvedCredentialSource[];
+  selection: CredentialSelection<NormalizedOpenCodeGoPayload>;
+}> {
+  const resolved: ResolvedCredentialSource[] = [];
+  const results: CandidateResult[] = [];
+
+  for (const { name, source } of dependencies.credentialSources) {
+    const resolution = resolveSafely(source);
+    resolved.push({ name, resolution });
+    if (resolution.status !== "available") continue;
+
+    const selection = await selectCredential(
+      [
+        {
+          source: name,
+          localState: "valid",
+          credential: resolution.key,
+        },
+      ],
+      (candidate) => attemptCandidate(candidate, dependencies),
+    );
+    results.push(...selection.results);
+    if (
+      selection.outcome === "quota" ||
+      selection.outcome === "transient" ||
+      selection.outcome === "live_no_quota"
+    ) {
+      return {
+        resolved,
+        selection: { ...selection, results },
+      };
+    }
+  }
+
+  return {
+    resolved,
+    selection: {
+      outcome: results.length > 0 ? "all_rejected" : "no_candidates",
+      refreshable: false,
+      results,
+    },
+  };
+}
+
+async function attemptCandidate(
+  candidate: SelectionCandidate<string>,
+  dependencies: Dependencies,
+): Promise<AttemptOutcome<NormalizedOpenCodeGoPayload>> {
+  try {
+    const payload = await requestUsage(
+      candidate.credential,
+      dependencies.fetch,
+      dependencies.deadlineMs,
+    );
+    const normalized = normalizeOpenCodeGoPayload(payload);
+    if (normalized.windows.length === 0) {
+      return { kind: "transient", error: "quota_missing" };
+    }
+    return { kind: "quota", result: normalized };
   } catch (error) {
     const code = errorCode(error);
-    attempts[0] = {
-      source: OPENCODE_GO_CREDENTIAL_SOURCE,
-      status: "failed",
-      error: code,
-    };
-    return failedProvider({
-      provider: "opencode-go",
-      label: LABEL,
-      status:
-        code === "provider_auth_rejected"
-          ? "auth_required"
-          : code === "provider_rate_limited"
-            ? "rate_limited"
-            : "error",
-      error: code,
-      source: "api",
-      sourcesTried: sourceNames(attempts),
-      attempts,
-    });
+    if (code === "provider_auth_rejected") {
+      return { kind: "rejected", error: code };
+    }
+    return { kind: "transient", error: code };
   }
+}
+
+function sourceAttempts(
+  resolved: readonly ResolvedCredentialSource[],
+  selection: CredentialSelection<NormalizedOpenCodeGoPayload>,
+): SourceAttempt[] {
+  return resolved.map(({ name, resolution }) => {
+    if (resolution.status === "available") {
+      return selectionAttemptRecord(
+        name,
+        selection.results.find((entry) => entry.source === name),
+        selection,
+      );
+    }
+    return {
+      source: name,
+      status: resolution.status === "error" ? "failed" : "skipped",
+      error: credentialError(resolution),
+      ...(resolution.status === "invalid" ? { credentialPresent: true } : {}),
+    };
+  });
+}
+
+function selectionAttemptRecord(
+  sourceName: string,
+  result: CandidateResult | undefined,
+  selection: CredentialSelection<NormalizedOpenCodeGoPayload>,
+): SourceAttempt {
+  if (
+    result === undefined ||
+    result.outcome === "not_tried" ||
+    result.outcome === "live_no_quota"
+  ) {
+    return {
+      source: sourceName,
+      status: "skipped",
+      ...(selection.transientError ? { error: selection.transientError } : {}),
+    };
+  }
+  if (result.outcome === "quota") {
+    return { source: sourceName, status: "success" };
+  }
+  return { source: sourceName, status: "failed", error: result.error };
+}
+
+type LocalFailure = { status: ProviderStatus; code: string };
+
+function selectionFailureFor(
+  selection: CredentialSelection<NormalizedOpenCodeGoPayload>,
+  resolved: readonly ResolvedCredentialSource[],
+): LocalFailure {
+  switch (selection.outcome) {
+    case "transient":
+      return transientFailure(
+        selection.transientError ?? "quota_request_failed",
+      );
+    case "all_rejected": {
+      const indeterminate = indeterminateFailureFor(resolved);
+      return (
+        indeterminate ?? {
+          status: "auth_required",
+          code: "provider_auth_rejected",
+        }
+      );
+    }
+    case "live_no_quota":
+      // Unreachable: every attempt yields windows or throws.
+      return { status: "error", code: "quota_missing" };
+    default:
+      return (
+        indeterminateFailureFor(resolved) ??
+        localCredentialFailure({ status: "missing", path: "" })
+      );
+  }
+}
+
+function transientFailure(code: string): LocalFailure {
+  return {
+    status: code === "provider_rate_limited" ? "rate_limited" : "error",
+    code,
+  };
+}
+
+function indeterminateFailureFor(
+  resolved: readonly ResolvedCredentialSource[],
+): LocalFailure | undefined {
+  const fallback = resolved.find(
+    ({ name, resolution }) =>
+      name === OPENCODE_GO_CREDENTIAL_SOURCE &&
+      (resolution.status === "invalid" || resolution.status === "error"),
+  );
+  const preferred = resolved.find(
+    ({ name, resolution }) =>
+      name === PI_OPENCODE_GO_SOURCE &&
+      (resolution.status === "invalid" || resolution.status === "error"),
+  );
+  const failure = fallback ?? preferred;
+  return failure ? localCredentialFailure(failure.resolution) : undefined;
+}
+
+function localCredentialFailure(
+  resolution: CredentialResolution,
+): LocalFailure {
+  if (resolution.status === "missing") {
+    return {
+      status: "auth_required",
+      code: "opencode_go_credential_unavailable",
+    };
+  }
+  if (resolution.status === "error") {
+    return { status: "error", code: "credential_resolution_failed" };
+  }
+  return { status: "error", code: "opencode_go_credential_invalid" };
 }
 
 async function inspectAuth(
   dependencies: Dependencies,
 ): Promise<AuthProviderReport> {
-  const resolution = dependencies.credential();
-  const source: AuthSourceReport = {
-    source: OPENCODE_GO_CREDENTIAL_SOURCE,
-    path: resolution.path,
-    status:
-      resolution.status === "available"
-        ? "available"
-        : resolution.status === "missing"
-          ? "missing"
-          : resolution.status === "error"
-            ? "error"
-            : "invalid",
-    ...(resolution.status === "error"
-      ? { error: "credential_resolution_failed" }
-      : {}),
-  };
-  return { provider: "opencode-go", sources: [source] };
+  const sources: AuthSourceReport[] = dependencies.credentialSources.map(
+    ({ name, source }) => {
+      const inspection = inspectSafely(source);
+      return {
+        source: name,
+        path: inspection.path,
+        status:
+          inspection.status === "available"
+            ? "available"
+            : inspection.status === "missing"
+              ? "missing"
+              : inspection.status === "error"
+                ? "error"
+                : "invalid",
+        ...(inspection.status === "error"
+          ? { error: "credential_resolution_failed" }
+          : {}),
+      };
+    },
+  );
+  return { provider: "opencode-go", sources };
 }
 
 async function requestUsage(
@@ -392,19 +683,27 @@ async function raceWithAbort<T>(
 
 export function normalizeOpenCodeGoPayload(
   raw: unknown,
+  now = Date.now(),
 ): NormalizedOpenCodeGoPayload {
   const root = objectValue(raw);
-  const usage = objectValue(root?.usage);
-  if (!usage) return { windows: [] };
+  const nestedUsage = objectValue(root?.usage);
   const definitions = [
-    ["rolling", "five_hour", "session"],
-    ["weekly", "weekly", "weekly"],
-    ["monthly", "monthly", "monthly"],
+    [["rollingUsage", "rolling"], "five_hour", "session"],
+    [["weeklyUsage", "weekly"], "weekly", "weekly"],
+    [["monthlyUsage", "monthly"], "monthly", "monthly"],
   ] as const;
   const windows = definitions
-    .map(([name, id, kind]) => {
-      const record = objectValue(usage[name]);
-      return record ? normalizeWindow(record, id, kind) : undefined;
+    .map(([names, id, kind]) => {
+      const record = names
+        .map(
+          (name) =>
+            objectValue(nestedUsage?.[name]) ?? objectValue(root?.[name]),
+        )
+        .find(
+          (candidate): candidate is Record<string, unknown> =>
+            candidate !== undefined,
+        );
+      return record ? normalizeWindow(record, id, kind, now) : undefined;
     })
     .filter((window): window is QuotaWindow => window !== undefined);
   const plan =
@@ -416,18 +715,27 @@ function normalizeWindow(
   record: Record<string, unknown>,
   id: string,
   kind: QuotaWindow["kind"],
+  now: number,
 ): QuotaWindow | undefined {
-  const used = firstNumber(record, ["percent", "percentUsed", "usedPercent"]);
+  const used = firstNumber(record, [
+    "percent",
+    "percentUsed",
+    "usedPercent",
+    "usagePercent",
+  ]);
   const remaining = firstNumber(record, [
     "percentRemaining",
     "remainingPercent",
   ]);
+  const status = stringValue(record.status)?.toLowerCase();
   const percentRemaining =
     remaining !== undefined
       ? clampPercent(remaining)
       : used !== undefined
         ? clampPercent(100 - used)
-        : undefined;
+        : status === "rate-limited"
+          ? 0
+          : undefined;
   if (percentRemaining === undefined) return undefined;
   const reset = firstValue(record, [
     "resetsAt",
@@ -445,8 +753,32 @@ function normalizeWindow(
     "periodSeconds",
     "period_seconds",
   ]);
-  const parsedReset = safeParseReset(reset);
-  const hasAuthoritativeDuration = windowSeconds === 18_000;
+  const resetInSec = firstNumber(record, ["resetInSec", "reset_in_sec"]);
+  const parsedReset =
+    safeParseReset(reset) ??
+    (resetInSec !== undefined && resetInSec >= 0
+      ? isoFromTimestamp(now + resetInSec * 1_000)
+      : undefined);
+  // Only a payload-supplied 18,000 s rolling duration promotes the window to
+  // the `five_hour` identity; plan-declared fallbacks below never do.
+  const hasAuthoritativeDuration = windowSeconds === FIVE_HOURS_SECONDS;
+  const hasPayloadDuration = windowSeconds !== undefined && windowSeconds > 0;
+  // Plan-declared cycle lengths fill in only when the payload names none;
+  // a payload duration always wins. The monthly cap is one calendar month
+  // ending at the reported reset, so only its start is derived.
+  const effectiveWindowSeconds = hasPayloadDuration
+    ? windowSeconds
+    : parsedReset === undefined
+      ? undefined
+      : id === "five_hour"
+        ? FIVE_HOURS_SECONDS
+        : id === "weekly"
+          ? WEEK_SECONDS
+          : undefined;
+  const derivedStartsAt =
+    id === "monthly" && !hasPayloadDuration && parsedReset !== undefined
+      ? calendarMonthsBefore(parsedReset, 1)
+      : undefined;
   const normalizedIdentity =
     id === "five_hour" && !hasAuthoritativeDuration
       ? { id: "rolling", label: "rolling", kind: "unknown" as const }
@@ -455,9 +787,10 @@ function normalizeWindow(
     ...normalizedIdentity,
     percentUsed: clampPercent(100 - percentRemaining),
     percentRemaining,
-    ...(windowSeconds !== undefined && windowSeconds > 0
-      ? { windowSeconds }
+    ...(effectiveWindowSeconds !== undefined
+      ? { windowSeconds: effectiveWindowSeconds }
       : {}),
+    ...(derivedStartsAt ? { startsAt: derivedStartsAt } : {}),
     ...(parsedReset ? { resetsAt: parsedReset } : {}),
   };
 }
@@ -469,6 +802,12 @@ function safeParseReset(value: unknown): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+function isoFromTimestamp(timestamp: number): string | undefined {
+  if (!Number.isFinite(timestamp)) return undefined;
+  const date = new Date(timestamp);
+  return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
 }
 
 function credentialError(

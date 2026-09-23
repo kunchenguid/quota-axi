@@ -136,7 +136,7 @@ export function createCodexAdapter(
     id: "codex",
     label: "Codex",
     discoverAccounts: () => discoverCodexAccounts(dependencies),
-    fetchQuota: (options) => fetchQuotaWithDependencies(dependencies, options),
+    fetchQuota: (options) => fetchSingleWinnerQuota(dependencies, options),
     inspectAuth: (_options) => inspectAuthWithDependencies(dependencies),
   };
 }
@@ -146,10 +146,68 @@ export const codexAdapter = createCodexAdapter();
 export async function fetchQuota(
   options: ProviderOptions,
 ): Promise<ProviderQuota> {
-  return fetchQuotaWithDependencies(defaultCodexDependencies, options);
+  return fetchSingleWinnerQuota(defaultCodexDependencies, options);
 }
 
 const CODEX_HOME_ACCOUNT_KEY = "codex-home";
+
+/**
+ * The credential key a credential source belongs to: the native store and
+ * the CLI fallback are `codex-home`, a Pi source is its provider id.
+ */
+function codexCredentialKey(
+  source: ProviderQuota["source"] | undefined,
+): string | undefined {
+  if (source === "oauth" || source === "cli-rpc") return CODEX_HOME_ACCOUNT_KEY;
+  return source?.startsWith("pi:") ? source.slice("pi:".length) : undefined;
+}
+
+/**
+ * The single-winner row covers the key whose credential produced it, plus
+ * the other native or built-in Pi key when both store the same account.
+ */
+async function fetchSingleWinnerQuota(
+  dependencies: CodexDependencies,
+  options: ProviderOptions,
+): Promise<ProviderQuota> {
+  if (isProfileOnly(options))
+    return fetchQuotaWithDependencies(dependencies, options);
+  const nativeState = readCredentialState();
+  let builtinResolution: PiCodexCredentialResolution;
+  try {
+    builtinResolution = await dependencies.piCodexBroker.resolve();
+  } catch {
+    builtinResolution = { status: "error" };
+  }
+  const report = await fetchQuotaWithDependencies(
+    dependencies,
+    options,
+    undefined,
+    {
+      nativeState,
+      builtinResolution,
+    },
+  );
+  const ownKeys = report.accountKeys ?? [];
+  const pairedKeys = [CODEX_HOME_ACCOUNT_KEY, PI_CODEX_BUILTIN_ID];
+  if (!ownKeys.some((key) => pairedKeys.includes(key))) {
+    return report;
+  }
+  const nativeStoredAccountId =
+    nativeState.status === "available" || nativeState.status === "expired"
+      ? nativeState.credentials.accountId
+      : undefined;
+  if (
+    nativeStoredAccountId === undefined ||
+    nativeStoredAccountId !== resolvedAccountId(builtinResolution)
+  ) {
+    return report;
+  }
+  return {
+    ...report,
+    accountKeys: [...new Set([...ownKeys, ...pairedKeys])],
+  };
+}
 
 /**
  * `cacheKey` is the lane's cache slot and must be the key the collection will
@@ -198,6 +256,8 @@ async function discoverCodexAccounts(
     account: Extract<CodexAccountContext, { kind: "pi" }>;
     storedAccountId?: string;
     reading?: Promise<ProviderQuota>;
+    /** Native keys whose reading collapsed into this lane. */
+    nativeAccountKeys?: string[];
   }[] = [];
   const piLaneByAccountId = new Map<string, (typeof piLanes)[number]>();
   for (const piProviderId of ids) {
@@ -253,20 +313,51 @@ async function discoverCodexAccounts(
       options,
       lane.account,
     ));
+  const readPiOrNative = async (
+    lane: (typeof piLanes)[number],
+    options: ProviderOptions,
+  ): Promise<ProviderQuota> => {
+    const report = await readPi(lane, options);
+    const accountId = laneIdentity(report, lane.storedAccountId);
+    if (report.state.status === "fresh" || !hasNativeLane || !accountId) {
+      return report;
+    }
+    const reading = await readNative(options);
+    if (
+      !reading ||
+      laneIdentity(reading, nativeStoredAccountId) !== accountId ||
+      !(
+        reading.state.status === "fresh" ||
+        (reading.state.stale && !report.state.stale)
+      )
+    ) {
+      return report;
+    }
+    const attempts = [...(report.attempts ?? []), ...(reading.attempts ?? [])];
+    return {
+      ...reading,
+      attempts,
+      state: { ...reading.state, sourcesTried: sourceNames(attempts) },
+    };
+  };
   const accounts: ProviderAccount[] = [];
   if (hasNativeLane) {
     accounts.push({
       accountKey: CODEX_HOME_ACCOUNT_KEY,
       fetchQuota: async (options) => {
         const reading = await readNative(options);
-        const accountId =
-          reading && laneIdentity(reading, nativeStoredAccountId);
-        if (!reading || !accountId) return reading;
+        if (!reading) return undefined;
+        const accountKeys = nativeAccount.includesBuiltinPi
+          ? [CODEX_HOME_ACCOUNT_KEY, PI_CODEX_BUILTIN_ID]
+          : [CODEX_HOME_ACCOUNT_KEY];
+        const accountId = laneIdentity(reading, nativeStoredAccountId);
+        if (!accountId) return { ...reading, accountKeys };
         for (const lane of piLanes) {
           const piReading = await readPi(lane, options);
           if (laneIdentity(piReading, lane.storedAccountId) !== accountId) {
             continue;
           }
+          lane.nativeAccountKeys = accountKeys;
           if (
             reading.state.status === "fresh" ||
             piReading.state.status === "fresh"
@@ -275,7 +366,7 @@ async function discoverCodexAccounts(
           }
           return undefined;
         }
-        return reading;
+        return { ...reading, accountKeys };
       },
       inspectAuth: () =>
         inspectAuthWithDependencies(dependencies, nativeAccount),
@@ -285,30 +376,14 @@ async function discoverCodexAccounts(
     accounts.push({
       accountKey: lane.account.piProviderId,
       fetchQuota: async (options) => {
-        const report = await readPi(lane, options);
-        const accountId = laneIdentity(report, lane.storedAccountId);
-        if (report.state.status === "fresh" || !hasNativeLane || !accountId) {
-          return report;
-        }
-        const reading = await readNative(options);
-        if (
-          !reading ||
-          laneIdentity(reading, nativeStoredAccountId) !== accountId ||
-          !(
-            reading.state.status === "fresh" ||
-            (reading.state.stale && !report.state.stale)
-          )
-        ) {
-          return report;
-        }
-        const attempts = [
-          ...(report.attempts ?? []),
-          ...(reading.attempts ?? []),
-        ];
+        const report = await readPiOrNative(lane, options);
         return {
-          ...reading,
-          attempts,
-          state: { ...reading.state, sourcesTried: sourceNames(attempts) },
+          ...report,
+          accountKeys: [
+            lane.account.piProviderId,
+            ...(lane.account.extraPiProviderIds ?? []),
+            ...(lane.nativeAccountKeys ?? []),
+          ],
         };
       },
       inspectAuth: () =>
@@ -496,6 +571,10 @@ async function fetchQuotaWithDependencies(
   dependencies: CodexDependencies,
   options: ProviderOptions,
   account?: CodexAccountContext,
+  singleWinnerCredentials?: {
+    nativeState: CredentialState;
+    builtinResolution: PiCodexCredentialResolution;
+  },
 ): Promise<ProviderQuota> {
   if (isProfileOnly(options)) return fetchProfileOnlyQuota();
   if (account?.kind === "pi") return fetchPiAccountQuota(dependencies, account);
@@ -509,7 +588,8 @@ async function fetchQuotaWithDependencies(
   // make statusFromError advise a sign-in for what is a network outage.
   let errorIsDefault = true;
 
-  const credentialState = readCredentialState();
+  const credentialState =
+    singleWinnerCredentials?.nativeState ?? readCredentialState();
   // The accounts whose credentials this reading has tried. A failure may only
   // serve a cached snapshot stamped with one of them: a credential never tried
   // cannot vouch for windows filed under the slot this reading shares.
@@ -574,12 +654,15 @@ async function fetchQuotaWithDependencies(
     errorIsDefault = false;
   }
 
+  let piCredentialTried = false;
   if (!account || account.includesBuiltinPi) {
-    let piResolution: PiCodexCredentialResolution;
-    try {
-      piResolution = await dependencies.piCodexBroker.resolve();
-    } catch {
-      piResolution = { status: "error" };
+    let piResolution = singleWinnerCredentials?.builtinResolution;
+    if (!piResolution) {
+      try {
+        piResolution = await dependencies.piCodexBroker.resolve();
+      } catch {
+        piResolution = { status: "error" };
+      }
     }
     // Only a resolution holding credentials names an account, and those
     // credentials are always tried below.
@@ -628,6 +711,7 @@ async function fetchQuotaWithDependencies(
       }
     }
 
+    piCredentialTried = piCandidates.length > 0;
     const piSelection = await selectCredential(piCandidates, (candidate) =>
       attemptCodexCandidate(candidate.credential),
     );
@@ -683,6 +767,9 @@ async function fetchQuotaWithDependencies(
     undefined,
     account?.cacheKey,
     accountIds,
+    oauthCandidates.length === 0 && piCredentialTried
+      ? PI_CODEX_BUILTIN_ID
+      : CODEX_HOME_ACCOUNT_KEY,
   );
 }
 
@@ -765,13 +852,17 @@ function codexSuccessReport(
     attempts,
   });
   stampCodexStoredAccountId(report, storedAccountId);
+  const credentialKey = codexCredentialKey(source);
+  if (credentialKey) report.accountKeys = [credentialKey];
   return report;
 }
 
 /**
  * `accountIds` names the ChatGPT accounts the credentials this reading tried
  * still store, so a snapshot stamped for another stored identity is not served
- * back as this account's stale windows.
+ * back as this account's stale windows. `credentialKey` is the key of the
+ * credential this failed reading speaks for; a stale reading instead names the
+ * key of the credential that produced its cached snapshot.
  */
 function codexFailureReport(
   error: string,
@@ -780,12 +871,19 @@ function codexFailureReport(
   source?: ProviderQuota["source"],
   accountKey?: string,
   accountIds: readonly string[] = [],
+  credentialKey = codexCredentialKey(source) ?? CODEX_HOME_ACCOUNT_KEY,
 ): ProviderQuota {
   const cached = readCachedCodexProvider(accountKey, accountIds);
-  if (cached) {
-    return staleFromCache(cached, error, sourceNames(attempts), attempts);
+  const stale = cached
+    ? staleFromCache(cached, error, sourceNames(attempts), attempts)
+    : undefined;
+  if (stale) {
+    return {
+      ...stale,
+      accountKeys: [codexCredentialKey(cached?.source) ?? credentialKey],
+    };
   }
-  return failedProvider({
+  const report = failedProvider({
     provider: "codex",
     label: "Codex",
     ...(source ? { source } : {}),
@@ -795,6 +893,7 @@ function codexFailureReport(
     sourcesTried: sourceNames(attempts),
     attempts,
   });
+  return { ...report, accountKeys: [credentialKey] };
 }
 
 export async function inspectAuth(
@@ -1249,15 +1348,18 @@ function profileOnlyFailure(
   attempts: SourceAttempt[],
   retryAfter?: string,
 ): ProviderQuota {
-  return failedProvider({
-    provider: "codex",
-    label: "Codex",
-    status,
-    error,
-    retryAfter,
-    sourcesTried: sourceNames(attempts),
-    attempts,
-  });
+  return {
+    ...failedProvider({
+      provider: "codex",
+      label: "Codex",
+      status,
+      error,
+      retryAfter,
+      sourcesTried: sourceNames(attempts),
+      attempts,
+    }),
+    accountKeys: [CODEX_HOME_ACCOUNT_KEY],
+  };
 }
 
 function readCredentialState(authFile = codexAuthFile()): CredentialState {

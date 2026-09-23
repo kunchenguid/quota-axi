@@ -25,6 +25,7 @@ import type {
   AuthProviderReport,
   AuthSourceReport,
   ProviderAdapter,
+  ProviderAuthStatus,
   ProviderOptions,
   ProviderQuota,
   ProviderStatus,
@@ -33,6 +34,7 @@ import type {
 } from "../types.js";
 import {
   failedProvider,
+  servableStaleWindows,
   sourceNames,
   statusFromError,
   successProvider,
@@ -143,6 +145,7 @@ type ClaudeFailureOptions = {
   staleEligible?: boolean;
   retryAfter?: string;
   authUsable?: boolean;
+  authStatus?: ProviderAuthStatus;
   envProfileScopeDenied?: boolean;
   windows?: QuotaWindow[];
 };
@@ -485,17 +488,42 @@ async function liveClaudeRefreshBlocker(): Promise<string | undefined> {
  * command line. The PID check in the caller is essential because quota-axi's
  * own argv may contain a standalone `claude` provider argument.
  *
- * The installed
- * `claude` executable (native installer or a versioned shim) or the npm
- * package running under a Node runtime. Every whitespace-separated token is
- * checked rather than only the first, because a `ps` command line splits an
- * installation path that contains a space. Matching is deliberately generous -
- * over-matching only means quota-axi stays read-only, which is the safe side.
+ * Matches the installed `claude` executable (native installer or a versioned
+ * shim) and the npm package running under a Node runtime. The executable is
+ * argv[0], so a token whose basename is `claude` names it only in that
+ * position: either the first token (a bare `claude` resolved on PATH) or a
+ * later path fragment when an installation path contains a space and `ps`
+ * splits it across tokens. A bare `claude` token inside another process's
+ * arguments is ordinary prose, not a session, and must not stand the refresh
+ * down.
  */
 function isLiveClaudeCodeProcess(commandLine: string): boolean {
   const tokens = commandLine.split(/\s+/);
-  if (tokens.some((token) => token.split("/").pop() === "claude")) return true;
+  if (
+    tokens.some(
+      (token, index) =>
+        token.split("/").pop() === "claude" &&
+        (index === 0 || token.includes("/")),
+    )
+  ) {
+    return true;
+  }
   return commandLine.includes("@anthropic-ai/claude-code/");
+}
+
+/**
+ * A stored-expired session that still carries a refresh token and was rejected
+ * is soft expiry, not a sign-out (Kimi and Grok report the same class): status
+ * `unavailable`, `authStatus: expired_refreshable`, and the cache survives.
+ * Only presence of the refresh token was inspected; rotation stays the Claude
+ * CLI's.
+ */
+function refreshableExpiryFailure(): ClaudeFailure {
+  return new ClaudeFailure("Claude access token expired", {
+    status: "unavailable",
+    staleEligible: true,
+    authStatus: "expired_refreshable",
+  });
 }
 
 /**
@@ -587,8 +615,8 @@ async function attemptClaudeQuota(
       source: state.source.source,
       status: "skipped",
       error: `credentials_${state.status}`,
-      // A malformed store still holds a credential, so a sibling source that
-      // answers supersedes it rather than replacing it silently.
+      // A malformed store is not confirmed absent; retain its diagnostic
+      // even when a sibling source answers.
       ...(state.status === "invalid" ? { credentialPresent: true } : {}),
     });
   }
@@ -597,7 +625,7 @@ async function attemptClaudeQuota(
   let definitiveFailureIsEnv = false;
   let transientFailure: ClaudeFailure | undefined;
   let transientFailureIsEnv = false;
-  let refreshableExpiredRejected = false;
+  let confirmedExpiryFailure: ClaudeFailure | undefined;
 
   if (credentialCandidates.length > 0) {
     for (const state of credentialCandidates) {
@@ -625,7 +653,12 @@ async function attemptClaudeQuota(
           }),
         };
       } catch (error) {
-        const failure = claudeFailureFor(error);
+        let failure = claudeFailureFor(error);
+        const softRefreshable =
+          failure.definitiveAuth &&
+          state.status === "expired" &&
+          state.refreshable;
+        if (softRefreshable) failure = refreshableExpiryFailure();
         attempts[attempts.length - 1] = {
           source: credential.source,
           status: "failed",
@@ -674,13 +707,16 @@ async function attemptClaudeQuota(
           transientFailureIsEnv = true;
           break;
         }
-        if (failure.definitiveAuth) {
+        if (softRefreshable || failure.definitiveAuth) {
+          // A stored-expired session that still carries a refresh token is
+          // rejected only because its access token lapsed; the vendor rotates
+          // it, so it is not a sign-out and never retires the cache. Among
+          // resolved rejections the highest-priority candidate's verdict
+          // wins, whichever class it is: a bystander file must not speak for
+          // the session the source order names first.
           if (!definitiveFailure) {
             definitiveFailure = failure;
             definitiveFailureIsEnv = credential.source === "env";
-          }
-          if (state.status === "expired" && state.refreshable) {
-            refreshableExpiredRejected = true;
           }
           // The env token names the account a live session actually uses, so
           // its own definitive rejection is a verdict on that session: it must
@@ -701,13 +737,28 @@ async function attemptClaudeQuota(
             state.status === "expired" &&
             failure.status === "rate_limited" &&
             (await confirmClaudeStoredExpiry(credential, attempts));
-          transientFailure = expiryConfirmed
-            ? new ClaudeFailure("Claude credential expired", {
-                status: "unavailable",
-                staleEligible: true,
-              }).withUsageFetchFailure()
-            : failure.withUsageFetchFailure();
-          transientFailureIsEnv = credential.source === "env";
+          if (expiryConfirmed) {
+            if (!confirmedExpiryFailure && !definitiveFailure) {
+              confirmedExpiryFailure = new ClaudeFailure(
+                "Claude credential expired",
+                {
+                  status: "unavailable",
+                  staleEligible: true,
+                  ...(state.refreshable
+                    ? { authStatus: "expired_refreshable" as const }
+                    : {}),
+                },
+              ).withUsageFetchFailure();
+              // A confirmed expiry replaces an earlier env transient, as it
+              // did before source-priority tracking was added. Later sibling
+              // confirmations must not replace this first resolved verdict.
+              transientFailure = confirmedExpiryFailure;
+              transientFailureIsEnv = credential.source === "env";
+            }
+          } else if (!expiryConfirmed) {
+            transientFailure = failure.withUsageFetchFailure();
+            transientFailureIsEnv = credential.source === "env";
+          }
           // The env token is an independent source the vendor merely resolves
           // first; its non-definitive failure must not withhold a still-untried
           // stored source. An unresolved (transient) failure from a stored
@@ -758,13 +809,19 @@ async function attemptClaudeQuota(
   // its own non-definitive failure must not mask a stored source's genuine
   // definitive rejection, since that stored verdict is still fully resolved.
   let failure =
+    confirmedExpiryFailure ??
     (transientFailureIsEnv ? definitiveFailure : undefined) ??
     transientFailure ??
     definitiveFailure ??
     new ClaudeFailure("Claude quota unavailable", { staleEligible: true });
   // A failed Keychain discovery/read never saw the live session. A 401 from a leftover
   // oauth-file sidecar is not evidence the user is signed out of Claude.
-  if (keychainFailure && failure.definitiveAuth && !definitiveFailureIsEnv) {
+  // A refreshable soft expiry from that sidecar is no better evidence.
+  if (
+    keychainFailure &&
+    (failure.definitiveAuth || failure.authStatus === "expired_refreshable") &&
+    !definitiveFailureIsEnv
+  ) {
     failure = new ClaudeFailure(keychainFailure.source.error!, {
       staleEligible: true,
     });
@@ -773,7 +830,9 @@ async function attemptClaudeQuota(
   return {
     kind: "failure",
     failure,
-    refreshableExpiredRejected,
+    refreshableExpiredRejected:
+      failure === definitiveFailure &&
+      failure.authStatus === "expired_refreshable",
     keychainWithheld: credentialStates.some(
       (state) =>
         state.status === "skipped" && state.source.source === "keychain",
@@ -826,6 +885,7 @@ function failureReport(
     ...(observedWindows ? { source: "cli" } : {}),
   });
   if (failure.authUsable) report.state.authStatus = "usable";
+  if (failure.authStatus) report.state.authStatus = failure.authStatus;
   if (observedWindows) report.windows = observedWindows;
   return report;
 }
@@ -849,10 +909,9 @@ function staleClaudeReport(
   const ageMilliseconds = now - refreshedAt;
   if (ageMilliseconds >= SEVEN_DAYS_MS) return undefined;
 
-  const windows = cached.windows.filter((window) => {
-    if (window.resetsAt !== undefined) {
-      const resetsAt = Date.parse(window.resetsAt);
-      return Number.isFinite(resetsAt) && resetsAt > now;
+  const windows = servableStaleWindows(cached, now).filter((window) => {
+    if (window.resetsAt && Number.isFinite(Date.parse(window.resetsAt))) {
+      return true;
     }
     const maxAge = resetlessWindowMaxAge(window);
     return maxAge !== undefined && ageMilliseconds < maxAge;
@@ -875,6 +934,7 @@ function staleClaudeReport(
     },
     attempts,
   };
+  if (failure.authStatus) report.state.authStatus = failure.authStatus;
   return failure.usageFetchFailure ? withUsageFetchFailure(report) : report;
 }
 
@@ -882,11 +942,7 @@ function resetlessWindowMaxAge(window: QuotaWindow): number | undefined {
   if (window.kind === "weekly" || window.kind === "model") {
     return SEVEN_DAYS_MS;
   }
-  if (
-    window.kind === "session" ||
-    window.kind === "monthly" ||
-    window.kind === "credits"
-  ) {
+  if (window.kind === "session" || window.kind === "monthly") {
     return FIVE_HOURS_MS;
   }
   return undefined;
@@ -1825,6 +1881,7 @@ class ClaudeFailure extends Error {
   readonly staleEligible: boolean;
   readonly retryAfter: string | undefined;
   readonly authUsable: boolean;
+  readonly authStatus: ProviderAuthStatus | undefined;
   readonly envProfileScopeDenied: boolean;
   readonly windows: QuotaWindow[] | undefined;
   usageFetchFailure = false;
@@ -1840,6 +1897,7 @@ class ClaudeFailure extends Error {
     this.staleEligible = options.staleEligible ?? false;
     this.retryAfter = options.retryAfter;
     this.authUsable = options.authUsable ?? false;
+    this.authStatus = options.authStatus;
     this.envProfileScopeDenied = options.envProfileScopeDenied ?? false;
     this.windows = options.windows;
   }

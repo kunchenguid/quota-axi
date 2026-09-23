@@ -163,7 +163,108 @@ function semanticsFor(
         provider.state.untrustedWindowIds ?? [],
         generatedAt,
       );
+    case "minimax":
+      return minimaxSemantics(
+        provider.windows,
+        provider.state.untrustedWindowIds ?? [],
+        generatedAt,
+      );
+    case "mimo":
+      return unknownSemantics(
+        provider.windows,
+        "MiMo exposes local API authentication, but no first-party read-only quota endpoint is established, so model headroom remains unknown.",
+      );
+    case "deepseek":
+    case "openrouter":
+      return unknownSemantics(
+        provider.windows,
+        `${provider.label ?? provider.provider} reports a credit balance, not a usage window. quota-axi exposes the raw balance but does not infer an effective remaining percentage.`,
+      );
+    case "elevenlabs":
+      return elevenLabsSemantics(provider.windows, generatedAt);
+    case "devin":
+      return devinSemantics(
+        provider.windows,
+        provider.state.untrustedWindowIds ?? [],
+        generatedAt,
+      );
   }
+}
+
+/**
+ * ElevenLabs meters one thing: the characters the subscription plan includes
+ * for the current refresh period. It is scoped `included_characters` rather
+ * than `all_models` for the same reason Command Code's windows are scoped
+ * `included_credits` - the vendor's `can_extend_character_limit` plans bill
+ * usage past the included allowance, so a zeroed window says that allowance is
+ * spent, not that requests stop. It is a speech allowance rather than a
+ * coding-agent lane, so it never binds a model scope either.
+ */
+/**
+ * Devin's daily and weekly windows meter included plan quota. Paid extra usage
+ * continues past a zeroed window, and free models do not draw on these windows,
+ * so they bound `included_quota` rather than `all_models`. Max omits the daily
+ * window only when `hideDailyQuota` is explicitly true, and weekly alone is
+ * then the bound. Otherwise incomplete caps remain unresolved rather than
+ * publishing a known effective remaining percentage.
+ */
+function devinSemantics(
+  windows: QuotaWindow[],
+  untrustedWindowIds: string[],
+  generatedAt: string,
+): QuotaSemantics {
+  const daily = windows.filter(({ id }) => id === "daily");
+  const weekly = windows.filter(({ id }) => id === "weekly");
+  const expected = [...weekly, ...daily];
+  const recognized = new Set(expected);
+  const unresolved = windows.filter((window) => !recognized.has(window));
+  const unresolvedWindowIds = [
+    ...new Set([...unresolved.map(({ id }) => id), ...untrustedWindowIds]),
+  ];
+  const description =
+    "Devin's daily and weekly windows bound included quota. Free models do not draw on them, and paid extra usage continues past a zeroed window, so they are not an all-model bound. Organization and administrator limits are not reported in these fields.";
+  if (unresolvedWindowIds.length > 0) {
+    return {
+      status: "partial",
+      description,
+      effectiveAvailability:
+        weekly.length > 0
+          ? [
+              unresolvedAvailability(
+                "included_quota",
+                expected,
+                unresolvedWindowIds,
+              ),
+            ]
+          : [],
+      unresolvedWindowIds,
+    };
+  }
+  if (weekly.length === 0) {
+    return knownSemantics(
+      [],
+      "Devin reported no weekly included-quota window, so no effective remaining percentage can be computed.",
+    );
+  }
+  return knownSemantics(
+    [availability("included_quota", expected, generatedAt)],
+    description,
+  );
+}
+
+function elevenLabsSemantics(
+  windows: QuotaWindow[],
+  generatedAt: string,
+): QuotaSemantics {
+  const characters = windows.filter(({ id }) => id === "characters");
+  const description =
+    "ElevenLabs' characters window is the subscription plan's included character allowance for the current refresh period, so it bounds the included_characters scope only. Plans that can extend the character limit bill usage past it, so a zeroed window means the included allowance is spent, not that requests are refused.";
+  return knownSemantics(
+    characters.length > 0
+      ? [availability("included_characters", characters, generatedAt)]
+      : [],
+    description,
+  );
 }
 
 /**
@@ -178,6 +279,13 @@ function opencodeGoSemantics(
   windows: QuotaWindow[],
   generatedAt: string,
 ): QuotaSemantics {
+  // No windows at all means the provider was never set up (or is signed
+  // out), not that a subset of the plan's stacked caps is missing - that
+  // distinction is handled below. Fall through to the standard no-window
+  // reading instead of naming all three caps as unresolved.
+  if (windows.length === 0) {
+    return unknownSemantics(windows, "OpenCode Go reported no quota windows.");
+  }
   const plan = windows.filter(({ id }) =>
     ["rolling", "five_hour", "weekly", "monthly"].includes(id),
   );
@@ -211,6 +319,49 @@ function opencodeGoSemantics(
     plan.length > 0 ? [availability("all_models", plan, generatedAt)] : [],
     "OpenCode Go's rolling, weekly, and monthly windows are stacked plan caps ($12 per rolling 5 hours, $30 per week, $60 per month) that jointly bound Go-plan usage, so effective remaining is the minimum across the named windows. A zeroed plan window blocks Go-plan requests; the vendor's free-model fallback or an opted-in Zen balance may still serve past it, which this endpoint does not report.",
   );
+}
+
+function minimaxSemantics(
+  windows: QuotaWindow[],
+  untrustedWindowIds: string[],
+  generatedAt: string,
+): QuotaSemantics {
+  const modelWindows = windows.filter(
+    ({ id, kind }) => kind === "model" && id.startsWith("model:"),
+  );
+  const unresolved = windows.filter((window) => !modelWindows.includes(window));
+  const unresolvedWindowIds = [
+    ...new Set([...unresolved.map(({ id }) => id), ...untrustedWindowIds]),
+  ];
+  const models = new Map<string, QuotaWindow[]>();
+  for (const window of modelWindows) {
+    const scope = minimaxModelScope(window.id);
+    const scoped = models.get(scope) ?? [];
+    scoped.push(window);
+    models.set(scope, scoped);
+  }
+  const effectiveAvailability = [...models].map(([scope, scoped]) =>
+    unresolvedWindowIds.length > 0
+      ? unresolvedAvailability(scope, scoped, unresolvedWindowIds)
+      : availability(scope, scoped, generatedAt),
+  );
+  if (unresolvedWindowIds.length > 0) {
+    return {
+      status: "partial",
+      description:
+        "MiniMax reports quota rows for named models. Unrecognized rows are not assigned to a model, so effective model headroom remains unknown.",
+      effectiveAvailability,
+      unresolvedWindowIds,
+    };
+  }
+  return knownSemantics(
+    effectiveAvailability,
+    "MiniMax reports quota windows for named models. Each model scope is bounded only by the windows the provider reports for that model; no account-wide bound is inferred.",
+  );
+}
+
+function minimaxModelScope(id: string): string {
+  return id.replace(/:(?:5h|7d|window:[^:]+)$/, "");
 }
 
 function commandCodeSemantics(
@@ -434,13 +585,6 @@ function grokSemantics(
 
 const KIMI_ACCOUNT_WINDOW_IDS = new Set(["weekly", "five_hour", "month_total"]);
 
-/**
- * `month_code` is the code-typed share of `month_total` as the vendor serves
- * it, not a cap of its own, so it is recognized - never unresolved - but it
- * bounds nothing and no remaining is derived from it.
- */
-const KIMI_SHARE_WINDOW_IDS = new Set(["month_code"]);
-
 const KIMI_CODE_SHARE_NOTE =
   "The monthly code window is the code-typed share of that monthly total rather than a separate allowance, so it adds no bound.";
 
@@ -450,9 +594,11 @@ function kimiSemantics(
   generatedAt: string,
 ): QuotaSemantics {
   const bounds = windows.filter(({ id }) => KIMI_ACCOUNT_WINDOW_IDS.has(id));
+  // A window marked `shareOf` is a used-share of a parent window, not a cap
+  // of its own, so it is recognized - never unresolved - but bounds nothing.
   const unresolved = windows.filter(
-    ({ id }) =>
-      !KIMI_ACCOUNT_WINDOW_IDS.has(id) && !KIMI_SHARE_WINDOW_IDS.has(id),
+    ({ id, shareOf }) =>
+      !KIMI_ACCOUNT_WINDOW_IDS.has(id) && shareOf === undefined,
   );
   const unresolvedWindowIds = [
     ...new Set([...unresolved.map(({ id }) => id), ...untrustedWindowIds]),

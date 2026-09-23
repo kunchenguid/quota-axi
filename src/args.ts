@@ -10,6 +10,11 @@ import {
 
 export type QuotaFlags = {
   providers: ProviderId[];
+  /**
+   * True when `--provider` named the providers. Named providers are never
+   * folded out of the human report or omitted from default TOON.
+   */
+  explicitProviders: boolean;
   json: boolean;
   full: boolean;
   tui: boolean;
@@ -28,6 +33,8 @@ export type QuotaFlags = {
   refreshSeconds?: number;
   /** Render one `--tui` frame and exit instead of staying live. */
   once: boolean;
+  /** Start `--tui` with providers that are not set up drawn as full cards. */
+  all: boolean;
 };
 
 /** Refresh bounds: fast enough to feel live, slow enough to stay polite. */
@@ -99,11 +106,12 @@ function parseCommonFlags(
   args: string[],
   defaultProviders?: readonly ProviderId[],
 ): ModelsFlags {
-  let providerValue: string | undefined;
+  const providerValues: string[] = [];
   let json = false;
   let full = false;
   let tui = false;
   let once = false;
+  let all = false;
   let refreshSeconds: number | undefined;
   let allowKeychainPrompt = false;
   let allowClaudeInference = false;
@@ -131,6 +139,10 @@ function parseCommonFlags(
     }
     if (arg === "--once") {
       once = true;
+      continue;
+    }
+    if (arg === "--all") {
+      all = true;
       continue;
     }
     if (arg === "--refresh") {
@@ -188,12 +200,12 @@ function parseCommonFlags(
           ["Pass --provider=... if the value begins with --"],
         );
       }
-      providerValue = value;
+      providerValues.push(value);
       index++;
       continue;
     }
     if (arg.startsWith("--provider=")) {
-      providerValue = arg.slice("--provider=".length);
+      providerValues.push(arg.slice("--provider=".length));
       continue;
     }
     throw new AxiError(`unknown argument: ${arg}`, "VALIDATION_ERROR", [
@@ -219,16 +231,22 @@ function parseCommonFlags(
       ["Run `quota-axi --tui --refresh 5m` for the live human report"],
     );
   }
+  if (all && !tui) {
+    throw new AxiError(
+      "--all is only supported with --tui",
+      "VALIDATION_ERROR",
+      ["Run `quota-axi --tui --all` to draw every provider as a full card"],
+    );
+  }
 
   return {
-    providers:
-      providerValue === undefined && defaultProviders
-        ? [...defaultProviders]
-        : parseProviderScope(providerValue),
+    providers: parseProviderScope(providerValues, defaultProviders),
+    explicitProviders: providerValues.length > 0,
     json,
     full,
     tui,
     once,
+    all,
     allowKeychainPrompt,
     allowClaudeInference,
     noCredentialRefresh,
@@ -282,9 +300,34 @@ function parseSortValue(value: string | undefined): ModelSortKey {
   );
 }
 
-function parseProviderScope(value: string | undefined): ProviderId[] {
+/**
+ * Union every `--provider` value in first-seen order. `parseProviders`
+ * already de-duplicates within one value; this de-duplicates across repeats,
+ * so `--provider zai --provider codex` equals `--provider zai,codex`.
+ */
+function parseProviderScope(
+  values: readonly string[],
+  defaultProviders?: readonly ProviderId[],
+): ProviderId[] {
+  if (values.length === 0) {
+    return defaultProviders ? [...defaultProviders] : parseProviders(undefined);
+  }
   try {
-    return parseProviders(value);
+    const seen = new Set<ProviderId>();
+    const providers: ProviderId[] = [];
+    for (const value of values) {
+      if (!value.trim()) continue;
+      for (const provider of parseProviders(value)) {
+        if (seen.has(provider)) continue;
+        seen.add(provider);
+        providers.push(provider);
+      }
+    }
+    return providers.length > 0
+      ? providers
+      : defaultProviders
+        ? [...defaultProviders]
+        : parseProviders(undefined);
   } catch (error) {
     throw new AxiError(
       error instanceof Error ? error.message : "unsupported provider",

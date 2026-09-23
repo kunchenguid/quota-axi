@@ -1051,6 +1051,576 @@ describe("Claude credential-state reporting", () => {
     });
   });
 
+  it("keeps a refreshable expired session unconfirmed while Claude Code is running", async () => {
+    usePlatform("darwin");
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-06T20:00:00.000Z"));
+    const home = useTempHome();
+    writeClaudeCredential(home, {
+      accessToken: "expired-token",
+      refreshToken: "refresh-token-presence-only",
+      expiresAt: "2000-01-01T00:00:00.000Z",
+    });
+    vi.doMock("../../src/lib/process.js", () => ({
+      execFileText: vi.fn(async (command: string, args: string[]) => {
+        if (command === "security" && args[0] === "list-keychains") {
+          return `    "${fixtureKeychain}"\n`;
+        }
+        if (command === "security" && args[0] === "dump-keychain") {
+          return `keychain: "${fixtureKeychain}"\nversion: 512\nclass: "genp"\nattributes:\n    "acct"<blob>="fixture-user"\n    "svce"<blob>="other-service"\n`;
+        }
+        throw new Error("unexpected process call");
+      }),
+    }));
+    vi.doMock("../../src/lib/running-processes.js", () => ({
+      listRunningCommandLines: vi.fn(async () => ({
+        status: "listed" as const,
+        processes: [
+          { pid: process.pid + 1, commandLine: "/usr/local/bin/claude" },
+        ],
+      })),
+    }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(null, { status: 401 })),
+    );
+
+    const { readCachedProvider, writeCachedProviders } =
+      await import("../../src/cache.js");
+    writeCachedProviders([cachedClaudeQuota(34)]);
+
+    const { fetchQuota } = await import("../../src/providers/claude.js");
+    const result = await fetchQuota({
+      allowKeychainPrompt: false,
+      refreshCredentials: true,
+    });
+
+    expect(result).toMatchObject({
+      source: "cache",
+      state: {
+        status: "stale",
+        stale: true,
+        error: "Claude access token expired",
+        authStatus: "expired_refreshable",
+      },
+    });
+    expect(result.windows[0]?.percentUsed).toBe(34);
+    expect(readCachedProvider("claude")?.windows[0]?.percentUsed).toBe(34);
+    expect(result.attempts).toContainEqual({
+      source: "claude-cli-refresh",
+      status: "skipped",
+      error: "refresh_live_vendor_process",
+    });
+    expect(result.attempts).toContainEqual({
+      source: "oauth-file",
+      status: "failed",
+      error: "Claude access token expired",
+    });
+    expect(JSON.stringify(result)).not.toContain("refresh-token-presence-only");
+  });
+
+  it("retains sign-out when a non-refreshable Keychain token is rejected before a refreshable file token", async () => {
+    usePlatform("darwin");
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-06T20:00:00.000Z"));
+    const home = useTempHome();
+    writeClaudeCredential(home, {
+      accessToken: "expired-file-token",
+      refreshToken: "refresh-token-presence-only",
+      expiresAt: "2000-01-01T00:00:00.000Z",
+    });
+    const execFileText = mockKeychainRead(async () =>
+      JSON.stringify({
+        claudeAiOauth: {
+          accessToken: "expired-keychain-token",
+          expiresAt: "2000-01-01T00:00:00.000Z",
+        },
+      }),
+    );
+    vi.doMock("../../src/lib/process.js", () => ({ execFileText }));
+    vi.doMock("../../src/lib/running-processes.js", () => ({
+      listRunningCommandLines: vi.fn(async () => ({
+        status: "listed" as const,
+        processes: [],
+      })),
+    }));
+    const runRefreshDelegate = vi.fn(async () => ({
+      status: "ran" as const,
+      exitCode: 0,
+    }));
+    vi.doMock("../../src/providers/delegated-refresh.js", async (original) => ({
+      ...(await original<
+        typeof import("../../src/providers/delegated-refresh.js")
+      >()),
+      runRefreshDelegate,
+    }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(null, { status: 401 })),
+    );
+
+    const { readCachedProvider, writeCachedProviders } =
+      await import("../../src/cache.js");
+    writeCachedProviders([cachedClaudeQuota(34)]);
+
+    const { fetchQuota } = await import("../../src/providers/claude.js");
+    const result = await fetchQuota({
+      allowKeychainPrompt: true,
+      refreshCredentials: true,
+    });
+
+    expect(result).toMatchObject({
+      source: "unavailable",
+      state: {
+        status: "auth_required",
+        stale: false,
+        error: "Claude sign-in required",
+      },
+    });
+    expect(result.attempts).toEqual(
+      expect.arrayContaining([
+        {
+          source: "keychain",
+          status: "failed",
+          error: "Claude sign-in required",
+        },
+        {
+          source: "oauth-file",
+          status: "failed",
+          error: "Claude access token expired",
+        },
+      ]),
+    );
+    expect(readCachedProvider("claude")).toBeUndefined();
+    expect(runRefreshDelegate).not.toHaveBeenCalled();
+  });
+
+  describe("refreshable expired credential verdicts", () => {
+    const expired = "2000-01-01T00:00:00.000Z";
+
+    function setupDarwin(): string {
+      usePlatform("darwin");
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-07-06T20:00:00.000Z"));
+      return useTempHome();
+    }
+
+    function reject401(): void {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => new Response(null, { status: 401 })),
+      );
+    }
+
+    function keychainCredential(oauth: Record<string, unknown>) {
+      return mockKeychainRead(async () =>
+        JSON.stringify({ claudeAiOauth: oauth }),
+      );
+    }
+
+    async function seedCache() {
+      const cache = await import("../../src/cache.js");
+      cache.writeCachedProviders([cachedClaudeQuota(34)]);
+      return cache.readCachedProvider;
+    }
+
+    it("keeps a denied Keychain read as the error beside a refreshable sidecar 401", async () => {
+      const home = setupDarwin();
+      writeClaudeCredential(home, {
+        accessToken: "expired-sidecar",
+        refreshToken: "refresh-token-presence-only",
+        expiresAt: expired,
+      });
+      const readCached = await seedCache();
+      const execFileText = mockKeychainRead(async () => {
+        throw Object.assign(new Error("auth failed"), { code: 51 });
+      });
+      vi.doMock("../../src/lib/process.js", () => ({ execFileText }));
+      reject401();
+
+      const { fetchQuota } = await import("../../src/providers/claude.js");
+      const result = await fetchQuota({
+        allowKeychainPrompt: true,
+        refreshCredentials: false,
+      });
+
+      expect(result.state.error).toBe("keychain_access_denied");
+      expect(result.state.authStatus).toBeUndefined();
+      expect(result.state.status).toBe("stale");
+      expect(readCached("claude")).toBeDefined();
+    });
+
+    it("reports a denied Keychain read as an error, not soft expiry, when nothing is cached", async () => {
+      const home = setupDarwin();
+      writeClaudeCredential(home, {
+        accessToken: "expired-sidecar",
+        refreshToken: "refresh-token-presence-only",
+        expiresAt: expired,
+      });
+      const execFileText = mockKeychainRead(async () => {
+        throw Object.assign(new Error("auth failed"), { code: 51 });
+      });
+      vi.doMock("../../src/lib/process.js", () => ({ execFileText }));
+      reject401();
+
+      const { fetchQuota } = await import("../../src/providers/claude.js");
+      const result = await fetchQuota({
+        allowKeychainPrompt: true,
+        refreshCredentials: false,
+      });
+
+      expect(result.state.status).toBe("error");
+      expect(result.state.error).toBe("keychain_access_denied");
+      expect(result.state.authStatus).toBeUndefined();
+    });
+
+    it("keeps a prompt-required Keychain error beside a refreshable sidecar 401", async () => {
+      const home = setupDarwin();
+      writeClaudeCredential(home, {
+        accessToken: "expired-sidecar",
+        refreshToken: "refresh-token-presence-only",
+        expiresAt: expired,
+      });
+      vi.doMock("../../src/lib/process.js", () => ({
+        execFileText: mockKeychainRead(async () => ""),
+      }));
+      reject401();
+
+      const { fetchQuota } = await import("../../src/providers/claude.js");
+      const result = await fetchQuota({
+        allowKeychainPrompt: false,
+        refreshCredentials: false,
+      });
+
+      expect(result.state.error).toBe("keychain_prompt_required");
+      expect(result.state.authStatus).toBeUndefined();
+    });
+
+    it("reads soft expiry when a delegated refresh never ran and nothing is cached", async () => {
+      const home = useTempHome();
+      writeClaudeCredential(home, {
+        accessToken: "expired-token",
+        refreshToken: "refresh-token-presence-only",
+        expiresAt: expired,
+      });
+      reject401();
+
+      const { fetchQuota } = await import("../../src/providers/claude.js");
+      const result = await fetchQuota({
+        allowKeychainPrompt: false,
+        refreshCredentials: false,
+      });
+
+      expect(result).toMatchObject({
+        source: "unavailable",
+        state: {
+          status: "unavailable",
+          error: "Claude access token expired",
+          authStatus: "expired_refreshable",
+        },
+      });
+      expect(result.attempts).toContainEqual({
+        source: "oauth-file",
+        status: "failed",
+        error: "Claude access token expired",
+      });
+    });
+
+    it("keeps the soft verdict, cache and a claude remedy when the delegated refresh ran and the same token is still rejected", async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-07-06T20:00:00.000Z"));
+      const home = useTempHome();
+      writeClaudeCredential(home, {
+        accessToken: "expired-token",
+        refreshToken: "refresh-token-presence-only",
+        expiresAt: expired,
+      });
+      const readCached = await seedCache();
+      reject401();
+      vi.doMock("../../src/lib/running-processes.js", () => ({
+        listRunningCommandLines: vi.fn(async () => ({
+          status: "listed" as const,
+          processes: [],
+        })),
+      }));
+      const runRefreshDelegate = vi.fn(async () => ({
+        status: "ran" as const,
+        exitCode: 0,
+      }));
+      vi.doMock(
+        "../../src/providers/delegated-refresh.js",
+        async (original) => ({
+          ...(await original<
+            typeof import("../../src/providers/delegated-refresh.js")
+          >()),
+          runRefreshDelegate,
+        }),
+      );
+
+      const { fetchQuota } = await import("../../src/providers/claude.js");
+      const result = await fetchQuota({
+        allowKeychainPrompt: false,
+        refreshCredentials: true,
+      });
+      const annotated = annotateQuotaAdvice({
+        generatedAt: "2026-07-06T20:00:00.000Z",
+        providers: [result],
+      });
+
+      expect(runRefreshDelegate).toHaveBeenCalledTimes(1);
+      expect(annotated.providers[0]?.state).toMatchObject({
+        status: "stale",
+        error: "Claude access token expired",
+        authStatus: "expired_refreshable",
+        reason: "credentials_expired",
+        remedyCommand: "claude",
+      });
+      expect(annotated.help?.join("\n")).toContain("`claude`");
+      expect(readCached("claude")).toBeDefined();
+    });
+
+    it.each(["refresh_command_not_found", "refresh_spawn_failed"])(
+      "explains when the Claude CLI could not be run (%s)",
+      async (refreshError) => {
+        const home = useTempHome();
+        writeClaudeCredential(home, {
+          accessToken: "expired-token",
+          refreshToken: "refresh-token-presence-only",
+          expiresAt: expired,
+        });
+        reject401();
+        vi.doMock("../../src/lib/running-processes.js", () => ({
+          listRunningCommandLines: vi.fn(async () => ({
+            status: "listed" as const,
+            processes: [],
+          })),
+        }));
+        vi.doMock(
+          "../../src/providers/delegated-refresh.js",
+          async (original) => ({
+            ...(await original<
+              typeof import("../../src/providers/delegated-refresh.js")
+            >()),
+            runRefreshDelegate: vi.fn(async () => ({
+              status: "unavailable" as const,
+              error: refreshError,
+            })),
+          }),
+        );
+
+        const { fetchQuota } = await import("../../src/providers/claude.js");
+        const result = await fetchQuota({
+          allowKeychainPrompt: false,
+          refreshCredentials: true,
+        });
+        const annotated = annotateQuotaAdvice({
+          generatedAt: "2026-07-06T20:00:00.000Z",
+          providers: [result],
+        });
+
+        expect(annotated.providers[0]?.state).toMatchObject({
+          reason: "credentials_expired",
+          remedyCommand: "claude",
+        });
+        expect(annotated.help?.join("\n")).toContain(
+          "quota-axi could not run the Claude CLI; run `claude` once where it is installed.",
+        );
+        expect(annotated.help?.join("\n")).not.toContain(
+          "`claude doctor` did not recover it",
+        );
+      },
+    );
+
+    it("offers no claude remedy while Claude Code is running and owns the refresh", async () => {
+      const home = useTempHome();
+      writeClaudeCredential(home, {
+        accessToken: "expired-token",
+        refreshToken: "refresh-token-presence-only",
+        expiresAt: expired,
+      });
+      reject401();
+      vi.doMock("../../src/lib/running-processes.js", () => ({
+        listRunningCommandLines: vi.fn(async () => ({
+          status: "listed" as const,
+          processes: [
+            { pid: process.pid + 1, commandLine: "/usr/local/bin/claude" },
+          ],
+        })),
+      }));
+
+      const { fetchQuota } = await import("../../src/providers/claude.js");
+      const result = await fetchQuota({
+        allowKeychainPrompt: false,
+        refreshCredentials: true,
+      });
+      const annotated = annotateQuotaAdvice({
+        generatedAt: "2026-07-06T20:00:00.000Z",
+        providers: [result],
+      });
+
+      expect(annotated.providers[0]?.state.authStatus).toBe(
+        "expired_refreshable",
+      );
+      expect(annotated.providers[0]?.state.remedyCommand).toBeUndefined();
+      expect(annotated.help).toBeUndefined();
+    });
+
+    it.each([
+      ["refreshable Keychain before a non-refreshable file", true],
+      ["non-refreshable Keychain before a refreshable file", false],
+    ])("decides by source priority: %s", async (_name, keychainRefreshable) => {
+      const home = setupDarwin();
+      writeClaudeCredential(home, {
+        accessToken: "expired-file-token",
+        ...(keychainRefreshable
+          ? {}
+          : { refreshToken: "refresh-token-presence-only" }),
+        expiresAt: expired,
+      });
+      vi.doMock("../../src/lib/process.js", () => ({
+        execFileText: keychainCredential({
+          accessToken: "expired-keychain-token",
+          ...(keychainRefreshable
+            ? { refreshToken: "refresh-token-presence-only" }
+            : {}),
+          expiresAt: expired,
+        }),
+      }));
+      const readCached = await seedCache();
+      reject401();
+
+      const { fetchQuota } = await import("../../src/providers/claude.js");
+      const result = await fetchQuota({
+        allowKeychainPrompt: true,
+        refreshCredentials: false,
+      });
+
+      if (keychainRefreshable) {
+        expect(result.state.status).toBe("stale");
+        expect(result.state.authStatus).toBe("expired_refreshable");
+        expect(readCached("claude")).toBeDefined();
+      } else {
+        expect(result.state.status).toBe("auth_required");
+        expect(readCached("claude")).toBeUndefined();
+      }
+    });
+
+    it("carries the soft vocabulary on a 429 whose profile probe confirms a refreshable expiry", async () => {
+      const home = useTempHome();
+      writeClaudeCredential(home, {
+        accessToken: "expired-token",
+        refreshToken: "refresh-token-presence-only",
+        expiresAt: expired,
+      });
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: string | URL | Request) =>
+          String(input).includes("/profile")
+            ? new Response(null, { status: 401 })
+            : new Response(null, { status: 429 }),
+        ),
+      );
+
+      const { fetchQuota } = await import("../../src/providers/claude.js");
+      const result = await fetchQuota({
+        allowKeychainPrompt: false,
+        refreshCredentials: false,
+      });
+
+      expect(result.state.error).toBe("Claude credential expired");
+      expect(result.state.authStatus).toBe("expired_refreshable");
+    });
+
+    it.each([
+      ["refreshable Keychain before non-refreshable file", true],
+      ["non-refreshable Keychain before refreshable file", false],
+    ])(
+      "keeps confirmed 429 expiry source-prioritized (%s)",
+      async (_name, keychainRefreshable) => {
+        const home = setupDarwin();
+        writeClaudeCredential(home, {
+          accessToken: "expired-file-token",
+          ...(keychainRefreshable
+            ? {}
+            : { refreshToken: "refresh-token-presence-only" }),
+          expiresAt: expired,
+        });
+        vi.doMock("../../src/lib/process.js", () => ({
+          execFileText: keychainCredential({
+            accessToken: "expired-keychain-token",
+            ...(keychainRefreshable
+              ? { refreshToken: "refresh-token-presence-only" }
+              : {}),
+            expiresAt: expired,
+          }),
+        }));
+        vi.stubGlobal(
+          "fetch",
+          vi.fn(async (input: string | URL | Request) =>
+            String(input).includes("/profile")
+              ? new Response(null, { status: 401 })
+              : new Response(null, { status: 429 }),
+          ),
+        );
+
+        const { fetchQuota } = await import("../../src/providers/claude.js");
+        const result = await fetchQuota({
+          allowKeychainPrompt: true,
+          refreshCredentials: false,
+        });
+
+        if (keychainRefreshable) {
+          expect(result.state.authStatus).toBe("expired_refreshable");
+          expect(result.state.error).toBe("Claude credential expired");
+        } else {
+          expect(result.state.authStatus).not.toBe("expired_refreshable");
+          expect(result.state.error).toBe("Claude credential expired");
+        }
+      },
+    );
+
+    it("keeps confirmed expiry ahead of a lower-priority transient sibling", async () => {
+      const home = setupDarwin();
+      writeClaudeCredential(home, {
+        accessToken: "expired-file-token",
+        expiresAt: expired,
+      });
+      const readCached = await seedCache();
+      vi.doMock("../../src/lib/process.js", () => ({
+        execFileText: keychainCredential({
+          accessToken: "expired-keychain-token",
+          refreshToken: "refresh-token-presence-only",
+          expiresAt: expired,
+        }),
+      }));
+      let usageCalls = 0;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: string | URL | Request) => {
+          if (String(input).includes("/profile"))
+            return new Response(null, { status: 401 });
+          usageCalls += 1;
+          return new Response(null, {
+            status: usageCalls === 1 ? 429 : 500,
+          });
+        }),
+      );
+
+      const { fetchQuota } = await import("../../src/providers/claude.js");
+      const result = await fetchQuota({
+        allowKeychainPrompt: true,
+        refreshCredentials: false,
+      });
+
+      expect(result.state).toMatchObject({
+        status: "stale",
+        error: "Claude credential expired",
+        authStatus: "expired_refreshable",
+      });
+      expect(readCached("claude")).toBeDefined();
+    });
+  });
+
   it("returns fresh quota when an advisory-expired file token still succeeds", async () => {
     const home = useTempHome();
     mkdirSync(join(home, ".claude"), { recursive: true });
@@ -2675,31 +3245,62 @@ attributes:
     );
   });
 
-  it("does not treat Keychain exit 44 as signed-out or retire the Claude cache", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-07-06T20:00:00.000Z"));
-    usePlatform("darwin");
-    useTempHome();
-    const { readCachedProvider, writeCachedProviders } =
-      await import("../../src/cache.js");
-    writeCachedProviders([cachedClaudeQuota(34)]);
-    const execFileText = mockKeychainRead(async () => {
-      throw Object.assign(new Error("not found"), { code: 44 });
-    });
-    vi.doMock("../../src/lib/process.js", () => ({ execFileText }));
-    const { fetchQuota } = await import("../../src/providers/claude.js");
-    const result = await fetchQuota({
+  it.each([
+    {
+      name: "exit 44",
       allowKeychainPrompt: true,
-      refreshCredentials: false,
-    });
-    expect(result.state.status).not.toBe("auth_required");
-    expect(result.state.error).toBe("keychain_unreachable");
-    expect(result.source).toBe("cache");
-    expect(readCachedProvider("claude")).toMatchObject({
-      provider: "claude",
-      source: "oauth",
-    });
-  });
+      execError: Object.assign(new Error("not found"), { code: 44 }),
+      expectedError: "keychain_unreachable",
+    },
+    {
+      name: "prompt timeout",
+      allowKeychainPrompt: true,
+      execError: Object.assign(new Error("timed out"), { killed: true }),
+      expectedError: "keychain_prompt_timeout",
+    },
+    {
+      name: "prompt required",
+      allowKeychainPrompt: false,
+      execError: undefined,
+      expectedError: "keychain_prompt_required",
+    },
+  ])(
+    "does not treat Keychain $name plus sidecar 401 as signed-out",
+    async ({ allowKeychainPrompt, execError, expectedError }) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-07-06T20:00:00.000Z"));
+      usePlatform("darwin");
+      const home = useTempHome();
+      writeClaudeCredential(home, {
+        accessToken: "expired-sidecar",
+        expiresAt: "2000-01-01T00:00:00.000Z",
+      });
+      const { readCachedProvider, writeCachedProviders } =
+        await import("../../src/cache.js");
+      writeCachedProviders([cachedClaudeQuota(34)]);
+      const execFileText = mockKeychainRead(async () => {
+        if (execError) throw execError;
+        return "";
+      });
+      vi.doMock("../../src/lib/process.js", () => ({ execFileText }));
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => new Response(null, { status: 401 })),
+      );
+      const { fetchQuota } = await import("../../src/providers/claude.js");
+      const result = await fetchQuota({
+        allowKeychainPrompt,
+        refreshCredentials: false,
+      });
+      expect(result.state.status).not.toBe("auth_required");
+      expect(result.state.error).toBe(expectedError);
+      expect(result.source).toBe("cache");
+      expect(readCachedProvider("claude")).toMatchObject({
+        provider: "claude",
+        source: "oauth",
+      });
+    },
+  );
 
   it("does not treat a denied Keychain plus sidecar 401 as signed-out or retire the cache", async () => {
     vi.useFakeTimers();

@@ -1,0 +1,18 @@
+{
+  "userStatus": {
+    "email": "person@example.invalid",
+    "userId": "fixture-user",
+    "teamsTier": "max",
+    "planStatus": {
+      "dailyQuotaRemainingPercent": 10,
+      "weeklyQuotaRemainingPercent": 40,
+      "dailyQuotaResetAtUnix": "1790150400",
+      "weeklyQuotaResetAtUnix": "1790496000",
+      "overageBalanceMicros": 0
+    }
+  },
+  "planInfo": {
+    "billingStrategy": "BILLING_STRATEGY_QUOTA",
+    "hideDailyQuota": true
+  }
+}

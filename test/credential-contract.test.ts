@@ -21,13 +21,16 @@ import type { ProviderQuota, SourceAttempt } from "../src/types.js";
  */
 
 type PiProviderCase = {
-  provider: "codex" | "kimi" | "grok";
+  provider: "codex" | "kimi" | "grok" | "opencode-go";
   /** Property name Pi stores this provider's credential under. */
   piKey: string;
   /** Attempt source name the adapter reports for its Pi store. */
   piSource: string;
-  /** A structurally complete, unexpired entry for this provider. */
-  liveEntry: Record<string, unknown>;
+  /** Credential used to exercise advisory stored expiry, when applicable. */
+  expiredProbe?: {
+    entry: Record<string, unknown>;
+    token: string;
+  };
 };
 
 const CASES: PiProviderCase[] = [
@@ -35,35 +38,46 @@ const CASES: PiProviderCase[] = [
     provider: "codex",
     piKey: "openai-codex",
     piSource: "pi:openai-codex",
-    liveEntry: {
-      type: "oauth",
-      access: "pi-codex-probe-token",
-      refresh: "must-not-be-read",
-      expires: Date.now() + 3_600_000,
-      accountId: "acct-contract-fixture",
+    expiredProbe: {
+      token: "pi-codex-probe-token",
+      entry: {
+        type: "oauth",
+        access: "pi-codex-probe-token",
+        refresh: "must-not-be-read",
+        accountId: "acct-contract-fixture",
+      },
     },
   },
   {
     provider: "kimi",
     piKey: "kimi-coding",
     piSource: "pi:kimi-coding",
-    liveEntry: {
-      type: "oauth",
-      access: "pi-kimi-probe-token",
-      refresh: "must-not-be-read",
-      expires: Date.now() + 3_600_000,
+    expiredProbe: {
+      token: "pi-kimi-probe-token",
+      entry: {
+        type: "oauth",
+        access: "pi-kimi-probe-token",
+        refresh: "must-not-be-read",
+      },
     },
   },
   {
     provider: "grok",
     piKey: "xai",
     piSource: "pi:xai",
-    liveEntry: {
-      type: "oauth",
-      access: "pi-xai-probe-token",
-      refresh: "must-not-be-read",
-      expires: Date.now() + 3_600_000,
+    expiredProbe: {
+      token: "pi-xai-probe-token",
+      entry: {
+        type: "oauth",
+        access: "pi-xai-probe-token",
+        refresh: "must-not-be-read",
+      },
     },
+  },
+  {
+    provider: "opencode-go",
+    piKey: "opencode-go",
+    piSource: "pi:opencode-go",
   },
 ];
 
@@ -89,6 +103,11 @@ const ENV_KEYS = [
   "XDG_DATA_HOME",
   "GITHUB_COPILOT_APPS_JSON",
   "GH_CONFIG_DIR",
+  "ELEVENLABS_API_KEY",
+  "WINDSURF_API_KEY",
+  "WINDSURF_API_SERVER_URL",
+  "QUOTA_AXI_OPENCODE_GO_PI_AUTH",
+  "COPILOT_HOME",
 ] as const;
 
 const originalEnv = Object.fromEntries(
@@ -115,9 +134,16 @@ beforeEach(() => {
     "apps.json",
   );
   process.env.GH_CONFIG_DIR = join(tempDir, "gh");
+  // OpenCode Go reads its Pi store only behind this opt-in; the contract here
+  // exercises that real file-to-adapter path.
+  process.env.QUOTA_AXI_OPENCODE_GO_PI_AUTH = "1";
+  process.env.COPILOT_HOME = join(tempDir, "copilot");
   delete process.env.GROK_AUTH;
   delete process.env.GROK_AUTH_JSON;
   delete process.env.GROK_AUTH_PATH;
+  delete process.env.ELEVENLABS_API_KEY;
+  delete process.env.WINDSURF_API_KEY;
+  delete process.env.WINDSURF_API_SERVER_URL;
   mkdirSync(process.env.CODEX_HOME, { recursive: true });
   vi.doMock("../src/lib/process.js", async (importOriginal) => ({
     ...(await importOriginal<typeof import("../src/lib/process.js")>()),
@@ -128,6 +154,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.doUnmock("../src/lib/process.js");
+  vi.doUnmock("../src/providers/copilot-cli-credential.js");
   vi.resetModules();
   for (const key of ENV_KEYS) {
     const value = originalEnv[key];
@@ -198,29 +225,93 @@ describe("credential source contract", { timeout: 30_000 }, () => {
       },
     );
 
-    it("probes a stored-expired Pi credential instead of skipping it", async () => {
-      // Stored expiry is advisory ordering. The endpoint, not the `expires`
-      // field, is the only thing allowed to produce an auth verdict.
-      writePiStore({
-        [testCase.piKey]: { ...testCase.liveEntry, expires: Date.now() - 1 },
+    const expiredProbe = testCase.expiredProbe;
+    if (expiredProbe) {
+      it("probes a stored-expired Pi credential instead of skipping it", async () => {
+        // Stored expiry is advisory ordering. The endpoint, not the `expires`
+        // field, is the only thing allowed to produce an auth verdict.
+        writePiStore({
+          [testCase.piKey]: {
+            ...expiredProbe.entry,
+            expires: Date.now() - 1,
+          },
+        });
+        const api = stubRejectingApi();
+
+        await readQuota(testCase.provider);
+
+        expect(api.bearers).toContain(`Bearer ${expiredProbe.token}`);
       });
-      const api = stubRejectingApi();
-
-      await readQuota(testCase.provider);
-
-      const token = testCase.liveEntry.access as string;
-      expect(api.bearers).toContain(`Bearer ${token}`);
-    });
+    }
   });
 
   /**
-   * GitHub Copilot has two independent stores and no stored expiry: Copilot's
-   * own `apps.json`, then the GitHub CLI login. Neither ever reads as absent
-   * once it holds something, and no readable token is skipped before a
-   * sign-in verdict.
+   * Copilot source ordering and unsupported-storage verdicts are documented
+   * in README Provider notes. Present but unusable stores must remain visible
+   * when a sibling source answers.
    */
   describe("copilot", () => {
-    const copilotSources = ["apps-json", "gh:hosts.yml"];
+    it.each([
+      "credential_not_found",
+      "credential_logon_session_unavailable",
+      "credential_binding_mismatch",
+    ] as const)("keeps Windows %s visible when gh answers", async (reason) => {
+      const dir = join(tempDir, ".copilot");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(
+        join(dir, "config.json"),
+        JSON.stringify({
+          lastLoggedInUser: {
+            host: "https://github.com",
+            login: "synthetic-user",
+          },
+        }),
+      );
+      vi.doMock(
+        "../src/providers/copilot-cli-credential.js",
+        async (importOriginal) => {
+          const native =
+            await importOriginal<
+              typeof import("../src/providers/copilot-cli-credential.js")
+            >();
+          return {
+            ...native,
+            resolveCopilotCliCredential: (
+              options: Parameters<typeof native.resolveCopilotCliCredential>[0],
+              presenceOnly: boolean,
+            ) =>
+              native.resolveCopilotCliCredential(options, presenceOnly, {
+                platform: "win32",
+                environment: {},
+                homeDirectory: () => tempDir,
+                hasGrant: () => true,
+                readWindows: async () => ({ status: "unavailable", reason }),
+              }),
+          };
+        },
+      );
+      writeGhHosts("github.com:\n  oauth_token: gho_synthetic\n");
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(
+          async () =>
+            new Response(JSON.stringify({ copilot_plan: "individual" })),
+        ),
+      );
+      const result = await readQuota("copilot");
+      expect(result.state.status).toBe("fresh");
+      expect(attemptsFor(result, "copilot-cli:keychain")[0]).toMatchObject({
+        error: reason,
+        credentialPresent: true,
+      });
+      expect(attemptsFor(result, "gh:hosts.yml")[0].status).toBe("success");
+    });
+
+    const copilotSources = [
+      "apps-json",
+      "copilot-cli:keychain",
+      "gh:hosts.yml",
+    ];
 
     function writeAppsJson(text: string): void {
       const path = process.env.GITHUB_COPILOT_APPS_JSON!;
@@ -293,6 +384,38 @@ describe("credential source contract", { timeout: 30_000 }, () => {
       },
     );
 
+    it.each([
+      "{invalid",
+      JSON.stringify({
+        lastLoggedInUser: {
+          host: "https://github.com",
+          login: "synthetic-user",
+        },
+      }),
+    ])(
+      "keeps a present unsupported native source visible when a sibling answers",
+      async (text) => {
+        const dir = process.env.COPILOT_HOME!;
+        mkdirSync(dir, { recursive: true });
+        writeFileSync(join(dir, "config.json"), text);
+        writeGhHosts("github.com:\n  oauth_token: gho_synthetic\n");
+        vi.stubGlobal(
+          "fetch",
+          vi.fn(
+            async () =>
+              new Response(JSON.stringify({ copilot_plan: "individual" })),
+          ),
+        );
+        const result = await readQuota("copilot");
+        expect(result.state.status).toBe("fresh");
+        const attempt = attemptsFor(result, "copilot-cli:keychain")[0];
+        expect(attempt.status).toBe("skipped");
+        expect(
+          attempt.credentialPresent === true || attempt.degraded === false,
+        ).toBe(true);
+      },
+    );
+
     it("probes every readable store's token, in declared order, before a sign-in verdict", async () => {
       writeAppsJson('{"github.com":{"oauth_token":"apps-probe-token"}}');
       writeGhHosts("github.com:\n  oauth_token: gho_probe_fixture\n");
@@ -304,6 +427,188 @@ describe("credential source contract", { timeout: 30_000 }, () => {
         "Bearer apps-probe-token",
         "Bearer gho_probe_fixture",
       ]);
+      expect(result.state.status).toBe("auth_required");
+    });
+  });
+
+  /**
+   * ElevenLabs has one deliberately supplied credential and no stored expiry.
+   * The same two halves of the rule still apply: an unset variable is an absent
+   * source, and a variable holding something unusable is a credential that
+   * exists and failed - never a silent absence, and never sent as a header.
+   */
+  describe("elevenlabs", () => {
+    const source = "env:ELEVENLABS_API_KEY";
+
+    /** Records every request, so "never sent" is checked rather than assumed. */
+    function stubRejectingApiKey(): { keys: string[] } {
+      const keys: string[] = [];
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (_input: unknown, init?: RequestInit) => {
+          keys.push(new Headers(init?.headers).get("xi-api-key") ?? "");
+          return new Response(null, { status: 401 });
+        }),
+      );
+      return { keys };
+    }
+
+    it("leaves an unset variable unmarked, so nothing reads as degraded", async () => {
+      const api = stubRejectingApiKey();
+
+      const result = await readQuota("elevenlabs");
+
+      const attempts = attemptsFor(result, source);
+      expect(attempts.length).toBeGreaterThan(0);
+      for (const attempt of attempts) {
+        expect(attempt.credentialPresent).toBeUndefined();
+      }
+      expect(api.keys).toEqual([]);
+      expect(result.state.status).toBe("auth_required");
+    });
+
+    it.each([
+      ["a blank value", "   "],
+      ["an environment reference", "$ELEVENLABS_API_KEY"],
+      ["a command reference", "!op read op://vault/key"],
+      ["a control byte", "xi-\u0007-fixture"],
+    ])("never sends %s as a header value", async (_label, value) => {
+      process.env.ELEVENLABS_API_KEY = value;
+      const api = stubRejectingApiKey();
+
+      const result = await readQuota("elevenlabs");
+
+      expect(api.keys).toEqual([]);
+      expect(result.state.status).toBe("auth_required");
+    });
+
+    it.each([
+      ["an environment reference", "$ELEVENLABS_API_KEY"],
+      ["a command reference", "!op read op://vault/key"],
+    ])(
+      "marks a present but unusable variable (%s) as a credential that exists",
+      async (_label, value) => {
+        process.env.ELEVENLABS_API_KEY = value;
+        stubRejectingApiKey();
+
+        const result = await readQuota("elevenlabs");
+        const attempts = attemptsFor(result, source);
+
+        expect(attempts.length).toBeGreaterThan(0);
+        for (const attempt of attempts) {
+          expect(attempt.credentialPresent).toBe(true);
+        }
+      },
+    );
+
+    it("probes a usable key with the vendor's own header, never as a bearer", async () => {
+      process.env.ELEVENLABS_API_KEY = "elevenlabs-probe-fixture";
+      const api = stubRejectingApiKey();
+      const bearers: string[] = [];
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (_input: unknown, init?: RequestInit) => {
+          const headers = new Headers(init?.headers);
+          api.keys.push(headers.get("xi-api-key") ?? "");
+          bearers.push(headers.get("authorization") ?? "");
+          return new Response(null, { status: 401 });
+        }),
+      );
+
+      const result = await readQuota("elevenlabs");
+
+      expect(api.keys).toEqual(["elevenlabs-probe-fixture"]);
+      expect(bearers).toEqual([""]);
+      expect(result.state.status).toBe("auth_required");
+    });
+  });
+
+  /**
+   * Devin has two sources and no stored expiry. An unset or blank variable is
+   * absence; a non-blank value that is not a usable secret is a credential that
+   * exists and is never sent. A usable key is posted as Connect-JSON `apiKey`.
+   */
+  describe("devin", () => {
+    const source = "env:WINDSURF_API_KEY";
+
+    function stubRejectingApiKey(): { keys: string[] } {
+      const keys: string[] = [];
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (_input: unknown, init?: RequestInit) => {
+          const body = JSON.parse(String(init?.body ?? "{}")) as {
+            metadata?: { apiKey?: string };
+          };
+          keys.push(body.metadata?.apiKey ?? "");
+          return new Response(null, { status: 401 });
+        }),
+      );
+      return { keys };
+    }
+
+    it("leaves an unset variable unmarked, so nothing reads as degraded", async () => {
+      const api = stubRejectingApiKey();
+
+      const result = await readQuota("devin");
+
+      const attempts = attemptsFor(result, source);
+      expect(attempts.length).toBeGreaterThan(0);
+      for (const attempt of attempts) {
+        expect(attempt.credentialPresent).toBeUndefined();
+      }
+      expect(api.keys).toEqual([]);
+      expect(result.state.status).toBe("auth_required");
+    });
+
+    it.each([
+      ["a blank value", "   ", "auth_required"],
+      ["an environment reference", "$WINDSURF_API_KEY", "error"],
+      ["a command reference", "!op read op://vault/key", "error"],
+      ["a control byte", "devin-\u0007-fixture", "error"],
+    ])("never sends %s", async (_label, value, status) => {
+      process.env.WINDSURF_API_KEY = value;
+      const api = stubRejectingApiKey();
+
+      const result = await readQuota("devin");
+
+      expect(api.keys).toEqual([]);
+      expect(result.state.status).toBe(status);
+    });
+
+    it("marks a present but unusable variable as a credential that exists", async () => {
+      process.env.WINDSURF_API_KEY = "$WINDSURF_API_KEY";
+      stubRejectingApiKey();
+
+      const result = await readQuota("devin");
+      const attempts = attemptsFor(result, source);
+
+      expect(attempts.length).toBeGreaterThan(0);
+      for (const attempt of attempts) {
+        expect(attempt.credentialPresent).toBe(true);
+      }
+    });
+
+    it("probes a usable key in the Connect-JSON body, never as a bearer", async () => {
+      process.env.WINDSURF_API_KEY = "devin-probe-fixture";
+      const api = stubRejectingApiKey();
+      const bearers: string[] = [];
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (_input: unknown, init?: RequestInit) => {
+          const headers = new Headers(init?.headers);
+          const body = JSON.parse(String(init?.body ?? "{}")) as {
+            metadata?: { apiKey?: string };
+          };
+          api.keys.push(body.metadata?.apiKey ?? "");
+          bearers.push(headers.get("authorization") ?? "");
+          return new Response(null, { status: 401 });
+        }),
+      );
+
+      const result = await readQuota("devin");
+
+      expect(api.keys).toEqual(["devin-probe-fixture"]);
+      expect(bearers).toEqual([""]);
       expect(result.state.status).toBe("auth_required");
     });
   });

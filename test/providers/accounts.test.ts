@@ -23,6 +23,11 @@ const OPTIONS: ProviderOptions = {
 };
 
 const GENERATED_AT = "2026-07-15T12:00:00.000Z";
+const hourMs = 60 * 60 * 1000;
+const staleNow = Date.now();
+const STALE_EARLIER = new Date(staleNow - 3 * hourMs).toISOString();
+const STALE_MIDDLE = new Date(staleNow - 2 * hourMs).toISOString();
+const STALE_LATER = new Date(staleNow - hourMs).toISOString();
 
 const originalXdgCacheHome = process.env.XDG_CACHE_HOME;
 let cacheHome: string;
@@ -93,6 +98,7 @@ describe("verified subscription coalescing", () => {
       windows: [{ percentUsed: 20, percentRemaining: 80 }],
     });
     expect(reports[0]?.state.status).not.toBe("auth_required");
+    expect(reports[0]?.accountKeys).toEqual(["pi-work", "native"]);
     expect(reports[0]?.attempts?.map((attempt) => attempt.source)).toEqual([
       "oauth",
       "cli",
@@ -355,7 +361,7 @@ describe("verified subscription coalescing", () => {
             undefined,
             "codex",
           ),
-          "2026-07-15T09:00:00.000Z",
+          STALE_EARLIER,
         ),
       ),
       OPTIONS,
@@ -377,7 +383,7 @@ describe("verified subscription coalescing", () => {
         if (key === "openai-codex-2")
           return refreshedAt(
             live("acct-a", 30, "oauth", undefined, undefined, "codex"),
-            "2026-07-15T10:00:00.000Z",
+            STALE_MIDDLE,
           );
         const cached = readCachedProvider("codex", key);
         return cached
@@ -405,7 +411,7 @@ describe("verified subscription coalescing", () => {
         if (key === "openai-codex-2")
           return refreshedAt(
             live("acct-a", 35, "oauth", undefined, undefined, "codex"),
-            "2026-07-15T11:00:00.000Z",
+            STALE_LATER,
           );
         const cached = readCachedProvider("codex", key);
         return cached
@@ -445,8 +451,8 @@ describe("verified subscription coalescing", () => {
         report.state.refreshedAt,
       ]),
     ).toEqual([
-      ["openai-codex-2", "stale", 35, "2026-07-15T11:00:00.000Z"],
-      ["openai-codex-other", "stale", 80, "2026-07-15T09:00:00.000Z"],
+      ["openai-codex-2", "stale", 35, STALE_LATER],
+      ["openai-codex-other", "stale", 80, STALE_EARLIER],
     ]);
   });
 
@@ -618,6 +624,7 @@ function live(
     state: {
       status: "fresh",
       stale: false,
+      refreshedAt: STALE_LATER,
       sourcesTried: [source],
     },
     attempts: [{ source, status: "success" }],

@@ -15,8 +15,8 @@ import { usableLiteralSecret } from "../lib/secret.js";
  * `gh` keeps that token in `hosts.yml` only when it stores credentials in plain
  * text; otherwise the token lives in the OS keyring. The keyring is never read,
  * and `gh` is never launched to print a token: a keyring login is recorded as a
- * skipped source. A `gh` login is not evidence of Copilot access, so it never
- * changes the provider's verdict.
+ * skipped source. A `gh` login is not evidence of Copilot access; the adapter
+ * owns the final verdict (see README Provider notes).
  *
  * The reader is deliberately narrow rather than a YAML dependency. It walks the
  * block mappings `gh` writes and keeps exactly one value, the `github.com`

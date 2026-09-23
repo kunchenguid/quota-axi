@@ -76,16 +76,29 @@ type ProviderBlocks = {
 
 /**
  * Render the default decision-shaped report: one `quota[]` row per measurable
- * scope, plus the sparse `exhaustion[]` and `attention[]` blocks. `--full` adds
- * the audit blocks. Demotion happens here, never at computation, so `--tui` and
- * the normalized model keep every field.
+ * scope, plus the sparse `exhaustion[]` and `attention[]` blocks. Providers
+ * named in `omitProviderIds` drop out of those blocks and are counted in one
+ * help line. `--full` ignores that list (it adds the audit blocks and never
+ * subtracts) and prints no omission line. Demotion happens here, never at
+ * computation, so `--tui` and the normalized model keep every field.
  */
 export function renderQuotaToon(
   response: QuotaAxiResponse,
   binPath: string,
   full: boolean,
+  omitProviderIds: readonly ProviderId[] = [],
 ): string {
-  const { quota, exhaustion, attention } = quotaBlocks(response);
+  const omit = new Set(full ? [] : omitProviderIds);
+  const shown =
+    omit.size === 0
+      ? response
+      : {
+          ...response,
+          providers: response.providers.filter(
+            (provider) => !omit.has(provider.provider),
+          ),
+        };
+  const { quota, exhaustion, attention } = quotaBlocks(shown);
   const blocks = [
     encode({
       bin: collapseHome(binPath),
@@ -99,13 +112,14 @@ export function renderQuotaToon(
   ];
 
   if (full) blocks.push(...auditBlocks(response));
-  blocks.push(renderHelp(quotaHelpLines(response)));
+  blocks.push(renderHelp(quotaHelpLines(response, omit.size)));
   return blocks.filter(Boolean).join("\n");
 }
 
 /**
- * Contract invariant: every requested provider/account lane appears at least
- * once, in `quota[]` or `attention[]` or both, and never in metric order.
+ * Contract invariant: every provider this function is given appears at least
+ * once, in `quota[]` or `attention[]`, and never in metric order. Default
+ * TOON omission of not-set-up providers happens before this runs.
  */
 function quotaBlocks(response: QuotaAxiResponse): ProviderBlocks {
   const blocks: ProviderBlocks = { quota: [], exhaustion: [], attention: [] };
@@ -146,6 +160,7 @@ function quotaBlocks(response: QuotaAxiResponse): ProviderBlocks {
     blocks.attention.push(
       ...providerAttention(provider, measured, scopeAttention.length),
     );
+    blocks.attention.push(...shareRows(provider));
     blocks.attention.push(...scopeAttention);
   }
   return blocks;
@@ -205,6 +220,25 @@ function providerAttention(
     ...providerStateRows(provider, measured, scopeRows),
     ...degradedSourceRows(provider),
   ];
+}
+
+function shareRows(provider: ProviderQuota): AttentionRow[] {
+  return provider.windows
+    .filter((window) => window.shareOf)
+    .map((window) => ({
+      ...providerColumns(provider),
+      scope: "all",
+      kind: "share",
+      detail: shareDetail(window),
+      remedy: NONE,
+    }));
+}
+
+function shareDetail(window: QuotaWindow): string {
+  const relationship = `${window.id} of ${window.shareOf}`;
+  return window.percentUsed === undefined
+    ? relationship
+    : `${relationship}${DETAIL_SEPARATOR}${window.percentUsed}`;
 }
 
 /**
@@ -486,7 +520,7 @@ export function renderAuthToon(
     }),
     encode({ auth: sources }),
     renderHelp([
-      "Run `quota-axi --allow-keychain-prompt auth` to permit macOS Keychain access",
+      "Run `quota-axi --allow-keychain-prompt auth` to permit native secure-store access",
     ]),
   ].join("\n");
 }
@@ -577,8 +611,9 @@ export function redactedResponse(
 export function quotaJsonReport(
   response: QuotaAxiResponse,
   full: boolean,
+  laneAbsent: readonly boolean[] = [],
 ): QuotaAxiResponse {
-  const redacted = redactedResponse(response, full);
+  const redacted = redactedResponse(markNotSetUp(response, laneAbsent), full);
   if (full) return redacted;
   return {
     ...redacted,
@@ -599,10 +634,28 @@ export function quotaJsonReport(
   };
 }
 
+/**
+ * Sparse `notSetUp: true` on lanes the caller already classified absent.
+ * The flags are computed before redaction strips `attempts`. An empty list
+ * leaves the model untouched, so a caller that has not classified adds nothing.
+ */
+function markNotSetUp(
+  response: QuotaAxiResponse,
+  laneAbsent: readonly boolean[],
+): QuotaAxiResponse {
+  if (!laneAbsent.some(Boolean)) return response;
+  return {
+    ...response,
+    providers: response.providers.map((provider, index) =>
+      laneAbsent[index] ? { ...provider, notSetUp: true } : provider,
+    ),
+  };
+}
+
 function demotedWindow(window: QuotaWindow): QuotaWindow {
   return {
     ...window,
-    percentUsed: undefined,
+    percentUsed: window.shareOf === undefined ? undefined : window.percentUsed,
     startsAt: undefined,
     windowSeconds: undefined,
     ...(window.pace

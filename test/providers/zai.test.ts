@@ -1,4 +1,10 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -28,44 +34,15 @@ const RESET_FIVE_HOUR = 1_786_643_056_425;
 const RESET_WEEKLY = 1_786_759_220_997;
 const RESET_MCP = 1_787_623_220_999;
 
-const QUOTA_PAYLOAD = {
-  code: 200,
-  msg: "Operation successful",
-  data: {
-    limits: [
-      {
-        type: "TIME_LIMIT",
-        unit: 5,
-        number: 1,
-        usage: 4000,
-        currentValue: 0,
-        remaining: 4000,
-        percentage: 0,
-        nextResetTime: RESET_MCP,
-        usageDetails: [{ modelCode: "search-prime", usage: 0 }],
-      },
-      {
-        type: "TOKENS_LIMIT",
-        unit: 3,
-        number: 5,
-        percentage: 37,
-        nextResetTime: RESET_FIVE_HOUR,
-      },
-      {
-        type: "TOKENS_LIMIT",
-        unit: 6,
-        number: 1,
-        percentage: 50,
-        nextResetTime: RESET_WEEKLY,
-      },
-    ],
-    level: "max",
-  },
-  success: true,
-};
+const QUOTA_PAYLOAD = JSON.parse(
+  readFileSync(
+    join(process.cwd(), "test/fixtures/zai/quota-limit.json"),
+    "utf8",
+  ),
+) as unknown;
 
 describe("Z.AI request transport", () => {
-  it("makes one fixed-origin read-only request with a bare token", async () => {
+  it("makes one fixed-origin read-only request with a bearer token", async () => {
     const request = vi.fn(
       async (_input: RequestInfo | URL, _init?: RequestInit) =>
         jsonResponse(QUOTA_PAYLOAD),
@@ -96,7 +73,7 @@ describe("Z.AI request transport", () => {
     expect(init?.redirect).toBe("manual");
     expect(init?.credentials).toBe("omit");
     const headers = new Headers(init?.headers);
-    expect(headers.get("authorization")).toBe(SYNTHETIC_KEY);
+    expect(headers.get("authorization")).toBe(`Bearer ${SYNTHETIC_KEY}`);
     expect(headers.get("accept-language")).toBe("en-US,en");
     expect(headers.get("user-agent")).toMatch(/^quota-axi\/\d+\.\d+\.\d+$/);
     expect(headers.get("cookie")).toBeNull();
@@ -1125,7 +1102,7 @@ describe("Z.AI multi-source credentials", () => {
     const request = vi.fn(
       async (_input: RequestInfo | URL, init?: RequestInit) => {
         const headers = new Headers(init?.headers);
-        if (headers.get("authorization") === "dead-pi-key") {
+        if (headers.get("authorization") === "Bearer dead-pi-key") {
           return new Response("unauthorized", { status: 401 });
         }
         return jsonResponse(QUOTA_PAYLOAD);
@@ -1178,7 +1155,7 @@ describe("Z.AI multi-source credentials", () => {
     const request = vi.fn(
       async (_input: RequestInfo | URL, init?: RequestInit) => {
         const headers = new Headers(init?.headers);
-        if (headers.get("authorization") === "revoked-pi-key") {
+        if (headers.get("authorization") === "Bearer revoked-pi-key") {
           return jsonResponse({
             code: 1000,
             msg: "Authentication Failed",

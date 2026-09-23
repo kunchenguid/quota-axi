@@ -1,3 +1,9 @@
+import { coveredAccountKeys } from "./providers/accounts.js";
+import {
+  REFRESH_COMMAND_NOT_FOUND,
+  REFRESH_EXIT_STATUS,
+  REFRESH_SPAWN_FAILED,
+} from "./providers/delegated-refresh.js";
 import { grokCliRefreshNeeded } from "./providers/grok.js";
 import type {
   ProviderQuota,
@@ -10,6 +16,7 @@ export const KEYCHAIN_ACCESS_REMEDY_COMMAND =
   "quota-axi --allow-keychain-prompt";
 export const CREDENTIALS_EXPIRED_REASON = "credentials_expired";
 export const GROK_TOKEN_REFRESH_REMEDY_COMMAND = "grok";
+export const CLAUDE_TOKEN_REFRESH_REMEDY_COMMAND = "claude";
 export const INFERENCE_OPT_IN_REASON = "inference_opt_in_required";
 export const CLAUDE_INFERENCE_REMEDY_COMMAND =
   "quota-axi --provider claude --allow-claude-inference";
@@ -19,13 +26,19 @@ export function annotateQuotaAdvice(
   response: Omit<QuotaAxiResponse, "schemaVersion">,
 ): QuotaAxiResponse {
   const expanded = response.providers.some((provider) => provider.accountKey);
-  const providers = response.providers.map((provider) =>
-    annotateProviderAdvice(
-      expanded
-        ? { ...provider, accountKey: provider.accountKey ?? "default" }
-        : provider,
-    ),
-  );
+  const providers = response.providers.map((provider) => {
+    const accountKey = expanded
+      ? (provider.accountKey ?? "default")
+      : undefined;
+    return annotateProviderAdvice({
+      ...provider,
+      ...(accountKey ? { accountKey } : {}),
+      accountKeys: coveredAccountKeys(
+        accountKey ?? provider.accountKeys?.[0] ?? "default",
+        provider.accountKeys,
+      ),
+    });
+  });
   const help = providers.flatMap(providerHelpLines);
   return {
     generatedAt: response.generatedAt,
@@ -39,11 +52,30 @@ export function annotateQuotaAdvice(
  * Situational advice stays first because it is actionable; only the tier hint
  * is worth repeating on every invocation.
  */
-export function quotaHelpLines(response: QuotaAxiResponse): string[] {
-  return [
+export function quotaHelpLines(
+  response: QuotaAxiResponse,
+  omittedNotSetUp = 0,
+): string[] {
+  const lines = [
     ...(response.help ?? []),
     "Run `quota-axi --full` for windows, pace, reserve, and account evidence",
   ];
+  if (omittedNotSetUp > 0) {
+    lines.splice(lines.length - 1, 0, omittedNotSetUpHelpLine(omittedNotSetUp));
+  }
+  return lines;
+}
+
+/**
+ * The omission sentence the default report uses when it drops providers that
+ * are not set up. Situational advice stays ahead of it; the tier hint stays
+ * last.
+ */
+function omittedNotSetUpHelpLine(count: number): string {
+  const subject = count === 1 ? "1 provider" : `${count} providers`;
+  const verb = count === 1 ? "is" : "are";
+  const pronoun = count === 1 ? "it" : "them";
+  return `${subject} not set up ${verb} omitted; run \`quota-axi --full\` to list ${pronoun}`;
 }
 
 function annotateProviderAdvice(provider: ProviderQuota): ProviderQuota {
@@ -77,7 +109,41 @@ function annotateProviderAdvice(provider: ProviderQuota): ProviderQuota {
       },
     };
   }
+  if (needsClaudeTokenRefreshAdvice(provider)) {
+    return {
+      ...provider,
+      state: {
+        ...provider.state,
+        reason: CREDENTIALS_EXPIRED_REASON,
+        remedyCommand: CLAUDE_TOKEN_REFRESH_REMEDY_COMMAND,
+      },
+    };
+  }
   return provider;
+}
+
+/**
+ * A refreshable stored-expired Claude token still rejected after `claude
+ * doctor` ran, or after quota-axi found no way to run it, is the Claude
+ * counterpart of Grok's case: the vendor CLI did not recover the session, so
+ * the user runs it once. A delegate that was skipped because Claude Code is
+ * already running (or its process table was unreadable) or that outran its
+ * wait is not this case: the owning process is still doing the work.
+ */
+function needsClaudeTokenRefreshAdvice(provider: ProviderQuota): boolean {
+  return (
+    provider.provider === "claude" &&
+    provider.state.status !== "fresh" &&
+    provider.state.authStatus === "expired_refreshable" &&
+    (provider.attempts ?? []).some(
+      (attempt) =>
+        attempt.source === "claude-cli-refresh" &&
+        (attempt.status === "success" ||
+          attempt.error === REFRESH_EXIT_STATUS ||
+          attempt.error === REFRESH_SPAWN_FAILED ||
+          attempt.error === REFRESH_COMMAND_NOT_FOUND),
+    )
+  );
 }
 
 /**
@@ -193,6 +259,8 @@ function providerHelpLines(provider: ProviderQuota): string[] {
   if (hasKeychainAccessAdvice(provider))
     return [keychainAccessHelpLine(provider)];
   if (hasGrokTokenRefreshAdvice(provider)) return [grokTokenRefreshHelpLine()];
+  if (hasClaudeTokenRefreshAdvice(provider))
+    return [claudeTokenRefreshHelpLine(provider)];
   if (hasClaudeInferenceAdvice(provider)) return [claudeInferenceHelpLine()];
   return [];
 }
@@ -201,6 +269,14 @@ function hasClaudeInferenceAdvice(provider: ProviderQuota): boolean {
   return (
     provider.state.reason === INFERENCE_OPT_IN_REASON &&
     provider.state.remedyCommand === CLAUDE_INFERENCE_REMEDY_COMMAND
+  );
+}
+
+function hasClaudeTokenRefreshAdvice(provider: ProviderQuota): boolean {
+  return (
+    provider.provider === "claude" &&
+    provider.state.reason === CREDENTIALS_EXPIRED_REASON &&
+    provider.state.remedyCommand === CLAUDE_TOKEN_REFRESH_REMEDY_COMMAND
   );
 }
 
@@ -224,6 +300,19 @@ function keychainAccessHelpLine(provider: ProviderQuota): string {
 
 function claudeInferenceHelpLine(): string {
   return `Tell your user: the CLAUDE_CODE_OAUTH_TOKEN session is usable but its token cannot read the quota endpoint. Running \`${CLAUDE_INFERENCE_REMEDY_COMMAND}\` once reads its five-hour and seven-day quota by spending one bounded native Claude Code startup plus a small inference request; quota-axi never does this by default.`;
+}
+
+function claudeTokenRefreshHelpLine(provider: ProviderQuota): string {
+  const refreshFailure = (provider.attempts ?? []).find(
+    (attempt) =>
+      attempt.source === "claude-cli-refresh" &&
+      (attempt.error === REFRESH_COMMAND_NOT_FOUND ||
+        attempt.error === REFRESH_SPAWN_FAILED),
+  );
+  if (refreshFailure) {
+    return "Tell your user: quota-axi could not run the Claude CLI; run `claude` once where it is installed.";
+  }
+  return `Tell your user: run \`${CLAUDE_TOKEN_REFRESH_REMEDY_COMMAND}\` once so Claude Code can refresh its own session token; \`claude doctor\` did not recover it. quota-axi delegates that refresh to the Claude CLI and never rotates credentials itself.`;
 }
 
 function grokTokenRefreshHelpLine(): string {

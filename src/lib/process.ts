@@ -3,15 +3,25 @@ import { constants } from "node:fs";
 import { access, stat } from "node:fs/promises";
 import * as path from "node:path";
 
+export type ExecFileTextOptions = {
+  maxBufferBytes?: number;
+  env?: NodeJS.ProcessEnv;
+};
+
 export function execFileText(
   command: string,
   args: string[],
   timeoutMs: number,
+  optionsOrMaxBuffer: ExecFileTextOptions | number = {},
 ): Promise<string> {
+  const options =
+    typeof optionsOrMaxBuffer === "number"
+      ? { maxBufferBytes: optionsOrMaxBuffer }
+      : optionsOrMaxBuffer;
   return new Promise((resolve, reject) => {
     let invocation: ReturnType<typeof shimInvocation>;
     try {
-      invocation = shimInvocation(command, args);
+      invocation = shimInvocation(command, args, options.env);
     } catch (error) {
       reject(error);
       return;
@@ -23,8 +33,12 @@ export function execFileText(
         timeout: timeoutMs,
         // A busy multi-agent host's full `ps` table with command lines runs
         // well past 1 MiB, which surfaced as an unexplained probe failure.
-        maxBuffer: 16 * 1024 * 1024,
-        ...(invocation.environment ? { env: invocation.environment } : {}),
+        maxBuffer: options.maxBufferBytes ?? 16 * 1024 * 1024,
+        ...(invocation.environment
+          ? { env: invocation.environment }
+          : options.env
+            ? { env: options.env }
+            : {}),
       },
       (error, stdout) => {
         if (error) {
@@ -40,6 +54,7 @@ export function execFileText(
 function shimInvocation(
   command: string,
   args: string[],
+  childEnvironment?: NodeJS.ProcessEnv,
 ): {
   command: string;
   args: string[];
@@ -52,7 +67,7 @@ function shimInvocation(
     return { command, args };
   }
   const environment: NodeJS.ProcessEnv = {
-    ...process.env,
+    ...(childEnvironment ?? process.env),
     QUOTA_AXI_COMMAND: validateWindowsArgument(command),
     ...Object.fromEntries(
       args.map((argument, index) => [

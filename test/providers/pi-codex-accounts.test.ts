@@ -824,7 +824,13 @@ describe("Codex Pi sibling account lanes", () => {
             windowSeconds: 604_800,
           },
         ],
-        state: { status: "fresh", stale: false, sourcesTried: ["cli-rpc"] },
+        state: {
+          status: "fresh",
+          stale: false,
+          // A resetless window is aged from here, so it must be recent.
+          refreshedAt: new Date().toISOString(),
+          sourcesTried: ["cli-rpc"],
+        },
       },
     ]);
     writePiAuth({
@@ -1214,6 +1220,8 @@ describe("Codex Pi sibling account lanes", () => {
         state: {
           status: "fresh",
           stale: false,
+          // A resetless window is aged from here, so it must be recent.
+          refreshedAt: new Date().toISOString(),
           sourcesTried: ["pi:openai-codex"],
         },
       },
@@ -1485,6 +1493,341 @@ describe("Codex Pi sibling account lanes", () => {
     expect(second[0]?.state.stale).toBe(false);
     expect(second[0]?.windows).toEqual([]);
   });
+
+  it("publishes the built-in Pi key on the native row that folded it", async () => {
+    await expectPublishedMembership(
+      { token: "native-access-token", accountId: "acct-a" },
+      {
+        "openai-codex": {
+          token: "personal-access-token",
+          accountId: "acct-a",
+        },
+        "openai-codex-work": {
+          token: "work-access-token",
+          accountId: "acct-b",
+        },
+      },
+      [
+        {
+          accountKey: "codex-home",
+          accountKeys: ["codex-home", "openai-codex"],
+        },
+        {
+          accountKey: "openai-codex-work",
+          accountKeys: ["openai-codex-work"],
+        },
+      ],
+    );
+  });
+
+  it("publishes a Pi sibling on the built-in row that folded it", async () => {
+    await expectPublishedMembership(
+      { token: "native-access-token", accountId: "acct-z" },
+      {
+        "openai-codex": {
+          token: "personal-access-token",
+          accountId: "acct-a",
+        },
+        "openai-codex-work": {
+          token: "work-access-token",
+          accountId: "acct-a",
+        },
+      },
+      [
+        { accountKey: "codex-home", accountKeys: ["codex-home"] },
+        {
+          accountKey: "openai-codex",
+          accountKeys: ["openai-codex", "openai-codex-work"],
+        },
+      ],
+    );
+  });
+
+  it("publishes the native key on the Pi sibling that folded it", async () => {
+    await expectPublishedMembership(
+      { token: "native-access-token", accountId: "acct-b" },
+      {
+        "openai-codex": {
+          token: "personal-access-token",
+          accountId: "acct-c",
+        },
+        "openai-codex-work": {
+          token: "work-access-token",
+          accountId: "acct-b",
+        },
+      },
+      [
+        { accountKey: "openai-codex", accountKeys: ["openai-codex"] },
+        {
+          accountKey: "openai-codex-work",
+          accountKeys: ["openai-codex-work", "codex-home"],
+        },
+      ],
+    );
+  });
+
+  it("publishes each distinct Codex lane as covering only its own key", async () => {
+    await expectPublishedMembership(
+      { token: "native-access-token", accountId: "acct-a" },
+      {
+        "openai-codex": {
+          token: "personal-access-token",
+          accountId: "acct-c",
+        },
+        "openai-codex-work": {
+          token: "work-access-token",
+          accountId: "acct-b",
+        },
+      },
+      [
+        { accountKey: "codex-home", accountKeys: ["codex-home"] },
+        { accountKey: "openai-codex", accountKeys: ["openai-codex"] },
+        {
+          accountKey: "openai-codex-work",
+          accountKeys: ["openai-codex-work"],
+        },
+      ],
+    );
+  });
+
+  it("keeps a folded Pi sibling as grouped when the lane's fresh reading names another account", async () => {
+    await expectPublishedMembership(
+      { token: "native-access-token", accountId: "acct-z" },
+      {
+        "openai-codex": {
+          token: "personal-access-token",
+          accountId: "acct-a",
+          liveAccountId: "acct-c",
+        },
+        "openai-codex-work": {
+          token: "work-access-token",
+          accountId: "acct-a",
+        },
+      },
+      [
+        { accountKey: "codex-home", accountKeys: ["codex-home"] },
+        {
+          accountKey: "openai-codex",
+          accountKeys: ["openai-codex", "openai-codex-work"],
+        },
+      ],
+    );
+  });
+
+  it("keeps the folded built-in key as grouped when the native reading names another account", async () => {
+    await expectPublishedMembership(
+      {
+        token: "native-access-token",
+        accountId: "acct-a",
+        liveAccountId: "acct-b",
+      },
+      {
+        "openai-codex": {
+          token: "personal-access-token",
+          accountId: "acct-a",
+        },
+        "openai-codex-work": {
+          token: "work-access-token",
+          accountId: "acct-b",
+        },
+      },
+      [
+        {
+          accountKey: "openai-codex-work",
+          accountKeys: ["openai-codex-work", "codex-home", "openai-codex"],
+        },
+      ],
+    );
+  });
+
+  it("publishes both Pi keys on the one lane they fold into without a native login", async () => {
+    await expectPublishedMembership(
+      undefined,
+      {
+        "openai-codex": {
+          token: "personal-access-token",
+          accountId: "acct-a",
+        },
+        "openai-codex-work": {
+          token: "work-access-token",
+          accountId: "acct-a",
+        },
+      },
+      [{ accountKeys: ["openai-codex", "openai-codex-work"] }],
+    );
+  });
+
+  it("publishes the native and built-in keys on the single-account row that share an account", async () => {
+    await expectPublishedMembership(
+      { token: "native-access-token", accountId: "acct-a" },
+      {
+        "openai-codex": {
+          token: "personal-access-token",
+          accountId: "acct-a",
+        },
+      },
+      [{ accountKeys: ["codex-home", "openai-codex"] }],
+    );
+  });
+
+  it("pairs single-winner keys from the credentials used before either store changes during the request", async () => {
+    for (const rewrittenStore of ["native", "pi"] as const) {
+      writeNativeAuth("native-access-token", "acct-a");
+      writePiAuth({
+        "openai-codex": piOauthEntry({
+          access: "pi-access-token",
+          accountId: "acct-a",
+        }),
+      });
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => {
+          if (rewrittenStore === "native") {
+            writeNativeAuth("other-native-token", "acct-b");
+          } else {
+            writePiAuth({
+              "openai-codex": piOauthEntry({
+                access: "other-pi-token",
+                accountId: "acct-b",
+              }),
+            });
+          }
+          return usage(20, "a@example.invalid", "acct-a");
+        }),
+      );
+      const adapter = (
+        await import("../../src/providers/codex.js")
+      ).createCodexAdapter();
+      const report = await adapter.fetchQuota(OPTIONS);
+      expect(report.accountKeys).toEqual(["codex-home", "openai-codex"]);
+      expect(report.account?.accountId).toBe("acct-a");
+    }
+  });
+
+  it("publishes only the answering key on the single-account row for distinct accounts", async () => {
+    await expectPublishedMembership(
+      { token: "native-access-token", accountId: "acct-a" },
+      {
+        "openai-codex": {
+          token: "personal-access-token",
+          accountId: "acct-b",
+        },
+      },
+      [{ accountKeys: ["codex-home"] }],
+    );
+    await expectPublishedMembership(
+      undefined,
+      {
+        "openai-codex": {
+          token: "personal-access-token",
+          accountId: "acct-b",
+        },
+      },
+      [{ accountKeys: ["openai-codex"] }],
+    );
+  });
+
+  it("keeps the built-in key as grouped on the single-account row when the native reading names another account", async () => {
+    await expectPublishedMembership(
+      {
+        token: "native-access-token",
+        accountId: "acct-a",
+        liveAccountId: "acct-b",
+      },
+      {
+        "openai-codex": {
+          token: "personal-access-token",
+          accountId: "acct-a",
+        },
+      },
+      [{ accountKeys: ["codex-home", "openai-codex"] }],
+    );
+  });
+
+  it("publishes the producing Pi key on a single-account stale reading", async () => {
+    writePiAuth({
+      "openai-codex": piOauthEntry({
+        access: "pi-access-token",
+        accountId: "acct-b",
+      }),
+    });
+    stubUsageByToken({
+      "pi-access-token": usage(40, "b@example.invalid", "acct-b"),
+    });
+    await cacheCodexRead();
+
+    stubUsageByToken({
+      "pi-access-token": new Response("unavailable", { status: 503 }),
+    });
+    const [report] = await publishedCodexRows();
+    expect(report).toMatchObject({
+      state: { status: "stale", stale: true },
+      accountKeys: ["openai-codex"],
+    });
+    expect(report?.accountKey).toBeUndefined();
+  });
+
+  it("publishes the Pi key on a single-account reading whose Pi credential was rejected", async () => {
+    writePiAuth({
+      "openai-codex": piOauthEntry({
+        access: "pi-access-token",
+        accountId: "acct-b",
+      }),
+    });
+    stubUsageByToken({
+      "pi-access-token": new Response("unauthorized", { status: 401 }),
+    });
+
+    const [report] = await publishedCodexRows();
+    expect(report).toMatchObject({
+      state: { status: "auth_required", stale: false },
+      accountKeys: ["openai-codex"],
+    });
+  });
+
+  it("publishes the Pi key on a single-account reading whose native store is malformed and Pi credential was rejected", async () => {
+    writeFileSync(join(process.env.CODEX_HOME!, "auth.json"), "{not json", {
+      mode: 0o600,
+    });
+    writePiAuth({
+      "openai-codex": piOauthEntry({
+        access: "pi-access-token",
+        accountId: "acct-b",
+      }),
+    });
+    stubUsageByToken({
+      "pi-access-token": new Response("unauthorized", { status: 401 }),
+    });
+
+    const [report] = await publishedCodexRows();
+    expect(report).toMatchObject({
+      state: { status: "auth_required", stale: false },
+      accountKeys: ["openai-codex"],
+    });
+  });
+
+  it("publishes the native key on a profile-only reading", async () => {
+    writeNativeAuth("native-access-token", "acct-a");
+    stubUsageByToken({
+      "native-access-token": usage(10, "a@example.invalid", "acct-a"),
+    });
+    const profileOnly: ProviderOptions = {
+      ...OPTIONS,
+      credentialMode: "profile-only",
+    };
+
+    const fresh = await publishedCodexRows(profileOnly);
+    expect(fresh.map((report) => report.accountKeys)).toEqual([["codex-home"]]);
+
+    stubUsageByToken({
+      "native-access-token": new Response("unauthorized", { status: 401 }),
+    });
+    const failed = await publishedCodexRows(profileOnly);
+    expect(failed).toMatchObject([
+      { state: { status: "auth_required" }, accountKeys: ["codex-home"] },
+    ]);
+  });
+
   it("never serves a rejected native login's cached windows for a Pi probe that failed", async () => {
     writeNativeAuth("native-access-token", "acct-a");
     stubUsageByToken({
@@ -1516,6 +1859,62 @@ describe("Codex Pi sibling account lanes", () => {
     expect(second[0]?.windows).toEqual([]);
   });
 });
+
+type MembershipCredential = {
+  token: string;
+  accountId: string;
+  liveAccountId?: string;
+};
+
+async function expectPublishedMembership(
+  native: MembershipCredential | undefined,
+  pi: Record<string, MembershipCredential>,
+  expected: { accountKey?: string; accountKeys: string[] }[],
+): Promise<void> {
+  rmSync(join(process.env.CODEX_HOME!, "auth.json"), { force: true });
+  if (native) writeNativeAuth(native.token, native.accountId);
+  writePiAuth(
+    Object.fromEntries(
+      Object.entries(pi).map(([id, entry]) => [
+        id,
+        piOauthEntry({ access: entry.token, accountId: entry.accountId }),
+      ]),
+    ),
+  );
+  const responses: Record<string, Response> = {};
+  for (const [email, entry] of [
+    ...(native ? [["native@example.invalid", native] as const] : []),
+    ...Object.values(pi).map((entry) => ["pi@example.invalid", entry] as const),
+  ]) {
+    responses[entry.token] = usage(
+      native === entry ? 10 : 20,
+      email,
+      entry.liveAccountId ?? entry.accountId,
+    );
+  }
+  stubUsageByToken(responses);
+
+  const { fetchQuota } = await import("../../src/commands.js");
+  const response = await fetchQuota(["codex"], OPTIONS);
+  const json = quotaJsonReport(response, false);
+  expect(json.schemaVersion).toBe(
+    expected.some((row) => row.accountKey) ? 6 : 5,
+  );
+  expect(
+    json.providers.map((provider) => ({
+      accountKey: provider.accountKey,
+      accountKeys: provider.accountKeys,
+    })),
+  ).toEqual(expected);
+  expect(
+    quotaJsonReport(response, true).providers.map(
+      (provider) => provider.accountKeys,
+    ),
+  ).toEqual(expected.map((row) => row.accountKeys));
+  expect(renderQuotaToon(response, "/quota-axi", true)).not.toContain(
+    "accountKeys",
+  );
+}
 
 function writePiAuth(store: Record<string, unknown>): void {
   mkdirSync(process.env.PI_CODING_AGENT_DIR!, { recursive: true });
@@ -1568,6 +1967,12 @@ async function cacheCodexRead() {
   const response = await fetchQuota(["codex"], OPTIONS);
   writeCachedProviders(response.providers);
   return response.providers;
+}
+
+async function publishedCodexRows(options: ProviderOptions = OPTIONS) {
+  vi.resetModules();
+  const { fetchQuota } = await import("../../src/commands.js");
+  return quotaJsonReport(await fetchQuota(["codex"], options), false).providers;
 }
 
 function writeNativeAuth(accessToken: string, accountId?: string): void {
