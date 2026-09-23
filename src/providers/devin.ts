@@ -249,7 +249,8 @@ export function createDevinAdapter(
     fetch: providerFetch,
     readCachedProvider: readCachedProviderFromDisk,
     deleteCachedProvider: () => deleteCachedProviderFromDisk("devin"),
-    now: Date.now,
+    // Call-time read: the adapter is built at import, before a test replaces Date.
+    now: () => Date.now(),
     deadlineMs: OPERATION_DEADLINE_MS,
     ...overrides,
   };
