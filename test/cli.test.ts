@@ -1463,7 +1463,9 @@ describe("human report folding for providers that are not set up", () => {
     };
     try {
       const run = capture(["--tui"]);
-      await settle("Press q to quit · a show not set up · refreshing every 5m");
+      await settle(
+        "Press r to refresh · q to quit · a show not set up · refreshing every 5m",
+      );
       expect(lastFrame()).not.toContain("╭─ ○ zai ");
 
       process.stdin.emit("data", Buffer.from("a"));

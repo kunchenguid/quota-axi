@@ -123,7 +123,9 @@ async function quotaTuiReport(
       renderTuiHintLine(
         scrollHint(
           scroll,
-          ["Press q to quit", ...keyHints(), refreshing].join(" · "),
+          ["Press r to refresh", "q to quit", ...keyHints(), refreshing].join(
+            " · ",
+          ),
           keyHints(),
         ),
         terminal(),

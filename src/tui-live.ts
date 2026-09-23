@@ -1,9 +1,10 @@
 /**
  * Live loop for the human terminal report: paint a frame, then repaint on a
- * fixed refresh interval until the operator quits with `q` or Ctrl+C. Every
- * terminal effect is injected so the loop is exercised without a real TTY, and
- * the alternate screen, cursor, and raw mode are always restored - including
- * when a refresh throws. This is presentation only; it derives nothing new.
+ * fixed refresh interval until the operator quits with `q` or Ctrl+C; `r`
+ * refreshes immediately. Every terminal effect is injected so the loop is
+ * exercised without a real TTY, and the alternate screen, cursor, and raw mode
+ * are always restored - including when a refresh throws. This is presentation
+ * only; it derives nothing new.
  *
  * The loop owns the viewport: the report renders at whatever height its cards
  * need, and `scrollFrame` windows it onto the terminal's actual rows. Scroll
@@ -61,14 +62,9 @@ const ENTER_SCREEN = "\x1b[?1049h\x1b[?25l";
 const LEAVE_SCREEN = "\x1b[?25h\x1b[?1049l";
 const CLEAR_SCREEN = "\x1b[H\x1b[2J";
 
-type ScrollCommand =
-  | "quit"
-  | "up"
-  | "down"
-  | "page-up"
-  | "page-down"
-  | "top"
-  | "bottom";
+type ScrollCommand = "up" | "down" | "page-up" | "page-down" | "top" | "bottom";
+
+type LiveCommand = ScrollCommand | "quit" | "refresh";
 
 /** Escape sequences, longest first so `\x1b[1~` never matches as `\x1b[1`. */
 const ESCAPE_KEYS: ReadonlyArray<readonly [string, ScrollCommand]> = [
@@ -87,8 +83,9 @@ const ESCAPE_KEYS: ReadonlyArray<readonly [string, ScrollCommand]> = [
 ];
 
 /** `q`, plus Ctrl+C and Ctrl+D, which raw mode delivers as data, not signals. */
-const CHARACTER_KEYS: Readonly<Record<string, ScrollCommand>> = {
+const CHARACTER_KEYS: Readonly<Record<string, LiveCommand>> = {
   q: "quit",
+  r: "refresh",
   Q: "quit",
   "\x03": "quit",
   "\x04": "quit",
@@ -105,9 +102,9 @@ const CHARACTER_KEYS: Readonly<Record<string, ScrollCommand>> = {
   G: "bottom",
 };
 
-type KeyCommand = ScrollCommand | { action: string };
+type KeyCommand = LiveCommand | { action: string };
 
-type WakeReason = "tick" | "resize" | "scroll" | "key" | "quit";
+type WakeReason = "tick" | "resize" | "scroll" | "key" | "refresh" | "quit";
 
 /**
  * Run the live report until the operator quits, and return the last snapshot
@@ -141,7 +138,8 @@ export async function runLiveTui<T>({
   // current rows and frame bounds. In particular, input received while load()
   // is pending must not be clamped against stale pre-resize bounds.
   let offset = 0;
-  const pendingScrollCommands: Array<Exclude<ScrollCommand, "quit">> = [];
+  const pendingScrollCommands: ScrollCommand[] = [];
+  let refreshRequested = false;
   let pendingKeyInput = "";
   const onData = (chunk: Buffer | string): void => {
     const text = pendingKeyInput + chunk.toString();
@@ -153,6 +151,11 @@ export async function runLiveTui<T>({
       if (command === "quit") {
         requestQuit();
         return;
+      }
+      if (command === "refresh") {
+        refreshRequested = true;
+        notify("refresh");
+        continue;
       }
       if (typeof command === "object") {
         keys[command.action]?.();
@@ -217,6 +220,10 @@ export async function runLiveTui<T>({
         io.stdout.write(`${CLEAR_SCREEN}${frame.text}`);
       };
       paint();
+      if (refreshRequested) {
+        refreshRequested = false;
+        continue;
+      }
 
       let ticked = false;
       const handle = io.setTimer(() => {
@@ -228,8 +235,16 @@ export async function runLiveTui<T>({
           const reason = await new Promise<WakeReason>((resolve) => {
             wake = resolve;
           });
+          if (reason === "refresh" || refreshRequested) {
+            refreshRequested = false;
+            break;
+          }
           if (reason === "tick" || reason === "quit") break;
           paint();
+          if (refreshRequested) {
+            refreshRequested = false;
+            break;
+          }
         }
       } finally {
         wake = undefined;

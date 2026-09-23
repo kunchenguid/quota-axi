@@ -15,7 +15,7 @@ export const TOP_HELP = `usage: quota-axi [quota|auth|models] [flags]
 commands[3]:
   (none)=quota, auth, models
 output:
-  Default TOON reports local quota evidence. models is a deterministic data join; --sort runway is explicit opt-in ordering. --tui renders a live human terminal report instead (q quits); providers that are not set up fold into one line that a or --all expands.
+  Default TOON reports local quota evidence. models is a deterministic data join; --sort runway is explicit opt-in ordering. --tui renders a live human terminal report instead (r refreshes, q quits); providers that are not set up fold into one line that a or --all expands.
 notes:
   Every quota read, including each --tui refresh, may delegate an expired session's renewal to the vendor CLI that owns it. --no-credential-refresh disables delegated credential refresh; auth is always read-only.
   {"tui":{"show":"used"}} in ~/.config/quota-axi/config.json (or $XDG_CONFIG_HOME/quota-axi/config.json) makes --tui draw what each window has used instead of what is left; it never changes TOON or JSON.
