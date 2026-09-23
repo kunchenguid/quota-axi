@@ -241,6 +241,45 @@ describe("live terminal report loop", () => {
     await run;
   });
 
+  it("keeps an r pressed while a refresh is in flight and reads again after the paint", async () => {
+    const io = harness();
+    let calls = 0;
+    const releases: Array<() => void> = [];
+    const run = runLiveTui<number>({
+      load: async () => {
+        calls += 1;
+        const call = calls;
+        await new Promise<void>((resolve) => {
+          releases.push(resolve);
+        });
+        return call;
+      },
+      render: (value) => `frame ${value}`,
+      intervalMillis: 300_000,
+      io: io.io,
+    });
+    await flush();
+    expect(calls).toBe(1);
+
+    io.press("r");
+    await flush();
+    expect(calls).toBe(1);
+
+    releases[0]?.();
+    await flush();
+    expect(io.output()).toContain("frame 1");
+    expect(calls).toBe(2);
+
+    releases[1]?.();
+    await flush();
+    expect(io.frame()).toBe("frame 2");
+    expect(calls).toBe(2);
+    expect(io.pendingTimers()).toBe(1);
+
+    io.press("q");
+    await expect(run).resolves.toBe(2);
+  });
+
   it("repaints on resize without refetching or resetting the interval", async () => {
     const io = harness();
     const source = counting();
