@@ -322,6 +322,39 @@ describe("Codex credential-state reporting", () => {
     },
   );
 
+  it("keeps the stale snapshot when a Pi entry is rejected and the Codex CLI's own login cannot read its limits", async () => {
+    const { writeCachedProviders, readCachedProvider } =
+      await import("../../src/cache.js");
+    writeCachedProviders([cachedCodexSnapshot()]);
+    writePiAuth(piOauthEntry());
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(null, { status: 401 })),
+    );
+    const binary = join(tempDir!, "codex-fixture");
+    process.env.QUOTA_AXI_CODEX_BINARY = binary;
+    const spawn = vi.fn(() =>
+      successfulChild({ account: { type: "chatgpt" } }, {}),
+    );
+    vi.doMock("node:child_process", () => ({ spawn }));
+    vi.doMock("../../src/lib/process.js", () => ({
+      findCommandPath: vi.fn(async () => binary),
+      terminateChild: vi.fn(),
+    }));
+
+    const { fetchQuota } = await import("../../src/providers/codex.js");
+    const result = await fetchQuota({
+      allowKeychainPrompt: false,
+      refreshCredentials: false,
+    });
+
+    expect(spawn).toHaveBeenCalledOnce();
+    expect(result.state.status).toBe("stale");
+    expect(result.state.error).not.toBe("Codex sign-in required");
+    expect(result.windows).toHaveLength(1);
+    expect(readCachedProvider("codex")).toBeDefined();
+  });
+
   it("keeps the cached snapshot when the present auth.json cannot be parsed", async () => {
     const { writeCachedProviders, readCachedProvider } =
       await import("../../src/cache.js");

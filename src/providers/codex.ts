@@ -659,7 +659,7 @@ async function fetchQuotaWithDependencies(
       accountIds,
     );
   }
-  let credentialRejected = oauthSelection.outcome === "all_rejected";
+  const nativeCredentialRejected = oauthSelection.outcome === "all_rejected";
   if (oauthSelection.outcome === "all_rejected") {
     finalError = oauthSelection.refreshable
       ? CODEX_ACCESS_TOKEN_EXPIRED
@@ -749,7 +749,6 @@ async function fetchQuotaWithDependencies(
       );
     }
     if (piSelection.outcome === "all_rejected") {
-      credentialRejected = true;
       if (errorIsDefault || statusFromError(finalError) === "auth_required") {
         finalError =
           piSelection.refreshable || finalError === CODEX_ACCESS_TOKEN_EXPIRED
@@ -775,7 +774,8 @@ async function fetchQuotaWithDependencies(
     const confirmsSignOut =
       finalError === CODEX_SIGN_IN_REQUIRED &&
       (error instanceof CodexCliSignedOutError ||
-        (credentialRejected && error instanceof CodexCliAccountReadingError));
+        (nativeCredentialRejected &&
+          error instanceof CodexCliAccountReadingError));
     if (
       !confirmsSignOut &&
       (errorIsDefault || !(error instanceof CodexCliUnavailableError))
