@@ -210,28 +210,43 @@ export function normalizeDeepSeekPayload(
   return { metrics };
 }
 
+type DeepSeekWallet = { remaining: number; unit: "usd" | "cny" };
+
+/**
+ * A wallet is denominated in the currency the vendor reported, so its unit is
+ * that currency rather than a generic `credits` label that would misstate a
+ * CNY amount.
+ */
+function walletUnit(currency: DeepSeekCurrency): DeepSeekWallet["unit"] {
+  return currency === "USD" ? "usd" : "cny";
+}
+
+/**
+ * DeepSeek reports one wallet per currency and can report several at once, so
+ * one scalar cannot carry the account. Every representable wallet is published
+ * in `balances`; the scalar `remaining`/`unit` mirror the funded wallet so a
+ * zero or unfunded wallet can never mask a funded one and single-value
+ * consumers keep working. A lone wallet stays scalar-only.
+ */
 function computeCredits(
   metrics: NormalizedDeepSeekPayload["metrics"],
 ): ProviderQuota["credits"] | undefined {
-  const usdTotal = metrics.find(
-    (m) => m.currency === "USD" && m.id === "usd-total",
-  );
-  if (usdTotal) {
-    const value = Number(usdTotal.value);
-    if (Number.isFinite(value)) {
-      return { remaining: value, unit: "usd" };
-    }
+  const balances: DeepSeekWallet[] = [];
+  for (const metric of metrics) {
+    const value = Number(metric.value);
+    if (!Number.isFinite(value)) continue;
+    balances.push({ remaining: value, unit: walletUnit(metric.currency) });
   }
-  const cnyTotal = metrics.find(
-    (m) => m.currency === "CNY" && m.id === "cny-total",
-  );
-  if (cnyTotal) {
-    const value = Number(cnyTotal.value);
-    if (Number.isFinite(value)) {
-      return { remaining: value, unit: "credits" };
-    }
-  }
-  return undefined;
+  if (balances.length === 0) return undefined;
+  const funded =
+    balances.find((balance) => balance.remaining > 0) ??
+    balances.find((balance) => balance.remaining !== 0) ??
+    balances[0];
+  return {
+    remaining: funded.remaining,
+    unit: funded.unit,
+    ...(balances.length > 1 ? { balances } : {}),
+  };
 }
 
 function objectValue(value: unknown): Record<string, unknown> | undefined {

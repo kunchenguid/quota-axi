@@ -160,6 +160,32 @@ describe("quota cache", () => {
     expect(readCachedProvider("claude")).toBeUndefined();
   });
 
+  it("retains every cached credit wallet", () => {
+    useTempCache();
+    writeCachedProviders([
+      {
+        ...quota("copilot", 20),
+        credits: {
+          remaining: 49.27,
+          unit: "cny",
+          balances: [
+            { remaining: 0, unit: "usd" },
+            { remaining: 49.27, unit: "cny" },
+          ],
+        },
+      },
+    ]);
+
+    expect(readCachedProvider("copilot")?.credits).toEqual({
+      remaining: 49.27,
+      unit: "cny",
+      balances: [
+        { remaining: 0, unit: "usd" },
+        { remaining: 49.27, unit: "cny" },
+      ],
+    });
+  });
+
   it("invalidates Codex identities that do not exactly match duration", () => {
     useTempCache();
     const file = cacheFilePath();
