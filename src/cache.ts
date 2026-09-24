@@ -3,7 +3,6 @@ import { chmodSync, existsSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   cacheFilePath,
-  claudeCredentialContextId,
   ensurePrivateParent,
   readUntracedJsonFile,
 } from "./lib/fs.js";
@@ -13,6 +12,7 @@ import { devinReadingContextId } from "./providers/devin-cache-context.js";
 import { elevenLabsReadingContextId } from "./providers/elevenlabs-cache-context.js";
 import { miniMaxReadingContextId } from "./providers/minimax-cache-context.js";
 import { isPiCodexSource } from "./providers/pi-codex-credential.js";
+import { claudeReadingContextId } from "./providers/claude-cache-context.js";
 import { fetchLockPath, withLockSync } from "./lib/fetch-lock.js";
 import { inputsDigest, type TracedInputs } from "./lib/input-trace.js";
 import { reuseContextId } from "./lib/reuse-context.js";
@@ -98,7 +98,7 @@ const CREDENTIAL_CONTEXT_ID = /^[a-f0-9]{64}$/;
 const CONTEXT_SCOPED_PROVIDERS: Partial<
   Record<ProviderId, (provider: ProviderQuota) => string | undefined>
 > = {
-  claude: claudeCredentialContextId,
+  claude: claudeReadingContextId,
   kimi: kimiReadingContextId,
   commandcode: commandCodeReadingContextId,
   elevenlabs: elevenLabsReadingContextId,

@@ -206,6 +206,17 @@ describe("fresh reuse is opt-in", () => {
     expect(usageCalls).toBe(0);
   });
 
+  it("ignores an invalid QUOTA_AXI_MAX_AGE for full reports", async () => {
+    for (const value of ["soon", "61m"]) {
+      process.env.QUOTA_AXI_MAX_AGE = value;
+      const full = await readJson("--full");
+      expect(full.state.reused).toBeUndefined();
+      expect(full.account?.accountId).toBe("fixture");
+      expect(full.attempts?.length).toBeGreaterThan(0);
+    }
+    expect(usageCalls).toBe(2);
+  });
+
   it("treats a blank QUOTA_AXI_MAX_AGE as unset", async () => {
     process.env.QUOTA_AXI_MAX_AGE = " ";
     await readJson();
@@ -248,6 +259,33 @@ describe("single-flight lock", () => {
 });
 
 describe("fresh reuse", () => {
+  it("reads Pi Anthropic again after its auth store changes", async () => {
+    const profile = join(root, "empty-claude-profile");
+    mkdirSync(profile, { recursive: true });
+    process.env.CLAUDE_CONFIG_DIR = profile;
+    const piDir = join(root, "pi-agent");
+    mkdirSync(piDir, { recursive: true });
+    process.env.PI_CODING_AGENT_DIR = piDir;
+    const writePi = (token: string) =>
+      writeFileSync(
+        join(piDir, "auth.json"),
+        JSON.stringify({ anthropic: { type: "oauth", access: token } }),
+      );
+    writePi("synthetic-pi-a");
+
+    const first = await readJson();
+    expect(first.state.reused).toBeUndefined();
+    expect(usageCalls).toBe(1);
+
+    advance(2);
+    usagePercent = 42;
+    writePi("synthetic-pi-account-b");
+    const second = await readJson();
+    expect(second.state.reused).toBeUndefined();
+    expect(usageCalls).toBe(2);
+    expect(second.windows[0]?.percentRemaining).toBe(58);
+  });
+
   it("answers a burst of reads with one vendor call, where --max-age 0 makes one per read", async () => {
     for (let read = 0; read < 8; read++) {
       await readJson();
@@ -292,6 +330,25 @@ describe("fresh reuse", () => {
         (scope) => scope.status !== "unknown",
       ),
     ).toBe(true);
+  });
+
+  it("reads live for full account and source-attempt evidence", async () => {
+    const fresh = await readJson("--full", "--max-age", "0");
+    advance(5);
+    const reused = await readJson("--full", "--max-age", "90s");
+
+    expect(usageCalls).toBe(2);
+    expect(reused.state.reused).toBeUndefined();
+    expect(fresh.account).toEqual({
+      accountId: "fixture",
+      identityStatus: "verified",
+    });
+    expect(fresh.attempts).toEqual([
+      { source: "oauth-file", status: "success" },
+      { source: "oauth-profile", status: "success" },
+    ]);
+    expect(reused.account).toEqual(fresh.account);
+    expect(reused.attempts).toEqual(fresh.attempts);
   });
 
   it("names a reused reading in TOON attention and keeps its quota rows", async () => {
@@ -391,7 +448,7 @@ describe("fresh reuse", () => {
     expect(usageCalls).toBeGreaterThan(1);
   });
 
-  it("reads the vendor for --full, whose account and attempts are never cached", async () => {
+  it("reads the vendor for --full", async () => {
     await readJson();
     const full = await readJson("--full");
     expect(usageCalls).toBe(2);
@@ -399,7 +456,7 @@ describe("fresh reuse", () => {
     expect(full.attempts?.length).toBeGreaterThan(0);
 
     await readJson("--full", "--max-age", "90s");
-    expect(usageCalls).toBe(2);
+    expect(usageCalls).toBe(3);
   });
 
   it("does not restamp a reused reading's age when it writes the cache", async () => {

@@ -480,12 +480,13 @@ async function readProvider(
 /**
  * How old a reused reading may be: `--max-age`, else the host's
  * `QUOTA_AXI_MAX_AGE`, else `0`, so reuse is opt-in. `--full` is the audit
- * tier, and account identity and source attempts are never cached, so the
- * host variable does not reach it; only an explicit `--max-age` does.
+ * tier and always reads live for account identity and source attempts.
  */
 function readMaxAge(flags: QuotaFlags): number {
-  if (flags.maxAgeSeconds !== undefined) return flags.maxAgeSeconds;
-  return flags.full ? 0 : (readMaxAgeEnv() ?? 0);
+  if (flags.full) return 0;
+  const environmentMaxAge =
+    flags.maxAgeSeconds === undefined ? readMaxAgeEnv() : undefined;
+  return flags.maxAgeSeconds ?? environmentMaxAge ?? 0;
 }
 
 /** Env var naming a quota snapshot file that answers instead of any vendor. */
