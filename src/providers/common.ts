@@ -151,6 +151,32 @@ export function resetlessStaleMaxAgeSeconds(window: QuotaWindow): number {
  * `undefined` when none survive, so the caller reports the failed read exactly
  * as it would with no cache at all.
  */
+/**
+ * A definitive sign-out retires the snapshot and returns undefined, so the
+ * caller reports the same failure it would with no cache. Soft expiry and
+ * transport failures stay eligible for {@link staleFromCache}.
+ */
+export function staleUnlessSignOut(
+  cached: ProviderQuota | undefined,
+  error: string,
+  sourcesTried: string[],
+  attempts: SourceAttempt[],
+  signOut: { definitive: boolean; retire: () => void },
+  now: number = Date.now(),
+): ProviderQuota | undefined {
+  if (signOut.definitive) {
+    try {
+      signOut.retire();
+    } catch {
+      // The sign-out stands when the cache cannot be rewritten.
+    }
+    return undefined;
+  }
+  return cached
+    ? staleFromCache(cached, error, sourcesTried, attempts, now)
+    : undefined;
+}
+
 export function staleFromCache(
   cached: ProviderQuota,
   error: string,

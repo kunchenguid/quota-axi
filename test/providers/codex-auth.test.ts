@@ -253,6 +253,75 @@ describe("Codex credential-state reporting", () => {
     );
   });
 
+  it("retires a cached snapshot on sign-out and keeps it for a transient probe", async () => {
+    const { writeCachedProviders, readCachedProvider } =
+      await import("../../src/cache.js");
+    const snapshot = {
+      provider: "codex" as const,
+      label: "Codex",
+      source: "oauth" as const,
+      windows: [
+        {
+          id: "weekly",
+          label: "week",
+          kind: "weekly" as const,
+          percentUsed: 10,
+          percentRemaining: 90,
+          windowSeconds: 604_800,
+        },
+      ],
+      state: {
+        status: "fresh" as const,
+        stale: false,
+        refreshedAt: new Date().toISOString(),
+        sourcesTried: ["oauth"],
+      },
+    };
+    writeCachedProviders([snapshot]);
+    const { fetchQuota } = await import("../../src/providers/codex.js");
+    const signedOut = await fetchQuota({
+      allowKeychainPrompt: false,
+      refreshCredentials: false,
+    });
+    expect(signedOut.state).toMatchObject({
+      status: "auth_required",
+      stale: false,
+      error: "Codex sign-in required",
+    });
+    expect(signedOut.windows).toEqual([]);
+    expect(readCachedProvider("codex")).toBeUndefined();
+
+    writeAuth({ tokens: { access_token: jwt({ exp: 1 }) } });
+    writeCachedProviders([snapshot]);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(null, { status: 401 })),
+    );
+    const rejected = await fetchQuota({
+      allowKeychainPrompt: false,
+      refreshCredentials: false,
+    });
+    expect(rejected.state).toMatchObject({
+      status: "stale",
+      error: "Codex sign-in required",
+    });
+    expect(readCachedProvider("codex")).toBeDefined();
+
+    writeCachedProviders([snapshot]);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new TypeError("network unavailable");
+      }),
+    );
+    const transient = await fetchQuota({
+      allowKeychainPrompt: false,
+      refreshCredentials: false,
+    });
+    expect(transient.state.status).toBe("stale");
+    expect(readCachedProvider("codex")).toBeDefined();
+  });
+
   it("treats access-token usability as authoritative when id_token is expired", async () => {
     // Counterfactual: the previous OR-expiry check treated id_token exp as
     // credential expiry and skipped OAuth even with a valid access token.

@@ -6,12 +6,14 @@ import {
   degradedSources,
   providerPresence,
 } from "../../src/lib/source-attempts.js";
+import { readCachedProvider, writeCachedProviders } from "../../src/cache.js";
 import {
   copilotAdapter,
   fetchQuota,
   inspectAuth,
   normalizeCopilotUser,
 } from "../../src/providers/copilot.js";
+import type { ProviderQuota } from "../../src/types.js";
 
 const originalAppsJson = process.env.GITHUB_COPILOT_APPS_JSON;
 const originalXdgCacheHome = process.env.XDG_CACHE_HOME;
@@ -460,6 +462,50 @@ describe("GitHub Copilot credential sources", () => {
     expect(degradedSources(result.attempts)).toEqual([
       { source: "apps-json", error: "credentials_invalid" },
     ]);
+  });
+
+  it("retires a cached snapshot on sign-out and keeps it for a transient failure", async () => {
+    const snapshot: ProviderQuota = {
+      provider: "copilot",
+      label: "GitHub Copilot",
+      source: "api",
+      windows: [
+        {
+          id: "chat",
+          label: "chat",
+          kind: "monthly",
+          percentUsed: 40,
+          percentRemaining: 60,
+          resetsAt: new Date(Date.now() + 86_400_000).toISOString(),
+        },
+      ],
+      state: {
+        status: "fresh",
+        stale: false,
+        refreshedAt: "2026-09-12T12:00:00.000Z",
+        sourcesTried: ["api"],
+      },
+    };
+    writeCachedProviders([snapshot]);
+    const signedOut = await fetchQuota(options);
+    expect(signedOut.state).toMatchObject({
+      status: "auth_required",
+      stale: false,
+      error: "GitHub Copilot sign-in required",
+    });
+    expect(signedOut.windows).toEqual([]);
+    expect(readCachedProvider("copilot")).toBeUndefined();
+
+    const bare = await fetchQuota(options);
+    expect(bare.state.status).toBe("auth_required");
+
+    writeAppsJson({ "github.com": { oauth_token: "gho_live_fixture" } });
+    writeCachedProviders([snapshot]);
+    stubUserEndpoint({ gho_live_fixture: 503 });
+    const transient = await fetchQuota(options);
+    expect(transient.state.status).toBe("stale");
+    expect(transient.windows.length).toBeGreaterThan(0);
+    expect(readCachedProvider("copilot")).toBeDefined();
   });
 
   it("reports sign-in required when neither store holds a credential, without a request", async () => {

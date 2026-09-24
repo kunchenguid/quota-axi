@@ -1,6 +1,6 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { readCachedProvider } from "../cache.js";
+import { readCachedProvider, retireCachedSlot } from "../cache.js";
 import { providerFetch } from "../lib/http.js";
 import { execFileText, commandExists } from "../lib/process.js";
 import {
@@ -21,7 +21,7 @@ import type {
 import {
   failedProvider,
   sourceNames,
-  staleFromCache,
+  staleUnlessSignOut,
   statusFromError,
   successProvider,
   withRemaining,
@@ -159,9 +159,16 @@ export async function fetchQuota(
   }
 
   const cached = readCachedProvider("cursor");
-  const stale = cached
-    ? staleFromCache(cached, finalError, sourceNames(attempts), attempts)
-    : undefined;
+  const stale = staleUnlessSignOut(
+    cached,
+    finalError,
+    sourceNames(attempts),
+    attempts,
+    {
+      definitive: finalError === "Cursor sign-in required",
+      retire: () => retireCachedSlot("cursor"),
+    },
+  );
   if (stale) return stale;
 
   return failedProvider({

@@ -564,6 +564,18 @@ function cacheIdentity(provider: ProviderQuota): string {
   return `${provider.provider}/${provider.accountKey ?? DEFAULT_ACCOUNT_KEY}`;
 }
 
+/**
+ * Retire one slot. An omitted key retires only the default slot, so a sibling
+ * account's snapshot stays. {@link deleteCachedProvider} with no key removes
+ * every slot for that provider.
+ */
+export function retireCachedSlot(
+  provider: ProviderId,
+  accountKey?: string,
+): void {
+  deleteCachedProvider(provider, accountKey ?? DEFAULT_ACCOUNT_KEY);
+}
+
 export function deleteCachedProvider(
   provider: ProviderId,
   accountKey?: string,

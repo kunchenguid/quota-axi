@@ -239,7 +239,7 @@ describe("Cursor CLI-only quota refresh", () => {
     });
   });
 
-  it("falls back to stale quota when the Linux auth-file token is rejected", async () => {
+  it("retires the cache when the Linux auth-file token is rejected", async () => {
     writeCliAuthFile();
     mockProcess({});
     vi.stubGlobal(
@@ -249,19 +249,22 @@ describe("Cursor CLI-only quota refresh", () => {
 
     await onLinux(async () => {
       await seedCache();
+      const { readCachedProvider } = await import("../../src/cache.js");
       const { fetchQuota } = await import("../../src/providers/cursor.js");
       const result = await fetchQuota({
         allowKeychainPrompt: false,
         refreshCredentials: false,
       });
 
-      expect(result.state.status).toBe("stale");
+      expect(result.state.status).toBe("auth_required");
+      expect(result.state.stale).toBe(false);
+      expect(result.windows).toEqual([]);
       expect(result.state.error).toBe("Cursor sign-in required");
       expect(result.state.sourcesTried).toEqual([
         "state-vscdb",
         "cli-authfile",
-        "cache",
       ]);
+      expect(readCachedProvider("cursor")).toBeUndefined();
       expect(result.attempts).toEqual([
         {
           source: "state-vscdb",
@@ -274,6 +277,29 @@ describe("Cursor CLI-only quota refresh", () => {
           error: "Cursor sign-in required",
         },
       ]);
+    });
+  });
+
+  it("keeps the cache when the Linux auth-file probe fails transiently", async () => {
+    writeCliAuthFile();
+    mockProcess({});
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("{}", { status: 503 })),
+    );
+
+    await onLinux(async () => {
+      await seedCache();
+      const { readCachedProvider } = await import("../../src/cache.js");
+      const { fetchQuota } = await import("../../src/providers/cursor.js");
+      const result = await fetchQuota({
+        allowKeychainPrompt: false,
+        refreshCredentials: false,
+      });
+
+      expect(result.state.status).toBe("stale");
+      expect(result.windows.length).toBeGreaterThan(0);
+      expect(readCachedProvider("cursor")).toBeDefined();
     });
   });
 

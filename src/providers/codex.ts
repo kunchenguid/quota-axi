@@ -3,6 +3,7 @@ import { isAbsolute, join } from "node:path";
 import { spawn } from "node:child_process";
 import {
   deleteCachedProvider,
+  retireCachedSlot,
   readCachedCodexProvider,
   readCachedProvider,
   stampCodexStoredAccountId,
@@ -30,7 +31,7 @@ import type {
 import {
   failedProvider,
   sourceNames,
-  staleFromCache,
+  staleUnlessSignOut,
   statusFromError,
   successProvider,
   withRemaining,
@@ -564,6 +565,8 @@ async function fetchPiAccountQuota(
     source,
     account.cacheKey,
     [...storedAccountIds.values()],
+    codexCredentialKey(source) ?? CODEX_HOME_ACCOUNT_KEY,
+    piCandidates.length === 0 && finalError === "Codex sign-in required",
   );
 }
 
@@ -770,6 +773,9 @@ async function fetchQuotaWithDependencies(
     oauthCandidates.length === 0 && piCredentialTried
       ? PI_CODEX_BUILTIN_ID
       : CODEX_HOME_ACCOUNT_KEY,
+    oauthCandidates.length === 0 &&
+      !piCredentialTried &&
+      finalError === "Codex sign-in required",
   );
 }
 
@@ -872,11 +878,21 @@ function codexFailureReport(
   accountKey?: string,
   accountIds: readonly string[] = [],
   credentialKey = codexCredentialKey(source) ?? CODEX_HOME_ACCOUNT_KEY,
+  definitive = false,
 ): ProviderQuota {
-  const cached = readCachedCodexProvider(accountKey, accountIds);
-  const stale = cached
-    ? staleFromCache(cached, error, sourceNames(attempts), attempts)
-    : undefined;
+  const cached = definitive
+    ? undefined
+    : readCachedCodexProvider(accountKey, accountIds);
+  const stale = staleUnlessSignOut(
+    cached,
+    error,
+    sourceNames(attempts),
+    attempts,
+    {
+      definitive,
+      retire: () => retireCachedSlot("codex", accountKey),
+    },
+  );
   if (stale) {
     return {
       ...stale,

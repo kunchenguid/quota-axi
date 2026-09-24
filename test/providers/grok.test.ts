@@ -10,7 +10,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { writeCachedProviders } from "../../src/cache.js";
+import { readCachedProvider, writeCachedProviders } from "../../src/cache.js";
 import { main } from "../../src/cli.js";
 import { withQuotaSemantics } from "../../src/interpretation.js";
 import { statusFromError } from "../../src/providers/common.js";
@@ -1451,6 +1451,42 @@ describe("Grok expired access-token classification", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("retires a cached snapshot on definitive sign-out and matches the no-cache reading", async () => {
+    writeCachedProviders([cachedGrok("web")]);
+
+    const result = await fetchQuota({
+      allowKeychainPrompt: false,
+      refreshCredentials: false,
+    });
+
+    expect(result).toMatchObject({
+      source: "unavailable",
+      windows: [],
+      state: {
+        status: "auth_required",
+        stale: false,
+        error: "Grok sign-in required",
+        authStatus: "unusable",
+      },
+    });
+    expect(readCachedProvider("grok")).toBeUndefined();
+
+    const json = JSON.parse(
+      await captureCli(["--provider", "grok", "--json"]),
+    ) as QuotaAxiResponse;
+    expect(json.providers[0]?.state).toMatchObject({
+      status: "auth_required",
+      authStatus: "unusable",
+      error: "Grok sign-in required",
+    });
+    expect(process.exitCode).toBe(1);
+
+    const tui = await captureCli(["--provider", "grok", "--tui", "--once"]);
+    expect(tui).toContain("signed out");
+    expect(tui).not.toContain("cache · stale");
+    expect(process.exitCode).toBe(1);
+  });
+
   it("retains expired-token classification on stale web cache fallback after probe rejection", async () => {
     writeAuth({
       "https://auth.x.ai::fixture-client": {
@@ -1495,6 +1531,7 @@ describe("Grok expired access-token classification", () => {
       ],
     });
     expect(result.state.error).not.toMatch(/sign-in/i);
+    expect(readCachedProvider("grok")).toBeDefined();
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
