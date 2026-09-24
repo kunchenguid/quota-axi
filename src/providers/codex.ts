@@ -659,6 +659,7 @@ async function fetchQuotaWithDependencies(
       accountIds,
     );
   }
+  let credentialRejected = oauthSelection.outcome === "all_rejected";
   if (oauthSelection.outcome === "all_rejected") {
     finalError = oauthSelection.refreshable
       ? CODEX_ACCESS_TOKEN_EXPIRED
@@ -748,6 +749,7 @@ async function fetchQuotaWithDependencies(
       );
     }
     if (piSelection.outcome === "all_rejected") {
+      credentialRejected = true;
       if (errorIsDefault || statusFromError(finalError) === "auth_required") {
         finalError =
           piSelection.refreshable || finalError === CODEX_ACCESS_TOKEN_EXPIRED
@@ -770,7 +772,14 @@ async function fetchQuotaWithDependencies(
       status: "failed",
       error: message,
     };
-    if (errorIsDefault || !(error instanceof CodexCliUnavailableError)) {
+    const confirmsSignOut =
+      finalError === CODEX_SIGN_IN_REQUIRED &&
+      (error instanceof CodexCliSignedOutError ||
+        (credentialRejected && error instanceof CodexCliAccountReadingError));
+    if (
+      !confirmsSignOut &&
+      (errorIsDefault || !(error instanceof CodexCliUnavailableError))
+    ) {
       finalError = message;
     }
   }
@@ -888,18 +897,15 @@ function codexFailureReport(
   accountIds: readonly string[] = [],
   credentialKey = codexCredentialKey(source) ?? CODEX_HOME_ACCOUNT_KEY,
 ): ProviderQuota {
-  const signedOut = error === CODEX_SIGN_IN_REQUIRED;
   const softExpiry = error === CODEX_ACCESS_TOKEN_EXPIRED;
-  const cached = signedOut
-    ? undefined
-    : readCachedCodexProvider(accountKey, accountIds);
+  const cached = readCachedCodexProvider(accountKey, accountIds);
   const stale = staleUnlessSignOut(
     cached,
     error,
     sourceNames(attempts),
     attempts,
     {
-      definitive: signedOut,
+      definitive: error === CODEX_SIGN_IN_REQUIRED,
       retire: () => retireCachedSlot("codex", accountKey),
     },
   );

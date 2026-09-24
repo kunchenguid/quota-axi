@@ -1487,6 +1487,21 @@ describe("Grok expired access-token classification", () => {
     expect(process.exitCode).toBe(1);
   });
 
+  it("keeps the cached snapshot when the present Grok auth store cannot be parsed", async () => {
+    writeCachedProviders([cachedGrok("web")]);
+    mkdirSync(dirname(process.env.GROK_AUTH_JSON!), { recursive: true });
+    writeFileSync(process.env.GROK_AUTH_JSON!, "{malformed");
+
+    const result = await fetchQuota({
+      allowKeychainPrompt: false,
+      refreshCredentials: false,
+    });
+
+    expect(result.state.status).toBe("stale");
+    expect(result.windows.length).toBeGreaterThan(0);
+    expect(readCachedProvider("grok")).toBeDefined();
+  });
+
   it("retains expired-token classification on stale web cache fallback after probe rejection", async () => {
     writeAuth({
       "https://auth.x.ai::fixture-client": {

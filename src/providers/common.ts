@@ -5,6 +5,7 @@ import type {
   QuotaWindow,
   SourceAttempt,
 } from "../types.js";
+import { isDegradedSourceAttempt } from "../lib/source-attempts.js";
 import { percentRemaining } from "../lib/time.js";
 
 export function withRemaining(
@@ -148,7 +149,9 @@ export function resetlessStaleMaxAgeSeconds(window: QuotaWindow): number {
 /**
  * A definitive sign-out retires the snapshot and returns undefined, so the
  * caller reports the same failure it would with no cache. Soft expiry and
- * transport failures stay eligible for {@link staleFromCache}.
+ * transport failures stay eligible for {@link staleFromCache}, and so does a
+ * sign-out while a present store was skipped unprobed: only a credential the
+ * vendor rejected, or no credential at all, proves the snapshot's login gone.
  */
 export function staleUnlessSignOut(
   cached: ProviderQuota | undefined,
@@ -158,7 +161,13 @@ export function staleUnlessSignOut(
   signOut: { definitive: boolean; retire: () => void },
   now: number = Date.now(),
 ): ProviderQuota | undefined {
-  if (signOut.definitive) {
+  if (
+    signOut.definitive &&
+    !attempts.some(
+      (attempt) =>
+        attempt.status === "skipped" && isDegradedSourceAttempt(attempt),
+    )
+  ) {
     try {
       signOut.retire();
     } catch {
