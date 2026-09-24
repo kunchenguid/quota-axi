@@ -807,6 +807,43 @@ describe("cards for providers with no combinable bound", () => {
     expect(emptyTrack).toHaveLength(0);
   });
 
+  it("states every wallet when a windowless provider reports more than one", () => {
+    const multiWallet = withQuotaSemantics(
+      {
+        provider: "deepseek",
+        label: "DeepSeek",
+        source: "api",
+        windows: [],
+        credits: {
+          remaining: 49.27,
+          unit: "cny",
+          balances: [
+            { remaining: 0, unit: "usd" },
+            { remaining: 49.27, unit: "cny" },
+          ],
+        },
+        state: {
+          status: "fresh",
+          stale: false,
+          refreshedAt: GENERATED_AT,
+          authStatus: "usable",
+          sourcesTried: ["env:DEEPSEEK_API_KEY"],
+        },
+      },
+      GENERATED_AT,
+    );
+    const lines = renderQuotaTui(
+      {
+        generatedAt: GENERATED_AT,
+        schemaVersion: 5,
+        providers: [multiWallet],
+      },
+      { timeZone: "America/Los_Angeles" },
+    ).split("\n");
+
+    expect(findLine(lines, "0 usd · 49.27 cny remaining")).toBeDefined();
+  });
+
   it("renders Cursor's jointly bounded card with its effective bar", () => {
     const cursor = withQuotaSemantics(
       {
