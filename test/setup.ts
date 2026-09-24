@@ -56,3 +56,8 @@ process.env.XDG_DATA_HOME = join(
 );
 delete process.env.WINDSURF_API_KEY;
 delete process.env.WINDSURF_API_SERVER_URL;
+
+// A host may opt into fresh reuse or point at a snapshot fixture for every
+// process; tests start from the default and opt in themselves.
+delete process.env.QUOTA_AXI_MAX_AGE;
+delete process.env.QUOTA_AXI_SNAPSHOT;

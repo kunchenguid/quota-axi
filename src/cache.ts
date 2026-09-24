@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { chmodSync, renameSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   cacheFilePath,
@@ -467,6 +467,9 @@ export function writeCachedProviders(
       return record && reuse ? { ...record, reuse } : record;
     })
     .filter((provider): provider is CachedProvider => Boolean(provider));
+  // Taking the lock creates the cache directory, so a reading that writes
+  // and clears nothing must leave no trace on disk
+  if (cacheable.length === 0 && clearProviders.size === 0) return;
 
   withCacheWriteLock(() => {
     const byProvider = new Map<string, CachedProvider>();
@@ -565,6 +568,7 @@ export function deleteCachedProvider(
   provider: ProviderId,
   accountKey?: string,
 ): void {
+  if (!existsSync(cacheFilePath())) return;
   withCacheWriteLock(() => {
     const existing = readCacheProviders();
     const remaining = existing.filter((item) =>
