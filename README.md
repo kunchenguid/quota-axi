@@ -563,6 +563,8 @@ Everything a consumer branches on stays in the default tier: `accountKey` and `a
 
 `notSetUp: true` is present only on a provider lane that has positive evidence of absence (the same `providerPresence` classification the human report uses). Every provider stays in `providers[]` on both default `--json` and `--full`; omitting entries would change downstream consumers that look a provider up by id. The field is additive, so `schemaVersion` stays 5, or 6 when a provider expands to multiple accounts. Default TOON is the only output that omits these providers.
 
+`credits.balances` follows the same additive rule: it is present only when a vendor reports more than one wallet, so a consumer that reads `credits.remaining`/`unit` is unaffected and `schemaVersion` is unchanged.
+
 `--tui` renders from the complete in-memory model, so demotion never changes what the human report draws. Demotion happens only in the renderer (`quotaJsonReport` and `renderQuotaToon` in `src/render.ts`). Presence for an absence marker and for a TOON omission is classified in `quotaCommand` before redaction.
 
 ### Quota report shape
