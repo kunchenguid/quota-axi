@@ -3,7 +3,7 @@ import { isAbsolute, join } from "node:path";
 import { spawn } from "node:child_process";
 import {
   deleteCachedProvider,
-  retireCachedSlot,
+  retireCodexAccount,
   readCachedCodexProvider,
   readCachedProvider,
   stampCodexStoredAccountId,
@@ -906,7 +906,7 @@ function codexFailureReport(
     attempts,
     {
       definitive: error === CODEX_SIGN_IN_REQUIRED,
-      retire: () => retireCachedSlot("codex", accountKey),
+      retire: () => retireCodexAccount(accountKey, accountIds),
     },
   );
   if (stale) {
