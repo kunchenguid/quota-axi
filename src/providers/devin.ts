@@ -249,7 +249,8 @@ export function createDevinAdapter(
     fetch: providerFetch,
     readCachedProvider: readCachedProviderFromDisk,
     deleteCachedProvider: () => deleteCachedProviderFromDisk("devin"),
-    now: Date.now,
+    // Resolve Date at call time so a clock swapped in after load still applies
+    now: () => Date.now(),
     deadlineMs: OPERATION_DEADLINE_MS,
     ...overrides,
   };
