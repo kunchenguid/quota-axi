@@ -356,6 +356,30 @@ describe("GitHub Copilot credential sources", () => {
     },
   });
 
+  function cachedCopilotSnapshot(): ProviderQuota {
+    return {
+      provider: "copilot",
+      label: "GitHub Copilot",
+      source: "api",
+      windows: [
+        {
+          id: "chat",
+          label: "chat",
+          kind: "monthly",
+          percentUsed: 40,
+          percentRemaining: 60,
+          resetsAt: new Date(Date.now() + 86_400_000).toISOString(),
+        },
+      ],
+      state: {
+        status: "fresh",
+        stale: false,
+        refreshedAt: new Date().toISOString(),
+        sourcesTried: ["api"],
+      },
+    };
+  }
+
   function writeGhHosts(text: string): void {
     const dir = process.env.GH_CONFIG_DIR!;
     mkdirSync(dir, { recursive: true });
@@ -636,12 +660,19 @@ describe("GitHub Copilot credential sources", () => {
       "github.com:\n    users:\n        fixture-user:\n    user: fixture-user\n",
     );
     const api = stubUserEndpoint({ "stale-apps-token": 401 });
+    writeCachedProviders([cachedCopilotSnapshot()]);
 
     const result = await fetchQuota(options);
 
-    expect(result.state.status).toBe("auth_required");
-    expect(result.state.error).toBe("GitHub Copilot sign-in required");
+    expect(result.state).toMatchObject({
+      status: "auth_required",
+      stale: false,
+      error: "GitHub Copilot sign-in required",
+    });
+    expect(result.windows).toEqual([]);
+    expect(readCachedProvider("copilot")).toBeUndefined();
     expect(api.bearers).toEqual(["Bearer stale-apps-token"]);
+    expect((await fetchQuota(options)).state.status).toBe("auth_required");
     expect(result.attempts?.[2]).toEqual({
       source: "gh:hosts.yml",
       status: "skipped",
@@ -653,11 +684,18 @@ describe("GitHub Copilot credential sources", () => {
   it("keeps the sign-in verdict when the GitHub CLI store cannot be parsed", async () => {
     writeGhHosts("github.com:\n\toauth_token: gho_cli_fixture\n");
     const api = stubUserEndpoint({ gho_cli_fixture: 200 });
+    writeCachedProviders([cachedCopilotSnapshot()]);
 
     const result = await fetchQuota(options);
 
-    expect(result.state.status).toBe("auth_required");
+    expect(result.state).toMatchObject({
+      status: "auth_required",
+      stale: false,
+    });
+    expect(result.windows).toEqual([]);
+    expect(readCachedProvider("copilot")).toBeUndefined();
     expect(api.bearers).toEqual([]);
+    expect((await fetchQuota(options)).state.status).toBe("auth_required");
     expect(result.attempts?.[2]).toEqual({
       source: "gh:hosts.yml",
       status: "skipped",

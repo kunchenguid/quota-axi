@@ -152,20 +152,27 @@ export function resetlessStaleMaxAgeSeconds(window: QuotaWindow): number {
  * transport failures stay eligible for {@link staleFromCache}, and so does a
  * sign-out while a present store was skipped unprobed: only a credential the
  * vendor rejected, or no credential at all, proves the snapshot's login gone.
+ * A skip on an incidental source (another tool's login) is no such store.
  */
 export function staleUnlessSignOut(
   cached: ProviderQuota | undefined,
   error: string,
   sourcesTried: string[],
   attempts: SourceAttempt[],
-  signOut: { definitive: boolean; retire: () => void },
+  signOut: {
+    definitive: boolean;
+    retire: () => void;
+    incidentalSources?: readonly string[];
+  },
   now: number = Date.now(),
 ): ProviderQuota | undefined {
   if (
     signOut.definitive &&
     !attempts.some(
       (attempt) =>
-        attempt.status === "skipped" && isDegradedSourceAttempt(attempt),
+        attempt.status === "skipped" &&
+        !signOut.incidentalSources?.includes(attempt.source) &&
+        isDegradedSourceAttempt(attempt),
     )
   ) {
     try {

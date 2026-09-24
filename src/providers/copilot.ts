@@ -256,6 +256,7 @@ export async function fetchQuota(
     {
       definitive: signOut,
       retire: () => retireCachedSlot("copilot"),
+      incidentalSources: copilotAdapter.incidentalSources,
     },
   );
   if (stale) return stale;
