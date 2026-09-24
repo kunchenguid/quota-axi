@@ -596,6 +596,21 @@ describe("renderQuotaTui structure", () => {
     expect(output).not.toContain("\u0085");
   });
 
+  it("marks a reused reading with its age and keeps it live", () => {
+    const response = fixtureResponse();
+    const claude = response.providers[0];
+    claude.state.reused = true;
+    claude.state.refreshedAt = new Date(
+      Date.parse(GENERATED_AT) - 42_000,
+    ).toISOString();
+    const lines = renderQuotaTui(response, {
+      timeZone: "America/Los_Angeles",
+    }).split("\n");
+    const title = findLine(lines, "● claude");
+    expect(title).toContain("max · oauth · reused 42s");
+    expect(title).not.toContain("stale");
+  });
+
   it("marks a stale provider and keeps effective headroom unknown", () => {
     const response = fixtureResponse();
     const claude = response.providers[0];

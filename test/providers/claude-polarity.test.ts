@@ -289,12 +289,21 @@ describe("Claude polarity end to end", () => {
     };
   }
 
+  // Every read asks the vendor, so the second read exercises stale fallback
+  // rather than reusing the first one's fresh reading.
   async function publishedClaude(): Promise<
     QuotaAxiResponse["providers"][number]
   > {
     const json = JSON.parse(
       await quotaCommand(
-        ["--provider", "claude", "--json", "--no-credential-refresh"],
+        [
+          "--provider",
+          "claude",
+          "--json",
+          "--no-credential-refresh",
+          "--max-age",
+          "0",
+        ],
         undefined,
       ),
     ) as QuotaAxiResponse;

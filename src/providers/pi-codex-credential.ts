@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { resolvePiAuthFilePath } from "../lib/pi-agent-dir.js";
 import { classifyPiAuthEntry } from "../lib/pi-auth-store.js";
 import type { ProviderSource } from "../types.js";
+import { traceInput } from "../lib/input-trace.js";
 
 export const PI_CODEX_BUILTIN_ID = "openai-codex";
 const AUTH_FILE_LIMIT_BYTES = 64 * 1024;
@@ -259,6 +260,7 @@ async function readBoundedFile(
   path: string,
   maxBytes: number,
 ): Promise<Buffer> {
+  traceInput(path);
   const file = await open(path, "r");
   try {
     const contents = new Uint8Array(maxBytes + 1);

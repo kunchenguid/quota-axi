@@ -333,6 +333,12 @@ export type ProviderQuota = {
     degradedSources?: DegradedSource[];
     /** Omitted from default `--json`; see `--full`. */
     sourcesTried?: string[];
+    /**
+     * Sparse marker: this fresh reading is the last successful one, served
+     * from the cache instead of asking the vendor again, and `refreshedAt`
+     * (kept in default `--json` when this is set) says when it was taken.
+     */
+    reused?: true;
   };
   attempts?: SourceAttempt[];
   /**

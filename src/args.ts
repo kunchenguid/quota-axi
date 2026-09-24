@@ -35,11 +35,26 @@ export type QuotaFlags = {
   once: boolean;
   /** Start `--tui` with providers that are not set up drawn as full cards. */
   all: boolean;
+  /**
+   * Oldest successful reading a read may reuse instead of asking the vendor;
+   * `0` always asks. The caller applies the default.
+   */
+  maxAgeSeconds?: number;
 };
 
 /** Refresh bounds: fast enough to feel live, slow enough to stay polite. */
 export const MIN_REFRESH_SECONDS = 30;
 export const MAX_REFRESH_SECONDS = 86_400;
+
+/**
+ * Fresh-reuse bounds. The default absorbs a burst of back-to-back reads (a
+ * dispatcher polling per decision, a test run) that would otherwise trip a
+ * vendor's usage-endpoint rate limit, while staying under the 2-5 minute live
+ * `--tui` cadence so each scheduled frame still reads the vendor. Ninety
+ * seconds moves a five-hour window's elapsed time by half a percent.
+ */
+export const DEFAULT_MAX_AGE_SECONDS = 90;
+export const MAX_MAX_AGE_SECONDS = 3_600;
 
 export type ModelsFlags = QuotaFlags & {
   intelligence?: IntelligenceBucket;
@@ -113,6 +128,7 @@ function parseCommonFlags(
   let once = false;
   let all = false;
   let refreshSeconds: number | undefined;
+  let maxAgeSeconds: number | undefined;
   let allowKeychainPrompt = false;
   let allowClaudeInference = false;
   let noCredentialRefresh = false;
@@ -152,6 +168,15 @@ function parseCommonFlags(
     }
     if (arg.startsWith("--refresh=")) {
       refreshSeconds = parseRefreshValue(arg.slice("--refresh=".length));
+      continue;
+    }
+    if (arg === "--max-age") {
+      maxAgeSeconds = parseMaxAgeValue(args[index + 1]);
+      index++;
+      continue;
+    }
+    if (arg.startsWith("--max-age=")) {
+      maxAgeSeconds = parseMaxAgeValue(arg.slice("--max-age=".length));
       continue;
     }
     if (arg === "--allow-keychain-prompt") {
@@ -252,6 +277,7 @@ function parseCommonFlags(
     noCredentialRefresh,
     profileOnly,
     ...(refreshSeconds !== undefined ? { refreshSeconds } : {}),
+    ...(maxAgeSeconds !== undefined ? { maxAgeSeconds } : {}),
     ...(intelligence ? { intelligence } : {}),
     ...(sort ? { sort } : {}),
   };
@@ -269,23 +295,49 @@ function parseIntelligenceValue(
   );
 }
 
+/** A whole-unit duration (`45s`, `5m`, `1h`) or bare seconds. */
+function parseDurationSeconds(value: string | undefined): number | undefined {
+  const match = /^(\d{1,7})(s|m|h)?$/.exec(value?.trim() ?? "");
+  if (!match) return undefined;
+  const multiplier = match[2] === "h" ? 3600 : match[2] === "m" ? 60 : 1;
+  return Number(match[1]) * multiplier;
+}
+
 /** Accept a whole-unit duration (`45s`, `5m`, `1h`) or bare seconds. */
 function parseRefreshValue(value: string | undefined): number {
-  const match = /^(\d{1,7})(s|m|h)?$/.exec(value?.trim() ?? "");
-  if (!match) {
+  const seconds = parseDurationSeconds(value);
+  if (seconds === undefined) {
     throw new AxiError(
       "--refresh requires a duration such as 30s, 5m, or 1h",
       "VALIDATION_ERROR",
       ["Pass --refresh=... if the value begins with --"],
     );
   }
-  const multiplier = match[2] === "h" ? 3600 : match[2] === "m" ? 60 : 1;
-  const seconds = Number(match[1]) * multiplier;
   if (seconds < MIN_REFRESH_SECONDS || seconds > MAX_REFRESH_SECONDS) {
     throw new AxiError(
       `--refresh must be between ${MIN_REFRESH_SECONDS}s and ${MAX_REFRESH_SECONDS / 3600}h`,
       "VALIDATION_ERROR",
       ["Provider quota windows do not move fast enough for tighter polling"],
+    );
+  }
+  return seconds;
+}
+
+/** Accept `0`, a whole-unit duration (`45s`, `2m`, `1h`), or bare seconds. */
+function parseMaxAgeValue(value: string | undefined): number {
+  const seconds = parseDurationSeconds(value);
+  if (seconds === undefined) {
+    throw new AxiError(
+      "--max-age requires a duration such as 0, 90s, or 2m",
+      "VALIDATION_ERROR",
+      ["Pass --max-age 0 to always read the vendor"],
+    );
+  }
+  if (seconds > MAX_MAX_AGE_SECONDS) {
+    throw new AxiError(
+      `--max-age must be at most ${MAX_MAX_AGE_SECONDS / 60}m`,
+      "VALIDATION_ERROR",
+      ["Reuse only absorbs bursts; it is not a long-lived cache"],
     );
   }
   return seconds;

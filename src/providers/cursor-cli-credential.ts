@@ -8,6 +8,7 @@ import {
 } from "../lib/fs.js";
 import { execFileText } from "../lib/process.js";
 import type { AuthSourceReport, ProviderOptions } from "../types.js";
+import { traceInput } from "../lib/input-trace.js";
 
 /**
  * The Cursor CLI (`cursor-agent`) keeps sign-in identity in a plain
@@ -287,7 +288,9 @@ function missingState(
 }
 
 function hasKeychainAccessMarker(identity: CursorCliIdentity): boolean {
-  return existsSync(cursorCliKeychainAccessMarkerPath(markerKey(identity)));
+  const marker = cursorCliKeychainAccessMarkerPath(markerKey(identity));
+  traceInput(marker);
+  return existsSync(marker);
 }
 
 function writeKeychainAccessMarkerBestEffort(

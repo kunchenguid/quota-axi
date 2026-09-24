@@ -4,7 +4,7 @@ import {
   cacheFilePath,
   claudeCredentialContextId,
   ensurePrivateParent,
-  readJsonFile,
+  readUntracedJsonFile,
 } from "./lib/fs.js";
 import { kimiReadingContextId } from "./providers/kimi-cache-context.js";
 import { commandCodeReadingContextId } from "./providers/commandcode-cache-context.js";
@@ -12,7 +12,11 @@ import { devinReadingContextId } from "./providers/devin-cache-context.js";
 import { elevenLabsReadingContextId } from "./providers/elevenlabs-cache-context.js";
 import { miniMaxReadingContextId } from "./providers/minimax-cache-context.js";
 import { isPiCodexSource } from "./providers/pi-codex-credential.js";
+import { inputsDigest, type TracedInputs } from "./lib/input-trace.js";
+import { reuseContextId } from "./lib/reuse-context.js";
 import type {
+  DegradedSource,
+  ProviderAuthStatus,
   ProviderId,
   ProviderQuota,
   ProviderSource,
@@ -138,7 +142,151 @@ function codexAccountContextId(accountId?: string): string | undefined {
 type CachedProvider = {
   snapshot: ProviderQuota;
   credentialContextId?: string;
+  reuse?: ReuseStamp;
 };
+
+/**
+ * What fresh reuse needs beyond the stale-fallback snapshot. It is kept apart
+ * from `snapshot.state` so a stale fallback never carries a reading's
+ * `authStatus` or superseded sources forward as if they were current.
+ */
+type ReuseStamp = {
+  /** {@link reuseContextId} of the process that took the reading. */
+  context: string;
+  /** The local files the reading was derived from, and their state then. */
+  inputs: string[];
+  inputsDigest: string;
+  /** The report's `generatedAt`, shared by every lane of one reading. */
+  readingAt: string;
+  /** Lanes that reading reported, so a partial group is never served. */
+  lanes: number;
+  /** This lane's position in the adapter's declaration order. */
+  lane: number;
+  accountKeys?: string[];
+  authStatus?: ProviderAuthStatus;
+  degradedSources?: DegradedSource[];
+};
+
+const AUTH_STATUSES = [
+  "usable",
+  "expired_refreshable",
+  "unusable",
+] as const satisfies readonly ProviderAuthStatus[];
+
+/**
+ * The local inputs a provider's reading was traced to. A symbol key, like the
+ * Codex stamp, so it survives the quota command's object copies while staying
+ * off every serialized surface.
+ */
+const READING_INPUTS = Symbol("readingInputs");
+
+type TracedQuota = ProviderQuota & { [READING_INPUTS]?: TracedInputs };
+
+/**
+ * Attach the inputs a reading was traced to. Only a traced reading is ever
+ * stamped for fresh reuse, because nothing else says what it depended on.
+ */
+export function stampReadingInputs(
+  provider: ProviderQuota,
+  inputs: TracedInputs,
+): void {
+  (provider as TracedQuota)[READING_INPUTS] = inputs;
+}
+
+/**
+ * The last successful reading of `provider`, when it was taken by a process
+ * making the same credential selection as this one, no local file it was
+ * derived from has changed since, every lane it reported was cached, and it is
+ * younger than `maxAgeSeconds`. Returns `undefined`
+ * whenever any of that is not established, so the caller reads the vendor.
+ */
+export function readReusableProviders(
+  provider: ProviderId,
+  maxAgeSeconds: number,
+  now: number = Date.now(),
+  contextId: string = reuseContextId(),
+): ProviderQuota[] | undefined {
+  if (!(maxAgeSeconds > 0)) return undefined;
+  const records = readCacheProviders().filter(
+    (record) =>
+      record.snapshot.provider === provider &&
+      record.reuse?.context === contextId,
+  );
+  const readingAt = records
+    .map((record) => record.reuse?.readingAt ?? "")
+    .sort()
+    .at(-1);
+  const group = records.filter(
+    (record) => record.reuse?.readingAt === readingAt,
+  );
+  if (group.length === 0 || group.length !== group[0].reuse?.lanes)
+    return undefined;
+  const young = group.every((record) => {
+    const refreshedAt = Date.parse(record.snapshot.state.refreshedAt ?? "");
+    return (
+      Number.isFinite(refreshedAt) &&
+      refreshedAt <= now &&
+      now - refreshedAt < maxAgeSeconds * 1_000
+    );
+  });
+  if (!young || !group.every((record) => stillCurrent(record, now)))
+    return undefined;
+  const stamp = group[0].reuse as ReuseStamp;
+  if (inputsDigest(stamp.inputs) !== stamp.inputsDigest) return undefined;
+  return group
+    .sort((a, b) => (a.reuse?.lane ?? 0) - (b.reuse?.lane ?? 0))
+    .map(reusedReading);
+}
+
+/**
+ * Every reading of `provider` in a snapshot file supplied for tests and
+ * fixtures, in file order. `undefined` when the file names no such provider;
+ * `"expired"` when a window's own reset has already passed, because a number
+ * that has stopped being true is never served (#257), not even from a stub.
+ */
+export function readSnapshotProviders(
+  file: string,
+  provider: ProviderId,
+  now: number = Date.now(),
+): ProviderQuota[] | "expired" | undefined {
+  const records = readCacheProviders(file).filter(
+    (record) => record.snapshot.provider === provider,
+  );
+  if (records.length === 0) return undefined;
+  if (!records.every((record) => stillCurrent(record, now))) return "expired";
+  return records.map(reusedReading);
+}
+
+/** Whether no window of this reading has reached its own reported reset. */
+function stillCurrent(record: CachedProvider, now: number): boolean {
+  return record.snapshot.windows.every(
+    (window) =>
+      window.resetsAt === undefined || Date.parse(window.resetsAt) > now,
+  );
+}
+
+function reusedReading(record: CachedProvider): ProviderQuota {
+  const { snapshot, reuse } = record;
+  return {
+    ...snapshot,
+    ...(reuse?.accountKeys ? { accountKeys: [...reuse.accountKeys] } : {}),
+    windows: snapshot.windows.map((window) => ({ ...window })),
+    state: {
+      ...snapshot.state,
+      status: "fresh",
+      stale: false,
+      reused: true,
+      ...(reuse?.authStatus ? { authStatus: reuse.authStatus } : {}),
+      ...(reuse?.degradedSources
+        ? {
+            degradedSources: reuse.degradedSources.map((source) => ({
+              ...source,
+            })),
+          }
+        : {}),
+    },
+  };
+}
 
 export function readCachedProvider(
   provider: ProviderId,
@@ -262,14 +410,15 @@ function readCachedProviderInContext(
   )?.snapshot;
 }
 
-export function writeCachedProviders(providers: ProviderQuota[]): void {
-  providers = providers.filter(
-    (provider) =>
-      !(
-        (provider.provider === "claude" || provider.provider === "copilot") &&
-        provider.source === "cli"
-      ),
-  );
+export function writeCachedProviders(
+  providers: ProviderQuota[],
+  readingAt: string = new Date().toISOString(),
+): void {
+  // A reused reading is already the record it came from: rewriting it would
+  // restamp its age, and a missing context identity must not clear it.
+  providers = providers.filter((provider) => !provider.state.reused);
+  const reuseStamps = reuseStampsFor(providers, readingAt);
+  providers = providers.filter((provider) => !isCacheExcluded(provider));
   const clearProviders = new Set(
     providers
       .filter(
@@ -281,7 +430,11 @@ export function writeCachedProviders(providers: ProviderQuota[]): void {
       .map(cacheIdentity),
   );
   const cacheable = providers
-    .map(toCacheProvider)
+    .map((provider) => {
+      const record = toCacheProvider(provider);
+      const reuse = reuseStamps.get(provider);
+      return record && reuse ? { ...record, reuse } : record;
+    })
     .filter((provider): provider is CachedProvider => Boolean(provider));
 
   const file = cacheFilePath();
@@ -307,6 +460,59 @@ export function writeCachedProviders(providers: ProviderQuota[]): void {
   );
 
   writeCacheFile(file, merged);
+}
+
+/**
+ * Fresh-reuse stamps for the providers whose every lane in this report is
+ * cacheable. A provider with one failed, uncacheable, or empty lane gets none,
+ * so the next read asks the vendor again instead of serving part of a report.
+ */
+function reuseStampsFor(
+  providers: ProviderQuota[],
+  readingAt: string,
+): Map<ProviderQuota, ReuseStamp> {
+  const stamps = new Map<ProviderQuota, ReuseStamp>();
+  let context: string | undefined;
+  for (const id of new Set(providers.map((provider) => provider.provider))) {
+    const lanes = providers.filter((provider) => provider.provider === id);
+    const inputs = (lanes[0] as TracedQuota)[READING_INPUTS];
+    if (
+      !inputs ||
+      !lanes.every(
+        (provider) =>
+          (provider as TracedQuota)[READING_INPUTS] === inputs &&
+          !isCacheExcluded(provider) &&
+          toCacheProvider(provider),
+      )
+    )
+      continue;
+    context ??= reuseContextId();
+    lanes.forEach((provider, lane) => {
+      stamps.set(provider, {
+        context: context as string,
+        inputs: inputs.paths,
+        inputsDigest: inputs.digest,
+        readingAt,
+        lanes: lanes.length,
+        lane,
+        ...(provider.accountKeys ? { accountKeys: provider.accountKeys } : {}),
+        ...(provider.state.authStatus
+          ? { authStatus: provider.state.authStatus }
+          : {}),
+        ...(provider.state.degradedSources?.length
+          ? { degradedSources: provider.state.degradedSources }
+          : {}),
+      });
+    });
+  }
+  return stamps;
+}
+
+function isCacheExcluded(provider: ProviderQuota): boolean {
+  return (
+    (provider.provider === "claude" || provider.provider === "copilot") &&
+    provider.source === "cli"
+  );
 }
 
 function cacheIdentity(provider: ProviderQuota): string {
@@ -349,8 +555,8 @@ function writeCacheFile(file: string, providers: CachedProvider[]): void {
   chmodSync(file, 0o600);
 }
 
-function readCacheProviders(): CachedProvider[] {
-  const raw = readJsonFile(cacheFilePath());
+function readCacheProviders(file: string = cacheFilePath()): CachedProvider[] {
+  const raw = readUntracedJsonFile(file);
   const payload = objectValue(raw);
   const schemaVersion = numberValue(payload?.schemaVersion);
   if (
@@ -425,7 +631,61 @@ function serializeCachedProvider(
     ...(provider.credentialContextId
       ? { credentialContext: provider.credentialContextId }
       : {}),
+    ...(provider.reuse ? { reuse: provider.reuse } : {}),
   };
+}
+
+function normalizeReuseStamp(raw: unknown): ReuseStamp | undefined {
+  const data = objectValue(raw);
+  const context = stringValue(data?.context);
+  const inputs = stringArrayValue(data?.inputs);
+  const digest = stringValue(data?.inputsDigest);
+  const readingAt = stringValue(data?.readingAt);
+  const lanes = numberValue(data?.lanes);
+  const lane = numberValue(data?.lane);
+  if (
+    !data ||
+    !context ||
+    !CREDENTIAL_CONTEXT_ID.test(context) ||
+    !inputs ||
+    !digest ||
+    !CREDENTIAL_CONTEXT_ID.test(digest) ||
+    !readingAt ||
+    lanes === undefined ||
+    !Number.isInteger(lanes) ||
+    lanes < 1 ||
+    lane === undefined ||
+    !Number.isInteger(lane) ||
+    lane < 0 ||
+    lane >= lanes
+  )
+    return undefined;
+  const stamp: ReuseStamp = {
+    context,
+    inputs,
+    inputsDigest: digest,
+    readingAt,
+    lanes,
+    lane,
+  };
+  const accountKeys = stringArrayValue(data.accountKeys);
+  const authStatus = literalValue(data.authStatus, AUTH_STATUSES);
+  const degradedSources = Array.isArray(data.degradedSources)
+    ? data.degradedSources.map(normalizeDegradedSource)
+    : undefined;
+  if (accountKeys && accountKeys.length > 0) stamp.accountKeys = accountKeys;
+  if (authStatus) stamp.authStatus = authStatus;
+  if (degradedSources?.length && degradedSources.every(Boolean))
+    stamp.degradedSources = degradedSources as DegradedSource[];
+  return stamp;
+}
+
+function normalizeDegradedSource(raw: unknown): DegradedSource | undefined {
+  const data = objectValue(raw);
+  const source = stringValue(data?.source);
+  if (!source) return undefined;
+  const error = stringValue(data?.error);
+  return error ? { source, error } : { source };
 }
 
 function normalizeCachedProvider(
@@ -490,8 +750,10 @@ function normalizeCachedProvider(
     snapshot.state.untrustedWindowIds = untrustedWindowIds;
   if (credits) snapshot.credits = credits;
   const credentialContext = stringValue(data.credentialContext);
+  const reuse = normalizeReuseStamp(data.reuse);
   return {
     snapshot,
+    ...(reuse ? { reuse } : {}),
     ...(schemaVersion >= 2 &&
     snapshot.provider in CONTEXT_SCOPED_PROVIDERS &&
     credentialContext &&

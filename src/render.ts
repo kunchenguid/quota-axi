@@ -265,6 +265,15 @@ function providerStateRows(
   const rows: AttentionRow[] = [];
   const primary = primaryProviderRow(provider);
   if (primary) rows.push(primary);
+  if (provider.state.reused) {
+    rows.push({
+      ...providerColumns(provider),
+      scope: "all",
+      kind: "reused",
+      detail: `last refreshed ${provider.state.refreshedAt ?? UNKNOWN}`,
+      remedy: NONE,
+    });
+  }
   const unresolved = joinIds(provider.quotaSemantics?.unresolvedWindowIds);
   if (unresolved) {
     rows.push({
@@ -627,7 +636,10 @@ export function quotaJsonReport(
         : {}),
       state: {
         ...provider.state,
-        refreshedAt: undefined,
+        // A reused reading's age is load-bearing, so its fetch time stays.
+        refreshedAt: provider.state.reused
+          ? provider.state.refreshedAt
+          : undefined,
         sourcesTried: undefined,
       },
     })),

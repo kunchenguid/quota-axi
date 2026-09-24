@@ -2,6 +2,7 @@ import { open } from "node:fs/promises";
 import { homedir } from "node:os";
 import { classifyPiAuthEntry } from "../lib/pi-auth-store.js";
 import { resolvePiAuthFilePath } from "../lib/pi-agent-dir.js";
+import { traceInput } from "../lib/input-trace.js";
 
 const PI_PROVIDER_ID = "kimi-coding";
 const AUTH_FILE_LIMIT_BYTES = 64 * 1024;
@@ -151,6 +152,7 @@ async function readBoundedFile(
   path: string,
   maxBytes: number,
 ): Promise<Buffer> {
+  traceInput(path);
   const file = await open(path, "r");
   try {
     const contents = new Uint8Array(maxBytes + 1);

@@ -219,6 +219,32 @@ describe("live terminal report loop", () => {
     await run;
   });
 
+  it("tells the loader why it reads: start, tick, or the operator's r", async () => {
+    const io = harness();
+    const triggers: string[] = [];
+
+    const run = runLiveTui<number>({
+      load: async (trigger) => {
+        triggers.push(trigger);
+        return triggers.length;
+      },
+      render: (value) => `frame ${value}`,
+      intervalMillis: 300_000,
+      io: io.io,
+    });
+    await flush();
+    io.tick();
+    await flush();
+    io.press("r");
+    await flush();
+    io.tick();
+    await flush();
+
+    expect(triggers).toEqual(["start", "tick", "refresh", "tick"]);
+    io.press("q");
+    await run;
+  });
+
   it("refreshes immediately after a pending scroll repaint", async () => {
     const io = harness();
     const source = counting();

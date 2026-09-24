@@ -216,6 +216,22 @@ describe("CLI flag parsing", () => {
     }
   });
 
+  it("parses a fresh-reuse bound, including 0 to always read the vendor", () => {
+    expect(parseFlags([]).maxAgeSeconds).toBeUndefined();
+    expect(parseFlags(["--max-age", "0"]).maxAgeSeconds).toBe(0);
+    expect(parseFlags(["--max-age", "45"]).maxAgeSeconds).toBe(45);
+    expect(parseFlags(["--max-age=2m"]).maxAgeSeconds).toBe(120);
+    expect(parseFlags(["--tui", "--max-age", "1h"]).maxAgeSeconds).toBe(3600);
+    for (const value of ["", "soon", "-1", "1.5m"]) {
+      expect(() => parseFlags(["--max-age", value])).toThrow(
+        "--max-age requires a duration such as 0, 90s, or 2m",
+      );
+    }
+    expect(() => parseFlags(["--max-age", "61m"])).toThrow(
+      "--max-age must be at most 60m",
+    );
+  });
+
   it("parses --all for the human report and notes an explicit provider scope", () => {
     expect(parseFlags(["--tui", "--all"]).all).toBe(true);
     expect(parseFlags(["--tui"]).all).toBe(false);
@@ -261,6 +277,14 @@ describe("CLI flag parsing", () => {
     await expect(
       authCommand(["--tui"], { binPath: "quota-axi" }),
     ).rejects.toThrow("--tui is only supported by the quota command");
+  });
+
+  it("rejects --max-age for auth, which never reads quota", async () => {
+    await expect(
+      authCommand(["--max-age", "0"], { binPath: "quota-axi" }),
+    ).rejects.toThrow(
+      "--max-age is only supported by the quota and models commands",
+    );
   });
 
   it("rejects unsupported providers", () => {

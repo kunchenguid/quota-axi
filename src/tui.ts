@@ -333,6 +333,20 @@ function buildCard(
     : buildFailedCard(provider);
 }
 
+/** How old a reused reading is, as the card title's `reused 42s` marker. */
+function reusedAge(
+  refreshedAt: string | undefined,
+  generatedAtMs: number,
+): string {
+  const seconds = Math.floor(
+    (generatedAtMs - Date.parse(refreshedAt ?? "")) / 1_000,
+  );
+  if (!Number.isFinite(seconds) || seconds < 0) return "reused";
+  return seconds < 120
+    ? `reused ${seconds}s`
+    : `reused ${Math.floor(seconds / 60)}m`;
+}
+
 function buildLiveCard(
   provider: ProviderQuota,
   generatedAtMs: number,
@@ -343,6 +357,9 @@ function buildLiveCard(
     provider.plan,
     provider.source,
     stale ? "stale" : undefined,
+    provider.state.reused
+      ? reusedAge(provider.state.refreshedAt, generatedAtMs)
+      : undefined,
   ]
     .filter((part): part is string => part !== undefined)
     .join(" · ");

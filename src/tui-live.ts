@@ -42,8 +42,11 @@ export type LiveTuiIo = {
 };
 
 export type LiveTuiOptions<T> = {
-  /** Refresh the report. Bounded by the caller, not by this loop. */
-  load(): Promise<T>;
+  /**
+   * Refresh the report. Bounded by the caller, not by this loop. `trigger`
+   * says why: the first frame, the interval elapsing, or the operator's `r`.
+   */
+  load(trigger: LoadTrigger): Promise<T>;
   /** Render the current snapshot at the current terminal width. */
   render(value: T): string;
   /** Closing line pinned to the last row when height permits. */
@@ -103,6 +106,8 @@ const CHARACTER_KEYS: Readonly<Record<string, LiveCommand>> = {
 };
 
 type KeyCommand = LiveCommand | { action: string };
+
+export type LoadTrigger = "start" | "tick" | "refresh";
 
 type WakeReason = "tick" | "resize" | "scroll" | "key" | "refresh" | "quit";
 
@@ -179,10 +184,12 @@ export async function runLiveTui<T>({
   io.stdout.write(ENTER_SCREEN);
 
   let value: T | undefined;
+  let trigger: LoadTrigger = "start";
   try {
     while (!quit) {
       if (value === undefined) io.stdout.write(`${CLEAR_SCREEN}\n  loading…\n`);
-      value = await load();
+      value = await load(trigger);
+      trigger = "tick";
       if (quit) break;
       const snapshot = value;
       const paint = (): void => {
@@ -222,6 +229,7 @@ export async function runLiveTui<T>({
       paint();
       if (refreshRequested) {
         refreshRequested = false;
+        trigger = "refresh";
         continue;
       }
 
@@ -237,12 +245,14 @@ export async function runLiveTui<T>({
           });
           if (reason === "refresh" || refreshRequested) {
             refreshRequested = false;
+            trigger = "refresh";
             break;
           }
           if (reason === "tick" || reason === "quit") break;
           paint();
           if (refreshRequested) {
             refreshRequested = false;
+            trigger = "refresh";
             break;
           }
         }

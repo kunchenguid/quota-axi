@@ -1,7 +1,18 @@
 import { AxiError } from "axi-sdk-js";
 import { annotateQuotaAdvice } from "./advice.js";
-import { parseFlags, parseModelsFlags, type QuotaFlags } from "./args.js";
-import { writeCachedProviders } from "./cache.js";
+import {
+  DEFAULT_MAX_AGE_SECONDS,
+  parseFlags,
+  parseModelsFlags,
+  type QuotaFlags,
+} from "./args.js";
+import {
+  readReusableProviders,
+  readSnapshotProviders,
+  stampReadingInputs,
+  writeCachedProviders,
+} from "./cache.js";
+import { withInputTrace } from "./lib/input-trace.js";
 import { withQuotaSemantics } from "./interpretation.js";
 import { createModelsResponse, MODEL_CATALOG_PROVIDER_IDS } from "./models.js";
 import { providerPresence } from "./lib/source-attempts.js";
@@ -11,6 +22,7 @@ import {
   fetchAccountQuotas,
   inspectAccountAuth,
 } from "./providers/accounts.js";
+import { failedProvider } from "./providers/common.js";
 import { PROVIDERS } from "./providers/index.js";
 import {
   quotaJsonReport,
@@ -56,9 +68,16 @@ export async function quotaCommand(
     ...(flags.profileOnly ? { credentialMode: "profile-only" as const } : {}),
   };
 
-  if (flags.tui) return quotaTuiReport(flags, options);
+  const maxAgeSeconds = flags.profileOnly ? 0 : readMaxAge(flags);
 
-  const response = await loadQuota(flags.providers, options, false);
+  if (flags.tui) return quotaTuiReport(flags, options, maxAgeSeconds);
+
+  const response = await loadQuota(
+    flags.providers,
+    options,
+    false,
+    maxAgeSeconds,
+  );
   // Presence reads source attempts, which redaction removes, so both the JSON
   // marker and the TOON omission are classified on the complete model first.
   // The same rule as the human report: an explicit --provider never folds,
@@ -114,6 +133,7 @@ function omittedAbsentProviderIds(
 async function quotaTuiReport(
   flags: QuotaFlags,
   options: ProviderOptions,
+  maxAgeSeconds: number,
 ): Promise<string> {
   // A human display preference, so it is read only on this path: TOON and
   // JSON never see it.
@@ -145,7 +165,9 @@ async function quotaTuiReport(
   };
 
   if (flags.once || !isInteractiveTerminal()) {
-    return frame(await loadQuota(flags.providers, options, false));
+    return frame(
+      await loadQuota(flags.providers, options, false, maxAgeSeconds),
+    );
   }
 
   const refreshSeconds = flags.refreshSeconds ?? DEFAULT_REFRESH_SECONDS;
@@ -155,7 +177,15 @@ async function quotaTuiReport(
       ? []
       : [`a ${showNotSetUp ? "hide" : "show"} not set up`];
   const last = await runLiveTui<QuotaAxiResponse>({
-    load: () => loadQuota(flags.providers, options, true),
+    // `r` is an operator asking for a new reading now, so it never reuses;
+    // scheduled frames and the first one honor the same bound as every read.
+    load: (trigger) =>
+      loadQuota(
+        flags.providers,
+        options,
+        true,
+        trigger === "refresh" ? 0 : maxAgeSeconds,
+      ),
     render: frame,
     status: (scroll) =>
       renderTuiHintLine(
@@ -215,20 +245,22 @@ function processLiveTuiIo(): LiveTuiIo {
 
 /**
  * Fetch, apply the all-failed exit code, and refresh the cache unless the read
- * is profile-only, which never touches cached quota. A live report re-evaluates
- * the exit code every cycle so quitting reflects the last frame.
+ * is profile-only, which never touches cached quota, or comes from a supplied
+ * snapshot. A live report re-evaluates the exit code every cycle so quitting
+ * reflects the last frame.
  */
 async function loadQuota(
   providers: ProviderId[],
   options: ProviderOptions,
   live: boolean,
+  maxAgeSeconds: number,
 ): Promise<QuotaAxiResponse> {
-  const response = await fetchQuota(providers, options);
+  const response = await fetchQuota(providers, options, maxAgeSeconds);
   const allFailed = response.providers.every(isFailed);
   if (allFailed) process.exitCode = 1;
   else if (live) process.exitCode = undefined;
-  if (options.credentialMode !== "profile-only") {
-    writeCachedProvidersBestEffort(response.providers);
+  if (options.credentialMode !== "profile-only" && !snapshotFile()) {
+    writeCachedProvidersBestEffort(response.providers, response.generatedAt);
   }
   return response;
 }
@@ -243,8 +275,9 @@ export async function modelsCommand(
     allowKeychainPrompt: flags.allowKeychainPrompt,
     refreshCredentials: !flags.noCredentialRefresh,
   };
-  const quota = await fetchQuota(flags.providers, options);
-  writeCachedProvidersBestEffort(quota.providers);
+  const quota = await fetchQuota(flags.providers, options, readMaxAge(flags));
+  if (!snapshotFile())
+    writeCachedProvidersBestEffort(quota.providers, quota.generatedAt);
   const response = createModelsResponse(quota, {
     ...(flags.intelligence ? { intelligence: flags.intelligence } : {}),
     ...(flags.sort ? { sort: flags.sort } : {}),
@@ -286,6 +319,13 @@ export async function authCommand(
       "--tui is only supported by the quota command",
       "VALIDATION_ERROR",
       ["Run `quota-axi --tui` for the human quota report"],
+    );
+  }
+  if (flags.maxAgeSeconds !== undefined) {
+    throw new AxiError(
+      "--max-age is only supported by the quota and models commands",
+      "VALIDATION_ERROR",
+      ["auth always reads the credential stores on disk"],
     );
   }
   // `auth` reports the credential state that is on disk right now, so it never
@@ -334,14 +374,25 @@ function validateClaudeInference(flags: QuotaFlags): void {
   }
 }
 
+/**
+ * Read every provider. A supplied snapshot answers for all of them; otherwise
+ * a provider whose last successful reading is younger than `maxAgeSeconds`
+ * and was taken under this process's credential selection is served from the
+ * cache, and every other provider asks its vendor.
+ */
 export async function fetchQuota(
   providers: ProviderId[],
   options: ProviderOptions,
+  maxAgeSeconds = 0,
 ): Promise<QuotaAxiResponse> {
+  const snapshot = snapshotFile();
   const fetched = (
     await Promise.all(
       providers.map((provider) =>
-        fetchAccountQuotas(PROVIDERS[provider], options),
+        snapshot
+          ? snapshotReadings(provider, snapshot)
+          : (reusableReadings(provider, maxAgeSeconds) ??
+            tracedReadings(provider, options)),
       ),
     )
   ).flat();
@@ -357,6 +408,75 @@ export async function fetchQuota(
     generatedAt,
     providers: results,
   });
+}
+
+/**
+ * How old a reused reading may be. `--full` is the audit tier, and account
+ * identity and source attempts are never cached, so it reads the vendor unless
+ * `--max-age` explicitly allows reuse.
+ */
+function readMaxAge(flags: QuotaFlags): number {
+  return flags.maxAgeSeconds ?? (flags.full ? 0 : DEFAULT_MAX_AGE_SECONDS);
+}
+
+/** Env var naming a quota snapshot file that answers instead of any vendor. */
+export const SNAPSHOT_ENV = "QUOTA_AXI_SNAPSHOT";
+
+function snapshotFile(): string | undefined {
+  return process.env[SNAPSHOT_ENV]?.trim() || undefined;
+}
+
+/** Read the vendor, recording which local files the reading depended on. */
+async function tracedReadings(
+  provider: ProviderId,
+  options: ProviderOptions,
+): Promise<ProviderQuota[]> {
+  const { value, inputs } = await withInputTrace(() =>
+    fetchAccountQuotas(PROVIDERS[provider], options),
+  );
+  for (const reading of value) stampReadingInputs(reading, inputs);
+  return value;
+}
+
+function reusableReadings(
+  provider: ProviderId,
+  maxAgeSeconds: number,
+): ProviderQuota[] | undefined {
+  try {
+    return readReusableProviders(provider, maxAgeSeconds);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * A provider's readings from the supplied snapshot. It never falls through to
+ * the vendor: a provider the file does not name, or one whose windows have
+ * reached their reset, is reported unavailable so a fixture cannot silently
+ * read live credentials.
+ */
+function snapshotReadings(provider: ProviderId, file: string): ProviderQuota[] {
+  let readings: ProviderQuota[] | "expired" | undefined;
+  try {
+    readings = readSnapshotProviders(file, provider);
+  } catch {
+    readings = undefined;
+  }
+  if (Array.isArray(readings)) {
+    return readings.map((reading) => ({
+      ...reading,
+      state: { ...reading.state, sourcesTried: ["snapshot"] },
+    }));
+  }
+  return [
+    failedProvider({
+      provider,
+      label: PROVIDERS[provider].label,
+      status: "unavailable",
+      error: readings === "expired" ? "snapshot_expired" : "not_in_snapshot",
+      sourcesTried: ["snapshot"],
+    }),
+  ];
 }
 
 async function inspectAuth(
@@ -399,6 +519,13 @@ function validateProfileOnly(flags: QuotaFlags): void {
       ["Choose `--provider claude` or `--provider codex`"],
     );
   }
+  if (snapshotFile()) {
+    throw new AxiError(
+      `--profile-only cannot be combined with ${SNAPSHOT_ENV}`,
+      "VALIDATION_ERROR",
+      [`Unset ${SNAPSHOT_ENV} to read the selected profile`],
+    );
+  }
   if (flags.allowKeychainPrompt) {
     throw new AxiError(
       "--profile-only cannot be combined with --allow-keychain-prompt",
@@ -416,9 +543,12 @@ function validateProfileOnly(flags: QuotaFlags): void {
   }
 }
 
-function writeCachedProvidersBestEffort(providers: ProviderQuota[]): void {
+function writeCachedProvidersBestEffort(
+  providers: ProviderQuota[],
+  readingAt: string,
+): void {
   try {
-    writeCachedProviders(providers);
+    writeCachedProviders(providers, readingAt);
   } catch {
     return;
   }
