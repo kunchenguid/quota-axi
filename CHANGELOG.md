@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.54](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.53...quota-axi-v0.1.54) (2026-09-24)
+
+
+### Features
+
+* **cache:** add opt-in fresh reuse with single-flight cold reads ([#279](https://github.com/kunchenguid/quota-axi/issues/279)) ([9b102bc](https://github.com/kunchenguid/quota-axi/commit/9b102bc44611973e9ed1aec9ab96e7d7d8a7d414))
+
 ## [0.1.53](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.52...quota-axi-v0.1.53) (2026-09-23)
 
 
