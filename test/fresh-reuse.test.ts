@@ -325,6 +325,64 @@ describe("fresh reuse", () => {
   });
 });
 
+describe("live --tui", () => {
+  const ttys = [process.stdout, process.stdin].map((stream) => ({
+    stream,
+    descriptor: Object.getOwnPropertyDescriptor(stream, "isTTY"),
+  }));
+
+  afterEach(() => {
+    for (const { stream, descriptor } of ttys) {
+      if (descriptor) Object.defineProperty(stream, "isTTY", descriptor);
+      else delete (stream as { isTTY?: boolean }).isTTY;
+    }
+    process.stdin.pause();
+    vi.restoreAllMocks();
+  });
+
+  it("reads the vendor on every scheduled frame at --refresh 30s", async () => {
+    for (const { stream } of ttys)
+      Object.defineProperty(stream, "isTTY", {
+        configurable: true,
+        value: true,
+      });
+    vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const realSetTimeout = globalThis.setTimeout;
+    const ticks: Array<() => void> = [];
+    vi.stubGlobal("setTimeout", ((callback: () => void, ms?: number) =>
+      ms === 30_000
+        ? (ticks.push(callback), 0)
+        : realSetTimeout(callback, ms)) as typeof setTimeout);
+    const nextTick = async (): Promise<() => void> => {
+      while (ticks.length === 0)
+        await new Promise((resolve) => realSetTimeout(resolve, 5));
+      return ticks.shift()!;
+    };
+
+    const report = quotaCommand(
+      [
+        "--provider",
+        "claude",
+        "--tui",
+        "--refresh",
+        "30s",
+        "--no-credential-refresh",
+      ],
+      undefined,
+    );
+    for (let frame = 0; frame < 2; frame++) {
+      const tick = await nextTick();
+      advance(30);
+      tick();
+    }
+    await nextTick();
+    process.stdin.emit("data", "q");
+    await report;
+
+    expect(usageCalls).toBe(3);
+  });
+});
+
 describe("QUOTA_AXI_SNAPSHOT", () => {
   function writeSnapshot(resetsAt: string): string {
     const file = join(root, "snapshot.json");

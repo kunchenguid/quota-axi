@@ -49,9 +49,10 @@ export const MAX_REFRESH_SECONDS = 86_400;
 /**
  * Fresh-reuse bounds. The default absorbs a burst of back-to-back reads (a
  * dispatcher polling per decision, a test run) that would otherwise trip a
- * vendor's usage-endpoint rate limit, while staying under the 2-5 minute live
- * `--tui` cadence so each scheduled frame still reads the vendor. Ninety
- * seconds moves a five-hour window's elapsed time by half a percent.
+ * vendor's usage-endpoint rate limit. A live `--tui` caps its scheduled
+ * frames below the refresh interval unless `--max-age` is given, so each one
+ * still reads the vendor at any `--refresh`. Ninety seconds moves a five-hour
+ * window's elapsed time by half a percent.
  */
 export const DEFAULT_MAX_AGE_SECONDS = 90;
 export const MAX_MAX_AGE_SECONDS = 3_600;

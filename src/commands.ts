@@ -176,15 +176,25 @@ async function quotaTuiReport(
     flags.explicitProviders || notSetUp === 0
       ? []
       : [`a ${showNotSetUp ? "hide" : "show"} not set up`];
+  // A scheduled frame never reuses the loop's own previous frame, which is a
+  // full interval old, unless --max-age explicitly allows it; a newer reading
+  // from another process still answers.
+  const tickMaxAgeSeconds =
+    flags.maxAgeSeconds === undefined
+      ? Math.min(maxAgeSeconds, refreshSeconds - 1)
+      : maxAgeSeconds;
   const last = await runLiveTui<QuotaAxiResponse>({
-    // `r` is an operator asking for a new reading now, so it never reuses;
-    // scheduled frames and the first one honor the same bound as every read.
+    // `r` is an operator asking for a new reading now, so it never reuses
     load: (trigger) =>
       loadQuota(
         flags.providers,
         options,
         true,
-        trigger === "refresh" ? 0 : maxAgeSeconds,
+        trigger === "refresh"
+          ? 0
+          : trigger === "tick"
+            ? tickMaxAgeSeconds
+            : maxAgeSeconds,
       ),
     render: frame,
     status: (scroll) =>

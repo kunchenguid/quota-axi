@@ -356,7 +356,7 @@ CODEX_HOME=/path/to/codex-profile quota-axi --provider codex --profile-only --fu
 
 Repeated reads a short time apart reuse the last successful reading instead of asking the vendor again, because a burst of back-to-back reads (a dispatcher that takes a fresh reading per decision, a test run) can otherwise trip a vendor's usage-endpoint rate limit and leave the provider unmeasured until the limit clears.
 `quota` and `models` reuse a provider's reading when it is younger than `--max-age`, default 90 seconds, and `--max-age 0` always asks the vendor.
-Ninety seconds absorbs a burst while staying under the live `--tui` cadence, so each scheduled frame still reads the vendor, and it moves a five-hour window's elapsed time by half a percent.
+Ninety seconds absorbs a burst and moves a five-hour window's elapsed time by half a percent.
 `--max-age` accepts `0`, bare seconds, or a whole-unit duration up to one hour.
 
 A reading is reused only when all of these hold:
@@ -369,7 +369,8 @@ A reading is reused only when all of these hold:
 The cache keeps one slot per provider lane, so two profiles that alternate each read the vendor; each still reuses its own reading between switches.
 `--full` is the audit tier and account identity and source attempts are never cached, so it reads the vendor unless `--max-age` is passed explicitly.
 `--profile-only` never reuses, and readings the cache excludes (Claude native inference and Copilot native secure-store readings) are never reused.
-A live `--tui` reuses on its first frame and on scheduled refreshes; pressing `r` always reads the vendor, because it is an operator asking for a new reading now.
+A live `--tui` reuses on its first frame; a scheduled refresh reuses only a reading younger than the refresh interval, so it never repeats its own previous frame and still reads the vendor at any `--refresh`, unless `--max-age` is passed explicitly.
+Pressing `r` always reads the vendor, because it is an operator asking for a new reading now.
 
 A reused reading is a fresh reading, not a stale one: `state.status` stays `fresh`, `stale` stays `false`, and quota rows, pace, runway, and selection are derived as usual at the report's `generatedAt`.
 It is marked honestly on every surface: `--json` adds `state.reused: true` and keeps its `state.refreshedAt` (the time the vendor answered) in the default tier, default TOON adds a `reused` attention row naming that time, and the `--tui` card title says `reused 42s`.
