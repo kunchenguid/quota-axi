@@ -30,7 +30,10 @@ export type FetchTurn<T> =
   | { kind: "answered"; value: T }
   /** This process holds the lock: read the vendor, cache, then release. */
   | { kind: "leader"; lock: FetchLock }
-  /** No reading within the wait, or no lock directory: read the vendor. */
+  /**
+   * No reading within the wait, the holder released without a reusable one,
+   * or no lock directory: read the vendor.
+   */
   | { kind: "unlocked" };
 
 export type FetchTurnOptions = {
@@ -71,21 +74,33 @@ export async function takeFetchTurn<T>(
 ): Promise<FetchTurn<T>> {
   // Monotonic, so a wall-clock jump (or a test's fake Date) cannot stall it
   const deadline = performance.now() + waitMs;
+  let waited = false;
   for (;;) {
     const lock = tryLock(path);
     if (lock === "unavailable") return { kind: "unlocked" };
     if (lock) {
       const value = answer();
-      if (value === undefined) return { kind: "leader", lock };
+      if (value !== undefined) {
+        lock.release();
+        return { kind: "answered", value };
+      }
+      if (!waited) return { kind: "leader", lock };
+      // The holder's reading was not reusable, so another turn would only
+      // queue the waiters behind the same unanswerable read one at a time
       lock.release();
-      return { kind: "answered", value };
+      return { kind: "unlocked" };
     }
+    waited = true;
     const value = answer();
     if (value !== undefined) return { kind: "answered", value };
     if (performance.now() >= deadline) return { kind: "unlocked" };
     const holder = readHolder(path);
-    if (isAbandoned(path, holder, staleMs)) {
+    const state = holderState(path, holder, staleMs);
+    if (state === "released") continue;
+    if (state === "abandoned") {
       removeIfHeldBy(path, holder?.token);
+      // A crashed or wedged holder answered nothing, so the taker leads
+      waited = false;
       continue;
     }
     await sleep(pollMs);
@@ -134,25 +149,27 @@ function readHolder(path: string): Holder | undefined {
 }
 
 /**
- * Whether the holder crashed or wedged. A lock whose contents are not yet
- * written is only its creator between two syscalls, so it is judged by age.
+ * Whether the holder released the lock, crashed or wedged, or still holds it.
+ * A lock whose contents are not yet written is only its creator between two
+ * syscalls, so it is judged by age.
  */
-function isAbandoned(
+function holderState(
   path: string,
   holder: Holder | undefined,
   staleMs: number,
-): boolean {
+): "released" | "abandoned" | "held" {
   let modifiedAt: number;
   try {
     modifiedAt = statSync(path).mtimeMs;
   } catch {
-    // Released between the attempt and this check: try again at once
-    return true;
+    return "released";
   }
-  if (Math.abs(Date.now() - modifiedAt) > staleMs) return true;
-  if (!holder || holder.host !== hostname()) return false;
+  if (Math.abs(Date.now() - modifiedAt) > staleMs) return "abandoned";
+  if (!holder || holder.host !== hostname()) return "held";
   // This process never waits on a lock it holds, so its own pid is a leftover
-  return holder.pid === process.pid || !processAlive(holder.pid);
+  return holder.pid === process.pid || !processAlive(holder.pid)
+    ? "abandoned"
+    : "held";
 }
 
 function processAlive(pid: number): boolean {

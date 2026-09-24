@@ -23,9 +23,10 @@ type Fixture = { env: NodeJS.ProcessEnv; calls: string };
 /**
  * A synthetic home whose vendor is a fake Codex app-server that counts how
  * often it is asked for rate limits, so the count is the number of vendor
- * usage calls. It answers after `delayMs`, like a real vendor round trip.
+ * usage calls. It answers after `delayMs`, like a real vendor round trip, and
+ * with `failing` it answers with an error, a reading nothing can reuse.
  */
-function fixture(delayMs = 0): Fixture {
+function fixture(delayMs = 0, failing = false): Fixture {
   root = mkdtempSync(join(tmpdir(), "quota-axi-fresh-reuse-cli-"));
   const home = join(root, "home");
   mkdirSync(home, { mode: 0o700 });
@@ -67,8 +68,12 @@ process.stdin.on("data", (chunk) => {
         rateLimitsByLimitId: {}
       };
     }
+    const failed = ${failing} && request.method === "account/rateLimits/read";
+    const response = failed
+      ? { id: request.id, error: { code: -32000, message: "unavailable" } }
+      : { id: request.id, result };
     setTimeout(() => {
-      process.stdout.write(JSON.stringify({ id: request.id, result }) + "\\n");
+      process.stdout.write(JSON.stringify(response) + "\\n");
     }, delay);
   }
 });
@@ -120,15 +125,17 @@ function burst(reads: number, env: NodeJS.ProcessEnv = {}): number {
 
 /**
  * `processes` separate reads started together on a cold cache, as parallel
- * dispatch decisions produce. The vendor takes a second to answer, so every
- * process is waiting on it at once. Returns the vendor usage calls and each
- * process's reading.
+ * dispatch decisions produce. The vendor takes `delayMs` to answer, so every
+ * process is waiting on it at once. Returns the vendor usage calls, each
+ * process's reading, and how long the slowest process took.
  */
 async function concurrent(
   processes: number,
   env: NodeJS.ProcessEnv,
-): Promise<{ calls: number; readings: Reading[] }> {
-  const { env: base, calls } = fixture(1_000);
+  { delayMs = 1_000, failing = false } = {},
+): Promise<{ calls: number; readings: Reading[]; elapsedMs: number }> {
+  const { env: base, calls } = fixture(delayMs, failing);
+  const startedAt = performance.now();
   const readings = await Promise.all(
     Array.from(
       { length: processes },
@@ -147,13 +154,18 @@ async function concurrent(
           });
           child.on("error", reject);
           child.on("close", (status) => {
-            if (status === 0) resolvePromise(parseReading(stdout));
+            if (status === (failing ? 1 : 0))
+              resolvePromise(parseReading(stdout));
             else reject(new Error(`exit ${status}: ${stderr}`));
           });
         }),
     ),
   );
-  return { calls: readFileSync(calls, "utf8").length, readings };
+  return {
+    calls: readFileSync(calls, "utf8").length,
+    readings,
+    elapsedMs: performance.now() - startedAt,
+  };
 }
 
 describe("fresh reuse through the built CLI", () => {
@@ -174,6 +186,21 @@ describe("fresh reuse through the built CLI", () => {
       true,
     );
     expect(readings.filter((reading) => !reading.state.reused)).toHaveLength(1);
+  }, 60_000);
+
+  it("reads together after a holder whose reading cannot be reused", async () => {
+    const delayMs = 1_500;
+    const { calls, readings, elapsedMs } = await concurrent(
+      8,
+      { QUOTA_AXI_MAX_AGE: "90" },
+      { delayMs, failing: true },
+    );
+    expect(calls).toBe(8);
+    expect(readings.every((reading) => reading.state.status !== "fresh")).toBe(
+      true,
+    );
+    // Taking turns would cost one vendor round trip per process
+    expect(elapsedMs).toBeLessThan(4 * delayMs);
   }, 60_000);
 
   it("makes one per process without reuse, where no lock is taken", async () => {
