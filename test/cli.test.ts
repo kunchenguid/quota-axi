@@ -12,6 +12,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { parseFlags, parseModelsFlags } from "../src/args.js";
 import { main, normalizeArgv } from "../src/cli.js";
 import { authCommand, quotaCommand } from "../src/commands.js";
+import { createDevinAdapter } from "../src/providers/devin.js";
 import { PROVIDERS } from "../src/providers/index.js";
 import { redactedResponse } from "../src/render.js";
 import type {
@@ -1815,6 +1816,8 @@ describe("new provider public quota output", () => {
     useTempCache();
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2026-09-22T12:00:00.000Z"));
+    // The shared adapter captured Date.now at import, before this freeze.
+    PROVIDERS.devin = createDevinAdapter();
     const key = "synthetic-devin-cli-key";
     process.env.WINDSURF_API_KEY = key;
     const payload = JSON.parse(
