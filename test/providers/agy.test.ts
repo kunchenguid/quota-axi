@@ -1122,6 +1122,8 @@ function cachedAgyQuota(): ProviderQuota {
         kind: "session",
         percentUsed: 12,
         percentRemaining: 88,
+        // Still ahead, so a stale fallback may serve it.
+        resetsAt: new Date(Date.now() + 60 * 60 * 1_000).toISOString(),
       },
     ],
     state: {

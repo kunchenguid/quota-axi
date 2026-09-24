@@ -245,20 +245,11 @@ export async function fetchQuota(
   // profile/account changes. Never serve them as stale, or substitute an older
   // legacy source snapshot for a present but unmeasurable native selection.
   const cached = readCachedProvider("copilot");
-  if (
-    cached &&
-    cached.source !== "cli" &&
-    nativeSilent &&
-    !nativePromptRequired
-  ) {
-    const result = staleFromCache(
-      cached,
-      verdict.error,
-      sourceNames(attempts),
-      attempts,
-    );
-    return nativePromptRequired ? withPromptRemedy(result) : result;
-  }
+  const stale =
+    cached && cached.source !== "cli" && nativeSilent && !nativePromptRequired
+      ? staleFromCache(cached, verdict.error, sourceNames(attempts), attempts)
+      : undefined;
+  if (stale) return stale;
 
   const result = failedProvider({
     provider: "copilot",

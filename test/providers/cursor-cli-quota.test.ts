@@ -160,6 +160,8 @@ async function seedCache(): Promise<void> {
         kind: "monthly",
         percentUsed: 100,
         percentRemaining: 0,
+        // Still ahead, so a stale fallback may serve it.
+        resetsAt: new Date(Date.now() + 60 * 60 * 1_000).toISOString(),
       },
     ],
     state: {

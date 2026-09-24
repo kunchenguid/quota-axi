@@ -6,7 +6,7 @@ import { scrollFrame, scrollHint } from "../src/tui-viewport.js";
 const ENTER_SCREEN = "\x1b[?1049h";
 const LEAVE_SCREEN = "\x1b[?1049l";
 const CLEAR_SCREEN = "\x1b[H\x1b[2J";
-const HINT = "Press q to quit · refreshing every 5m";
+const HINT = "Press r to refresh · q to quit · refreshing every 5m";
 
 type Harness = {
   io: LiveTuiIo;
@@ -195,6 +195,89 @@ describe("live terminal report loop", () => {
     expect(io.pauses()).toBe(1);
     expect(io.subscriptions()).toBe(0);
     expect(io.pendingTimers()).toBe(0);
+  });
+
+  it("refreshes immediately on r", async () => {
+    const io = harness();
+    const source = counting();
+
+    const run = runLiveTui<number>({
+      load: source.load,
+      render: (value) => `frame ${value}`,
+      intervalMillis: 300_000,
+      io: io.io,
+    });
+    await flush();
+
+    io.press("r");
+    await flush();
+    expect(source.calls()).toBe(2);
+    expect(io.frame()).toBe("frame 2");
+    expect(io.pendingTimers()).toBe(1);
+
+    io.press("q");
+    await run;
+  });
+
+  it("refreshes immediately after a pending scroll repaint", async () => {
+    const io = harness();
+    const source = counting();
+
+    const run = runLiveTui<number>({
+      load: source.load,
+      render: (value) => `frame ${value}`,
+      intervalMillis: 300_000,
+      io: io.io,
+    });
+    await flush();
+
+    io.press("j");
+    io.press("r");
+    await flush();
+    expect(source.calls()).toBe(2);
+    expect(io.frame()).toBe("frame 2");
+
+    io.press("q");
+    await run;
+  });
+
+  it("keeps an r pressed while a refresh is in flight and reads again after the paint", async () => {
+    const io = harness();
+    let calls = 0;
+    const releases: Array<() => void> = [];
+    const run = runLiveTui<number>({
+      load: async () => {
+        calls += 1;
+        const call = calls;
+        await new Promise<void>((resolve) => {
+          releases.push(resolve);
+        });
+        return call;
+      },
+      render: (value) => `frame ${value}`,
+      intervalMillis: 300_000,
+      io: io.io,
+    });
+    await flush();
+    expect(calls).toBe(1);
+
+    io.press("r");
+    await flush();
+    expect(calls).toBe(1);
+
+    releases[0]?.();
+    await flush();
+    expect(io.output()).toContain("frame 1");
+    expect(calls).toBe(2);
+
+    releases[1]?.();
+    await flush();
+    expect(io.frame()).toBe("frame 2");
+    expect(calls).toBe(2);
+    expect(io.pendingTimers()).toBe(1);
+
+    io.press("q");
+    await expect(run).resolves.toBe(2);
   });
 
   it("repaints on resize without refetching or resetting the interval", async () => {

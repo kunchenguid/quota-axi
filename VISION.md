@@ -37,6 +37,9 @@ A credential the user supplies explicitly is as legitimate a source as one disco
 
 Every number reported is a number a provider reported or a figure derived from evidence quota-axi can trust.
 It never invents a window duration, a reset deadline, a relationship between windows, or a percentage.
+Across every provider and every window, `percentUsed` is how much of that window has been consumed and `percentRemaining` is what is left; adapters convert vendor fields into that direction rather than mirroring whatever polarity the wire happens to use.
+That data direction never changes; a person who reads gauges the other way may flip what the `--tui` report draws to consumption with one user-level preference, and that preference reaches only the human display, never the model, the cache, or the TOON and JSON an agent reads, because an agent has no preference to honor.
+The meaning of a vendor field is verified against a real observed reading or the vendor's own client or schema, never inferred from a UI screenshot.
 A conservative rule such as taking the lowest window as the effective bound applies only where that relationship is established as a fact about that provider, never as a default where relationships are unknown.
 Uncertainty gets louder as it propagates: an unmeasurable scope publishes no row, `spendPriority` renders the literal `unknown` rather than `0`, and an unknown pace marker is omitted rather than drawn.
 A number that has stopped being true is never served, even when labelled with its age and provenance, because it misleads the agent acting on it, and a failed read is reported as a failed read.

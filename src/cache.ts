@@ -8,6 +8,7 @@ import {
 } from "./lib/fs.js";
 import { kimiReadingContextId } from "./providers/kimi-cache-context.js";
 import { commandCodeReadingContextId } from "./providers/commandcode-cache-context.js";
+import { devinReadingContextId } from "./providers/devin-cache-context.js";
 import { elevenLabsReadingContextId } from "./providers/elevenlabs-cache-context.js";
 import { miniMaxReadingContextId } from "./providers/minimax-cache-context.js";
 import { isPiCodexSource } from "./providers/pi-codex-credential.js";
@@ -64,8 +65,8 @@ const CREDENTIAL_CONTEXT_ID = /^[a-f0-9]{64}$/;
  * Codex slot can be signed in to another ChatGPT account. A snapshot from one
  * such context says nothing about another, so each is stamped on write and
  * checked on stale reuse - strictly for Claude, Kimi, Command Code, MiniMax,
- * and ElevenLabs, whose identity a reading always has (and which skip write
- * and clear when that identity is missing), and on proven mismatch for Codex,
+ * ElevenLabs, and Devin, whose identity a reading always has (and which skip
+ * write and clear when that identity is missing), and on proven mismatch for Codex,
  * whose stored account id is optional.
  *
  * How that stamp is obtained is not the same question for each. A Claude
@@ -85,7 +86,8 @@ const CREDENTIAL_CONTEXT_ID = /^[a-f0-9]{64}$/;
  * source plus the deployment host its resolution implies. ElevenLabs publishes
  * a one-way digest of the key that answered, because that key is the only thing
  * naming the subscription and its single slot would otherwise be shared by
- * every key.
+ * every key. Devin publishes the answering source, host, and a one-way digest
+ * of the session token, because a new login replaces that token.
  */
 const CONTEXT_SCOPED_PROVIDERS: Partial<
   Record<ProviderId, (provider: ProviderQuota) => string | undefined>
@@ -94,6 +96,7 @@ const CONTEXT_SCOPED_PROVIDERS: Partial<
   kimi: kimiReadingContextId,
   commandcode: commandCodeReadingContextId,
   elevenlabs: elevenLabsReadingContextId,
+  devin: devinReadingContextId,
   codex: codexStampContextId,
   minimax: miniMaxReadingContextId,
 };
@@ -234,6 +237,17 @@ export function readCachedElevenLabsProvider(
   contextId: string,
 ): ProviderQuota | undefined {
   return readCachedProviderInContext("elevenlabs", contextId);
+}
+
+/**
+ * Devin stale quota may only be reused when the cache record proves it was
+ * captured for the same source, host, and key, so one login's windows can
+ * never stand in for another's.
+ */
+export function readCachedDevinProvider(
+  contextId: string,
+): ProviderQuota | undefined {
+  return readCachedProviderInContext("devin", contextId);
 }
 
 function readCachedProviderInContext(
@@ -379,7 +393,7 @@ function toCacheProvider(provider: ProviderQuota): CachedProvider | undefined {
   )?.snapshot;
   if (!snapshot) return undefined;
   const contextId = CONTEXT_SCOPED_PROVIDERS[provider.provider]?.(provider);
-  // Claude, Kimi, Command Code, MiniMax, and ElevenLabs require a published
+  // Claude, Kimi, Command Code, MiniMax, ElevenLabs, and Devin require a published
   // identity; Codex stamps are optional and withheld only on proven mismatch
   // at read time.
   if (
@@ -395,8 +409,8 @@ function toCacheProvider(provider: ProviderQuota): CachedProvider | undefined {
 }
 
 function missingRequiredContext(provider: ProviderId): boolean {
-  // Codex stamps are optional; Claude, Kimi, Command Code, MiniMax, and
-  // ElevenLabs must
+  // Codex stamps are optional; Claude, Kimi, Command Code, MiniMax, ElevenLabs,
+  // and Devin must
   // not clear when the current reading has no published context identity.
   if (provider === "codex") return false;
   const scope = CONTEXT_SCOPED_PROVIDERS[provider];

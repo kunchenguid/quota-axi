@@ -37,6 +37,7 @@ const originalMimoProvider = PROVIDERS.mimo;
 const originalDeepSeekProvider = PROVIDERS.deepseek;
 const originalOpenRouterProvider = PROVIDERS.openrouter;
 const originalElevenLabsProvider = PROVIDERS.elevenlabs;
+const originalDevinProvider = PROVIDERS.devin;
 const originalXdgCacheHome = process.env.XDG_CACHE_HOME;
 const originalClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
 const originalCodexHome = process.env.CODEX_HOME;
@@ -65,6 +66,7 @@ afterEach(() => {
   PROVIDERS.deepseek = originalDeepSeekProvider;
   PROVIDERS.openrouter = originalOpenRouterProvider;
   PROVIDERS.elevenlabs = originalElevenLabsProvider;
+  PROVIDERS.devin = originalDevinProvider;
   vi.unstubAllGlobals();
   if (originalXdgCacheHome === undefined) delete process.env.XDG_CACHE_HOME;
   else process.env.XDG_CACHE_HOME = originalXdgCacheHome;
@@ -101,6 +103,7 @@ describe("CLI flag parsing", () => {
       "deepseek",
       "openrouter",
       "elevenlabs",
+      "devin",
     ]);
   });
 
@@ -115,6 +118,36 @@ describe("CLI flag parsing", () => {
       "grok",
     ]);
     expect(parseFlags(["--provider", "agy"]).providers).toEqual(["agy"]);
+  });
+
+  it("accumulates repeated --provider flags in first-seen order", () => {
+    expect(
+      parseFlags(["--provider", "zai", "--provider", "codex"]).providers,
+    ).toEqual(["zai", "codex"]);
+    expect(parseFlags(["--provider", "zai,codex"]).providers).toEqual([
+      "zai",
+      "codex",
+    ]);
+    expect(
+      parseFlags([
+        "--provider",
+        "codex",
+        "--provider=zai,codex",
+        "--provider",
+        "claude",
+      ]).providers,
+    ).toEqual(["codex", "zai", "claude"]);
+    expect(
+      parseFlags(["--provider", "zai", "--provider", "zai"]).providers,
+    ).toEqual(["zai"]);
+    expect(
+      parseFlags(["--provider", "zai", "--provider", "codex"])
+        .explicitProviders,
+    ).toBe(true);
+    expect(
+      parseModelsFlags(["--provider", "claude", "--provider", "kimi"])
+        .providers,
+    ).toEqual(["claude", "kimi"]);
   });
 
   it("ignores a standalone argument separator", () => {
@@ -144,6 +177,7 @@ describe("CLI flag parsing", () => {
           "deepseek",
           "openrouter",
           "elevenlabs",
+          "devin",
         ],
         json: true,
         full: true,
@@ -1390,12 +1424,12 @@ describe("human report folding for providers that are not set up", () => {
 
     expect(output.trimEnd().split("\n").slice(-3)).toEqual([
       "  ○ not set up  cursor · copilot · grok · kimi · zai · agy · alibaba · opencode-go · commandcode",
-      "                minimax · mimo · deepseek · openrouter · elevenlabs",
+      "                minimax · mimo · deepseek · openrouter · elevenlabs · devin",
       "                quota-axi auth shows where each is read",
     ]);
     expect(output).not.toMatch(/╭─ ○ (agy|alibaba|commandcode) /);
 
-    expect(output).toMatch(/· 1 live · 1 needs attention · 14 not set up\n/);
+    expect(output).toMatch(/· 1 live · 1 needs attention · 15 not set up\n/);
     expect(output).toContain("╭─ ● codex ");
     expect(output).toContain("╭─ ○ claude ");
     expect(output).toContain("  ○ not set up  cursor · copilot · grok · kimi");
@@ -1407,7 +1441,7 @@ describe("human report folding for providers that are not set up", () => {
     stubFoldFleet();
     const output = await capture(["--tui", "--once", "--all"]);
 
-    expect(output).toContain("  ○ not set up · 14\n");
+    expect(output).toContain("  ○ not set up · 15\n");
     expect(output).toContain("╭─ ○ copilot ");
     expect(output).toContain("╭─ ○ elevenlabs ");
     expect(output).not.toContain("quota-axi auth shows where each is read");
@@ -1463,12 +1497,14 @@ describe("human report folding for providers that are not set up", () => {
     };
     try {
       const run = capture(["--tui"]);
-      await settle("Press q to quit · a show not set up · refreshing every 5m");
+      await settle(
+        "Press r to refresh · q to quit · a show not set up · refreshing every 5m",
+      );
       expect(lastFrame()).not.toContain("╭─ ○ zai ");
 
       process.stdin.emit("data", Buffer.from("a"));
       await settle("a hide not set up");
-      expect(lastFrame()).toContain("  ○ not set up · 14");
+      expect(lastFrame()).toContain("  ○ not set up · 15");
       expect(lastFrame()).toContain("╭─ ○ zai ");
 
       process.stdin.emit("data", Buffer.from("q"));
@@ -1774,6 +1810,64 @@ describe("new provider public quota output", () => {
     );
     expect(process.exitCode).toBe(1);
   });
+
+  it("publishes Devin included quota in TOON and JSON without the session token", async () => {
+    useTempCache();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-22T12:00:00.000Z"));
+    const key = "synthetic-devin-cli-key";
+    process.env.WINDSURF_API_KEY = key;
+    const payload = JSON.parse(
+      readFileSync("test/fixtures/devin/pro.json", "utf8"),
+    ) as unknown;
+    const fetch = vi.fn(async () => {
+      return new Response(JSON.stringify(payload), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    vi.stubGlobal("fetch", fetch);
+
+    try {
+      const toon = await capture(["--provider", "devin"]);
+      expect(toonRows(toon, "quota").map((row) => row.slice(0, 3))).toEqual([
+        ["devin", "included_quota", "60"],
+      ]);
+      expect(toon).not.toContain(key);
+      expect(toon).not.toContain("person@example.invalid");
+
+      const json = JSON.parse(
+        await capture(["--provider", "devin", "--json"]),
+      ) as QuotaAxiResponse;
+      expect(json.providers[0]).toMatchObject({
+        provider: "devin",
+        credits: { remaining: 2.5, unit: "usd" },
+      });
+      expect(json.providers[0]?.account).toBeUndefined();
+      expect(json.providers[0]?.windows.map((window) => window.id)).toEqual([
+        "weekly",
+        "daily",
+      ]);
+      expect(JSON.stringify(json)).not.toContain(key);
+
+      const full = JSON.parse(
+        await capture(["--provider", "devin", "--json", "--full"]),
+      ) as QuotaAxiResponse;
+      expect(full.providers[0]?.account).toEqual({
+        email: "person@example.invalid",
+        accountId: "fixture-user",
+      });
+      expect(
+        full.providers[0]?.quotaSemantics?.effectiveAvailability[0],
+      ).toMatchObject({
+        scope: "included_quota",
+        effectivePercentRemaining: 60,
+        boundedBy: ["weekly", "daily"],
+      });
+    } finally {
+      delete process.env.WINDSURF_API_KEY;
+    }
+  });
 });
 
 describe("default TOON decision blocks", () => {
@@ -1804,6 +1898,7 @@ describe("default TOON decision blocks", () => {
       emptyFreshQuota("openrouter", "OpenRouter"),
     );
     PROVIDERS.elevenlabs = providerWithQuota(freshElevenLabsQuota());
+    PROVIDERS.devin = providerWithQuota(freshDevinQuota());
 
     const output = await capture([]);
     const named = new Set([
@@ -1820,6 +1915,7 @@ describe("default TOON decision blocks", () => {
       "copilot",
       "cursor",
       "deepseek",
+      "devin",
       "elevenlabs",
       "grok",
       "kimi",
@@ -1829,6 +1925,227 @@ describe("default TOON decision blocks", () => {
       "openrouter",
       "zai",
     ]);
+    expect(output).not.toContain("omitted");
+  });
+
+  it("omits only absent providers and counts them in one help line", async () => {
+    stubNotSetUpFleet();
+    const output = await capture([]);
+    const stayed = ["agy", "claude", "codex", "cursor", "grok", "minimax"];
+
+    expect(namedProviders(output)).toEqual(stayed);
+    expect(output).toContain(
+      `${Object.keys(PROVIDERS).length - stayed.length} providers not set up are omitted; run \`quota-axi --full\` to list them`,
+    );
+    expect(output).toContain("degraded_source");
+    const keychainAt = output.indexOf("Tell your user:");
+    const omittedAt = output.indexOf("providers not set up are omitted");
+    const tierAt = output.indexOf(
+      "Run `quota-axi --full` for windows, pace, reserve, and account evidence",
+    );
+    expect(keychainAt).toBeGreaterThan(-1);
+    expect(keychainAt).toBeLessThan(omittedAt);
+    expect(omittedAt).toBeLessThan(tierAt);
+    expect(process.exitCode).toBeUndefined();
+
+    const full = await capture(["--full"]);
+    expect(namedProviders(full)).toEqual(
+      Object.keys(PROVIDERS).sort() as string[],
+    );
+    expect(full).not.toContain("omitted");
+  });
+
+  it("keeps an explicitly requested absent provider and restores it with --full", async () => {
+    stubNotSetUpFleet();
+    const requested = await capture(["--provider", "zai"]);
+
+    expect(toonRows(requested, "attention").map((row) => row[0])).toEqual([
+      "zai",
+    ]);
+    expect(requested).not.toContain("omitted");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("uses the singular omission line for one provider that is not set up", async () => {
+    stubEveryProvider((id) =>
+      id === "elevenlabs" ? notSetUpQuota(id) : emptyFreshQuota(id, id),
+    );
+
+    const output = await capture([]);
+
+    expect(output).toContain(
+      "1 provider not set up is omitted; run `quota-axi --full` to list it",
+    );
+    expect(output).not.toContain("elevenlabs");
+    expect(toonRows(output, "attention").map((row) => row[0])).toEqual(
+      Object.keys(PROVIDERS).filter((id) => id !== "elevenlabs"),
+    );
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("exits 1 with empty decision blocks when every provider is not set up", async () => {
+    stubEveryProvider((id) => notSetUpQuota(id));
+
+    const output = await capture([]);
+
+    expect(output).toContain("quota[0]:");
+    expect(output).toContain("exhaustion[0]:");
+    expect(output).toContain("attention[0]:");
+    expect(output).toContain(
+      `${Object.keys(PROVIDERS).length} providers not set up are omitted; run \`quota-axi --full\` to list them`,
+    );
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("marks absent lanes notSetUp in JSON and still lists every provider", async () => {
+    stubNotSetUpFleet();
+
+    const lean = JSON.parse(await capture(["--json"])) as QuotaAxiResponse;
+    const full = JSON.parse(
+      await capture(["--json", "--full"]),
+    ) as QuotaAxiResponse;
+
+    expect(lean.schemaVersion).toBe(5);
+    expect(full.schemaVersion).toBe(5);
+    expect(lean.providers.map((provider) => provider.provider)).toEqual(
+      Object.keys(PROVIDERS),
+    );
+    expect(full.providers.map((provider) => provider.provider)).toEqual(
+      Object.keys(PROVIDERS),
+    );
+    for (const report of [lean, full]) {
+      expect(
+        report.providers.find((provider) => provider.provider === "zai")
+          ?.notSetUp,
+      ).toBe(true);
+      expect(
+        report.providers.find((provider) => provider.provider === "copilot")
+          ?.notSetUp,
+      ).toBe(true);
+      for (const id of [
+        "agy",
+        "claude",
+        "codex",
+        "cursor",
+        "grok",
+        "minimax",
+      ]) {
+        expect(
+          report.providers.find((provider) => provider.provider === id)
+            ?.notSetUp,
+        ).toBeUndefined();
+      }
+    }
+    expect(
+      full.providers.find((provider) => provider.provider === "zai")?.attempts,
+    ).toEqual([
+      {
+        source: "env:zai",
+        status: "skipped",
+        error: "credentials_missing",
+      },
+    ]);
+    expect(JSON.stringify(lean)).not.toContain('"notSetUp":false');
+  });
+
+  it("folds an expanded provider only when every lane is absent", async () => {
+    stubEveryProvider((id) => notSetUpQuota(id));
+    PROVIDERS.codex = providerWithAccounts([
+      ["openai-codex", notSetUpQuota("codex")],
+      ["openai-codex-work", freshCodexQuota()],
+    ]);
+
+    const output = await capture([]);
+
+    expect(output).toContain("openai-codex");
+    expect(output).toContain("openai-codex-work");
+    expect(namedProviders(output)).toEqual(["codex"]);
+    expect(output).toContain(
+      `${Object.keys(PROVIDERS).length - 1} providers not set up are omitted; run \`quota-axi --full\` to list them`,
+    );
+    expect(process.exitCode).toBeUndefined();
+
+    const json = JSON.parse(await capture(["--json"])) as QuotaAxiResponse;
+    expect(json.schemaVersion).toBe(6);
+    expect(json.providers).toHaveLength(Object.keys(PROVIDERS).length + 1);
+    const lanes = json.providers.filter(
+      (provider) => provider.provider === "codex",
+    );
+    expect(lanes.map((lane) => lane.accountKey)).toEqual([
+      "openai-codex",
+      "openai-codex-work",
+    ]);
+    expect(
+      lanes.find((lane) => lane.accountKey === "openai-codex")?.notSetUp,
+    ).toBe(true);
+    expect(
+      lanes.find((lane) => lane.accountKey === "openai-codex-work")?.notSetUp,
+    ).toBeUndefined();
+    expect(
+      json.providers
+        .filter((provider) => provider.provider !== "codex")
+        .every((provider) => provider.notSetUp === true),
+    ).toBe(true);
+
+    const restored = await capture(["--full"]);
+    expect(namedProviders(restored)).toEqual(
+      Object.keys(PROVIDERS).sort() as string[],
+    );
+    expect(restored).not.toContain("omitted");
+  });
+
+  it("renders repeated --provider the same as one comma-separated flag", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-15T12:00:00.000Z"));
+    stubEveryProvider((id) => notSetUpQuota(id));
+    PROVIDERS.codex = providerWithQuota(freshCodexQuota());
+    PROVIDERS.zai = providerWithQuota(notSetUpQuota("zai"));
+
+    const repeated = await capture([
+      "--provider",
+      "zai",
+      "--provider",
+      "codex",
+    ]);
+    const comma = await capture(["--provider", "zai,codex"]);
+
+    expect(repeated).toBe(comma);
+    expect(repeated).toContain(
+      "zai,all,auth_required,zai_credential_unavailable",
+    );
+    expect(toonRows(repeated, "quota").map((row) => row[0])).toEqual(["codex"]);
+    expect(repeated).not.toContain("omitted");
+  });
+
+  it("ignores empty provider occurrences without widening a named scope", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-15T12:00:00.000Z"));
+    stubEveryProvider((id) => notSetUpQuota(id));
+    const codex = await capture(["--provider=codex"]);
+    expect(await capture(["--provider=", "--provider=codex"])).toBe(codex);
+    expect(await capture(["--provider=codex", "--provider="])).toBe(codex);
+    expect(await capture(["--provider=,codex"])).toBe(codex);
+    expect(
+      parseModelsFlags(["--provider=", "--provider=codex"]).providers,
+    ).toEqual(["codex"]);
+  });
+
+  it("retains all providers when every provider occurrence is empty", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-15T12:00:00.000Z"));
+    stubEveryProvider((id) => notSetUpQuota(id));
+    expect(parseFlags(["--provider="]).providers).toEqual(
+      parseFlags([]).providers,
+    );
+    expect(parseFlags(["--provider=", "--provider="]).providers).toEqual(
+      parseFlags([]).providers,
+    );
+    expect(parseModelsFlags(["--provider="]).providers).toEqual(
+      parseModelsFlags([]).providers,
+    );
+    expect(await capture(["--provider=", "--full"])).toBe(
+      await capture(["--full"]),
+    );
   });
 
   it("never adds a false unresolved_windows row for a never-set-up OpenCode Go", async () => {
@@ -2144,6 +2461,79 @@ describe("default TOON decision blocks", () => {
       ["codex", "openai-codex"],
       ["codex", "openai-codex-work"],
     ]);
+    expect(output).not.toContain("accountKeys");
+  });
+
+  it("publishes accountKeys for a non-folding provider and for lanes whose readings name their membership", async () => {
+    useTempCache();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-15T12:00:00.000Z"));
+    PROVIDERS.claude = providerWithQuota(pacedProvider("claude", 90, 10));
+    const home = pacedProvider("codex", 20, 80);
+    const work = pacedProvider("codex", 40, 60);
+    PROVIDERS.codex = {
+      ...providerWithAccounts([
+        ["codex-home", home],
+        ["openai-codex-work", work],
+      ]),
+      async discoverAccounts() {
+        return [
+          {
+            accountKey: "codex-home",
+            async fetchQuota() {
+              return { ...home, accountKeys: ["openai-codex"] };
+            },
+            async inspectAuth() {
+              return { provider: "codex", sources: [] };
+            },
+          },
+          {
+            accountKey: "openai-codex-work",
+            async fetchQuota() {
+              return work;
+            },
+            async inspectAuth() {
+              return { provider: "codex", sources: [] };
+            },
+          },
+        ];
+      },
+    };
+
+    const json = JSON.parse(
+      await capture(["--provider", "claude,codex", "--json"]),
+    ) as QuotaAxiResponse;
+    expect(json.schemaVersion).toBe(6);
+    expect(
+      json.providers.map((provider) => [
+        provider.provider,
+        provider.accountKey,
+        provider.accountKeys,
+      ]),
+    ).toEqual([
+      ["claude", "default", ["default"]],
+      ["codex", "codex-home", ["codex-home", "openai-codex"]],
+      ["codex", "openai-codex-work", ["openai-codex-work"]],
+    ]);
+
+    const full = JSON.parse(
+      await capture(["--provider", "claude,codex", "--json", "--full"]),
+    ) as QuotaAxiResponse;
+    expect(full.providers.map((provider) => provider.accountKeys)).toEqual([
+      ["default"],
+      ["codex-home", "openai-codex"],
+      ["openai-codex-work"],
+    ]);
+
+    const toon = await capture(["--provider", "claude,codex"]);
+    expect(toon).not.toContain("accountKeys");
+
+    const single = JSON.parse(
+      await capture(["--provider", "claude", "--json"]),
+    ) as QuotaAxiResponse;
+    expect(single.schemaVersion).toBe(5);
+    expect(single.providers[0]?.accountKey).toBeUndefined();
+    expect(single.providers[0]?.accountKeys).toEqual(["default"]);
   });
 });
 
@@ -2537,6 +2927,119 @@ function providerWithAccounts(
       }));
     },
   };
+}
+
+function stubEveryProvider(
+  quotaFor: (id: ProviderQuota["provider"]) => ProviderQuota,
+): void {
+  useTempCache();
+  for (const id of Object.keys(PROVIDERS) as ProviderQuota["provider"][]) {
+    PROVIDERS[id] = providerWithQuota(quotaFor(id));
+  }
+}
+
+/**
+ * One of each presence the omission rule has to tell apart: a stale reading,
+ * a Keychain prompt, a degraded store, a provider that recorded no attempts,
+ * an adapter-declared uncertain skip, a failed request, an incidental-source
+ * login that is still absence, and everyone else genuinely not set up.
+ */
+function stubNotSetUpFleet(): void {
+  stubEveryProvider((id) => notSetUpQuota(id));
+  PROVIDERS.codex = providerWithQuota({
+    ...staleClaudeQuota(),
+    provider: "codex",
+    label: "Codex",
+  });
+  PROVIDERS.claude = providerWithQuota({
+    ...notSetUpQuota("claude"),
+    state: {
+      status: "unavailable",
+      stale: false,
+      error: "keychain_prompt_required",
+    },
+    attempts: [
+      {
+        source: "oauth-file",
+        status: "skipped",
+        error: "credentials_missing",
+      },
+      {
+        source: "keychain",
+        status: "skipped",
+        error: "keychain_prompt_required",
+        credentialPresent: true,
+      },
+    ],
+  });
+  PROVIDERS.cursor = providerWithQuota({
+    ...notSetUpQuota("cursor"),
+    state: {
+      status: "unavailable",
+      stale: false,
+      error: "state-vscdb unreadable",
+      degradedSources: [{ source: "state-vscdb", error: "unreadable" }],
+    },
+    attempts: [
+      {
+        source: "state-vscdb",
+        status: "skipped",
+        error: "unreadable",
+        credentialPresent: true,
+        degraded: true,
+      },
+    ],
+  });
+  const minimax = notSetUpQuota("minimax");
+  delete minimax.attempts;
+  PROVIDERS.minimax = providerWithQuota(minimax);
+  PROVIDERS.agy = {
+    ...providerWithQuota({
+      ...notSetUpQuota("agy"),
+      state: {
+        status: "unavailable",
+        stale: false,
+        error: "agy CLI timed out",
+      },
+      attempts: [
+        { source: "cli", status: "skipped", error: "agy CLI timed out" },
+      ],
+    }),
+    isUncertainSkip: (attempt) => attempt.error === "agy CLI timed out",
+  };
+  PROVIDERS.grok = providerWithQuota({
+    ...notSetUpQuota("grok"),
+    state: { status: "error", stale: false, error: "network down" },
+    attempts: [{ source: "web", status: "failed", error: "network down" }],
+  });
+  PROVIDERS.copilot = {
+    ...providerWithQuota({
+      ...notSetUpQuota("copilot"),
+      attempts: [
+        {
+          source: "apps-json",
+          status: "skipped",
+          error: "credentials_missing",
+        },
+        {
+          source: "gh:hosts.yml",
+          status: "skipped",
+          error: "credentials_keyring_storage",
+          credentialPresent: true,
+        },
+      ],
+    }),
+    incidentalSources: ["gh:hosts.yml"],
+  };
+}
+
+function namedProviders(output: string): string[] {
+  return [
+    ...new Set([
+      ...toonRows(output, "quota").map((row) => row[0] ?? ""),
+      ...toonRows(output, "attention").map((row) => row[0] ?? ""),
+    ]),
+  ].sort();
 }
 
 function notSetUpQuota(provider: ProviderQuota["provider"]): ProviderQuota {
@@ -3089,6 +3592,34 @@ function freshCommandCodeQuota(): ProviderQuota {
       stale: false,
       refreshedAt: "2026-07-06T18:10:00Z",
       sourcesTried: ["pi:commandcode"],
+    },
+  };
+}
+
+function freshDevinQuota(): ProviderQuota {
+  return {
+    provider: "devin",
+    label: "Devin",
+    source: "api",
+    plan: "max",
+    windows: [
+      {
+        id: "weekly",
+        label: "week",
+        kind: "weekly",
+        percentUsed: 20,
+        percentRemaining: 80,
+        windowSeconds: 604_800,
+        startsAt: "2026-09-20T08:00:00.000Z",
+        resetsAt: "2026-09-27T08:00:00.000Z",
+      },
+    ],
+    state: {
+      status: "fresh",
+      stale: false,
+      authStatus: "usable",
+      refreshedAt: "2026-09-22T12:00:00.000Z",
+      sourcesTried: ["env:WINDSURF_API_KEY"],
     },
   };
 }

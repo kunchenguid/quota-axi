@@ -176,14 +176,10 @@ export async function fetchQuotaWithRuntime(
   const finalError = errorMessage(finalFailure);
   if (staleEligibleFailure(finalFailure)) {
     const cached = readCachedProvider("agy");
-    if (cached) {
-      return staleFromCache(
-        cached,
-        finalError,
-        sourceNames(attempts),
-        attempts,
-      );
-    }
+    const stale = cached
+      ? staleFromCache(cached, finalError, sourceNames(attempts), attempts)
+      : undefined;
+    if (stale) return stale;
   } else if (isDefinitiveAuthFailure(finalFailure)) {
     try {
       deleteCachedProvider("agy");

@@ -11,8 +11,8 @@ import {
 export type QuotaFlags = {
   providers: ProviderId[];
   /**
-   * True when `--provider` named the providers. The human report then draws
-   * every named provider as a full card, even one that is not set up.
+   * True when `--provider` named the providers. Named providers are never
+   * folded out of the human report or omitted from default TOON.
    */
   explicitProviders: boolean;
   json: boolean;
@@ -106,7 +106,7 @@ function parseCommonFlags(
   args: string[],
   defaultProviders?: readonly ProviderId[],
 ): ModelsFlags {
-  let providerValue: string | undefined;
+  const providerValues: string[] = [];
   let json = false;
   let full = false;
   let tui = false;
@@ -200,12 +200,12 @@ function parseCommonFlags(
           ["Pass --provider=... if the value begins with --"],
         );
       }
-      providerValue = value;
+      providerValues.push(value);
       index++;
       continue;
     }
     if (arg.startsWith("--provider=")) {
-      providerValue = arg.slice("--provider=".length);
+      providerValues.push(arg.slice("--provider=".length));
       continue;
     }
     throw new AxiError(`unknown argument: ${arg}`, "VALIDATION_ERROR", [
@@ -240,11 +240,8 @@ function parseCommonFlags(
   }
 
   return {
-    providers:
-      providerValue === undefined && defaultProviders
-        ? [...defaultProviders]
-        : parseProviderScope(providerValue),
-    explicitProviders: providerValue !== undefined,
+    providers: parseProviderScope(providerValues, defaultProviders),
+    explicitProviders: providerValues.length > 0,
     json,
     full,
     tui,
@@ -303,9 +300,34 @@ function parseSortValue(value: string | undefined): ModelSortKey {
   );
 }
 
-function parseProviderScope(value: string | undefined): ProviderId[] {
+/**
+ * Union every `--provider` value in first-seen order. `parseProviders`
+ * already de-duplicates within one value; this de-duplicates across repeats,
+ * so `--provider zai --provider codex` equals `--provider zai,codex`.
+ */
+function parseProviderScope(
+  values: readonly string[],
+  defaultProviders?: readonly ProviderId[],
+): ProviderId[] {
+  if (values.length === 0) {
+    return defaultProviders ? [...defaultProviders] : parseProviders(undefined);
+  }
   try {
-    return parseProviders(value);
+    const seen = new Set<ProviderId>();
+    const providers: ProviderId[] = [];
+    for (const value of values) {
+      if (!value.trim()) continue;
+      for (const provider of parseProviders(value)) {
+        if (seen.has(provider)) continue;
+        seen.add(provider);
+        providers.push(provider);
+      }
+    }
+    return providers.length > 0
+      ? providers
+      : defaultProviders
+        ? [...defaultProviders]
+        : parseProviders(undefined);
   } catch (error) {
     throw new AxiError(
       error instanceof Error ? error.message : "unsupported provider",

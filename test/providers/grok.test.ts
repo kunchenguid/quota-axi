@@ -262,6 +262,8 @@ function cachedGrok(source: "api" | "web"): ProviderQuota {
         kind: "credits",
         percentUsed: 20,
         percentRemaining: 80,
+        // Still ahead, so a stale fallback may serve it.
+        resetsAt: new Date(Date.now() + 60 * 60 * 1_000).toISOString(),
       },
     ],
     state: {

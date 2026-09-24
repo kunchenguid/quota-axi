@@ -42,3 +42,32 @@ export function retryAfterToIso(
   const date = new Date(raw);
   return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
 }
+
+/**
+ * The same UTC civil time `months` calendar months before `iso`, with the day
+ * clamped into a shorter month so a 31 March reset steps back to 28/29
+ * February rather than overflowing into early March. This is how a
+ * renewal-dated subscription cycle maps a reported reset back to the cycle's
+ * start; it is never a fixed day count. Returns `undefined` when `iso` is not
+ * a date or the result is not strictly earlier.
+ */
+export function calendarMonthsBefore(
+  iso: string,
+  months: number,
+): string | undefined {
+  const reset = new Date(iso);
+  const time = reset.getTime();
+  if (!Number.isFinite(time)) return undefined;
+  const day = reset.getUTCDate();
+  const start = new Date(time);
+  start.setUTCDate(1);
+  start.setUTCMonth(start.getUTCMonth() - months);
+  const daysInMonth = new Date(
+    Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + 1, 0),
+  ).getUTCDate();
+  start.setUTCDate(Math.min(day, daysInMonth));
+  const startTime = start.getTime();
+  return Number.isFinite(startTime) && startTime < time
+    ? start.toISOString()
+    : undefined;
+}

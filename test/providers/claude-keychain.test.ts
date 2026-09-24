@@ -47,7 +47,7 @@ beforeEach(() => {
     "fetch",
     vi.fn(
       async () =>
-        new Response(JSON.stringify({ five_hour: { utilization: 88 } })),
+        new Response(JSON.stringify({ five_hour: { utilization: 12 } })),
     ),
   );
 });

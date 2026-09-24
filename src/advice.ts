@@ -1,3 +1,4 @@
+import { coveredAccountKeys } from "./providers/accounts.js";
 import {
   REFRESH_COMMAND_NOT_FOUND,
   REFRESH_EXIT_STATUS,
@@ -25,13 +26,19 @@ export function annotateQuotaAdvice(
   response: Omit<QuotaAxiResponse, "schemaVersion">,
 ): QuotaAxiResponse {
   const expanded = response.providers.some((provider) => provider.accountKey);
-  const providers = response.providers.map((provider) =>
-    annotateProviderAdvice(
-      expanded
-        ? { ...provider, accountKey: provider.accountKey ?? "default" }
-        : provider,
-    ),
-  );
+  const providers = response.providers.map((provider) => {
+    const accountKey = expanded
+      ? (provider.accountKey ?? "default")
+      : undefined;
+    return annotateProviderAdvice({
+      ...provider,
+      ...(accountKey ? { accountKey } : {}),
+      accountKeys: coveredAccountKeys(
+        accountKey ?? provider.accountKeys?.[0] ?? "default",
+        provider.accountKeys,
+      ),
+    });
+  });
   const help = providers.flatMap(providerHelpLines);
   return {
     generatedAt: response.generatedAt,
@@ -45,11 +52,30 @@ export function annotateQuotaAdvice(
  * Situational advice stays first because it is actionable; only the tier hint
  * is worth repeating on every invocation.
  */
-export function quotaHelpLines(response: QuotaAxiResponse): string[] {
-  return [
+export function quotaHelpLines(
+  response: QuotaAxiResponse,
+  omittedNotSetUp = 0,
+): string[] {
+  const lines = [
     ...(response.help ?? []),
     "Run `quota-axi --full` for windows, pace, reserve, and account evidence",
   ];
+  if (omittedNotSetUp > 0) {
+    lines.splice(lines.length - 1, 0, omittedNotSetUpHelpLine(omittedNotSetUp));
+  }
+  return lines;
+}
+
+/**
+ * The omission sentence the default report uses when it drops providers that
+ * are not set up. Situational advice stays ahead of it; the tier hint stays
+ * last.
+ */
+function omittedNotSetUpHelpLine(count: number): string {
+  const subject = count === 1 ? "1 provider" : `${count} providers`;
+  const verb = count === 1 ? "is" : "are";
+  const pronoun = count === 1 ? "it" : "them";
+  return `${subject} not set up ${verb} omitted; run \`quota-axi --full\` to list ${pronoun}`;
 }
 
 function annotateProviderAdvice(provider: ProviderQuota): ProviderQuota {

@@ -61,7 +61,9 @@ export function claudeCredentialContextId(): string {
   const { configDir, keychainService } = claudeProfileLocations();
   // Include the exact service: it already encodes the secure-storage selector,
   // including a relative raw path hash.
-  // Version the identity to withhold snapshots from earlier opaque discovery.
+  // Version the identity to withhold snapshots an earlier release wrote for
+  // this same selection: `v2` covers former opaque discovery, `v3` the windows
+  // 0.1.50 stored with `utilization`/`percent` read as remaining.
   //
   // An explicit environment token selects an account the profile path and
   // Keychain service do not describe, so it earns its own identity: a snapshot
@@ -73,7 +75,7 @@ export function claudeCredentialContextId(): string {
   return createHash("sha256")
     .update(
       JSON.stringify([
-        "claude-profile-v2",
+        "claude-profile-v3",
         resolve(configDir),
         keychainService,
         ...(envSelected ? ["env-token"] : []),

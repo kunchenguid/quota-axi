@@ -322,13 +322,16 @@ async function fetchQuotaWithDependencies(
   if (authStatus === "usable" || transientError !== undefined) {
     // Valid model auth (CLI and/or Pi) without consumer windows is not logout.
     const cached = readCachedProvider("grok");
-    if (cached?.source === GROK_SOURCE && consumerTransient) {
-      const stale = staleFromCache(
-        cached,
-        transientError ?? GROK_CONSUMER_QUOTA_UNAVAILABLE_ERROR,
-        sourceNames(attempts),
-        attempts,
-      );
+    const stale =
+      cached?.source === GROK_SOURCE && consumerTransient
+        ? staleFromCache(
+            cached,
+            transientError ?? GROK_CONSUMER_QUOTA_UNAVAILABLE_ERROR,
+            sourceNames(attempts),
+            attempts,
+          )
+        : undefined;
+    if (stale) {
       return withAuthStatus(
         withUsageFetchFailure(stale),
         authStatus,
@@ -370,13 +373,11 @@ async function fetchQuotaWithDependencies(
   }
 
   const cached = readCachedProvider("grok");
-  if (cached?.source === GROK_SOURCE) {
-    return withAuthStatus(
-      staleFromCache(cached, finalError, sourceNames(attempts), attempts),
-      authStatus,
-      cliRefreshNeeded,
-    );
-  }
+  const stale =
+    cached?.source === GROK_SOURCE
+      ? staleFromCache(cached, finalError, sourceNames(attempts), attempts)
+      : undefined;
+  if (stale) return withAuthStatus(stale, authStatus, cliRefreshNeeded);
 
   return withAuthStatus(
     failedProvider({

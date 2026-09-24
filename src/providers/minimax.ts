@@ -317,14 +317,16 @@ async function fetchQuotaWithDependencies(
           const cached = dependencies.readCachedProvider(
             miniMaxCacheContextId(resolution.source, resolution.baseUrl),
           );
-          if (cached) {
-            return staleFromCache(
-              cached,
-              failure.code,
-              sourceNames(attempts),
-              attempts,
-            );
-          }
+          const stale = cached
+            ? staleFromCache(
+                cached,
+                failure.code,
+                sourceNames(attempts),
+                attempts,
+                dependencies.now(),
+              )
+            : undefined;
+          if (stale) return stale;
         } catch {
           // Cache I/O cannot replace the bounded provider failure.
         }
@@ -364,14 +366,16 @@ async function fetchQuotaWithDependencies(
             : configuredBaseUrl(),
         ),
       );
-      if (cached) {
-        return staleFromCache(
-          cached,
-          failure.code,
-          sourceNames(attempts),
-          attempts,
-        );
-      }
+      const stale = cached
+        ? staleFromCache(
+            cached,
+            failure.code,
+            sourceNames(attempts),
+            attempts,
+            dependencies.now(),
+          )
+        : undefined;
+      if (stale) return stale;
     } catch {
       // Cache I/O cannot replace the bounded provider failure.
     }

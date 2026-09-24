@@ -25,13 +25,13 @@ import type {
   SourceAttempt,
 } from "../types.js";
 import { VERSION } from "../version.js";
+import { servableStaleWindows, servableUntrustedWindowIds } from "./common.js";
 
 const ZAI_QUOTA_PATH = "/api/monitor/usage/quota/limit";
 const OPERATION_DEADLINE_MS = 15_000;
 const RESPONSE_LIMIT_BYTES = 262_144;
 const FIVE_HOURS_SECONDS = 18_000;
 const WEEK_SECONDS = 7 * 24 * 60 * 60;
-const MONTH_SECONDS = 30 * 24 * 60 * 60;
 const ZAI_HOST = "api.z.ai";
 const ZHIPU_HOST = "open.bigmodel.cn";
 const OPENCODE_AUTH_SOURCE = "opencode:auth.json";
@@ -444,18 +444,10 @@ function staleZaiReport(
   ) {
     return undefined;
   }
-  const refreshedAt = Date.parse(cached.state.refreshedAt);
-  if (!Number.isFinite(refreshedAt)) return undefined;
-  const ageMilliseconds = Math.max(0, now - refreshedAt);
-  const windows = cached.windows.filter((window) => {
-    if (window.resetsAt) {
-      const resetsAt = Date.parse(window.resetsAt);
-      if (Number.isFinite(resetsAt)) return resetsAt > now;
-    }
-    const maxAgeSeconds = maxStaleAgeSeconds(window);
-    return maxAgeSeconds > 0 && ageMilliseconds < maxAgeSeconds * 1_000;
-  });
+  if (!Number.isFinite(Date.parse(cached.state.refreshedAt))) return undefined;
+  const windows = servableStaleWindows(cached, now);
   if (windows.length === 0) return undefined;
+  const untrustedWindowIds = servableUntrustedWindowIds(cached, windows);
 
   return {
     provider: "zai",
@@ -469,28 +461,11 @@ function staleZaiReport(
       refreshedAt: cached.state.refreshedAt,
       error,
       ...(retryAfter ? { retryAfter } : {}),
-      ...(cached.state.untrustedWindowIds
-        ? { untrustedWindowIds: cached.state.untrustedWindowIds }
-        : {}),
+      ...(untrustedWindowIds ? { untrustedWindowIds } : {}),
       sourcesTried: [...attempts.map(({ source }) => source), "cache"],
     },
     attempts,
   };
-}
-
-function maxStaleAgeSeconds(window: QuotaWindow): number {
-  if (window.windowSeconds !== undefined && window.windowSeconds > 0)
-    return window.windowSeconds;
-  switch (window.kind) {
-    case "session":
-      return FIVE_HOURS_SECONDS;
-    case "weekly":
-      return WEEK_SECONDS;
-    case "monthly":
-      return MONTH_SECONDS;
-    default:
-      return 0;
-  }
 }
 
 async function requestZaiQuota(

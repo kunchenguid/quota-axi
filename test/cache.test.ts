@@ -14,6 +14,7 @@ import {
   readCachedClaudeProvider,
   readCachedCommandCodeProvider,
   readCachedKimiProvider,
+  readCachedDevinProvider,
   readCachedMiniMaxProvider,
   readCachedProvider,
   writeCachedProviders,
@@ -29,6 +30,11 @@ import { staleFromCache } from "../src/providers/common.js";
 import { withQuotaSemantics } from "../src/interpretation.js";
 import { createKimiCodeCliCredentialSource } from "../src/providers/kimi-code-cli-credential.js";
 import { createKimiAdapter } from "../src/providers/kimi.js";
+import {
+  clearDevinReadingContextId,
+  devinCacheContextId,
+  publishDevinReadingContextId,
+} from "../src/providers/devin-cache-context.js";
 import { publishMiniMaxReadingContextId } from "../src/providers/minimax-cache-context.js";
 import type { ProviderId, ProviderQuota } from "../src/types.js";
 
@@ -48,6 +54,7 @@ afterEach(() => {
   if (tempDir) rmSync(tempDir, { recursive: true, force: true });
   tempDir = undefined;
   clearCommandCodeReadingContextId();
+  clearDevinReadingContextId();
 });
 
 describe("quota cache", () => {
@@ -192,7 +199,15 @@ describe("quota cache", () => {
 
     const later = annotateQuotaAdvice({
       generatedAt: "2026-07-06T19:10:00Z",
-      providers: [staleFromCache(cached!, "fetch failed", ["api"], [])],
+      providers: [
+        staleFromCache(
+          cached!,
+          "fetch failed",
+          ["api"],
+          [],
+          Date.parse("2026-07-06T19:10:00Z"),
+        )!,
+      ],
     });
     expect(later.schemaVersion).toBe(5);
     expect(later.providers[0]?.accountKey).toBeUndefined();
@@ -652,7 +667,8 @@ oauth_host = "https://auth.kimi.ai"
       "fetch failed: synthetic outage",
       ["kimi-code"],
       [],
-    );
+      Date.parse("2026-07-06T18:20:00Z"),
+    )!;
     const monthCode = stale.windows.find(
       (window) => window.id === "month_code",
     );
@@ -770,6 +786,44 @@ oauth_host = "https://auth.kimi.ai"
     expect(readCachedCommandCodeProvider(contextId)).toBeUndefined();
     expect(readCachedProvider("commandcode")).toBeUndefined();
   });
+
+  it("reuses a Devin snapshot only for the source, host, and key that wrote it", () => {
+    useTempCache();
+    const contextId = devinCacheContextId(
+      "env:WINDSURF_API_KEY",
+      "https://server.codeium.com",
+      "synthetic-devin-cache-key",
+    );
+    const otherId = devinCacheContextId(
+      "file:credentials.toml",
+      "https://server.codeium.com",
+      "synthetic-devin-cache-key",
+    );
+    publishDevinReadingContextId(contextId);
+    writeCachedProviders([quota("devin", 40)]);
+
+    clearDevinReadingContextId();
+    writeCachedProviders([quota("devin", 5)]);
+
+    expect(readCachedDevinProvider(contextId)?.windows[0].percentUsed).toBe(40);
+    expect(readCachedDevinProvider(otherId)).toBeUndefined();
+    expect(readCachedProvider("devin")?.windows[0].percentUsed).toBe(40);
+  });
+
+  it("clears a Devin snapshot after an identified no-window report", () => {
+    useTempCache();
+    const contextId = devinCacheContextId(
+      "env:WINDSURF_API_KEY",
+      "https://server.codeium.com",
+      "synthetic-devin-cache-key",
+    );
+    publishDevinReadingContextId(contextId);
+    writeCachedProviders([quota("devin", 40)]);
+    writeCachedProviders([quotaWithoutWindows("devin")]);
+
+    expect(readCachedDevinProvider(contextId)).toBeUndefined();
+    expect(readCachedProvider("devin")).toBeUndefined();
+  });
 });
 
 function useTempCache(): void {
@@ -828,5 +882,6 @@ function providerLabel(provider: ProviderId): string {
   if (provider === "commandcode") return "Command Code";
   if (provider === "opencode-go") return "OpenCode Go";
   if (provider === "minimax") return "MiniMax";
+  if (provider === "devin") return "Devin";
   return "Kimi";
 }

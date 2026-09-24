@@ -34,6 +34,7 @@ import type {
 } from "../types.js";
 import {
   failedProvider,
+  servableStaleWindows,
   sourceNames,
   statusFromError,
   successProvider,
@@ -908,10 +909,9 @@ function staleClaudeReport(
   const ageMilliseconds = now - refreshedAt;
   if (ageMilliseconds >= SEVEN_DAYS_MS) return undefined;
 
-  const windows = cached.windows.filter((window) => {
-    if (window.resetsAt !== undefined) {
-      const resetsAt = Date.parse(window.resetsAt);
-      return Number.isFinite(resetsAt) && resetsAt > now;
+  const windows = servableStaleWindows(cached, now).filter((window) => {
+    if (window.resetsAt && Number.isFinite(Date.parse(window.resetsAt))) {
+      return true;
     }
     const maxAge = resetlessWindowMaxAge(window);
     return maxAge !== undefined && ageMilliseconds < maxAge;
@@ -942,11 +942,7 @@ function resetlessWindowMaxAge(window: QuotaWindow): number | undefined {
   if (window.kind === "weekly" || window.kind === "model") {
     return SEVEN_DAYS_MS;
   }
-  if (
-    window.kind === "session" ||
-    window.kind === "monthly" ||
-    window.kind === "credits"
-  ) {
+  if (window.kind === "session" || window.kind === "monthly") {
     return FIVE_HOURS_MS;
   }
   return undefined;
@@ -1064,7 +1060,7 @@ function normalizeScopedLimitEntry(raw: unknown): QuotaWindow | undefined {
       id: `model:${modelKey}`,
       label: `${modelName} week`,
       kind: "model",
-      percentUsed: claudeUsageRemainingToUsed(percent),
+      percentUsed: clampPercent(percent),
       resetsAt,
       windowSeconds: SEVEN_DAYS_SECONDS,
     });
@@ -1076,7 +1072,7 @@ function normalizeScopedLimitEntry(raw: unknown): QuotaWindow | undefined {
       id: "five_hour",
       label: "session",
       kind: "session",
-      percentUsed: claudeUsageRemainingToUsed(percent),
+      percentUsed: clampPercent(percent),
       resetsAt,
       windowSeconds: FIVE_HOURS_SECONDS,
     });
@@ -1086,7 +1082,7 @@ function normalizeScopedLimitEntry(raw: unknown): QuotaWindow | undefined {
       id: "seven_day",
       label: "week",
       kind: "weekly",
-      percentUsed: claudeUsageRemainingToUsed(percent),
+      percentUsed: clampPercent(percent),
       resetsAt,
       windowSeconds: SEVEN_DAYS_SECONDS,
     });
@@ -1097,7 +1093,7 @@ function normalizeScopedLimitEntry(raw: unknown): QuotaWindow | undefined {
     id: kind ?? "limit",
     label: kind ?? "limit",
     kind: "unknown",
-    percentUsed: claudeUsageRemainingToUsed(percent),
+    percentUsed: clampPercent(percent),
     resetsAt,
   });
 }
@@ -1799,20 +1795,10 @@ function normalizeWindow(
     id,
     label,
     kind,
-    percentUsed: claudeUsageRemainingToUsed(used),
+    percentUsed: clampPercent(used),
     resetsAt: stringValue(data.resets_at) ?? stringValue(data.reset_at),
     ...(windowSeconds !== undefined ? { windowSeconds } : {}),
   });
-}
-
-/**
- * Claude's OAuth usage endpoint names its subscription-window headroom
- * `utilization`/`percent`; quota-axi stores the complementary used value.
- * `extra_usage.utilization` is intentionally not routed here: Claude Code
- * derives that field from used credits and displays it as percent used.
- */
-function claudeUsageRemainingToUsed(remaining: number): number {
-  return clampPercent(100 - remaining);
 }
 
 function trustedClaudeWindowSeconds(

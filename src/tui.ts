@@ -21,6 +21,14 @@ import type {
 
 export type TuiColorDepth = "none" | "16" | "256" | "truecolor";
 
+/**
+ * Which side of each window the human report draws: what is left (the
+ * canonical `percentRemaining` direction, the default) or what has been
+ * consumed. It is a display preference only - the model, cache, TOON, and
+ * JSON keep the canonical direction whatever it is set to.
+ */
+export type TuiShow = "remaining" | "used";
+
 export type TuiOptions = {
   /** Raw terminal width; clamped to [80, 120], defaults to 100. */
   columns?: number;
@@ -41,6 +49,8 @@ export type TuiOptions = {
    * into one footer line (`a` in the live report, `--all`, or `--provider`).
    */
   showNotSetUp?: boolean;
+  /** Draw percentages and bars as what is left (default) or what is used. */
+  show?: TuiShow;
 };
 
 const CARD_WIDTH = 49;
@@ -99,6 +109,7 @@ const ACCENTS: Record<ProviderId, StyleSpec> = {
   deepseek: { rgb: [88, 160, 242], ansi16: "94", bold: true },
   openrouter: { rgb: [183, 148, 232], ansi16: "95", bold: true },
   elevenlabs: { rgb: [214, 170, 255], ansi16: "95", bold: true },
+  devin: { rgb: [126, 196, 224], ansi16: "96", bold: true },
 };
 
 const STYLES: Record<Exclude<StyleName, `accent:${ProviderId}`>, StyleSpec> = {
@@ -149,6 +160,7 @@ export function renderQuotaTui(
   const twoColumn = columns >= TWO_COLUMN_MIN;
   const generatedAtMs = Date.parse(response.generatedAt);
   const timeZone = options.timeZone;
+  const show = options.show ?? "remaining";
 
   const tiers: Record<ProviderPresence, ProviderQuota[]> = {
     live: [],
@@ -163,7 +175,7 @@ export function renderQuotaTui(
   const { live, attention, absent } = tiers;
   const carded = [...live, ...attention];
   const card = (provider: ProviderQuota): Card =>
-    buildCard(provider, generatedAtMs);
+    buildCard(provider, generatedAtMs, show);
 
   const lines: Line[] = [];
   lines.push([
@@ -311,13 +323,21 @@ function headerText(
 
 type Card = Line[];
 
-function buildCard(provider: ProviderQuota, generatedAtMs: number): Card {
+function buildCard(
+  provider: ProviderQuota,
+  generatedAtMs: number,
+  show: TuiShow,
+): Card {
   return isLive(provider)
-    ? buildLiveCard(provider, generatedAtMs)
+    ? buildLiveCard(provider, generatedAtMs, show)
     : buildFailedCard(provider);
 }
 
-function buildLiveCard(provider: ProviderQuota, generatedAtMs: number): Card {
+function buildLiveCard(
+  provider: ProviderQuota,
+  generatedAtMs: number,
+  show: TuiShow,
+): Card {
   const stale = provider.state.stale;
   const rightTitle = [
     provider.plan,
@@ -346,14 +366,17 @@ function buildLiveCard(provider: ProviderQuota, generatedAtMs: number): Card {
   } else if (hasWhollyUnknownWindowRelationships(provider)) {
     lines.push(...windowsOnlyHeadline(stale));
   } else {
-    lines.push(...effectiveHeadline(provider, headline, stale));
+    lines.push(...effectiveHeadline(provider, headline, stale, show));
   }
 
   if (provider.windows.length > 0) {
     lines.push(interior([], "border"));
     for (const window of provider.windows) {
       lines.push(
-        interior(windowRow(window, generatedAtMs, provider.windows), "border"),
+        interior(
+          windowRow(window, generatedAtMs, provider.windows, show),
+          "border",
+        ),
       );
     }
   }
@@ -381,6 +404,7 @@ function effectiveHeadline(
   provider: ProviderQuota,
   headline: EffectiveAvailability | undefined,
   stale: boolean | undefined,
+  show: TuiShow,
 ): Line[] {
   const lines: Line[] = [];
   const effectivePct = headline?.effectivePercentRemaining;
@@ -388,14 +412,18 @@ function effectiveHeadline(
 
   const verdict = runwayVerdict(headline);
   const percentText =
-    effectivePct === undefined ? undefined : `${Math.round(effectivePct)}%`;
+    effectivePct === undefined ? undefined : shownPercent(effectivePct, show);
+  // The remaining view has always read as bare headroom; the flipped view
+  // says so, because the same number would otherwise read the other way.
+  const direction = show === "used" ? "used · " : "";
   const headlineLabelWidth = Math.max(
     0,
     EFFECTIVE_BAR_WIDTH -
       lineWidth(verdict) -
       1 -
       displayWidth(percentText ?? "") -
-      1,
+      1 -
+      displayWidth(direction),
   );
   const left: Line =
     effectivePct !== undefined && percentText !== undefined
@@ -405,7 +433,7 @@ function effectiveHeadline(
             style: boldHealthStyle(effectivePct),
           },
           {
-            text: ` ${headlineLabel(provider, headline, headlineLabelWidth)}`,
+            text: ` ${direction}${headlineLabel(provider, headline, headlineLabelWidth)}`,
             style: "dim",
           },
         ]
@@ -429,7 +457,7 @@ function effectiveHeadline(
     interior(
       [
         { text: "   " },
-        ...thinBar(effectivePct, markerPct, EFFECTIVE_BAR_WIDTH),
+        ...thinBar(effectivePct, markerPct, EFFECTIVE_BAR_WIDTH, show),
         { text: "   " },
       ],
       "border",
@@ -607,6 +635,7 @@ function windowRow(
   window: QuotaWindow,
   generatedAtMs: number,
   windows: QuotaWindow[],
+  show: TuiShow,
 ): Line {
   if (window.shareOf) {
     return shareWindowRow(window, generatedAtMs, windows);
@@ -617,10 +646,13 @@ function windowRow(
   return [
     { text: "   " },
     { text: padEndDisplay(shortWindowLabel(window), 8), style: "label" },
-    ...thinBar(pct, marker, WINDOW_BAR_WIDTH),
+    ...thinBar(pct, marker, WINDOW_BAR_WIDTH, show),
     { text: " " },
     {
-      text: (pct === undefined ? "?" : `${Math.round(pct)}%`).padStart(4),
+      text: (pct === undefined
+        ? "?"
+        : shownPercent(pct, show, window.percentUsed)
+      ).padStart(4),
       style: pct === undefined ? "dim" : healthStyle(pct),
     },
     { text: "  " },
@@ -666,21 +698,38 @@ function shareCaption(window: QuotaWindow, windows: QuotaWindow[]): string {
 }
 
 /**
+ * The percentage a row or headline prints. A window uses its raw consumed
+ * figure; an effective headline derives consumption from raw remaining.
+ */
+function shownPercent(
+  percentRemaining: number,
+  show: TuiShow,
+  percentUsed = 100 - percentRemaining,
+): string {
+  return `${Math.round(show === "used" ? percentUsed : percentRemaining)}%`;
+}
+
+/**
  * Quiet-Ledger thin bar with the linear-pace marker: fill is current
  * headroom at half-cell resolution, `┃` overwrites the cell at
  * `timeRemainingPercent` (the fill position of exactly linear burn), and the
- * marker is omitted when pace is unknown rather than faked.
+ * marker is omitted when pace is unknown rather than faked. The used view
+ * mirrors both: fill is consumption and the marker sits at the elapsed share
+ * of the window, so fill running past the marker means burning ahead of the
+ * reset clock. Color always follows headroom, whichever side is drawn.
  */
 export function thinBar(
   percentRemaining: number | undefined,
   markerPercent: number | undefined,
   width: number,
+  show: TuiShow = "remaining",
 ): Line {
   const fillStyle: StyleName =
     percentRemaining === undefined ? "track" : healthStyle(percentRemaining);
   let halfUnits = 0;
   if (percentRemaining !== undefined) {
-    const pct = Math.min(100, Math.max(0, percentRemaining));
+    const remaining = Math.min(100, Math.max(0, percentRemaining));
+    const pct = show === "used" ? 100 - remaining : remaining;
     halfUnits = Math.round((pct / 100) * width * 2);
     if (pct > 0 && halfUnits === 0) halfUnits = 1;
     if (pct < 100 && halfUnits === width * 2) halfUnits = width * 2 - 1;
@@ -693,9 +742,10 @@ export function thinBar(
     else cells.push({ text: "─", style: "track" });
   }
   if (markerPercent !== undefined && Number.isFinite(markerPercent)) {
+    const position = show === "used" ? 100 - markerPercent : markerPercent;
     const cell = Math.min(
       width - 1,
-      Math.max(0, Math.round((markerPercent / 100) * width)),
+      Math.max(0, Math.round((position / 100) * width)),
     );
     cells[cell] = { text: "┃", style: "marker" };
   }
