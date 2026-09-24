@@ -12,6 +12,19 @@ import type {
   QuotaSemantics,
   QuotaWindow,
 } from "./types.js";
+const OLLAMA_CLOUD_QUOTA_WINDOW_IDS: Readonly<Record<string, true>> = {
+  five_hour: true,
+  weekly: true,
+};
+const OLLAMA_CLOUD_NON_QUOTA_WINDOW_IDS: Readonly<Record<string, true>> = {
+  monthly_spend: true,
+  activity: true,
+};
+const MUSE_QUOTA_WINDOW_IDS: Readonly<Record<string, true>> = {
+  five_hour: true,
+  session: true,
+  weekly: true,
+};
 
 export function markAgyStaleIfExpiredReset(
   provider: ProviderQuota,
@@ -138,6 +151,12 @@ function semanticsFor(
         provider.state.untrustedWindowIds ?? [],
         generatedAt,
       );
+    case "muse-code":
+      return museCodeSemantics(
+        provider.windows,
+        provider.state.untrustedWindowIds ?? [],
+        generatedAt,
+      );
     case "zai":
       return zaiSemantics(
         provider.windows,
@@ -157,6 +176,12 @@ function semanticsFor(
       return alibabaSemantics(provider.windows, generatedAt);
     case "opencode-go":
       return opencodeGoSemantics(provider.windows, generatedAt);
+    case "ollama-cloud":
+      return ollamaCloudSemantics(
+        provider.windows,
+        provider.state.untrustedWindowIds ?? [],
+        generatedAt,
+      );
     case "commandcode":
       return commandCodeSemantics(
         provider.windows,
@@ -318,6 +343,103 @@ function opencodeGoSemantics(
   return knownSemantics(
     plan.length > 0 ? [availability("all_models", plan, generatedAt)] : [],
     "OpenCode Go's rolling, weekly, and monthly windows are stacked plan caps ($12 per rolling 5 hours, $30 per week, $60 per month) that jointly bound Go-plan usage, so effective remaining is the minimum across the named windows. A zeroed plan window blocks Go-plan requests; the vendor's free-model fallback or an opted-in Zen balance may still serve past it, which this endpoint does not report.",
+  );
+}
+
+function ollamaCloudSemantics(
+  windows: QuotaWindow[],
+  untrustedWindowIds: string[],
+  generatedAt: string,
+): QuotaSemantics {
+  const quotaWindows = windows.filter(
+    (window) => OLLAMA_CLOUD_QUOTA_WINDOW_IDS[window.id] === true,
+  );
+  const unresolvedWindowIds = [
+    ...new Set([
+      ...windows
+        .filter(
+          (window) =>
+            OLLAMA_CLOUD_QUOTA_WINDOW_IDS[window.id] !== true &&
+            OLLAMA_CLOUD_NON_QUOTA_WINDOW_IDS[window.id] !== true,
+        )
+        .map((window) => window.id),
+      ...untrustedWindowIds,
+    ]),
+  ];
+  if (unresolvedWindowIds.length > 0) {
+    return {
+      status: "partial",
+      description:
+        "Ollama Cloud has missing or unfamiliar quota windows, so effective model headroom is unknown.",
+      effectiveAvailability:
+        quotaWindows.length > 0
+          ? [
+              unresolvedAvailability(
+                "all_models",
+                quotaWindows,
+                unresolvedWindowIds,
+              ),
+            ]
+          : [],
+      unresolvedWindowIds,
+    };
+  }
+  if (quotaWindows.length === 0) {
+    if (windows.length > 0) {
+      return {
+        status: "unknown",
+        description:
+          "Ollama Cloud reports dollar usage without a cap, so effective quota headroom is unknown.",
+        effectiveAvailability: [],
+      };
+    }
+    return unknownSemantics(windows, "Ollama Cloud reports no quota windows.");
+  }
+  return knownSemantics(
+    [availability("all_models", quotaWindows, generatedAt)],
+    "Ollama Cloud's session and weekly usage windows jointly bound model usage. Dollar-spend windows have no cap and do not change effective headroom.",
+  );
+}
+
+function museCodeSemantics(
+  windows: QuotaWindow[],
+  untrustedWindowIds: string[],
+  generatedAt: string,
+): QuotaSemantics {
+  const quotaWindows = windows.filter(
+    (window) => MUSE_QUOTA_WINDOW_IDS[window.id] === true,
+  );
+  const unresolvedWindowIds = [
+    ...new Set([
+      ...windows
+        .filter((window) => MUSE_QUOTA_WINDOW_IDS[window.id] !== true)
+        .map((window) => window.id),
+      ...untrustedWindowIds,
+    ]),
+  ];
+  if (unresolvedWindowIds.length > 0) {
+    return {
+      status: "partial",
+      description:
+        "Muse Code has a missing or unfamiliar subscription window, so effective model headroom is unknown.",
+      effectiveAvailability:
+        quotaWindows.length > 0
+          ? [
+              unresolvedAvailability(
+                "all_models",
+                quotaWindows,
+                unresolvedWindowIds,
+              ),
+            ]
+          : [],
+      unresolvedWindowIds,
+    };
+  }
+  if (quotaWindows.length === 0)
+    return unknownSemantics(windows, "Muse Code reported no quota windows.");
+  return knownSemantics(
+    [availability("all_models", quotaWindows, generatedAt)],
+    "Muse Code's rolling prompt and weekly windows jointly bound model usage.",
   );
 }
 

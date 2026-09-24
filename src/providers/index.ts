@@ -9,7 +9,9 @@ import { devinAdapter } from "./devin.js";
 import { elevenLabsAdapter } from "./elevenlabs.js";
 import { grokAdapter } from "./grok.js";
 import { kimiAdapter } from "./kimi.js";
+import { museAdapter } from "./muse.js";
 import { opencodeGoAdapter } from "./opencode-go.js";
+import { ollamaCloudAdapter } from "./ollama-cloud.js";
 import { minimaxAdapter } from "./minimax.js";
 import { mimoAdapter } from "./mimo.js";
 import { deepseekAdapter } from "./deepseek.js";
@@ -28,10 +30,12 @@ export const PROVIDERS: Record<ProviderId, ProviderAdapter> = {
   copilot: copilotAdapter,
   grok: grokAdapter,
   kimi: kimiAdapter,
+  "muse-code": museAdapter,
   zai: zaiAdapter,
   agy: agyAdapter,
   alibaba: alibabaAdapter,
   "opencode-go": opencodeGoAdapter,
+  "ollama-cloud": ollamaCloudAdapter,
   commandcode: commandCodeAdapter,
   minimax: minimaxAdapter,
   mimo: mimoAdapter,

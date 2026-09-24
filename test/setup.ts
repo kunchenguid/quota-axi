@@ -56,6 +56,9 @@ process.env.XDG_DATA_HOME = join(
 );
 delete process.env.WINDSURF_API_KEY;
 delete process.env.WINDSURF_API_SERVER_URL;
+delete process.env.OLLAMA_API_KEY;
+delete process.env.META_API_KEY;
+delete process.env.MUSE_AUTH_PATH;
 
 // A host may opt into fresh reuse or point at a snapshot fixture for every
 // process; tests start from the default and opt in themselves.

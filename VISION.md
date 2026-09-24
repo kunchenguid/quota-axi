@@ -22,7 +22,7 @@ The default report stays in declaration order and carries no preference, so no c
 ## Least action on someone else's credentials
 
 quota-axi acts on credentials other tools own, and it takes the least action that yields a true reading.
-It never logs in or creates an identity. Default quota reads spend no inference; the narrowly scoped opt-in exception is defined in [README Provider notes](README.md#provider-notes).
+It never logs in or creates an identity. Default quota reads spend no inference; the narrowly scoped Claude and Muse opt-in exceptions are defined in [README Provider notes](README.md#provider-notes).
 It never drives a browser or imports browser state or cookies, because a surface built for a human page is flaky and yields numbers it cannot verify.
 Running a vendor's own non-interactive command is allowed when that is what stands between quota-axi and an accurate report, and only under the limits below.
 Renewing a short-lived credential is such a case, and it is always the vendor's own CLI that renews it: quota-axi runs the smallest non-interactive command that already owns rotation, then re-reads the store that CLI just rewrote.

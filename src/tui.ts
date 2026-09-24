@@ -99,10 +99,12 @@ const ACCENTS: Record<ProviderId, StyleSpec> = {
   copilot: { rgb: [116, 199, 236], ansi16: "94", bold: true },
   grok: { rgb: [180, 190, 254], ansi16: "95", bold: true },
   kimi: { rgb: [245, 194, 231], ansi16: "95", bold: true },
+  "muse-code": { rgb: [221, 160, 221], ansi16: "95", bold: true },
   zai: { rgb: [129, 216, 209], ansi16: "96", bold: true },
   agy: { rgb: [232, 184, 109], ansi16: "93", bold: true },
   alibaba: { rgb: [255, 155, 120], ansi16: "91", bold: true },
   "opencode-go": { rgb: [160, 210, 255], ansi16: "96", bold: true },
+  "ollama-cloud": { rgb: [173, 216, 230], ansi16: "96", bold: true },
   commandcode: { rgb: [110, 210, 168], ansi16: "92", bold: true },
   minimax: { rgb: [255, 196, 112], ansi16: "93", bold: true },
   mimo: { rgb: [174, 214, 241], ansi16: "96", bold: true },
@@ -520,7 +522,8 @@ function creditsOnlyHeadline(
 /**
  * The headline block for a provider that reports real per-window usage but no
  * combinable bound: quota-axi does not know whether those windows are
- * independent or jointly bounding, so there is no combined
+ * independent or jointly bounding, or they are spend-only windows that bound
+ * nothing, so there is no combined
  * effective percentage, pace, or runway to show. Rendering the empty effective
  * bar there reads as a failure, so the block is replaced by a single line naming
  * what the card actually is - the per-window rows below carry the real data.
@@ -530,12 +533,22 @@ function hasWhollyUnknownWindowRelationships(provider: ProviderQuota): boolean {
   if (
     provider.windows.length === 0 ||
     semantics?.status !== "unknown" ||
-    semantics.unresolvedWindowIds === undefined
+    semantics.effectiveAvailability.length > 0
   ) {
     return false;
   }
-  const unresolved = new Set(semantics.unresolvedWindowIds);
-  return provider.windows.every(({ id }) => unresolved.has(id));
+  const unresolved = new Set(semantics.unresolvedWindowIds ?? []);
+  return provider.windows.every(
+    (window) => unresolved.has(window.id) || isSpendOnlyWindow(window),
+  );
+}
+
+function isSpendOnlyWindow(window: QuotaWindow): boolean {
+  return (
+    window.percentRemaining === undefined &&
+    window.percentUsed === undefined &&
+    Number.isFinite(window.spentUsd)
+  );
 }
 
 function windowsOnlyHeadline(stale: boolean | undefined): Line[] {
@@ -658,8 +671,28 @@ function windowRow(
     return shareWindowRow(window, generatedAtMs, windows);
   }
   const pct = window.percentRemaining;
-  const marker = window.pace?.timeRemainingPercent;
   const reset = resetCountdown(window, generatedAtMs);
+  if (isSpendOnlyWindow(window)) {
+    const captionWidth = WINDOW_BAR_WIDTH + 1 + 4;
+    const limit = Number.isFinite(window.limitUsd)
+      ? ` / ${window.limitUsd} USD`
+      : "";
+    return [
+      { text: "   " },
+      { text: padEndDisplay(shortWindowLabel(window), 8), style: "label" },
+      {
+        text: padEndDisplay(
+          truncate(`spent ${window.spentUsd} USD${limit}`, captionWidth),
+          captionWidth,
+        ),
+        style: "label",
+      },
+      { text: "  " },
+      { text: padEndDisplay(reset, 6), style: "dim" },
+      { text: " " },
+    ];
+  }
+  const marker = window.pace?.timeRemainingPercent;
   return [
     { text: "   " },
     { text: padEndDisplay(shortWindowLabel(window), 8), style: "label" },

@@ -5,9 +5,11 @@ export type ProviderId =
   | "copilot"
   | "grok"
   | "kimi"
+  | "muse-code"
   | "zai"
   | "agy"
   | "alibaba"
+  | "ollama-cloud"
   | "opencode-go"
   | "commandcode"
   | "minimax"
@@ -24,10 +26,12 @@ export const PROVIDER_IDS = [
   "copilot",
   "grok",
   "kimi",
+  "muse-code",
   "zai",
   "agy",
   "alibaba",
   "opencode-go",
+  "ollama-cloud",
   "commandcode",
   "minimax",
   "mimo",
@@ -363,6 +367,8 @@ export type ProviderOptions = {
    * headers when an env bearer cannot use the zero-spend usage endpoint.
    */
   allowClaudeInference?: boolean;
+  /** Permit one bounded Muse Code inference quota request. */
+  allowMuseInference?: boolean;
   /** Restrict discovery to the provider's selected native profile file. */
   credentialMode?: "profile-only";
   /**

@@ -157,10 +157,12 @@ function quotaBlocks(response: QuotaAxiResponse): ProviderBlocks {
       }
     }
 
+    const spendRows = measured ? spendWindowRows(provider, true) : [];
     blocks.attention.push(
       ...providerAttention(provider, measured, scopeAttention.length),
     );
     blocks.attention.push(...shareRows(provider));
+    if (measured) blocks.attention.push(...spendRows);
     blocks.attention.push(...scopeAttention);
   }
   return blocks;
@@ -232,6 +234,35 @@ function shareRows(provider: ProviderQuota): AttentionRow[] {
       detail: shareDetail(window),
       remedy: NONE,
     }));
+}
+function spendWindowRows(
+  provider: ProviderQuota,
+  measured: boolean,
+): AttentionRow[] {
+  return provider.windows
+    .filter(
+      (window) =>
+        Number.isFinite(window.spentUsd) &&
+        window.percentUsed === undefined &&
+        window.percentRemaining === undefined,
+    )
+    .map((window) => {
+      const authDetail = provider.state.authStatus
+        ? ` (auth ${provider.state.authStatus})`
+        : "";
+      const unknownDetail = measured
+        ? ""
+        : `${DETAIL_SEPARATOR}quota headroom unknown${authDetail}`;
+      return {
+        ...providerColumns(provider),
+        scope: "all",
+        kind: "spend",
+        detail: `${window.label}: ${window.spentUsd} USD${
+          Number.isFinite(window.limitUsd) ? ` of ${window.limitUsd} USD` : ""
+        }${unknownDetail}`,
+        remedy: NONE,
+      };
+    });
 }
 
 function shareDetail(window: QuotaWindow): string {
@@ -313,6 +344,8 @@ function providerStateRows(
     });
     return rows;
   }
+  const spendRows = spendWindowRows(provider, false);
+  if (spendRows.length > 0) return [...rows, ...spendRows];
   // No status row to carry the auth fact. Emit one when there is an auth
   // status to state, or when nothing else would name this provider at all.
   if (suffix === "" && rows.length + scopeRows > 0) return rows;

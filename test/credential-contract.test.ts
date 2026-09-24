@@ -2,6 +2,13 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { withQuotaSemantics } from "../src/interpretation.js";
+import {
+  createMuseAdapter,
+  defaultMuseCredentialSources,
+  MUSE_API_KEY_SOURCE,
+  MUSE_AUTH_FILE_SOURCE,
+} from "../src/providers/muse.js";
 import type { ProviderQuota, SourceAttempt } from "../src/types.js";
 
 /**
@@ -104,6 +111,9 @@ const ENV_KEYS = [
   "GITHUB_COPILOT_APPS_JSON",
   "GH_CONFIG_DIR",
   "ELEVENLABS_API_KEY",
+  "OLLAMA_API_KEY",
+  "META_API_KEY",
+  "MUSE_AUTH_PATH",
   "WINDSURF_API_KEY",
   "WINDSURF_API_SERVER_URL",
   "QUOTA_AXI_OPENCODE_GO_PI_AUTH",
@@ -142,6 +152,9 @@ beforeEach(() => {
   delete process.env.GROK_AUTH_JSON;
   delete process.env.GROK_AUTH_PATH;
   delete process.env.ELEVENLABS_API_KEY;
+  delete process.env.OLLAMA_API_KEY;
+  delete process.env.META_API_KEY;
+  delete process.env.MUSE_AUTH_PATH;
   delete process.env.WINDSURF_API_KEY;
   delete process.env.WINDSURF_API_SERVER_URL;
   mkdirSync(process.env.CODEX_HOME, { recursive: true });
@@ -243,6 +256,66 @@ describe("credential source contract", { timeout: 30_000 }, () => {
         expect(api.bearers).toContain(`Bearer ${expiredProbe.token}`);
       });
     }
+  });
+  it("keeps an invalid Muse env key visible when its auth file answers", async () => {
+    const authPath = join(tempDir, "muse", "auth.json");
+    mkdirSync(join(tempDir, "muse"), { recursive: true });
+    writeFileSync(
+      authPath,
+      JSON.stringify({
+        providers: { meta: { api_key: "synthetic-muse-file-key" } },
+      }),
+      { mode: 0o600 },
+    );
+    const environment = {
+      META_API_KEY: " synthetic-invalid-key ",
+      MUSE_AUTH_PATH: authPath,
+    };
+    const bearers: string[] = [];
+    const fetch: typeof globalThis.fetch = async (_input, init) => {
+      bearers.push(new Headers(init?.headers).get("authorization") ?? "");
+      return new Response(
+        `data: ${JSON.stringify({
+          subscription: {
+            window: { used_percent: "10", window_duration_mins: 300 },
+            weekly: { used_percent: "20" },
+          },
+        })}\n\n`,
+        { headers: { "content-type": "text/event-stream" } },
+      );
+    };
+    const adapter = createMuseAdapter({
+      sources: defaultMuseCredentialSources(environment),
+      fetch,
+      listRunningCommandLines: async () => ({
+        status: "listed",
+        processes: [],
+      }),
+    });
+
+    const result = withQuotaSemantics(
+      await adapter.fetchQuota({
+        allowKeychainPrompt: false,
+        allowMuseInference: true,
+        refreshCredentials: false,
+      }),
+      new Date().toISOString(),
+    );
+
+    expect(bearers).toHaveLength(1);
+    expect(bearers[0]).not.toContain("synthetic-invalid-key");
+    expect(result.attempts).toMatchObject([
+      {
+        source: MUSE_API_KEY_SOURCE,
+        status: "failed",
+        credentialPresent: true,
+      },
+      { source: MUSE_AUTH_FILE_SOURCE, status: "success" },
+    ]);
+    expect(result.state.degradedSources?.map(({ source }) => source)).toContain(
+      MUSE_API_KEY_SOURCE,
+    );
+    expect(JSON.stringify(result)).not.toContain("synthetic-muse-file-key");
   });
 
   /**
@@ -610,6 +683,71 @@ describe("credential source contract", { timeout: 30_000 }, () => {
       expect(api.keys).toEqual(["devin-probe-fixture"]);
       expect(bearers).toEqual([""]);
       expect(result.state.status).toBe("auth_required");
+    });
+  });
+  describe("ollama-cloud", () => {
+    const source = "env:OLLAMA_API_KEY";
+
+    it("leaves an unset variable absent and does not send a request", async () => {
+      const api = stubRejectingApi();
+
+      const result = await readQuota("ollama-cloud");
+
+      expect(attemptsFor(result, source)).toEqual([
+        {
+          source,
+          status: "skipped",
+          error: "ollama-cloud_credential_unavailable",
+        },
+      ]);
+      expect(api.bearers).toEqual([]);
+      expect(result.state.status).toBe("auth_required");
+    });
+
+    it("keeps a present but unusable variable visible and does not send it", async () => {
+      process.env.OLLAMA_API_KEY = "$OLLAMA_API_KEY";
+      const api = stubRejectingApi();
+
+      const result = await readQuota("ollama-cloud");
+
+      expect(attemptsFor(result, source)).toMatchObject([
+        { status: "failed", credentialPresent: true },
+      ]);
+      expect(api.bearers).toEqual([]);
+      expect(result.state.status).toBe("auth_required");
+    });
+
+    it("reports a rejected key as sign-in required", async () => {
+      process.env.OLLAMA_API_KEY = "ollama-env-contract-key";
+      const api = stubRejectingApi();
+
+      const result = await readQuota("ollama-cloud");
+
+      expect(api.bearers).toHaveLength(1);
+      expect(result.state.status).toBe("auth_required");
+      expect(attemptsFor(result, source)).toMatchObject([
+        { status: "failed", error: "provider_auth_rejected" },
+      ]);
+    });
+
+    it("keeps a transient request error from becoming sign-in required", async () => {
+      process.env.OLLAMA_API_KEY = "ollama-env-contract-key";
+      const requests: string[] = [];
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: string | URL | Request) => {
+          requests.push(String(input));
+          return new Response(null, { status: 503 });
+        }),
+      );
+
+      const result = await readQuota("ollama-cloud");
+
+      expect(requests).toEqual(["https://ollama.com/api/usage"]);
+      expect(result.state.status).toBe("error");
+      expect(attemptsFor(result, source)).toMatchObject([
+        { status: "failed", error: "provider_error:503" },
+      ]);
     });
   });
 });

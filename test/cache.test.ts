@@ -75,6 +75,19 @@ describe("quota cache", () => {
       expect(readCachedProvider("copilot")?.windows[0]?.percentUsed).toBe(40);
     },
   );
+  it("never caches Muse Code inference readings", () => {
+    useTempCache();
+    const muse = {
+      ...quota("claude", 20),
+      provider: "muse-code" as const,
+      label: "Muse Code",
+      source: "api" as const,
+    };
+
+    writeCachedProviders([muse]);
+
+    expect(readCachedProvider("muse-code")).toBeUndefined();
+  });
 
   it("ignores malformed matching entries", () => {
     useTempCache();

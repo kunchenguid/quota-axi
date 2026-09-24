@@ -118,6 +118,48 @@ describe("renderQuotaTui structure", () => {
     expect(findLine(lines, "45% credits")).toContain("empty in 2d 13h");
     expect(lines.join("\n")).not.toContain("▲ empty in");
   });
+  it("shows raw dollar spend without a quota bar", () => {
+    const provider = withQuotaSemantics(
+      {
+        provider: "ollama-cloud",
+        label: "Ollama Cloud",
+        source: "api",
+        windows: [
+          {
+            id: "monthly_spend",
+            label: "monthly usage spend",
+            kind: "monthly",
+            spentUsd: 0.42,
+          },
+        ],
+        state: {
+          status: "fresh",
+          stale: false,
+          refreshedAt: GENERATED_AT,
+          authStatus: "usable",
+          sourcesTried: [],
+        },
+      },
+      GENERATED_AT,
+    );
+    const response: QuotaAxiResponse = {
+      generatedAt: GENERATED_AT,
+      schemaVersion: 5,
+      providers: [provider],
+    };
+
+    const output = renderQuotaTui(response, {
+      columns: 80,
+      colorDepth: "none",
+      timeZone: "America/Los_Angeles",
+    });
+
+    expect(output).toContain("spent 0.42 USD");
+    expect(output).not.toContain("0.42%");
+    expect(output).toContain("per-window usage");
+    expect(output).toContain("no combined bound");
+    expect(output).not.toContain("effective unknown");
+  });
 
   it("names the binding window on the headline instead of the model scope", () => {
     const lines = render();

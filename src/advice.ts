@@ -5,6 +5,10 @@ import {
   REFRESH_SPAWN_FAILED,
 } from "./providers/delegated-refresh.js";
 import { grokCliRefreshNeeded } from "./providers/grok.js";
+import {
+  MUSE_INFERENCE_OPT_IN_ERROR,
+  MUSE_INFERENCE_REMEDY_COMMAND,
+} from "./providers/muse.js";
 import type {
   ProviderQuota,
   QuotaAxiResponse,
@@ -89,6 +93,16 @@ function annotateProviderAdvice(provider: ProviderQuota): ProviderQuota {
       },
     };
   }
+  if (needsMuseInferenceAdvice(provider)) {
+    return {
+      ...provider,
+      state: {
+        ...provider.state,
+        reason: INFERENCE_OPT_IN_REASON,
+        remedyCommand: MUSE_INFERENCE_REMEDY_COMMAND,
+      },
+    };
+  }
   if (needsKeychainAccessAdvice(provider)) {
     return {
       ...provider,
@@ -160,6 +174,13 @@ function needsClaudeInferenceAdvice(provider: ProviderQuota): boolean {
     provider.state.status !== "fresh" &&
     provider.state.error === CLAUDE_ENV_SCOPE_DENIAL_ERROR &&
     envScopeDenialEndedDiscovery(provider.attempts ?? [])
+  );
+}
+function needsMuseInferenceAdvice(provider: ProviderQuota): boolean {
+  return (
+    provider.provider === "muse-code" &&
+    provider.state.status !== "fresh" &&
+    provider.state.error === MUSE_INFERENCE_OPT_IN_ERROR
   );
 }
 
@@ -262,6 +283,7 @@ function providerHelpLines(provider: ProviderQuota): string[] {
   if (hasClaudeTokenRefreshAdvice(provider))
     return [claudeTokenRefreshHelpLine(provider)];
   if (hasClaudeInferenceAdvice(provider)) return [claudeInferenceHelpLine()];
+  if (hasMuseInferenceAdvice(provider)) return [museInferenceHelpLine()];
   return [];
 }
 
@@ -269,6 +291,13 @@ function hasClaudeInferenceAdvice(provider: ProviderQuota): boolean {
   return (
     provider.state.reason === INFERENCE_OPT_IN_REASON &&
     provider.state.remedyCommand === CLAUDE_INFERENCE_REMEDY_COMMAND
+  );
+}
+function hasMuseInferenceAdvice(provider: ProviderQuota): boolean {
+  return (
+    provider.provider === "muse-code" &&
+    provider.state.reason === INFERENCE_OPT_IN_REASON &&
+    provider.state.remedyCommand === MUSE_INFERENCE_REMEDY_COMMAND
   );
 }
 
@@ -300,6 +329,9 @@ function keychainAccessHelpLine(provider: ProviderQuota): string {
 
 function claudeInferenceHelpLine(): string {
   return `Tell your user: the CLAUDE_CODE_OAUTH_TOKEN session is usable but its token cannot read the quota endpoint. Running \`${CLAUDE_INFERENCE_REMEDY_COMMAND}\` once reads its five-hour and seven-day quota by spending one bounded native Claude Code startup plus a small inference request; quota-axi never does this by default.`;
+}
+function museInferenceHelpLine(): string {
+  return `Tell your user: running \`${MUSE_INFERENCE_REMEDY_COMMAND}\` once spends at most one successful streamed Muse Code ping. quota-axi never does this by default.`;
 }
 
 function claudeTokenRefreshHelpLine(provider: ProviderQuota): string {

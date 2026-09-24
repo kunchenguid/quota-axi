@@ -64,10 +64,12 @@ export async function quotaCommand(
   const flags = parseFlags(args);
   validateProfileOnly(flags);
   validateClaudeInference(flags);
+  validateMuseInference(flags);
   const options: ProviderOptions = {
     allowKeychainPrompt: flags.profileOnly ? false : flags.allowKeychainPrompt,
     refreshCredentials: flags.profileOnly ? false : !flags.noCredentialRefresh,
     ...(flags.allowClaudeInference ? { allowClaudeInference: true } : {}),
+    ...(flags.allowMuseInference ? { allowMuseInference: true } : {}),
     ...(flags.profileOnly ? { credentialMode: "profile-only" as const } : {}),
   };
 
@@ -313,6 +315,13 @@ export async function authCommand(
       ["Run `quota-axi --provider claude --allow-claude-inference`"],
     );
   }
+  if (flags.allowMuseInference) {
+    throw new AxiError(
+      "--allow-muse-inference is only supported by the quota command",
+      "VALIDATION_ERROR",
+      ["Run `quota-axi --provider muse-code --allow-muse-inference`"],
+    );
+  }
   if (flags.profileOnly) {
     throw new AxiError(
       "--profile-only is only supported by the quota command",
@@ -376,6 +385,23 @@ function validateClaudeInference(flags: QuotaFlags): void {
   if (flags.tui && !flags.once) {
     throw new AxiError(
       "--allow-claude-inference requires --once with --tui",
+      "VALIDATION_ERROR",
+      ["Recurring TUI refreshes would repeatedly spend inference quota"],
+    );
+  }
+}
+function validateMuseInference(flags: QuotaFlags): void {
+  if (!flags.allowMuseInference) return;
+  if (!flags.explicitProviders || !flags.providers.includes("muse-code")) {
+    throw new AxiError(
+      "--allow-muse-inference requires explicit --provider muse-code",
+      "VALIDATION_ERROR",
+      ["Run `quota-axi --provider muse-code --allow-muse-inference`"],
+    );
+  }
+  if (flags.tui && !flags.once) {
+    throw new AxiError(
+      "--allow-muse-inference requires --once with --tui",
       "VALIDATION_ERROR",
       ["Recurring TUI refreshes would repeatedly spend inference quota"],
     );

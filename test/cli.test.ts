@@ -13,6 +13,7 @@ import { parseFlags, parseModelsFlags } from "../src/args.js";
 import { main, normalizeArgv } from "../src/cli.js";
 import { authCommand, quotaCommand } from "../src/commands.js";
 import { PROVIDERS } from "../src/providers/index.js";
+import { createDevinAdapter } from "../src/providers/devin.js";
 import { redactedResponse } from "../src/render.js";
 import type {
   ProviderAdapter,
@@ -22,6 +23,7 @@ import type {
 } from "../src/types.js";
 
 const originalClaudeProvider = PROVIDERS.claude;
+const originalOllamaCloudProvider = PROVIDERS["ollama-cloud"];
 const originalCodexProvider = PROVIDERS.codex;
 const originalCursorProvider = PROVIDERS.cursor;
 const originalCopilotProvider = PROVIDERS.copilot;
@@ -37,6 +39,7 @@ const originalMimoProvider = PROVIDERS.mimo;
 const originalDeepSeekProvider = PROVIDERS.deepseek;
 const originalOpenRouterProvider = PROVIDERS.openrouter;
 const originalElevenLabsProvider = PROVIDERS.elevenlabs;
+const originalMuseProvider = PROVIDERS["muse-code"];
 const originalDevinProvider = PROVIDERS.devin;
 const originalXdgCacheHome = process.env.XDG_CACHE_HOME;
 const originalClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
@@ -66,6 +69,8 @@ afterEach(() => {
   PROVIDERS.deepseek = originalDeepSeekProvider;
   PROVIDERS.openrouter = originalOpenRouterProvider;
   PROVIDERS.elevenlabs = originalElevenLabsProvider;
+  PROVIDERS["muse-code"] = originalMuseProvider;
+  PROVIDERS["ollama-cloud"] = originalOllamaCloudProvider;
   PROVIDERS.devin = originalDevinProvider;
   vi.unstubAllGlobals();
   if (originalXdgCacheHome === undefined) delete process.env.XDG_CACHE_HOME;
@@ -93,10 +98,12 @@ describe("CLI flag parsing", () => {
       "copilot",
       "grok",
       "kimi",
+      "muse-code",
       "zai",
       "agy",
       "alibaba",
       "opencode-go",
+      "ollama-cloud",
       "commandcode",
       "minimax",
       "mimo",
@@ -167,10 +174,12 @@ describe("CLI flag parsing", () => {
           "copilot",
           "grok",
           "kimi",
+          "muse-code",
           "zai",
           "agy",
           "alibaba",
           "opencode-go",
+          "ollama-cloud",
           "commandcode",
           "minimax",
           "mimo",
@@ -187,10 +196,15 @@ describe("CLI flag parsing", () => {
         all: false,
         allowKeychainPrompt: true,
         allowClaudeInference: false,
+        allowMuseInference: false,
         noCredentialRefresh: false,
         profileOnly: false,
       },
     );
+    expect(
+      parseFlags(["--provider", "muse-code", "--allow-muse-inference"])
+        .allowMuseInference,
+    ).toBe(true);
     expect(parseFlags(["--tui"]).tui).toBe(true);
     expect(parseFlags(["--tui", "--once"]).once).toBe(true);
   });
@@ -315,18 +329,27 @@ describe("CLI flag parsing", () => {
       "--profile-only is only supported by the quota command",
     );
   });
+  it("rejects Muse inference opt-in for models", () => {
+    expect(() => parseModelsFlags(["--allow-muse-inference"])).toThrow(
+      "only supported by the quota command",
+    );
+  });
 });
 
 describe("delegated credential refresh wiring", () => {
-  function recordingProvider(seen: ProviderOptions[]): ProviderAdapter {
+  function recordingProvider(
+    seen: ProviderOptions[],
+    id: "claude" | "muse-code" = "claude",
+  ): ProviderAdapter {
+    const label = id === "claude" ? "Claude" : "Muse Code";
     return {
-      id: "claude",
-      label: "Claude",
+      id,
+      label,
       async fetchQuota(options) {
         seen.push(options);
         return {
-          provider: "claude",
-          label: "Claude",
+          provider: id,
+          label,
           source: "unavailable",
           windows: [],
           state: {
@@ -339,7 +362,7 @@ describe("delegated credential refresh wiring", () => {
       },
       async inspectAuth(options) {
         seen.push(options);
-        return { provider: "claude", sources: [] };
+        return { provider: id, sources: [] };
       },
     };
   }
@@ -372,6 +395,45 @@ describe("delegated credential refresh wiring", () => {
 
     expect(seen[0]?.allowClaudeInference).toBeUndefined();
     expect(seen[1]?.allowClaudeInference).toBe(true);
+  });
+  it("requires explicit Muse scope before passing the inference opt-in", async () => {
+    useTempCache();
+    const seen: ProviderOptions[] = [];
+    PROVIDERS["muse-code"] = recordingProvider(seen, "muse-code");
+
+    await expect(
+      quotaCommand(["--allow-muse-inference"], undefined),
+    ).rejects.toThrow("requires explicit --provider muse-code");
+    expect(seen).toHaveLength(0);
+
+    await quotaCommand(["--provider", "muse-code"], undefined);
+    await quotaCommand(
+      ["--provider", "muse-code", "--allow-muse-inference"],
+      undefined,
+    );
+
+    expect(seen[0]?.allowMuseInference).toBeUndefined();
+    expect(seen[1]?.allowMuseInference).toBe(true);
+  });
+  it("rejects unrelated, recurring, and auth-command Muse inference opt-ins", async () => {
+    await expect(
+      quotaCommand(
+        ["--provider", "claude", "--allow-muse-inference"],
+        undefined,
+      ),
+    ).rejects.toThrow("requires explicit --provider muse-code");
+    await expect(
+      quotaCommand(
+        ["--provider", "muse-code", "--tui", "--allow-muse-inference"],
+        undefined,
+      ),
+    ).rejects.toThrow("requires --once with --tui");
+    await expect(
+      authCommand(
+        ["--provider", "muse-code", "--allow-muse-inference"],
+        undefined,
+      ),
+    ).rejects.toThrow("only supported by the quota command");
   });
 
   it("rejects recurring or unrelated Claude inference opt-ins", async () => {
@@ -1447,13 +1509,13 @@ describe("human report folding for providers that are not set up", () => {
     const output = await capture(["--tui", "--once"]);
 
     expect(output.trimEnd().split("\n").slice(-3)).toEqual([
-      "  ○ not set up  cursor · copilot · grok · kimi · zai · agy · alibaba · opencode-go · commandcode",
-      "                minimax · mimo · deepseek · openrouter · elevenlabs · devin",
-      "                quota-axi auth shows where each is read",
+      "  ○ not set up  cursor · copilot · grok · kimi · muse-code · zai · agy · alibaba · opencode-go",
+      "                ollama-cloud · commandcode · minimax · mimo · deepseek · openrouter · elevenlabs",
+      "                devin   quota-axi auth shows where each is read",
     ]);
     expect(output).not.toMatch(/╭─ ○ (agy|alibaba|commandcode) /);
 
-    expect(output).toMatch(/· 1 live · 1 needs attention · 15 not set up\n/);
+    expect(output).toMatch(/· 1 live · 1 needs attention · 17 not set up\n/);
     expect(output).toContain("╭─ ● codex ");
     expect(output).toContain("╭─ ○ claude ");
     expect(output).toContain("  ○ not set up  cursor · copilot · grok · kimi");
@@ -1465,7 +1527,7 @@ describe("human report folding for providers that are not set up", () => {
     stubFoldFleet();
     const output = await capture(["--tui", "--once", "--all"]);
 
-    expect(output).toContain("  ○ not set up · 15\n");
+    expect(output).toContain("  ○ not set up · 17\n");
     expect(output).toContain("╭─ ○ copilot ");
     expect(output).toContain("╭─ ○ elevenlabs ");
     expect(output).not.toContain("quota-axi auth shows where each is read");
@@ -1528,7 +1590,7 @@ describe("human report folding for providers that are not set up", () => {
 
       process.stdin.emit("data", Buffer.from("a"));
       await settle("a hide not set up");
-      expect(lastFrame()).toContain("  ○ not set up · 15");
+      expect(lastFrame()).toContain("  ○ not set up · 17");
       expect(lastFrame()).toContain("╭─ ○ zai ");
 
       process.stdin.emit("data", Buffer.from("q"));
@@ -1837,8 +1899,10 @@ describe("new provider public quota output", () => {
 
   it("publishes Devin included quota in TOON and JSON without the session token", async () => {
     useTempCache();
+    const devinNow = Date.parse("2026-09-22T12:00:00.000Z");
     vi.useFakeTimers({ toFake: ["Date"] });
-    vi.setSystemTime(new Date("2026-09-22T12:00:00.000Z"));
+    vi.setSystemTime(devinNow);
+    PROVIDERS.devin = createDevinAdapter({ now: () => devinNow });
     const key = "synthetic-devin-cli-key";
     process.env.WINDSURF_API_KEY = key;
     const payload = JSON.parse(
@@ -1923,6 +1987,12 @@ describe("default TOON decision blocks", () => {
     );
     PROVIDERS.elevenlabs = providerWithQuota(freshElevenLabsQuota());
     PROVIDERS.devin = providerWithQuota(freshDevinQuota());
+    PROVIDERS["muse-code"] = providerWithQuota(
+      emptyFreshQuota("muse-code", "Muse Code"),
+    );
+    PROVIDERS["ollama-cloud"] = providerWithQuota(
+      emptyFreshQuota("ollama-cloud", "Ollama Cloud"),
+    );
 
     const output = await capture([]);
     const named = new Set([
@@ -1945,6 +2015,8 @@ describe("default TOON decision blocks", () => {
       "kimi",
       "mimo",
       "minimax",
+      "muse-code",
+      "ollama-cloud",
       "opencode-go",
       "openrouter",
       "zai",

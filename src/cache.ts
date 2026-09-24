@@ -555,8 +555,9 @@ function reuseStampsFor(
 
 function isCacheExcluded(provider: ProviderQuota): boolean {
   return (
-    (provider.provider === "claude" || provider.provider === "copilot") &&
-    provider.source === "cli"
+    provider.provider === "muse-code" ||
+    ((provider.provider === "claude" || provider.provider === "copilot") &&
+      provider.source === "cli")
   );
 }
 
