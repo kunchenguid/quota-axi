@@ -37,7 +37,7 @@ export type QuotaFlags = {
   all: boolean;
   /**
    * Oldest successful reading a read may reuse instead of asking the vendor;
-   * `0` always asks. The caller applies the default.
+   * `0` always asks. Absent, the caller falls back to {@link MAX_AGE_ENV}.
    */
   maxAgeSeconds?: number;
 };
@@ -47,14 +47,12 @@ export const MIN_REFRESH_SECONDS = 30;
 export const MAX_REFRESH_SECONDS = 86_400;
 
 /**
- * Fresh-reuse bounds. The default absorbs a burst of back-to-back reads (a
- * dispatcher polling per decision, a test run) that would otherwise trip a
- * vendor's usage-endpoint rate limit. A live `--tui` caps its scheduled
- * frames below the refresh interval unless `--max-age` is given, so each one
- * still reads the vendor at any `--refresh`. Ninety seconds moves a five-hour
- * window's elapsed time by half a percent.
+ * Fresh reuse is opt-in: with neither `--max-age` nor this variable every
+ * read asks the vendor. A host whose consumer polls per decision (a
+ * dispatcher, a test run) sets it once to absorb bursts that would otherwise
+ * trip a vendor's usage-endpoint rate limit; the flag wins over it.
  */
-export const DEFAULT_MAX_AGE_SECONDS = 90;
+export const MAX_AGE_ENV = "QUOTA_AXI_MAX_AGE";
 export const MAX_MAX_AGE_SECONDS = 3_600;
 
 export type ModelsFlags = QuotaFlags & {
@@ -324,19 +322,39 @@ function parseRefreshValue(value: string | undefined): number {
   return seconds;
 }
 
+/**
+ * The host-wide fresh-reuse bound from {@link MAX_AGE_ENV}, or `undefined`
+ * when it is unset or blank. A value that does not parse fails the read
+ * rather than silently turning reuse off.
+ */
+export function readMaxAgeEnv(
+  environment: NodeJS.ProcessEnv = process.env,
+): number | undefined {
+  const value = environment[MAX_AGE_ENV];
+  if (value === undefined || value.trim() === "") return undefined;
+  return parseMaxAgeValue(value, MAX_AGE_ENV);
+}
+
 /** Accept `0`, a whole-unit duration (`45s`, `2m`, `1h`), or bare seconds. */
-function parseMaxAgeValue(value: string | undefined): number {
+function parseMaxAgeValue(
+  value: string | undefined,
+  name = "--max-age",
+): number {
   const seconds = parseDurationSeconds(value);
   if (seconds === undefined) {
     throw new AxiError(
-      "--max-age requires a duration such as 0, 90s, or 2m",
+      `${name} requires a duration such as 0, 90s, or 2m`,
       "VALIDATION_ERROR",
-      ["Pass --max-age 0 to always read the vendor"],
+      [
+        name === "--max-age"
+          ? "Pass --max-age 0 to always read the vendor"
+          : `Unset ${name} to always read the vendor`,
+      ],
     );
   }
   if (seconds > MAX_MAX_AGE_SECONDS) {
     throw new AxiError(
-      `--max-age must be at most ${MAX_MAX_AGE_SECONDS / 60}m`,
+      `${name} must be at most ${MAX_MAX_AGE_SECONDS / 60}m`,
       "VALIDATION_ERROR",
       ["Reuse only absorbs bursts; it is not a long-lived cache"],
     );

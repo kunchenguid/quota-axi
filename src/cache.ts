@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { chmodSync, renameSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 import {
   cacheFilePath,
   claudeCredentialContextId,
@@ -12,6 +13,7 @@ import { devinReadingContextId } from "./providers/devin-cache-context.js";
 import { elevenLabsReadingContextId } from "./providers/elevenlabs-cache-context.js";
 import { miniMaxReadingContextId } from "./providers/minimax-cache-context.js";
 import { isPiCodexSource } from "./providers/pi-codex-credential.js";
+import { fetchLockPath } from "./lib/fetch-lock.js";
 import { inputsDigest, type TracedInputs } from "./lib/input-trace.js";
 import { reuseContextId } from "./lib/reuse-context.js";
 import type {
@@ -236,6 +238,21 @@ export function readReusableProviders(
   return group
     .sort((a, b) => (a.reuse?.lane ?? 0) - (b.reuse?.lane ?? 0))
     .map(reusedReading);
+}
+
+/**
+ * The single-flight lock guarding vendor reads of `provider` under this
+ * process's credential selection, so processes selecting different
+ * credentials never wait on each other (#61).
+ */
+export function fetchLockPathFor(
+  provider: ProviderId,
+  contextId: string = reuseContextId(),
+): string {
+  const key = createHash("sha256")
+    .update(JSON.stringify(["fetch-lock-v1", provider, contextId]))
+    .digest("hex");
+  return fetchLockPath(dirname(cacheFilePath()), key);
 }
 
 /**

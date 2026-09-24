@@ -266,7 +266,7 @@ describe("Claude macOS Keychain discovery", () => {
     });
   });
 
-  it("reuses a granted Keychain reading across back-to-back plain reads", async () => {
+  it("reuses a granted Keychain reading across back-to-back reads with --max-age", async () => {
     mockItems(item());
     const { claudeKeychainAccessMarkerPath } =
       await import("../../src/lib/fs.js");
@@ -277,7 +277,14 @@ describe("Claude macOS Keychain discovery", () => {
 
     for (let read = 0; read < 3; read++) {
       const output = await quotaCommand(
-        ["--provider", "claude", "--json", "--no-credential-refresh"],
+        [
+          "--provider",
+          "claude",
+          "--json",
+          "--no-credential-refresh",
+          "--max-age",
+          "90s",
+        ],
         undefined,
       );
       expect(JSON.parse(output).providers[0].state.status).toBe("fresh");

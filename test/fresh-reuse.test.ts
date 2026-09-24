@@ -1,8 +1,12 @@
+import { spawnSync } from "node:child_process";
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -52,11 +56,14 @@ const saved = Object.fromEntries(
     "CODEX_HOME",
     "PI_CODING_AGENT_DIR",
     "QUOTA_AXI_SNAPSHOT",
+    "QUOTA_AXI_MAX_AGE",
   ].map((name) => [name, process.env[name]]),
 );
 let root: string;
 let usageCalls: number;
 let usagePercent: number;
+/** The lock files present while the vendor was being asked */
+let locksDuringUsage: string[];
 
 beforeEach(() => {
   Object.defineProperty(process, "platform", {
@@ -69,8 +76,11 @@ beforeEach(() => {
   process.env.XDG_CACHE_HOME = join(root, "cache");
   delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
   delete process.env.QUOTA_AXI_SNAPSHOT;
+  // Reuse is opt-in; these tests enable it the way a host does
+  process.env.QUOTA_AXI_MAX_AGE = "90s";
   useProfile("a");
   usageCalls = 0;
+  locksDuringUsage = [];
   usagePercent = 30;
   // Faking only Date leaves the Response body stream on real timers.
   vi.useFakeTimers({ toFake: ["Date"] });
@@ -86,6 +96,9 @@ beforeEach(() => {
       }
       if (url.endsWith("/api/oauth/usage")) {
         usageCalls++;
+        locksDuringUsage = existsSync(locksDir())
+          ? readdirSync(locksDir())
+          : [];
         const payload = structuredClone(USAGE);
         payload.limits[0]!.percent = usagePercent;
         return new Response(JSON.stringify(payload), { status: 200 });
@@ -132,6 +145,10 @@ function cacheFilePath(): string {
   return join(root, "cache", "quota-axi", "quotas.json");
 }
 
+function locksDir(): string {
+  return join(root, "cache", "quota-axi", "locks");
+}
+
 function advance(seconds: number): void {
   vi.setSystemTime(new Date(Date.now() + seconds * 1_000));
 }
@@ -152,6 +169,83 @@ async function readToon(...flags: string[]): Promise<string> {
     undefined,
   );
 }
+
+describe("fresh reuse is opt-in", () => {
+  it("asks the vendor on every read when neither --max-age nor QUOTA_AXI_MAX_AGE is set", async () => {
+    delete process.env.QUOTA_AXI_MAX_AGE;
+    for (let read = 0; read < 3; read++) {
+      expect((await readJson()).state.reused).toBeUndefined();
+      advance(5);
+    }
+    expect(usageCalls).toBe(3);
+    expect(locksDuringUsage).toEqual([]);
+
+    await readJson("--max-age", "90s");
+    expect(usageCalls).toBe(3);
+  });
+
+  it("lets --max-age win over QUOTA_AXI_MAX_AGE", async () => {
+    process.env.QUOTA_AXI_MAX_AGE = "10s";
+    await readJson();
+    advance(30);
+    await readJson();
+    expect(usageCalls).toBe(2);
+    advance(30);
+    expect((await readJson("--max-age", "2m")).state.reused).toBe(true);
+    expect(usageCalls).toBe(2);
+  });
+
+  it("fails clearly on a QUOTA_AXI_MAX_AGE that does not parse", async () => {
+    for (const value of ["soon", "61m"]) {
+      process.env.QUOTA_AXI_MAX_AGE = value;
+      await expect(readJson()).rejects.toMatchObject({
+        code: "VALIDATION_ERROR",
+        message: expect.stringContaining("QUOTA_AXI_MAX_AGE"),
+      });
+    }
+    expect(usageCalls).toBe(0);
+  });
+
+  it("treats a blank QUOTA_AXI_MAX_AGE as unset", async () => {
+    process.env.QUOTA_AXI_MAX_AGE = " ";
+    await readJson();
+    await readJson();
+    expect(usageCalls).toBe(2);
+  });
+});
+
+describe("single-flight lock", () => {
+  it("holds a lock only while it reads the vendor", async () => {
+    await readJson();
+    expect(locksDuringUsage).toHaveLength(1);
+    expect(readdirSync(locksDir())).toEqual([]);
+  });
+
+  it("takes over a lock whose holder exited", async () => {
+    await readJson();
+    const [lock] = locksDuringUsage;
+    const exited = spawnSync(process.execPath, ["-e", ""]).pid;
+    writeFileSync(
+      join(locksDir(), lock!),
+      JSON.stringify({
+        pid: exited,
+        host: (await import("node:os")).hostname(),
+        token: "crashed-holder",
+      }),
+    );
+    // Judged by the holder, not by age
+    const now = Date.now() / 1000;
+    utimesSync(join(locksDir(), lock!), now, now);
+    advance(100);
+
+    const started = performance.now();
+    const read = await readJson();
+    expect(performance.now() - started).toBeLessThan(5_000);
+    expect(read.state.status).toBe("fresh");
+    expect(usageCalls).toBe(2);
+    expect(readdirSync(locksDir())).toEqual([]);
+  });
+});
 
 describe("fresh reuse", () => {
   it("answers a burst of reads with one vendor call, where --max-age 0 makes one per read", async () => {

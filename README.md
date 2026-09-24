@@ -334,7 +334,7 @@ It is generated from `src/skill.ts`; update it with `pnpm run build:skill` and v
 | `--allow-keychain-prompt`                                                                                                                    | Permit native secure-store access that could prompt (macOS or Windows)                                                 |
 | `--allow-claude-inference`                                                                                                                   | Spend one bounded native Claude inference to read env-token quota headers                                              |
 | `--no-credential-refresh`                                                                                                                    | Never run a vendor CLI's own non-interactive credential refresh                                                        |
-| `--max-age 0\|90s\|2m`                                                                                                                       | Reuse a fresh reading up to this old instead of asking the vendor, default 90s; `0` always asks                        |
+| `--max-age 0\|90s\|2m`                                                                                                                       | Opt in to reusing a fresh reading up to this old instead of asking the vendor; `0` always asks                         |
 | `--profile-only`                                                                                                                             | Read one explicitly selected Claude or Codex credential file (quota only)                                              |
 | `--intelligence high\|medium\|low`                                                                                                           | Filter `models` by editorial intelligence bucket                                                                       |
 | `--sort runway`                                                                                                                              | Explicitly sort `models` by documented usable-runway evidence                                                          |
@@ -354,10 +354,12 @@ CODEX_HOME=/path/to/codex-profile quota-axi --provider codex --profile-only --fu
 
 ### Fresh reuse
 
-Repeated reads a short time apart reuse the last successful reading instead of asking the vendor again, because a burst of back-to-back reads (a dispatcher that takes a fresh reading per decision, a test run) can otherwise trip a vendor's usage-endpoint rate limit and leave the provider unmeasured until the limit clears.
-`quota` and `models` reuse a provider's reading when it is younger than `--max-age`, default 90 seconds, and `--max-age 0` always asks the vendor.
+A burst of back-to-back reads (a dispatcher that takes a fresh reading per decision, a test run) can trip a vendor's usage-endpoint rate limit and leave the provider unmeasured until the limit clears.
+Fresh reuse lets such a caller serve the last successful reading instead of asking the vendor again.
+It is opt-in: with neither `--max-age` nor `QUOTA_AXI_MAX_AGE`, every `quota` and `models` read asks the vendor.
+`--max-age <duration>` enables it for one call, and `QUOTA_AXI_MAX_AGE=<duration>` enables it for a host; the flag wins, so `--max-age 0` always asks the vendor.
+Both accept `0`, bare seconds, or a whole-unit duration up to one hour, and a `QUOTA_AXI_MAX_AGE` that does not parse fails the read with a validation error instead of being ignored.
 Ninety seconds absorbs a burst and moves a five-hour window's elapsed time by half a percent.
-`--max-age` accepts `0`, bare seconds, or a whole-unit duration up to one hour.
 
 A reading is reused only when all of these hold:
 
@@ -367,14 +369,21 @@ A reading is reused only when all of these hold:
 - It is younger than `--max-age`, and no window has reached its own reported `resetsAt`, because a number that has stopped being true is never served ([#257](https://github.com/kunchenguid/quota-axi/issues/257)).
 
 The cache keeps one slot per provider lane, so two profiles that alternate each read the vendor; each still reuses its own reading between switches.
-`--full` is the audit tier and account identity and source attempts are never cached, so it reads the vendor unless `--max-age` is passed explicitly.
+`--full` is the audit tier and account identity and source attempts are never cached, so `QUOTA_AXI_MAX_AGE` does not reach it; it reuses only when `--max-age` is passed explicitly.
 `--profile-only` never reuses, and readings the cache excludes (Claude native inference and Copilot native secure-store readings) are never reused.
-A live `--tui` reuses on its first frame; a scheduled refresh reuses only a reading younger than the refresh interval, so it never repeats its own previous frame and still reads the vendor at any `--refresh`, unless `--max-age` is passed explicitly.
+With reuse enabled, a live `--tui` reuses on its first frame; a scheduled refresh reuses only a reading younger than the refresh interval, so it never repeats its own previous frame and still reads the vendor at any `--refresh`, unless `--max-age` is passed explicitly.
 Pressing `r` always reads the vendor, because it is an operator asking for a new reading now.
+
+With reuse enabled, processes that miss the cache together make one vendor read per provider and credential selection.
+The first creates a lock file under the cache directory, reads the vendor, and caches that provider's reading before releasing it; the others poll the cache and are answered by that reading through the same checks as any reuse.
+A waiter gives up after 30 seconds and reads the vendor itself, and a lock whose holder has exited, or that is older than two minutes, is taken over, so a crashed or wedged holder never blocks a read.
+If the holder's read fails, nothing is cached and the next waiter takes its turn.
+The lock only saves vendor calls: a lost race costs an extra read, never a wrong one.
 
 A reused reading is a fresh reading, not a stale one: `state.status` stays `fresh`, `stale` stays `false`, and quota rows, pace, runway, and selection are derived as usual at the report's `generatedAt`.
 It is marked honestly on every surface: `--json` adds `state.reused: true` and keeps its `state.refreshedAt` (the time the vendor answered) in the default tier, default TOON adds a `reused` attention row naming that time, and the `--tui` card title says `reused 42s`.
 Reusing never rewrites the cache record, so its age keeps counting from the vendor's answer.
+Serving it as fresh is honest because the caller chose the bound: a reused reading is the vendor's own answer at `refreshedAt`, no older than the `--max-age` the caller asked for, and never past a window's reset, so a consumer that needs a newer number reads `refreshedAt` or passes a smaller `--max-age`.
 
 #### Snapshot fixtures
 

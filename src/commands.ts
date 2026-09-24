@@ -1,18 +1,20 @@
 import { AxiError } from "axi-sdk-js";
 import { annotateQuotaAdvice } from "./advice.js";
 import {
-  DEFAULT_MAX_AGE_SECONDS,
   parseFlags,
   parseModelsFlags,
+  readMaxAgeEnv,
   type QuotaFlags,
 } from "./args.js";
 import {
+  fetchLockPathFor,
   isSnapshotFile,
   readReusableProviders,
   readSnapshotProviders,
   stampReadingInputs,
   writeCachedProviders,
 } from "./cache.js";
+import { takeFetchTurn } from "./lib/fetch-lock.js";
 import { withInputTrace } from "./lib/input-trace.js";
 import { withQuotaSemantics } from "./interpretation.js";
 import { createModelsResponse, MODEL_CATALOG_PROVIDER_IDS } from "./models.js";
@@ -270,9 +272,6 @@ async function loadQuota(
   const allFailed = response.providers.every(isFailed);
   if (allFailed) process.exitCode = 1;
   else if (live) process.exitCode = undefined;
-  if (options.credentialMode !== "profile-only" && !snapshotFile()) {
-    writeCachedProvidersBestEffort(response.providers, response.generatedAt);
-  }
   return response;
 }
 
@@ -287,8 +286,6 @@ export async function modelsCommand(
     refreshCredentials: !flags.noCredentialRefresh,
   };
   const quota = await fetchQuota(flags.providers, options, readMaxAge(flags));
-  if (!snapshotFile())
-    writeCachedProvidersBestEffort(quota.providers, quota.generatedAt);
   const response = createModelsResponse(quota, {
     ...(flags.intelligence ? { intelligence: flags.intelligence } : {}),
     ...(flags.sort ? { sort: flags.sort } : {}),
@@ -386,10 +383,12 @@ function validateClaudeInference(flags: QuotaFlags): void {
 }
 
 /**
- * Read every provider. A supplied snapshot answers for all of them; otherwise
- * a provider whose last successful reading is younger than `maxAgeSeconds`
- * and was taken under this process's credential selection is served from the
- * cache, and every other provider asks its vendor.
+ * Read every provider and refresh the cache, unless the read is profile-only,
+ * which never touches cached quota, or comes from a supplied snapshot. A
+ * snapshot answers for every provider; otherwise a provider whose last
+ * successful reading is younger than `maxAgeSeconds` and was taken under this
+ * process's credential selection is served from the cache, and every other
+ * provider asks its vendor.
  */
 export async function fetchQuota(
   providers: ProviderId[],
@@ -405,13 +404,21 @@ export async function fetchQuota(
       [`Point ${SNAPSHOT_ENV} at a quota-axi cache file, or unset it`],
     );
   }
+  const writesCache = options.credentialMode !== "profile-only" && !snapshot;
+  // Providers a lock holder already cached, so the report-wide write below
+  // does not stamp them a second time
+  const cached = new Set<ProviderId>();
   const fetched = (
     await Promise.all(
       providers.map((provider) =>
         snapshot
           ? snapshotReadings(provider, snapshot)
-          : (reusableReadings(provider, maxAgeSeconds) ??
-            tracedReadings(provider, options)),
+          : readProvider(
+              provider,
+              options,
+              writesCache ? maxAgeSeconds : 0,
+              () => cached.add(provider),
+            ),
       ),
     )
   ).flat();
@@ -423,6 +430,12 @@ export async function fetchQuota(
   const results = fetched.map((provider) =>
     withQuotaSemantics(provider, generatedAt),
   );
+  if (writesCache) {
+    writeCachedProvidersBestEffort(
+      results.filter((provider) => !cached.has(provider.provider)),
+      generatedAt,
+    );
+  }
   return annotateQuotaAdvice({
     generatedAt,
     providers: results,
@@ -430,12 +443,49 @@ export async function fetchQuota(
 }
 
 /**
- * How old a reused reading may be. `--full` is the audit tier, and account
- * identity and source attempts are never cached, so it reads the vendor unless
- * `--max-age` explicitly allows reuse.
+ * One provider's readings when fresh reuse may answer. Processes that miss
+ * the cache together take turns: the lock holder reads the vendor and caches
+ * that provider's readings before releasing, so the others are answered by
+ * the cache instead of each asking the vendor. `markCached` records that
+ * this provider's readings are already in the cache.
+ */
+async function readProvider(
+  provider: ProviderId,
+  options: ProviderOptions,
+  maxAgeSeconds: number,
+  markCached: () => void,
+): Promise<ProviderQuota[]> {
+  if (!(maxAgeSeconds > 0)) return tracedReadings(provider, options);
+  const reused = reusableReadings(provider, maxAgeSeconds);
+  if (reused) return reused;
+  const turn = await takeFetchTurn(fetchLockPathFor(provider), () =>
+    reusableReadings(provider, maxAgeSeconds),
+  );
+  if (turn.kind === "answered") return turn.value;
+  if (turn.kind === "unlocked") return tracedReadings(provider, options);
+  try {
+    const readings = await tracedReadings(provider, options);
+    const readingAt = nowIso();
+    writeCachedProvidersBestEffort(
+      readings.map((reading) => withQuotaSemantics(reading, readingAt)),
+      readingAt,
+    );
+    markCached();
+    return readings;
+  } finally {
+    turn.lock.release();
+  }
+}
+
+/**
+ * How old a reused reading may be: `--max-age`, else the host's
+ * `QUOTA_AXI_MAX_AGE`, else `0`, so reuse is opt-in. `--full` is the audit
+ * tier, and account identity and source attempts are never cached, so the
+ * host variable does not reach it; only an explicit `--max-age` does.
  */
 function readMaxAge(flags: QuotaFlags): number {
-  return flags.maxAgeSeconds ?? (flags.full ? 0 : DEFAULT_MAX_AGE_SECONDS);
+  if (flags.maxAgeSeconds !== undefined) return flags.maxAgeSeconds;
+  return flags.full ? 0 : (readMaxAgeEnv() ?? 0);
 }
 
 /** Env var naming a quota snapshot file that answers instead of any vendor. */

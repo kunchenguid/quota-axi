@@ -156,7 +156,14 @@ async function reusedAfter(
     (
       JSON.parse(
         await quotaCommand(
-          ["--provider", "claude", "--json", "--no-credential-refresh"],
+          [
+            "--provider",
+            "claude",
+            "--json",
+            "--no-credential-refresh",
+            "--max-age",
+            "90s",
+          ],
           undefined,
         ),
       ) as QuotaAxiResponse
