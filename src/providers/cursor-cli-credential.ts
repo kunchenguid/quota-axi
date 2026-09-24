@@ -298,6 +298,7 @@ function writeKeychainAccessMarkerBestEffort(
 ): void {
   try {
     const file = cursorCliKeychainAccessMarkerPath(markerKey(identity));
+    if (existsSync(file)) return;
     ensurePrivateParent(file);
     const temp = `${file}.${process.pid}.tmp`;
     writeFileSync(temp, "granted\n", { mode: 0o600 });

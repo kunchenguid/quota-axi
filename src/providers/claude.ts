@@ -1422,6 +1422,7 @@ function writeKeychainAccessMarkerBestEffort(
 ): void {
   try {
     const file = locations.keychainAccessMarker;
+    if (existsSync(file)) return;
     ensurePrivateParent(file);
     const temp = `${file}.${process.pid}.tmp`;
     writeFileSync(temp, "granted\n", { mode: 0o600 });

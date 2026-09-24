@@ -1,81 +1,107 @@
-import { readdirSync, readFileSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { fetchQuota } from "../src/commands.js";
 import {
   CREDENTIAL_SELECTION_ENV,
   reuseContextId,
 } from "../src/lib/reuse-context.js";
+import { PROVIDER_IDS } from "../src/types.js";
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  const refuse = () => {
+    throw new Error("no vendor process may start in this test");
+  };
+  return { ...actual, spawn: refuse, execFile: refuse };
+});
 
 /**
  * Environment variables that never choose which credential, profile, store,
  * or deployment a provider reads, so fresh reuse ignores them.
  */
 const NOT_SELECTING = new Set([
-  // Terminal and color detection for --tui
-  "TERM",
-  "COLORTERM",
-  "FORCE_COLOR",
-  "NO_COLOR",
   // Executable lookup; the store a CLI opens is chosen by its own variables
   "PATH",
-  "PATHEXT",
-  "WINDIR",
+  // Proxy routing for the same request to the same vendor
+  "ALL_PROXY",
+  "HTTPS_PROXY",
+  "NO_PROXY",
   // quota-axi's own cache location, which already separates the cache itself
   "XDG_CACHE_HOME",
   // Names a snapshot file that answers instead of every provider
   "QUOTA_AXI_SNAPSHOT",
 ]);
 
-function sourceFiles(dir: string): string[] {
-  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) =>
-    entry.isDirectory()
-      ? sourceFiles(join(dir, entry.name))
-      : entry.name.endsWith(".ts")
-        ? [join(dir, entry.name)]
-        : [],
-  );
-}
+const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+const environment = process.env;
+
+afterEach(() => {
+  process.env = environment;
+  Object.defineProperty(process, "platform", platform);
+  vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
+});
 
 /**
- * Every environment variable name `src/` reads: property reads on an env
- * object, and string literals bound to an `*_ENV` constant or an `envVar`
- * field, which is how indirect reads spell their names.
+ * Every environment variable name a full read of every provider consults on
+ * `os`, against an empty synthetic home where every vendor refuses the
+ * request. Windows variable names are case-insensitive, so they are compared
+ * in upper case there.
  */
-function environmentReads(): Set<string> {
-  const names = new Set<string>();
-  for (const file of sourceFiles("src")) {
-    const text = readFileSync(file, "utf8");
-    for (const match of text.matchAll(
-      /\benv(?:ironment)?\??\.([A-Z][A-Z0-9_]*)\b/g,
-    ))
-      names.add(match[1]!);
-    for (const match of text.matchAll(
-      /(?:\b[A-Z0-9_]+_ENV\s*=|\benvVar:)\s*"([A-Z][A-Z0-9_]*)"/g,
-    ))
-      names.add(match[1]!);
+async function environmentReads(os: NodeJS.Platform): Promise<Set<string>> {
+  const root = mkdtempSync(join(tmpdir(), "quota-axi-reuse-env-"));
+  // Native lookups such as os.homedir() see the real environment
+  vi.stubEnv("HOME", root);
+  vi.stubEnv("USERPROFILE", root);
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => new Response("{}", { status: 401 })),
+  );
+  Object.defineProperty(process, "platform", {
+    configurable: true,
+    value: os,
+  });
+  const reads = new Set<string>();
+  const record = (key: string | symbol) => {
+    if (typeof key === "string")
+      reads.add(os === "win32" ? key.toUpperCase() : key);
+  };
+  process.env = new Proxy<NodeJS.ProcessEnv>(
+    {
+      HOME: root,
+      USERPROFILE: root,
+      PATH: "",
+      XDG_CACHE_HOME: join(root, "cache"),
+    },
+    {
+      get: (target, key) => (record(key), Reflect.get(target, key)),
+      has: (target, key) => (record(key), Reflect.has(target, key)),
+    },
+  );
+  try {
+    await fetchQuota([...PROVIDER_IDS], { refreshCredentials: false });
+  } finally {
+    process.env = environment;
+    rmSync(root, { recursive: true, force: true });
   }
-  return names;
+  return reads;
 }
 
 describe("fresh-reuse credential selection", () => {
-  it("covers every environment variable a provider reads", () => {
-    const listed = new Set<string>(CREDENTIAL_SELECTION_ENV);
-    const unclassified = [...environmentReads()].filter(
-      (name) => !listed.has(name) && !NOT_SELECTING.has(name),
-    );
-    expect(unclassified).toEqual([]);
-  });
-
-  it("finds the indirect reads the scan is meant to catch", () => {
-    const reads = environmentReads();
-    for (const name of [
-      "CLAUDE_CODE_OAUTH_TOKEN",
-      "QUOTA_AXI_CODEX_BINARY",
-      "DEEPSEEK_API_KEY",
-      "GROK_AUTH_JSON",
-    ])
-      expect(reads).toContain(name);
-  });
+  it.each(["linux", "darwin", "win32"] as const)(
+    "covers every environment variable a provider reads on %s",
+    async (os) => {
+      const reads = await environmentReads(os);
+      expect(reads).toContain("CLAUDE_CODE_OAUTH_TOKEN");
+      const listed = new Set<string>(CREDENTIAL_SELECTION_ENV);
+      const unclassified = [...reads].filter(
+        (name) => !listed.has(name) && !NOT_SELECTING.has(name.toUpperCase()),
+      );
+      expect(unclassified).toEqual([]);
+    },
+  );
 
   it("changes with any selecting variable and hides every value", () => {
     const base = { HOME: "/synthetic/home" };

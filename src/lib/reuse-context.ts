@@ -6,9 +6,9 @@ import { homedir, userInfo } from "node:os";
  * credential store, credential, CLI, or deployment it reads. Fresh reuse
  * serves a cached reading only to a process whose values for all of these
  * match the process that took it, so one profile's reading never answers for
- * another (#61). `test/reuse-context.test.ts` scans `src/` for environment
- * reads and fails when a new one is neither listed here nor declared as not
- * selecting a credential.
+ * another (#61). `test/reuse-context.test.ts` reads every provider under a
+ * recording environment and fails when a variable it consults is neither
+ * listed here nor declared as not selecting a credential.
  */
 export const CREDENTIAL_SELECTION_ENV = [
   "HOME",

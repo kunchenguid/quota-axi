@@ -339,6 +339,7 @@ function code(error: unknown): unknown {
 function recordGrant(path: string, account: string): void {
   try {
     const file = copilotCliKeychainAccessMarkerPath(path, SERVICE, account);
+    if (existsSync(file)) return;
     ensurePrivateParent(file);
     const temp = `${file}.${process.pid}.tmp`;
     writeFileSync(temp, "granted\n", { mode: 0o600 });
