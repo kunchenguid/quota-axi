@@ -253,8 +253,8 @@ describe("Codex credential-state reporting", () => {
     );
   });
 
-  it("retires a cached snapshot on sign-out and keeps it for a transient probe", async () => {
-    const { writeCachedProviders, readCachedProvider } =
+  it("retires a cached snapshot on sign-out and keeps it for soft expiry or a transient probe", async () => {
+    const { writeCachedProviders, readCachedProvider, deleteCachedProvider } =
       await import("../../src/cache.js");
     const snapshot = {
       provider: "codex" as const,
@@ -302,11 +302,48 @@ describe("Codex credential-state reporting", () => {
       refreshCredentials: false,
     });
     expect(rejected.state).toMatchObject({
-      status: "stale",
+      status: "auth_required",
+      stale: false,
       error: "Codex sign-in required",
     });
-    expect(readCachedProvider("codex")).toBeDefined();
+    expect(rejected.windows).toEqual([]);
+    expect(readCachedProvider("codex")).toBeUndefined();
+    const rejectedUncached = await fetchQuota({
+      allowKeychainPrompt: false,
+      refreshCredentials: false,
+    });
+    expect(rejectedUncached.state).toMatchObject({
+      status: "auth_required",
+      error: "Codex sign-in required",
+    });
 
+    writeAuth({
+      tokens: { access_token: jwt({ exp: 1 }), refresh_token: "refresh" },
+    });
+    writeCachedProviders([snapshot]);
+    const softExpired = await fetchQuota({
+      allowKeychainPrompt: false,
+      refreshCredentials: false,
+    });
+    expect(softExpired.state).toMatchObject({
+      status: "stale",
+      error: "Codex access token expired",
+      authStatus: "expired_refreshable",
+    });
+    expect(softExpired.windows).toHaveLength(1);
+    expect(readCachedProvider("codex")).toBeDefined();
+    deleteCachedProvider("codex");
+    const softExpiredUncached = await fetchQuota({
+      allowKeychainPrompt: false,
+      refreshCredentials: false,
+    });
+    expect(softExpiredUncached.state).toMatchObject({
+      status: "unavailable",
+      error: "Codex access token expired",
+      authStatus: "expired_refreshable",
+    });
+
+    writeAuth({ tokens: { access_token: jwt({ exp: 1 }) } });
     writeCachedProviders([snapshot]);
     vi.stubGlobal(
       "fetch",
@@ -792,6 +829,7 @@ describe("Codex credential-state reporting", () => {
     writePiAuth(
       piOauthEntry({
         access: "expired-pi-access-token",
+        refresh: undefined,
         expires: Date.now() - 1,
       }),
     );
@@ -819,6 +857,7 @@ describe("Codex credential-state reporting", () => {
     writePiAuth(
       piOauthEntry({
         access: "expired-pi-access-token",
+        refresh: undefined,
         expires: Date.now() - 1,
       }),
     );
@@ -968,7 +1007,11 @@ describe("Codex credential-state reporting", () => {
       status: "expired",
       error: "credentials_expired_refreshable",
     });
-    expect(result.state.status).toBe("auth_required");
+    expect(result.state).toMatchObject({
+      status: "unavailable",
+      error: "Codex access token expired",
+      authStatus: "expired_refreshable",
+    });
     expect(result.attempts).toContainEqual({
       source: "pi:openai-codex",
       status: "failed",

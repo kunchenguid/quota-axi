@@ -146,12 +146,6 @@ export function resetlessStaleMaxAgeSeconds(window: QuotaWindow): number {
 }
 
 /**
- * Serve a cached snapshot as a stale reading of the current failure, keeping
- * only the windows {@link servableStaleWindows} still allows. Returns
- * `undefined` when none survive, so the caller reports the failed read exactly
- * as it would with no cache at all.
- */
-/**
  * A definitive sign-out retires the snapshot and returns undefined, so the
  * caller reports the same failure it would with no cache. Soft expiry and
  * transport failures stay eligible for {@link staleFromCache}.
@@ -177,6 +171,12 @@ export function staleUnlessSignOut(
     : undefined;
 }
 
+/**
+ * Serve a cached snapshot as a stale reading of the current failure, keeping
+ * only the windows {@link servableStaleWindows} still allows. Returns
+ * `undefined` when none survive, so the caller reports the failed read exactly
+ * as it would with no cache at all.
+ */
 export function staleFromCache(
   cached: ProviderQuota,
   error: string,

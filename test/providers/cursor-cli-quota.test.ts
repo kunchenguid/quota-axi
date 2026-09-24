@@ -375,6 +375,30 @@ describe("Cursor CLI-only quota refresh", () => {
     });
   });
 
+  it("keeps the cache when the editor token is rejected but the CLI Keychain token is untested", async () => {
+    writeCliConfig();
+    mockProcess({ editorToken: EDITOR_TOKEN, keychainToken: CLI_TOKEN });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("{}", { status: 401 })),
+    );
+
+    await onDarwin(async () => {
+      await seedCache();
+      const { readCachedProvider } = await import("../../src/cache.js");
+      const { fetchQuota } = await import("../../src/providers/cursor.js");
+      const result = await fetchQuota({
+        allowKeychainPrompt: false,
+        refreshCredentials: false,
+      });
+
+      expect(result.state.status).toBe("stale");
+      expect(result.state.error).toBe("keychain_prompt_required");
+      expect(result.windows.length).toBeGreaterThan(0);
+      expect(readCachedProvider("cursor")).toBeDefined();
+    });
+  });
+
   it("still reports sign-in required when neither Cursor store holds a credential", async () => {
     mockProcess({ keychainPresent: false });
 

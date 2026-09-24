@@ -1237,7 +1237,7 @@ describe("Codex Pi sibling account lanes", () => {
       }),
     });
     stubUsageByAccount({
-      "acct-personal": new Response("unauthorized", { status: 401 }),
+      "acct-personal": new Response("unavailable", { status: 503 }),
       "acct-work": usage(80, "work@example.invalid", "acct-work"),
     });
 
@@ -1252,6 +1252,63 @@ describe("Codex Pi sibling account lanes", () => {
       windows: [{ percentUsed: 80 }],
       state: { status: "fresh", stale: false },
     });
+  });
+
+  it("retires a Pi lane's own snapshot when its credential is rejected", async () => {
+    const { writeCachedProviders, readCachedProvider } =
+      await import("../../src/cache.js");
+    writeCachedProviders([
+      {
+        provider: "codex",
+        accountKey: "openai-codex",
+        label: "Codex",
+        source: "pi:openai-codex",
+        windows: [
+          {
+            id: "weekly",
+            label: "week",
+            kind: "weekly",
+            percentUsed: 20,
+            windowSeconds: 604_800,
+          },
+        ],
+        state: {
+          status: "fresh",
+          stale: false,
+          refreshedAt: new Date().toISOString(),
+          sourcesTried: ["pi:openai-codex"],
+        },
+      },
+    ]);
+    writePiAuth({
+      "openai-codex": piOauthEntry({
+        access: "personal-access-token",
+        accountId: "acct-personal",
+      }),
+      "openai-codex-work": piOauthEntry({
+        access: "work-access-token",
+        accountId: "acct-work",
+      }),
+    });
+    stubUsageByAccount({
+      "acct-personal": new Response("unauthorized", { status: 401 }),
+      "acct-work": usage(80, "work@example.invalid", "acct-work"),
+    });
+
+    const adapter = (
+      await import("../../src/providers/codex.js")
+    ).createCodexAdapter();
+    const reports = await fetchAccountQuotas(adapter, OPTIONS);
+    expect(reports[0]).toMatchObject({
+      accountKey: "openai-codex",
+      windows: [],
+      state: {
+        status: "auth_required",
+        stale: false,
+        error: "Codex sign-in required",
+      },
+    });
+    expect(readCachedProvider("codex", "openai-codex")).toBeUndefined();
   });
 
   it("reuses the sole lane's own cached reading when its probe fails", async () => {

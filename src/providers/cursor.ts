@@ -148,6 +148,12 @@ export async function fetchQuota(
               ? {}
               : { credentialPresent: cliState.source.credentialPresent }),
           });
+          if (cliState.source.credentialPresent === true) {
+            finalError = cursorFinalError(
+              cliState,
+              cursorCredentialError(cliState),
+            );
+          }
         }
       } else if (error instanceof RateLimitError) {
         retryAfter = error.retryAfter;
