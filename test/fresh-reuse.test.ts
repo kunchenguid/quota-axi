@@ -471,6 +471,32 @@ describe("QUOTA_AXI_SNAPSHOT", () => {
       /--profile-only cannot be combined with QUOTA_AXI_SNAPSHOT/,
     );
   });
+
+  it("rejects a snapshot path that does not exist", async () => {
+    process.env.QUOTA_AXI_SNAPSHOT = join(root, "missing.json");
+    await expect(readJson()).rejects.toMatchObject({
+      code: "VALIDATION_ERROR",
+      message: expect.stringMatching(/QUOTA_AXI_SNAPSHOT is not a readable/),
+    });
+    expect(usageCalls).toBe(0);
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+  });
+
+  it("rejects a snapshot file that is not a quota cache file", async () => {
+    const file = join(root, "snapshot.json");
+    writeFileSync(file, "{ not json");
+    process.env.QUOTA_AXI_SNAPSHOT = file;
+    await expect(readJson()).rejects.toMatchObject({
+      code: "VALIDATION_ERROR",
+      message: expect.stringMatching(/QUOTA_AXI_SNAPSHOT is not a readable/),
+    });
+    writeFileSync(file, JSON.stringify({ providers: "none" }));
+    await expect(readJson()).rejects.toMatchObject({
+      code: "VALIDATION_ERROR",
+    });
+    expect(usageCalls).toBe(0);
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+  });
 });
 
 describe("reuse stamps across account lanes", () => {

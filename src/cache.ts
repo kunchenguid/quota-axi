@@ -238,6 +238,11 @@ export function readReusableProviders(
     .map(reusedReading);
 }
 
+/** Whether a supplied snapshot file exists and parses as a quota cache file */
+export function isSnapshotFile(file: string): boolean {
+  return parseCacheProviders(readUntracedJsonFile(file)) !== undefined;
+}
+
 /**
  * Every reading of `provider` in a snapshot file supplied for tests and
  * fixtures, in file order. `undefined` when the file names no such provider;
@@ -556,7 +561,11 @@ function writeCacheFile(file: string, providers: CachedProvider[]): void {
 }
 
 function readCacheProviders(file: string = cacheFilePath()): CachedProvider[] {
-  const raw = readUntracedJsonFile(file);
+  return parseCacheProviders(readUntracedJsonFile(file)) ?? [];
+}
+
+/** `undefined` when the value is not a quota cache payload this version reads */
+function parseCacheProviders(raw: unknown): CachedProvider[] | undefined {
   const payload = objectValue(raw);
   const schemaVersion = numberValue(payload?.schemaVersion);
   if (
@@ -566,7 +575,7 @@ function readCacheProviders(file: string = cacheFilePath()): CachedProvider[] {
       schemaVersion !== CACHE_SCHEMA_VERSION) ||
     !Array.isArray(payload.providers)
   )
-    return [];
+    return undefined;
   return payload.providers
     .map((provider) => normalizeCachedProvider(provider, schemaVersion))
     .filter((provider): provider is CachedProvider => Boolean(provider));

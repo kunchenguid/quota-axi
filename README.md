@@ -381,6 +381,7 @@ Reusing never rewrites the cache record, so its age keeps counting from the vend
 `QUOTA_AXI_SNAPSHOT=<file>` makes `quota` and `models` answer every provider from that file instead of any credential or vendor, for tests and fixtures of tools that consume quota-axi output.
 The file uses the cache file format (`{"schemaVersion": 3, "providers": [...]}`), so a cache file captured from a real run is a valid fixture.
 Each provider's snapshots are served as reused readings with `sourcesTried: ["snapshot"]`, whatever their age; a provider the file does not name reports `unavailable` with `not_in_snapshot`, and one with a window past its own reset reports `unavailable` with `snapshot_expired`.
+A file that is missing or does not parse as that format fails with `VALIDATION_ERROR` (exit 2) rather than reporting every provider as `not_in_snapshot`.
 Nothing is written to the cache, and the variable cannot be combined with `--profile-only`.
 
 ```sh

@@ -7,6 +7,7 @@ import {
   type QuotaFlags,
 } from "./args.js";
 import {
+  isSnapshotFile,
   readReusableProviders,
   readSnapshotProviders,
   stampReadingInputs,
@@ -396,6 +397,14 @@ export async function fetchQuota(
   maxAgeSeconds = 0,
 ): Promise<QuotaAxiResponse> {
   const snapshot = snapshotFile();
+  // A mistyped fixture path would otherwise read as a fixture naming no provider
+  if (snapshot && !isSnapshotFile(snapshot)) {
+    throw new AxiError(
+      `${SNAPSHOT_ENV} is not a readable quota snapshot: ${snapshot}`,
+      "VALIDATION_ERROR",
+      [`Point ${SNAPSHOT_ENV} at a quota-axi cache file, or unset it`],
+    );
+  }
   const fetched = (
     await Promise.all(
       providers.map((provider) =>
