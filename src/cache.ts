@@ -238,9 +238,18 @@ export function readReusableProviders(
     .map(reusedReading);
 }
 
-/** Whether a supplied snapshot file exists and parses as a quota cache file */
+/**
+ * Whether a supplied snapshot file exists and every record in it parses as a
+ * quota cache record. A record the cache reader would drop would otherwise
+ * read as a fixture that never named that provider.
+ */
 export function isSnapshotFile(file: string): boolean {
-  return parseCacheProviders(readUntracedJsonFile(file)) !== undefined;
+  const raw = readUntracedJsonFile(file);
+  const records = objectValue(raw)?.providers;
+  return (
+    Array.isArray(records) &&
+    parseCacheProviders(raw)?.length === records.length
+  );
 }
 
 /**

@@ -1,13 +1,15 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchQuota } from "../src/commands.js";
-import {
-  CREDENTIAL_SELECTION_ENV,
-  reuseContextId,
-} from "../src/lib/reuse-context.js";
-import { PROVIDER_IDS } from "../src/types.js";
+import { quotaCommand } from "../src/commands.js";
+import type { QuotaAxiResponse } from "../src/types.js";
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
@@ -33,6 +35,9 @@ const NOT_SELECTING = new Set([
   // Names a snapshot file that answers instead of every provider
   "QUOTA_AXI_SNAPSHOT",
 ]);
+
+/** A value no real environment holds, so the cache can be searched for it */
+const SELECTION_VALUE = "synthetic-selection-value";
 
 const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
 const environment = process.env;
@@ -81,7 +86,10 @@ async function environmentReads(os: NodeJS.Platform): Promise<Set<string>> {
     },
   );
   try {
-    await fetchQuota([...PROVIDER_IDS], { refreshCredentials: false });
+    await quotaCommand(
+      ["--json", "--no-credential-refresh", "--max-age", "0"],
+      undefined,
+    );
   } finally {
     process.env = environment;
     rmSync(root, { recursive: true, force: true });
@@ -89,34 +97,111 @@ async function environmentReads(os: NodeJS.Platform): Promise<Set<string>> {
   return reads;
 }
 
+/**
+ * A reusable Claude reading taken under a synthetic Linux profile, then a
+ * second read after `change` edits the environment. Returns whether the
+ * second read was served from the first, and the cache file it left behind.
+ */
+async function reusedAfter(
+  change: (environment: NodeJS.ProcessEnv) => void,
+): Promise<{ reused: boolean; cache: string }> {
+  const root = mkdtempSync(join(tmpdir(), "quota-axi-reuse-select-"));
+  const configDir = join(root, "profile");
+  mkdirSync(configDir);
+  writeFileSync(
+    join(configDir, ".credentials.json"),
+    JSON.stringify({
+      claudeAiOauth: {
+        accessToken: "synthetic-claude-token",
+        expiresAt: "2035-01-01T00:00:00.000Z",
+      },
+    }),
+  );
+  vi.stubEnv("HOME", root);
+  vi.stubEnv("USERPROFILE", root);
+  Object.defineProperty(process, "platform", {
+    configurable: true,
+    value: "linux",
+  });
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: string | URL | Request) =>
+      String(input).endsWith("/api/oauth/usage")
+        ? new Response(
+            JSON.stringify({
+              limits: [
+                {
+                  kind: "weekly_all",
+                  group: "weekly",
+                  percent: 40,
+                  resets_at: "2099-01-01T00:00:00Z",
+                },
+              ],
+            }),
+            { status: 200 },
+          )
+        : new Response(JSON.stringify({ account: { uuid: "fixture" } }), {
+            status: 200,
+          }),
+    ),
+  );
+  process.env = {
+    HOME: root,
+    USERPROFILE: root,
+    PATH: "",
+    XDG_CACHE_HOME: join(root, "cache"),
+    CLAUDE_CONFIG_DIR: configDir,
+  };
+  const read = async () =>
+    (
+      JSON.parse(
+        await quotaCommand(
+          ["--provider", "claude", "--json", "--no-credential-refresh"],
+          undefined,
+        ),
+      ) as QuotaAxiResponse
+    ).providers[0]!;
+  try {
+    await read();
+    change(process.env);
+    const second = await read();
+    return {
+      reused: second.state.reused === true,
+      cache: readFileSync(join(root, "cache", "quota-axi", "quotas.json"), {
+        encoding: "utf8",
+      }),
+    };
+  } finally {
+    process.env = environment;
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
 describe("fresh-reuse credential selection", () => {
+  it("still reuses a reading when nothing that selects a credential changed", async () => {
+    expect((await reusedAfter(() => {})).reused).toBe(true);
+    expect(
+      (await reusedAfter((environment) => (environment.TERM = "xterm"))).reused,
+    ).toBe(true);
+  });
+
   it.each(["linux", "darwin", "win32"] as const)(
-    "covers every environment variable a provider reads on %s",
+    "never reuses a reading across a change to any variable a provider reads on %s",
     async (os) => {
       const reads = await environmentReads(os);
       expect(reads).toContain("CLAUDE_CODE_OAUTH_TOKEN");
-      const listed = new Set<string>(CREDENTIAL_SELECTION_ENV);
-      const unclassified = [...reads].filter(
-        (name) => !listed.has(name) && !NOT_SELECTING.has(name.toUpperCase()),
+      const selecting = [...reads].filter(
+        (name) => !NOT_SELECTING.has(name.toUpperCase()),
       );
-      expect(unclassified).toEqual([]);
+      const reusedAcross: string[] = [];
+      for (const name of selecting) {
+        const { reused, cache } = await reusedAfter(
+          (environment) => (environment[name] = SELECTION_VALUE),
+        );
+        if (reused) reusedAcross.push(name);
+        expect(cache, name).not.toContain(SELECTION_VALUE);
+      }
+      expect(reusedAcross).toEqual([]);
     },
   );
-
-  it("changes with any selecting variable and hides every value", () => {
-    const base = { HOME: "/synthetic/home" };
-    const id = reuseContextId(base);
-    expect(id).toMatch(/^[a-f0-9]{64}$/);
-    expect(reuseContextId({ ...base })).toBe(id);
-    expect(reuseContextId({ ...base, TERM: "xterm" })).toBe(id);
-    for (const name of CREDENTIAL_SELECTION_ENV) {
-      if (name === "HOME") continue;
-      expect(reuseContextId({ ...base, [name]: "synthetic" }), name).not.toBe(
-        id,
-      );
-    }
-    expect(reuseContextId({ ...base, ELEVENLABS_API_KEY: "sk-a" })).not.toBe(
-      reuseContextId({ ...base, ELEVENLABS_API_KEY: "sk-b" }),
-    );
-  });
 });

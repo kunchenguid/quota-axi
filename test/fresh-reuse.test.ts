@@ -8,16 +8,14 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  readCachedProvider,
-  readReusableProviders,
-  stampReadingInputs,
-  writeCachedProviders,
-} from "../src/cache.js";
 import { quotaCommand } from "../src/commands.js";
-import { cacheFilePath } from "../src/lib/fs.js";
-import { inputsDigest } from "../src/lib/input-trace.js";
-import type { ProviderQuota, QuotaAxiResponse } from "../src/types.js";
+import type { QuotaAxiResponse } from "../src/types.js";
+
+// No installed Codex CLI may answer for the synthetic Codex logins
+vi.mock("../src/lib/process.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/lib/process.js")>();
+  return { ...actual, findCommandPath: vi.fn(async () => undefined) };
+});
 
 /**
  * Fresh reuse, end to end through the quota command against a synthetic Claude
@@ -51,6 +49,8 @@ const saved = Object.fromEntries(
     "XDG_CACHE_HOME",
     "CLAUDE_CONFIG_DIR",
     "CLAUDE_CODE_OAUTH_TOKEN",
+    "CODEX_HOME",
+    "PI_CODING_AGENT_DIR",
     "QUOTA_AXI_SNAPSHOT",
   ].map((name) => [name, process.env[name]]),
 );
@@ -125,6 +125,11 @@ function writeCredentials(configDir: string, token: string): void {
       },
     }),
   );
+}
+
+/** The documented cache location under `XDG_CACHE_HOME` */
+function cacheFilePath(): string {
+  return join(root, "cache", "quota-axi", "quotas.json");
 }
 
 function advance(seconds: number): void {
@@ -497,86 +502,167 @@ describe("QUOTA_AXI_SNAPSHOT", () => {
     expect(usageCalls).toBe(0);
     expect(vi.mocked(fetch)).not.toHaveBeenCalled();
   });
+
+  it("rejects a snapshot file holding a provider record that does not parse", async () => {
+    const file = writeSnapshot("2026-09-26T00:00:00Z");
+    const snapshot = JSON.parse(readFileSync(file, "utf8")) as {
+      providers: Record<string, unknown>[];
+    };
+    const [claude] = snapshot.providers;
+    process.env.QUOTA_AXI_SNAPSHOT = file;
+
+    writeFileSync(
+      file,
+      JSON.stringify({ ...snapshot, providers: [{ ...claude, windows: [] }] }),
+    );
+    await expect(readJson()).rejects.toMatchObject({
+      code: "VALIDATION_ERROR",
+      message: expect.stringMatching(/QUOTA_AXI_SNAPSHOT is not a readable/),
+    });
+
+    writeFileSync(
+      file,
+      JSON.stringify({
+        ...snapshot,
+        providers: [claude, { ...claude, provider: "codex", label: 7 }],
+      }),
+    );
+    await expect(readJson()).rejects.toMatchObject({
+      code: "VALIDATION_ERROR",
+    });
+    expect(usageCalls).toBe(0);
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+  });
 });
 
-describe("reuse stamps across account lanes", () => {
-  function lane(accountKey: string, fresh = true): ProviderQuota {
-    return {
-      provider: "codex",
-      accountKey,
-      accountKeys: [accountKey],
-      label: "Codex",
-      source: "oauth",
-      windows: fresh
-        ? [
-            {
-              id: "weekly",
-              label: "week",
-              kind: "weekly",
-              percentUsed: 10,
-              percentRemaining: 90,
-              windowSeconds: 604_800,
-              resetsAt: "2026-09-29T00:00:00Z",
+describe("reuse across account lanes", () => {
+  let usage: Record<string, number | "fail">;
+  let codexCalls: number;
+
+  beforeEach(() => {
+    process.env.CODEX_HOME = join(root, "codex-home");
+    process.env.PI_CODING_AGENT_DIR = join(root, "pi-agent");
+    mkdirSync(process.env.PI_CODING_AGENT_DIR, { recursive: true });
+    writeFileSync(
+      join(process.env.PI_CODING_AGENT_DIR, "auth.json"),
+      JSON.stringify({
+        "openai-codex": piEntry("acct-personal"),
+        "openai-codex-work": piEntry("acct-work"),
+      }),
+    );
+    usage = { "acct-personal": 20, "acct-work": 80 };
+    codexCalls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+        codexCalls++;
+        const account = new Headers(init?.headers).get("ChatGPT-Account-Id");
+        const used = account ? usage[account] : undefined;
+        if (used === undefined) return new Response("{}", { status: 404 });
+        if (used === "fail") return new Response("{}", { status: 503 });
+        return new Response(
+          JSON.stringify({
+            plan_type: "plus",
+            account_id: account,
+            rate_limit: {
+              primary_window: {
+                used_percent: used,
+                limit_window_seconds: 604_800,
+                reset_after_seconds: 86_400,
+              },
             },
-          ]
-        : [],
-      state: fresh
-        ? {
-            status: "fresh",
-            stale: false,
-            refreshedAt: START,
-            sourcesTried: ["auth-json"],
-          }
-        : {
-            status: "error",
-            stale: false,
-            error: "network_unavailable",
-            sourcesTried: ["auth-json"],
-          },
+          }),
+          { status: 200 },
+        );
+      }),
+    );
+  });
+
+  function piEntry(accountId: string) {
+    return {
+      type: "oauth",
+      access: `synthetic-${accountId}-token`,
+      refresh: `synthetic-${accountId}-refresh`,
+      expires: Date.parse("2035-01-01T00:00:00Z"),
+      accountId,
     };
   }
 
-  function traced(lanes: ProviderQuota[]): ProviderQuota[] {
-    const inputs = { paths: [], digest: inputsDigest([]) };
-    for (const reading of lanes) stampReadingInputs(reading, inputs);
-    return lanes;
+  async function readCodex(
+    ...flags: string[]
+  ): Promise<QuotaAxiResponse["providers"]> {
+    const output = await quotaCommand(
+      ["--provider", "codex", "--json", "--no-credential-refresh", ...flags],
+      undefined,
+    );
+    return (JSON.parse(output) as QuotaAxiResponse).providers;
   }
 
-  it("serves every lane of a complete reading in declaration order", () => {
-    writeCachedProviders(traced([lane("pi:b"), lane("codex-home")]), START);
-    const reused = readReusableProviders("codex", 90);
-    expect(reused?.map((reading) => reading.accountKey)).toEqual([
-      "pi:b",
-      "codex-home",
+  it("serves every lane of a complete reading in declaration order", async () => {
+    await readCodex();
+    expect(codexCalls).toBe(2);
+    advance(10);
+
+    const reused = await readCodex();
+
+    expect(codexCalls).toBe(2);
+    expect(reused.map((reading) => reading.accountKey)).toEqual([
+      "openai-codex",
+      "openai-codex-work",
     ]);
-    expect(reused?.[0]).toMatchObject({
-      accountKeys: ["pi:b"],
-      state: { status: "fresh", reused: true },
+    expect(reused).toMatchObject([
+      { windows: [{ percentRemaining: 80 }], state: { reused: true } },
+      { windows: [{ percentRemaining: 20 }], state: { reused: true } },
+    ]);
+  });
+
+  it("never serves part of a reading when one lane failed", async () => {
+    usage["acct-work"] = "fail";
+    await readCodex();
+    usage["acct-work"] = 85;
+    codexCalls = 0;
+    advance(10);
+
+    const read = await readCodex();
+
+    expect(codexCalls).toBe(2);
+    expect(read.map((reading) => reading.state.reused)).toEqual([
+      undefined,
+      undefined,
+    ]);
+    expect(read[1]).toMatchObject({ windows: [{ percentRemaining: 15 }] });
+  });
+
+  it("never serves a cached reading that carries no reuse record", async () => {
+    await readCodex();
+    const cache = JSON.parse(readFileSync(cacheFilePath(), "utf8")) as {
+      providers: Record<string, unknown>[];
+    };
+    for (const record of cache.providers) delete record.reuse;
+    writeFileSync(cacheFilePath(), JSON.stringify(cache));
+    advance(10);
+
+    const read = await readCodex();
+
+    expect(codexCalls).toBe(4);
+    expect(read.map((reading) => reading.state.reused)).toEqual([
+      undefined,
+      undefined,
+    ]);
+  });
+
+  it("keeps a later stale fallback free of reuse-only state", async () => {
+    await readCodex();
+    usage["acct-personal"] = "fail";
+    advance(120);
+
+    const [personal] = await readCodex();
+
+    expect(personal).toMatchObject({
+      accountKey: "openai-codex",
+      windows: [{ percentRemaining: 80 }],
+      state: { status: "stale", stale: true },
     });
-  });
-
-  it("never serves part of a reading when one lane failed", () => {
-    writeCachedProviders(
-      traced([lane("pi:b"), lane("codex-home", false)]),
-      START,
-    );
-    expect(readReusableProviders("codex", 90)).toBeUndefined();
-  });
-
-  it("never serves a reading nothing traced", () => {
-    writeCachedProviders([lane("pi:b")], START);
-    expect(readReusableProviders("codex", 90)).toBeUndefined();
-  });
-
-  it("keeps the stale-fallback snapshot free of reuse-only state", () => {
-    const reading = lane("pi:b");
-    reading.state.authStatus = "usable";
-    writeCachedProviders(traced([reading]), START);
-    expect(readCachedProvider("codex", "pi:b")?.state).not.toHaveProperty(
-      "authStatus",
-    );
-    expect(readCachedProvider("codex", "pi:b")?.state).not.toHaveProperty(
-      "reused",
-    );
+    expect(personal!.state).not.toHaveProperty("reused");
   });
 });
