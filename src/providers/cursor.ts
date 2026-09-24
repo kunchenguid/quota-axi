@@ -1,7 +1,9 @@
+import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { readCachedProvider, retireCachedSlot } from "../cache.js";
 import { providerFetch } from "../lib/http.js";
+import { traceInput } from "../lib/input-trace.js";
 import { execFileText, commandExists } from "../lib/process.js";
 import {
   calendarMonthsBefore,
@@ -457,6 +459,16 @@ function rejectUnusableUsageResponse(response: Response): void {
 
 async function readCredentialState(): Promise<CredentialState> {
   if (!(await commandExists("sqlite3"))) {
+    // Without sqlite3 the database cannot be opened, so only the file's
+    // existence can say whether an editor sign-in might be there; an absent
+    // database must not hold back a sign-out verdict from the CLI source.
+    traceInput(STATE_DB);
+    if (!existsSync(STATE_DB)) {
+      return {
+        status: "missing",
+        source: { source: "state-vscdb", path: STATE_DB, status: "missing" },
+      };
+    }
     return {
       status: "skipped",
       source: {

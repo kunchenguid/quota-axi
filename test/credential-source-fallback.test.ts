@@ -56,13 +56,15 @@ function jwt(payload: Record<string, unknown>): string {
 }
 
 /** The standalone `codex login` store, with an access token that already expired. */
-function writeExpiredCodexAuthFile(): void {
+function writeExpiredCodexAuthFile({ refreshable = true } = {}): void {
   writeFileSync(
     join(tempDir, "auth.json"),
     JSON.stringify({
       tokens: {
         access_token: jwt({ exp: Math.floor(Date.now() / 1000) - 3_600 }),
-        refresh_token: "refresh-token-must-not-be-used",
+        ...(refreshable
+          ? { refresh_token: "refresh-token-must-not-be-used" }
+          : {}),
         account_id: "acct-auth-json-fixture",
       },
     }),
@@ -246,7 +248,7 @@ describe("per-provider credential source fallback", { timeout: 30_000 }, () => {
   });
 
   it("still reports the auth problem when every source is broken", async () => {
-    writeExpiredCodexAuthFile();
+    writeExpiredCodexAuthFile({ refreshable: false });
     // No Pi entry and no Codex binary: nothing is left to supersede the store.
     const api = stubUsageApi([]);
 
@@ -260,6 +262,22 @@ describe("per-provider credential source fallback", { timeout: 30_000 }, () => {
     expect(report).not.toMatch(/codex,all_models/);
     // The stored-expired credential was empirically tested before the
     // sign-out verdict: its expiry field alone never decides.
+    expect(api.bearers.length).toBeGreaterThan(0);
+  });
+
+  it("reports a rejected stored-expired store with a refresh token as refreshable, not signed out", async () => {
+    writeExpiredCodexAuthFile();
+    const api = stubUsageApi([]);
+
+    const report = await runQuota([]);
+
+    expect(quotaRows(report)).toEqual([]);
+    expect(attentionRows(report)).toContainEqual(
+      expect.stringContaining(
+        "codex,all,unavailable,Codex access token expired (auth expired_refreshable)",
+      ),
+    );
+    expect(report).not.toContain("auth_required");
     expect(api.bearers.length).toBeGreaterThan(0);
   });
 

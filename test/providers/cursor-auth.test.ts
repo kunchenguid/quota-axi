@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -124,6 +124,7 @@ describe("Cursor credential-state reporting", () => {
   });
 
   it("preserves skipped sqlite discovery failures", async () => {
+    writeFileSync(process.env.CURSOR_STATE_DB!, "");
     vi.doMock("../../src/lib/process.js", () => ({
       commandExists: vi.fn(async () => false),
       execFileText: vi.fn(),
@@ -406,6 +407,9 @@ describe("Cursor credential-state reporting", () => {
     const xdgConfigHome = join(tempDir!, "xdg-config");
     process.env.XDG_CONFIG_HOME = xdgConfigHome;
     process.env.HOME = join(tempDir!, "home");
+    const stateDir = join(xdgConfigHome, "Cursor", "User", "globalStorage");
+    mkdirSync(stateDir, { recursive: true });
+    writeFileSync(join(stateDir, "state.vscdb"), "");
     vi.doMock("../../src/lib/process.js", () => ({
       commandExists: vi.fn(async () => false),
       execFileText: vi.fn(),
