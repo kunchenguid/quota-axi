@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { readCachedProvider, retireCachedSlot } from "../cache.js";
@@ -463,7 +463,7 @@ async function readCredentialState(): Promise<CredentialState> {
     // existence can say whether an editor sign-in might be there; an absent
     // database must not hold back a sign-out verdict from the CLI source.
     traceInput(STATE_DB);
-    if (!existsSync(STATE_DB)) {
+    if (stateDbAbsent()) {
       return {
         status: "missing",
         source: { source: "state-vscdb", path: STATE_DB, status: "missing" },
@@ -515,6 +515,19 @@ async function readCredentialState(): Promise<CredentialState> {
         credentialPresent: true,
       },
     };
+  }
+}
+
+/**
+ * Only a missing entry counts as absent: a path that cannot be checked (for
+ * example EACCES on a parent directory) may still hold an editor sign-in, and
+ * `existsSync` would misreport it as absent and retire a live login's cache.
+ */
+function stateDbAbsent(): boolean {
+  try {
+    return statSync(STATE_DB, { throwIfNoEntry: false }) === undefined;
+  } catch {
+    return false;
   }
 }
 

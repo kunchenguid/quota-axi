@@ -1,4 +1,10 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -349,6 +355,47 @@ describe("Cursor CLI-only quota refresh", () => {
       });
     });
   });
+
+  // Root bypasses directory permissions, so the parent would stay checkable.
+  it.skipIf(process.getuid?.() === 0)(
+    "keeps the cache when sqlite3 is missing and the editor database cannot be checked",
+    async () => {
+      writeCliAuthFile();
+      const lockedDir = join(tempDir, "locked");
+      mkdirSync(lockedDir);
+      process.env.CURSOR_STATE_DB = join(lockedDir, "state.vscdb");
+      writeFileSync(process.env.CURSOR_STATE_DB, "");
+      chmodSync(lockedDir, 0o000);
+      mockProcess({ sqlite3Missing: true });
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => new Response("{}", { status: 401 })),
+      );
+
+      try {
+        await onLinux(async () => {
+          await seedCache();
+          const { readCachedProvider } = await import("../../src/cache.js");
+          const { fetchQuota } = await import("../../src/providers/cursor.js");
+          const result = await fetchQuota({
+            allowKeychainPrompt: false,
+            refreshCredentials: false,
+          });
+
+          expect(result.state.status).toBe("stale");
+          expect(readCachedProvider("cursor")).toBeDefined();
+          expect(result.attempts).toContainEqual({
+            source: "state-vscdb",
+            status: "skipped",
+            error: "sqlite3_unavailable",
+            credentialPresent: true,
+          });
+        });
+      } finally {
+        chmodSync(lockedDir, 0o700);
+      }
+    },
+  );
 
   it("keeps the cache when the Linux auth-file probe fails transiently", async () => {
     writeCliAuthFile();
