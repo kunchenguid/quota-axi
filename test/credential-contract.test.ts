@@ -106,7 +106,6 @@ const ENV_KEYS = [
   "ELEVENLABS_API_KEY",
   "WINDSURF_API_KEY",
   "WINDSURF_API_SERVER_URL",
-  "QUOTA_AXI_OPENCODE_GO_PI_AUTH",
   "COPILOT_HOME",
 ] as const;
 
@@ -134,9 +133,6 @@ beforeEach(() => {
     "apps.json",
   );
   process.env.GH_CONFIG_DIR = join(tempDir, "gh");
-  // OpenCode Go reads its Pi store only behind this opt-in; the contract here
-  // exercises that real file-to-adapter path.
-  process.env.QUOTA_AXI_OPENCODE_GO_PI_AUTH = "1";
   process.env.COPILOT_HOME = join(tempDir, "copilot");
   delete process.env.GROK_AUTH;
   delete process.env.GROK_AUTH_JSON;

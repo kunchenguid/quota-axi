@@ -30,12 +30,6 @@ import {
 export const OPENCODE_GO_USAGE_URL = "https://opencode.ai/zen/go/v1/usage";
 export const OPENCODE_GO_CREDENTIAL_SOURCE = "opencode:auth.json";
 export const PI_OPENCODE_GO_SOURCE = "pi:opencode-go";
-/**
- * Explicit opt-in that lets OpenCode Go read Pi's `opencode-go` entry ahead of
- * the opencode store. Unset or falsey keeps the long-standing default: the
- * opencode store is the only source, so an unscoped run never probes Pi.
- */
-export const PI_OPENCODE_GO_AUTH_ENV = "QUOTA_AXI_OPENCODE_GO_PI_AUTH";
 
 const PI_OPENCODE_GO_PROVIDER_ID = "opencode-go";
 
@@ -166,32 +160,21 @@ export function createPiOpenCodeGoCredentialSource(
 }
 
 /**
- * Pi's `opencode-go` entry is added first only when the opt-in environment
- * flag asks for it; the opencode store stays the default and fallback. See
- * README "Security Posture > Provider credential sources" for the rationale.
+ * Pi's `opencode-go` entry is read first and the opencode store stays the
+ * fallback, matching Z.AI's `pi:zai` order. See README "Security Posture >
+ * Provider credential sources".
  */
-export function defaultOpenCodeGoCredentialSources(
-  environment: Readonly<Record<string, string | undefined>> = process.env,
-): NamedOpenCodeGoCredentialSource[] {
-  const sources: NamedOpenCodeGoCredentialSource[] = [];
-  if (piOpenCodeGoAuthEnabled(environment)) {
-    sources.push({
+export function defaultOpenCodeGoCredentialSources(): NamedOpenCodeGoCredentialSource[] {
+  return [
+    {
       name: PI_OPENCODE_GO_SOURCE,
       source: createPiOpenCodeGoCredentialSource(),
-    });
-  }
-  sources.push({
-    name: OPENCODE_GO_CREDENTIAL_SOURCE,
-    source: createOpencodeGoAuthCredentialSource(),
-  });
-  return sources;
-}
-
-function piOpenCodeGoAuthEnabled(
-  environment: Readonly<Record<string, string | undefined>>,
-): boolean {
-  const value = environment[PI_OPENCODE_GO_AUTH_ENV]?.trim().toLowerCase();
-  return value === "1" || value === "true";
+    },
+    {
+      name: OPENCODE_GO_CREDENTIAL_SOURCE,
+      source: createOpencodeGoAuthCredentialSource(),
+    },
+  ];
 }
 
 export function resolveOpenCodeGoCredential(

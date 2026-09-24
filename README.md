@@ -197,7 +197,7 @@ $ quota-axi --provider claude --json
 $ quota-axi auth
 bin: ~/.npm/_npx/.../quota-axi
 description: Inspect local quota auth sources without printing secret values
-auth[31]{provider,source,path,status,error}:
+auth[33]{provider,source,path,status,error}:
   claude,oauth-file,~/.claude/.credentials.json,available,none
   claude,keychain,none,skipped,keychain_prompt_required
   codex,auth-json,~/.codex/auth.json,available,none
@@ -216,6 +216,7 @@ auth[31]{provider,source,path,status,error}:
   zai,opencode:auth.json,~/.local/share/opencode/auth.json,available,none
   agy,loopback,none,available,none
   alibaba,bl-cli,none,available,none
+  opencode-go,pi:opencode-go,~/.pi/agent/auth.json,missing,none
   opencode-go,opencode:auth.json,~/.local/share/opencode/auth.json,available,none
   commandcode,pi:commandcode,~/.pi/agent/auth.json,missing,none
   commandcode,env:COMMAND_CODE_API_KEY,none,missing,none
@@ -816,7 +817,7 @@ Auth source entries can include `credentialPresent` when a source is not genuine
 | Z.AI           | Pi's `$PI_CODING_AGENT_DIR/auth.json` (default `~/.pi/agent/auth.json`) for a literal Coding Plan `api_key` entry under `zai`, then opencode's `auth.json` (`$XDG_DATA_HOME/opencode/auth.json` when set, `%LOCALAPPDATA%\opencode\auth.json` on Windows, otherwise `~/.local/share/opencode/auth.json`) for a literal key under `zai-coding-plan`, `zai`, `z-ai`, `z.ai`, `zhipu`, or `zhipuai`                                                                                                                                            |
 | Antigravity    | No credential files; prefers the installed CLI's bounded, noninteractive structured `/quota` read (`agy -p "/quota"`, a bounded read, not an agent session), falling back to discovering already-running Antigravity or `agy` processes and reading their 127.0.0.1 read-only loopback endpoints                                                                                                                                                                                                                                            |
 | Alibaba        | The local `bl` CLI (`bl usage token-plan --output json`); quota-axi never reads Alibaba credential files or exchanges refresh data                                                                                                                                                                                                                                                                                                                                                                                                          |
-| OpenCode Go    | `$XDG_DATA_HOME/opencode/auth.json` when set, `%LOCALAPPDATA%\opencode\auth.json` on Windows, otherwise `~/.local/share/opencode/auth.json`, for a literal `opencode-go` key with `opencode` fallback by default. When `QUOTA_AXI_OPENCODE_GO_PI_AUTH` is `1` or `true`, Pi's `$PI_CODING_AGENT_DIR/auth.json` (default `~/.pi/agent/auth.json`) literal `opencode-go` `api_key` entry is read first. This is opt-in so an unscoped run does not read an unrelated Pi store.                                                                |
+| OpenCode Go    | Pi's `$PI_CODING_AGENT_DIR/auth.json` (default `~/.pi/agent/auth.json`) for a literal `opencode-go` `api_key` entry first, then opencode's `auth.json` (`$XDG_DATA_HOME/opencode/auth.json` when set, `%LOCALAPPDATA%\opencode\auth.json` on Windows, otherwise `~/.local/share/opencode/auth.json`) for a literal `opencode-go` key with `opencode` fallback                                                                                                                                                                               |
 
 | Command Code | Pi's `$PI_CODING_AGENT_DIR/auth.json` `commandcode` entry first (default `~/.pi/agent/auth.json`), then `$COMMAND_CODE_API_KEY`, legacy `$COMMANDCODE_API_KEY`, production `~/.commandcode/auth.json` top-level `apiKey`, then `~/.omp/agent/auth.json` `commandcode`/`command-code`. Stored expiry is ignored: the credential is a non-expiring API key. |
 | MiniMax | `MINIMAX_API_KEY`, then `$PI_CODING_AGENT_DIR/auth.json` (default `~/.pi/agent/auth.json`) for a literal `minimax` key, then `$MMX_CONFIG_DIR/config.json` (default `~/.mmx/config.json`); `MINIMAX_BASE_URL` is accepted only for MiniMax first-party hosts |
