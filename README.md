@@ -378,6 +378,7 @@ With reuse enabled, processes that miss the cache together make one vendor read 
 The first creates a lock file under the cache directory, reads the vendor, and caches that provider's reading before releasing it; the others poll the cache and are answered by that reading through the same checks as any reuse.
 A waiter gives up after 30 seconds and reads the vendor itself, and a lock whose holder has exited, or that is older than two minutes, is taken over, so a crashed or wedged holder never blocks a read.
 If the holder's reading is not reusable (it failed, is stale, has no windows, or is a reading the cache excludes), nothing is cached and the waiters read the vendor together rather than one at a time, so a burst takes about one vendor round trip beyond the holder's, not one per waiter.
+Leaders of different providers merge their readings into the one cache file under a short lock of their own, so one leader's write never drops another's reading and leaves its waiters to read the vendor; if that lock is not free within five seconds the write goes ahead unlocked.
 The lock only saves vendor calls: a lost race costs an extra read, never a wrong one.
 
 A reused reading is a fresh reading, not a stale one: `state.status` stays `fresh`, `stale` stays `false`, and quota rows, pace, runway, and selection are derived as usual at the report's `generatedAt`.

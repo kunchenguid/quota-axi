@@ -54,6 +54,9 @@ const POLL_MS = 100;
  * cache directory. Longer than any single read, including a Keychain prompt.
  */
 const STALE_MS = 120_000;
+/** A synchronous holder only rewrites one file, so it blocks briefly */
+const SYNC_WAIT_MS = 5_000;
+const SYNC_POLL_MS = 10;
 
 type Holder = { pid: number; host: string; token: string };
 
@@ -94,16 +97,41 @@ export async function takeFetchTurn<T>(
     const value = answer();
     if (value !== undefined) return { kind: "answered", value };
     if (performance.now() >= deadline) return { kind: "unlocked" };
-    const holder = readHolder(path);
-    const state = holderState(path, holder, staleMs);
-    if (state === "released") continue;
-    if (state === "abandoned") {
-      removeIfHeldBy(path, holder?.token);
-      // A crashed or wedged holder answered nothing, so the taker leads
-      waited = false;
-      continue;
+    const state = settleHolder(path, staleMs);
+    // A crashed or wedged holder answered nothing, so the taker leads
+    if (state === "abandoned") waited = false;
+    if (state === "held") await sleep(pollMs);
+  }
+}
+
+/**
+ * Run `fn` while holding the lock at `path`, for a critical section as short
+ * as a file's read-modify-write. It waits synchronously and takes over an
+ * abandoned lock as `takeFetchTurn` does; when the wait runs out, or no lock
+ * can be taken here, `fn` runs unlocked.
+ */
+export function withLockSync<T>(
+  path: string,
+  fn: () => T,
+  {
+    waitMs = SYNC_WAIT_MS,
+    pollMs = SYNC_POLL_MS,
+    staleMs = STALE_MS,
+  }: FetchTurnOptions = {},
+): T {
+  const deadline = performance.now() + waitMs;
+  for (;;) {
+    const lock = tryLock(path);
+    if (lock === "unavailable") return fn();
+    if (lock) {
+      try {
+        return fn();
+      } finally {
+        lock.release();
+      }
     }
-    await sleep(pollMs);
+    if (performance.now() >= deadline) return fn();
+    if (settleHolder(path, staleMs) === "held") sleepSync(pollMs);
   }
 }
 
@@ -146,6 +174,24 @@ function readHolder(path: string): Holder | undefined {
   } catch {
     return undefined;
   }
+}
+
+/**
+ * The lock's holder state after one wait step, with an abandoned lock
+ * already removed so the next attempt can take it.
+ */
+function settleHolder(
+  path: string,
+  staleMs: number,
+): "released" | "abandoned" | "held" {
+  const holder = readHolder(path);
+  const state = holderState(path, holder, staleMs);
+  if (state === "abandoned") removeIfHeldBy(path, holder?.token);
+  return state;
+}
+
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
 /**

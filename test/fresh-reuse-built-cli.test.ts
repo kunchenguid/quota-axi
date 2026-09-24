@@ -18,15 +18,18 @@ afterEach(() => {
   root = undefined;
 });
 
-type Fixture = { env: NodeJS.ProcessEnv; calls: string };
+type Fixture = { env: NodeJS.ProcessEnv; calls: string; blCalls: string };
 
 /**
  * A synthetic home whose vendor is a fake Codex app-server that counts how
  * often it is asked for rate limits, so the count is the number of vendor
  * usage calls. It answers after `delayMs`, like a real vendor round trip, and
- * with `failing` it answers with an error, a reading nothing can reuse.
+ * with `failing` it answers with an error, a reading nothing can reuse. A fake
+ * Alibaba `bl` on `PATH` counts its usage calls the same way. With `answerAt`,
+ * both answer at that epoch millisecond instead, so their readings land at
+ * once.
  */
-function fixture(delayMs = 0, failing = false): Fixture {
+function fixture(delayMs = 0, failing = false, answerAt?: number): Fixture {
   root = mkdtempSync(join(tmpdir(), "quota-axi-fresh-reuse-cli-"));
   const home = join(root, "home");
   mkdirSync(home, { mode: 0o700 });
@@ -57,7 +60,7 @@ process.stdin.on("data", (chunk) => {
     }
     if (request.method === "account/rateLimits/read") {
       appendFileSync(${JSON.stringify(calls)}, "x");
-      delay = ${delayMs};
+      delay = ${answerAt === undefined ? delayMs : `Math.max(0, ${answerAt} - Date.now())`};
       result = {
         rateLimits: {
           limitId: "codex",
@@ -80,19 +83,40 @@ process.stdin.on("data", (chunk) => {
 `,
     { mode: 0o700 },
   );
+  const bin = join(root, "bin");
+  mkdirSync(bin);
+  const blCalls = join(root, "bl-calls");
+  writeFileSync(blCalls, "");
+  writeFileSync(
+    join(bin, "bl"),
+    `#!${process.execPath}
+require("node:fs").appendFileSync(${JSON.stringify(blCalls)}, "x");
+setTimeout(() => {
+  process.stdout.write(JSON.stringify({ planName: "Pro", per1WeekPercentage: 20 }));
+}, ${answerAt === undefined ? delayMs : `Math.max(0, ${answerAt} - Date.now())`});
+`,
+    { mode: 0o700 },
+  );
   return {
     calls,
+    blCalls,
     env: {
       HOME: home,
       XDG_CACHE_HOME: join(root, "cache"),
       XDG_CONFIG_HOME: join(root, "config"),
       QUOTA_AXI_CODEX_BINARY: codex,
-      PATH: process.env.PATH ?? "",
+      PATH: `${bin}:${process.env.PATH ?? ""}`,
     },
   };
 }
 
-const ARGS = [BUILT_CLI_ENTRYPOINT, "--provider", "codex", "--json"];
+const argsFor = (provider: string) => [
+  BUILT_CLI_ENTRYPOINT,
+  "--provider",
+  provider,
+  "--json",
+];
+const ARGS = argsFor("codex");
 
 type Reading = { state: { status: string; reused?: true } };
 
@@ -121,6 +145,25 @@ function burst(reads: number, env: NodeJS.ProcessEnv = {}): number {
       expect(provider.state.reused).toBe(true);
   }
   return readFileSync(calls, "utf8").length;
+}
+
+function run(args: string[], env: NodeJS.ProcessEnv): Promise<Reading> {
+  return new Promise<Reading>((resolvePromise, reject) => {
+    const child = spawn(process.execPath, args, { env });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8").on("data", (chunk: string) => {
+      stdout += chunk;
+    });
+    child.stderr.setEncoding("utf8").on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+    child.on("error", reject);
+    child.on("close", (status) => {
+      if (status === 0) resolvePromise(parseReading(stdout));
+      else reject(new Error(`exit ${status}: ${stderr}`));
+    });
+  });
 }
 
 /**
@@ -202,6 +245,25 @@ describe("fresh reuse through the built CLI", () => {
     // Taking turns would cost one vendor round trip per process
     expect(elapsedMs).toBeLessThan(4 * delayMs);
   }, 60_000);
+
+  it("keeps both providers' readings when their leaders write at once", async () => {
+    for (let round = 0; round < 5; round++) {
+      const { env, calls, blCalls } = fixture(0, false, Date.now() + 1_500);
+      const readings = await Promise.all(
+        ["codex", "alibaba"].flatMap((provider) =>
+          Array.from({ length: 4 }, () =>
+            run(argsFor(provider), { ...env, QUOTA_AXI_MAX_AGE: "90" }),
+          ),
+        ),
+      );
+      expect(readFileSync(calls, "utf8")).toHaveLength(1);
+      expect(readFileSync(blCalls, "utf8")).toHaveLength(1);
+      expect(readings.filter((reading) => !reading.state.reused)).toHaveLength(
+        2,
+      );
+      rmSync(root!, { recursive: true, force: true });
+    }
+  }, 120_000);
 
   it("makes one per process without reuse, where no lock is taken", async () => {
     const { calls } = await concurrent(8, {});

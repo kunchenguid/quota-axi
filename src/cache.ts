@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { chmodSync, renameSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import {
   cacheFilePath,
   claudeCredentialContextId,
@@ -13,7 +13,7 @@ import { devinReadingContextId } from "./providers/devin-cache-context.js";
 import { elevenLabsReadingContextId } from "./providers/elevenlabs-cache-context.js";
 import { miniMaxReadingContextId } from "./providers/minimax-cache-context.js";
 import { isPiCodexSource } from "./providers/pi-codex-credential.js";
-import { fetchLockPath } from "./lib/fetch-lock.js";
+import { fetchLockPath, withLockSync } from "./lib/fetch-lock.js";
 import { inputsDigest, type TracedInputs } from "./lib/input-trace.js";
 import { reuseContextId } from "./lib/reuse-context.js";
 import type {
@@ -468,29 +468,40 @@ export function writeCachedProviders(
     })
     .filter((provider): provider is CachedProvider => Boolean(provider));
 
-  const file = cacheFilePath();
-  const byProvider = new Map<string, CachedProvider>();
-  let clearedExisting = false;
-  for (const provider of readCacheProviders()) {
-    if (clearProviders.has(cacheIdentity(provider.snapshot))) {
-      clearedExisting = true;
-      continue;
+  withCacheWriteLock(() => {
+    const byProvider = new Map<string, CachedProvider>();
+    let clearedExisting = false;
+    for (const provider of readCacheProviders()) {
+      if (clearProviders.has(cacheIdentity(provider.snapshot))) {
+        clearedExisting = true;
+        continue;
+      }
+      byProvider.set(cacheIdentity(provider.snapshot), provider);
     }
-    byProvider.set(cacheIdentity(provider.snapshot), provider);
-  }
-  if (cacheable.length === 0 && !clearedExisting) return;
-  for (const provider of cacheable)
-    byProvider.set(cacheIdentity(provider.snapshot), provider);
-  const merged = [...byProvider.values()].sort(
-    (a, b) =>
-      PROVIDER_IDS.indexOf(a.snapshot.provider) -
-        PROVIDER_IDS.indexOf(b.snapshot.provider) ||
-      (a.snapshot.accountKey ?? DEFAULT_ACCOUNT_KEY).localeCompare(
-        b.snapshot.accountKey ?? DEFAULT_ACCOUNT_KEY,
-      ),
-  );
+    if (cacheable.length === 0 && !clearedExisting) return;
+    for (const provider of cacheable)
+      byProvider.set(cacheIdentity(provider.snapshot), provider);
+    const merged = [...byProvider.values()].sort(
+      (a, b) =>
+        PROVIDER_IDS.indexOf(a.snapshot.provider) -
+          PROVIDER_IDS.indexOf(b.snapshot.provider) ||
+        (a.snapshot.accountKey ?? DEFAULT_ACCOUNT_KEY).localeCompare(
+          b.snapshot.accountKey ?? DEFAULT_ACCOUNT_KEY,
+        ),
+    );
 
-  writeCacheFile(file, merged);
+    writeCacheFile(cacheFilePath(), merged);
+  });
+}
+
+/**
+ * Serialize the cache file's read-modify-write across processes. Leaders of
+ * different providers write at once in a concurrent burst, and a merge that
+ * read the file before another leader's write would drop that reading, so
+ * its waiters would all find nothing and read the vendor together.
+ */
+function withCacheWriteLock(fn: () => void): void {
+  withLockSync(join(dirname(cacheFilePath()), "locks", "cache-write.lock"), fn);
 }
 
 /**
@@ -554,15 +565,17 @@ export function deleteCachedProvider(
   provider: ProviderId,
   accountKey?: string,
 ): void {
-  const existing = readCacheProviders();
-  const remaining = existing.filter((item) =>
-    item.snapshot.provider !== provider
-      ? true
-      : accountKey !== undefined &&
-        (item.snapshot.accountKey ?? DEFAULT_ACCOUNT_KEY) !== accountKey,
-  );
-  if (remaining.length === existing.length) return;
-  writeCacheFile(cacheFilePath(), remaining);
+  withCacheWriteLock(() => {
+    const existing = readCacheProviders();
+    const remaining = existing.filter((item) =>
+      item.snapshot.provider !== provider
+        ? true
+        : accountKey !== undefined &&
+          (item.snapshot.accountKey ?? DEFAULT_ACCOUNT_KEY) !== accountKey,
+    );
+    if (remaining.length === existing.length) return;
+    writeCacheFile(cacheFilePath(), remaining);
+  });
 }
 
 function writeCacheFile(file: string, providers: CachedProvider[]): void {
