@@ -92,7 +92,8 @@ function mockProcess(mock: ProcessMock): { calls: string[][] } {
   const calls: string[][] = [];
   vi.doMock("../../src/lib/process.js", () => ({
     commandExists: vi.fn(
-      async (command: string) => !(mock.sqlite3Missing && command === "sqlite3"),
+      async (command: string) =>
+        !(mock.sqlite3Missing && command === "sqlite3"),
     ),
     execFileText: vi.fn(async (command: string, args: string[]) => {
       calls.push([command, ...args]);
