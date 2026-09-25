@@ -366,9 +366,9 @@ function claudeTokenRefreshHelpLine(provider: ProviderQuota): string {
 
 function kimiTokenRefreshHelpLine(remedy: string | undefined): string {
   if (remedy === KIMI_CODE_TOKEN_REFRESH_REMEDY_COMMAND) {
-    return "Tell your user: run `kimi` once so Kimi Code can refresh its own session token. quota-axi stays read-only and never rotates Kimi credentials.";
+    return "Tell your user: run a Kimi Code session with `kimi` once so Kimi Code refreshes its own session token. quota-axi stays read-only and never rotates Kimi credentials.";
   }
-  return "Tell your user: run `pi` once so Pi can refresh its own Kimi session token. quota-axi stays read-only and never rotates Kimi credentials.";
+  return "Tell your user: use a Kimi model in `pi` once so Pi refreshes its own Kimi session token; Pi refreshes a provider's token only when that provider is used. quota-axi stays read-only and never rotates Kimi credentials.";
 }
 
 function grokTokenRefreshHelpLine(): string {
