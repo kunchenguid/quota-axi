@@ -50,7 +50,9 @@ export function degradedSources(
 /**
  * How present a provider is on this machine, as the human report groups it.
  *
- * - `live`: a fresh or stale reading, so there is something to draw.
+ * - `live`: a fresh reading, measured on this run.
+ * - `stale`: a cached reading served after the live read failed. It is drawn,
+ *   and it is not counted as live.
  * - `attention`: no reading, but a source found something - a credential
  *   (expired, rejected, or waiting on a prompt), an installed tool that
  *   failed, or a request that failed - so the user has this provider and it is
@@ -59,7 +61,7 @@ export function degradedSources(
  * - `absent`: every source was skipped as genuinely absent. This positive
  *   evidence is the only thing that lets a report fold a provider away.
  */
-export type ProviderPresence = "live" | "attention" | "absent";
+export type ProviderPresence = "live" | "stale" | "attention" | "absent";
 
 /**
  * Classify a provider reading by the evidence its own attempts carry. A skip
@@ -83,9 +85,8 @@ export function providerPresence(
     "incidentalSources" | "isUncertainSkip"
   > = {},
 ): ProviderPresence {
-  if (provider.state.status === "fresh" || provider.state.status === "stale") {
-    return "live";
-  }
+  if (provider.state.status === "fresh") return "live";
+  if (provider.state.status === "stale") return "stale";
   const attempts = provider.attempts ?? [];
   if (attempts.length === 0) return "attention";
   const incidental = new Set(declarations.incidentalSources ?? []);

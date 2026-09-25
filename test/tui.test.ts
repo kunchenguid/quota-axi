@@ -8,6 +8,7 @@ import {
   thinBar,
 } from "../src/tui.js";
 import { withQuotaSemantics } from "../src/interpretation.js";
+import { withUsageFetchFailure } from "../src/providers/usage-fetch-failure.js";
 import { providerPresence } from "../src/lib/source-attempts.js";
 import { redactedResponse } from "../src/render.js";
 import { PROVIDER_IDS } from "../src/types.js";
@@ -84,7 +85,7 @@ describe("renderQuotaTui structure", () => {
   it("summarizes the fleet in the dim header with local time", () => {
     const lines = render();
     expect(lines[0]).toBe(
-      "  quota-axi · 2026-08-06 16:21 PDT · 3 live · 3 need attention · 0 not set up",
+      "  quota-axi · 2026-08-06 16:21 PDT · 3 live · 0 stale · 3 need attention · 0 not set up",
     );
   });
 
@@ -620,12 +621,55 @@ describe("renderQuotaTui structure", () => {
     const lines = renderQuotaTui(response, {
       timeZone: "America/Los_Angeles",
     }).split("\n");
-    const title = findLine(lines, "● claude");
+    const title = findLine(lines, "◐ claude");
     expect(title).toContain("max · oauth · stale");
+    expect(lines[0]).toContain(
+      "2 live · 1 stale · 3 need attention · 0 not set up",
+    );
     findLine(lines, "stale · effective unknown");
     expect(findLine(lines, "stale · effective unknown")).toContain(
       "runway unknown",
     );
+  });
+
+  it("draws a stale reading apart from a fresh one, with age and the live-read error", () => {
+    const fresh = renderQuotaTui(fixtureResponse(), {
+      timeZone: "America/Los_Angeles",
+      colorDepth: "truecolor",
+    });
+    const response = fixtureResponse();
+    const claude = response.providers[0];
+    claude.state.status = "stale";
+    claude.state.stale = true;
+    claude.state.refreshedAt = new Date(
+      Date.parse(GENERATED_AT) - 90 * 60 * 1_000,
+    ).toISOString();
+    claude.state.error = "provider_unavailable";
+    claude.state.reason = "keychain_access_required";
+    response.providers[0] = withUsageFetchFailure(
+      withQuotaSemantics(claude, GENERATED_AT),
+    );
+    const stale = renderQuotaTui(response, {
+      timeZone: "America/Los_Angeles",
+      colorDepth: "truecolor",
+    });
+    const lines = stale.split("\n");
+
+    expect(lines[0]).toContain(
+      "2 live · 1 stale · 3 need attention · 0 not set up",
+    );
+    expect(fresh.split("\n")[0]).toContain(
+      "3 live · 0 stale · 3 need attention · 0 not set up",
+    );
+    expect(stale).toContain("\x1b[1;38;2;249;226;175m ◐ claude ");
+    expect(stale).toContain("\x1b[38;2;49;50;68m╭─");
+    expect(stale).not.toContain("\x1b[1;38;2;250;179;135m ● claude ");
+    expect(fresh).toContain("\x1b[1;38;2;250;179;135m ● claude ");
+    expect(findLine(lines, "last refreshed 1h 30m ago")).toBeDefined();
+    expect(findLine(lines, "fetch failed provider unavailable")).toBeDefined();
+    expect(findLine(lines, "reason keychain access required")).toBeDefined();
+    expect(fresh).not.toContain("last refreshed");
+    expect(fresh).not.toContain("◐");
   });
 });
 
@@ -722,7 +766,7 @@ describe("cards for providers with no combinable bound", () => {
 
   it("still marks the card stale when the snapshot is stale", () => {
     const lines = renderWithCopilot(true);
-    expect(findCardLine(lines, 1, "\u25cf copilot")).toContain("stale");
+    expect(findCardLine(lines, 1, "\u25d0 copilot")).toContain("stale");
     expect(findCardLine(lines, 1, "stale \u00b7 per-window usage")).toContain(
       "no combined bound",
     );
@@ -1290,7 +1334,7 @@ describe("providers that are not set up", () => {
     const lines = frame(fleet());
 
     expect(lines[0]).toBe(
-      "  quota-axi · 2026-08-06 16:21 PDT · 2 live · 1 needs attention · 10 not set up",
+      "  quota-axi · 2026-08-06 16:21 PDT · 2 live · 0 stale · 1 needs attention · 10 not set up",
     );
     expect(findLine(lines, "● claude")).toMatch(/● claude .*● codex /);
     const kimi = lines.findIndex((line) => line.includes("○ kimi"));
@@ -1330,7 +1374,9 @@ describe("providers that are not set up", () => {
       expect.stringContaining("elevenlabs credential unavailable"),
     );
     expect(lines.join("\n")).not.toContain("quota-axi auth shows where");
-    expect(lines[0]).toContain("2 live · 1 needs attention · 10 not set up");
+    expect(lines[0]).toContain(
+      "2 live · 0 stale · 1 needs attention · 10 not set up",
+    );
   });
 
   it("takes presence from the caller, since redaction removes the attempts", () => {
@@ -1338,14 +1384,18 @@ describe("providers that are not set up", () => {
     const redacted = redactedResponse(complete, false);
 
     // Without attempts nothing proves absence, so nothing folds.
-    expect(frame(redacted)[0]).toContain("2 live · 11 need attention");
+    expect(frame(redacted)[0]).toContain(
+      "2 live · 0 stale · 11 need attention",
+    );
     expect(frame(redacted).join("\n")).toContain("╭─ ○ zai ");
 
     const presence = complete.providers.map((provider) =>
       providerPresence(provider),
     );
     const lines = frame(redacted, { presence });
-    expect(lines[0]).toContain("2 live · 1 needs attention · 10 not set up");
+    expect(lines[0]).toContain(
+      "2 live · 0 stale · 1 needs attention · 10 not set up",
+    );
     expect(lines.join("\n")).not.toContain("╭─ ○ zai ");
   });
 
@@ -1357,14 +1407,14 @@ describe("providers that are not set up", () => {
     };
 
     expect(frame(response)).toEqual([
-      "  quota-axi · 2026-08-06 16:21 PDT · 0 live · 0 need attention · 3 not set up",
+      "  quota-axi · 2026-08-06 16:21 PDT · 0 live · 0 stale · 0 need attention · 3 not set up",
       "",
       "  ○ not set up  zai · mimo · deepseek   quota-axi auth shows where each is read",
     ]);
 
     const expanded = frame(response, { showNotSetUp: true });
     expect(expanded.slice(0, 4)).toEqual([
-      "  quota-axi · 2026-08-06 16:21 PDT · 0 live · 0 need attention · 3 not set up",
+      "  quota-axi · 2026-08-06 16:21 PDT · 0 live · 0 stale · 0 need attention · 3 not set up",
       "",
       "  ○ not set up · 3",
       "",
@@ -1385,10 +1435,10 @@ describe("providers that are not set up", () => {
     // The unabridged header does not fit the narrowest supported terminal.
     expect(displayColumns(wide[0])).toBeGreaterThan(80);
     expect(displayColumns(narrow[0])).toBeLessThanOrEqual(80);
-    // The time zone is spent to make room; every count survives.
+    // The time zone, then the date, is spent to make room; every count survives.
     expect(narrow[0]).toMatch(
       new RegExp(
-        `^ {2}quota-axi · \\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2} · 0 live · 0 need attention · ${PROVIDER_IDS.length} not set up$`,
+        `^ {2}quota-axi · \\d{2}:\\d{2} · 0 live · 0 stale · 0 need attention · ${PROVIDER_IDS.length} not set up$`,
       ),
     );
   });
@@ -1401,7 +1451,7 @@ describe("providers that are not set up", () => {
     });
 
     expect(lines[0]).toBe(
-      "  quota-axi · 2026-08-06 16:21 PDT · 2 live · 0 need attention · 0 not set up",
+      "  quota-axi · 2026-08-06 16:21 PDT · 2 live · 0 stale · 0 need attention · 0 not set up",
     );
   });
 

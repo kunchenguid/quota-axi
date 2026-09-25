@@ -1453,7 +1453,9 @@ describe("human report folding for providers that are not set up", () => {
     ]);
     expect(output).not.toMatch(/╭─ ○ (agy|alibaba|commandcode) /);
 
-    expect(output).toMatch(/· 1 live · 1 needs attention · 15 not set up\n/);
+    expect(output).toMatch(
+      /· 1 live · 0 stale · 1 needs attention · 15 not set up\n/,
+    );
     expect(output).toContain("╭─ ● codex ");
     expect(output).toContain("╭─ ○ claude ");
     expect(output).toContain("  ○ not set up  cursor · copilot · grok · kimi");
@@ -1480,7 +1482,9 @@ describe("human report folding for providers that are not set up", () => {
       "zai,codex",
     ]);
 
-    expect(output).toMatch(/· 1 live · 0 need attention · 1 not set up\n/);
+    expect(output).toMatch(
+      /· 1 live · 0 stale · 0 need attention · 1 not set up\n/,
+    );
     expect(output).toContain("╭─ ○ zai ");
     expect(output).not.toContain("quota-axi auth shows where each is read");
   });
