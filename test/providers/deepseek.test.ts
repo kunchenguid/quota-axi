@@ -60,6 +60,123 @@ describe("DeepSeek provider", () => {
     );
   });
 
+  it("surfaces every wallet and lets a funded wallet outrank a zero one", async () => {
+    const request = vi.fn(async () => {
+      return new Response(
+        JSON.stringify({
+          is_available: true,
+          balance_infos: [
+            {
+              currency: "USD",
+              total_balance: "0.00",
+              granted_balance: "0.00",
+              topped_up_balance: "0.00",
+            },
+            {
+              currency: "CNY",
+              total_balance: "49.27",
+              granted_balance: "0.00",
+              topped_up_balance: "49.27",
+            },
+          ],
+        }),
+        { headers: { "content-type": "application/json" } },
+      );
+    });
+
+    const report = await createDeepSeekAdapter({
+      credential: () => ({
+        status: "available",
+        key: KEY,
+        source: "env:DEEPSEEK_API_KEY",
+      }),
+      fetch: request,
+      now: () => Date.parse("2026-09-01T00:00:00.000Z"),
+    }).fetchQuota(OPTIONS);
+
+    expect(report).toMatchObject({
+      provider: "deepseek",
+      state: { status: "fresh", stale: false },
+      credits: {
+        remaining: 49.27,
+        unit: "cny",
+        balances: [
+          { remaining: 0, unit: "usd" },
+          { remaining: 49.27, unit: "cny" },
+        ],
+      },
+    });
+  });
+
+  it("publishes every wallet when both currencies carry funds", async () => {
+    const report = await createDeepSeekAdapter({
+      credential: () => ({
+        status: "available",
+        key: KEY,
+        source: "env:DEEPSEEK_API_KEY",
+      }),
+      fetch: async () =>
+        new Response(
+          JSON.stringify({
+            is_available: true,
+            balance_infos: [
+              { currency: "USD", total_balance: "12.50" },
+              { currency: "CNY", total_balance: "100.00" },
+            ],
+          }),
+          { headers: { "content-type": "application/json" } },
+        ),
+      now: () => Date.parse("2026-09-01T00:00:00.000Z"),
+    }).fetchQuota(OPTIONS);
+
+    expect(report.credits).toEqual({
+      remaining: 12.5,
+      unit: "usd",
+      balances: [
+        { remaining: 12.5, unit: "usd" },
+        { remaining: 100, unit: "cny" },
+      ],
+    });
+  });
+
+  it("keeps a lone wallet scalar-only in its reported currency", async () => {
+    const report = await createDeepSeekAdapter({
+      credential: () => ({
+        status: "available",
+        key: KEY,
+        source: "env:DEEPSEEK_API_KEY",
+      }),
+      fetch: async () =>
+        new Response(
+          JSON.stringify({
+            is_available: true,
+            balance_infos: [{ currency: "CNY", total_balance: "49.27" }],
+          }),
+          { headers: { "content-type": "application/json" } },
+        ),
+      now: () => Date.parse("2026-09-01T00:00:00.000Z"),
+    }).fetchQuota(OPTIONS);
+
+    expect(report.credits).toEqual({ remaining: 49.27, unit: "cny" });
+  });
+
+  it("keeps one metric row per reported currency with its existing id", () => {
+    expect(
+      normalizeDeepSeekPayload({
+        is_available: true,
+        balance_infos: [
+          { currency: "USD", total_balance: "12.50" },
+          { currency: "CNY", total_balance: "100.00" },
+        ],
+      }),
+    ).toEqual({
+      metrics: [
+        { id: "usd-total", value: "12.50", currency: "USD" },
+        { id: "cny-total", value: "100.00", currency: "CNY" },
+      ],
+    });
+  });
+
   it("tries Pi auth after an environment key is rejected", async () => {
     const request = vi.fn(async (_url: string, init?: RequestInit) => {
       const bearer = new Headers(init?.headers).get("authorization");

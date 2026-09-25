@@ -1025,13 +1025,36 @@ function normalizeCachedCredits(
   const remaining = numberValue(data.remaining);
   const unlimited = booleanValue(data.unlimited);
   const unit = literalValue(data.unit, ["usd", "cny", "credits"] as const);
-  if (remaining === undefined && unlimited === undefined && unit === undefined)
+  const balances = normalizeCachedBalances(data.balances);
+  if (
+    remaining === undefined &&
+    unlimited === undefined &&
+    unit === undefined &&
+    balances === undefined
+  )
     return undefined;
   return {
     remaining,
     unlimited,
     unit,
+    ...(balances ? { balances } : {}),
   };
+}
+
+function normalizeCachedBalances(
+  raw: unknown,
+): NonNullable<ProviderQuota["credits"]>["balances"] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const balances = raw.flatMap((entry) => {
+    const data = objectValue(entry);
+    if (!data) return [];
+    const remaining = numberValue(data.remaining);
+    const unit = literalValue(data.unit, ["usd", "cny", "credits"] as const);
+    return remaining === undefined || unit === undefined
+      ? []
+      : [{ remaining, unit }];
+  });
+  return balances.length > 0 ? balances : undefined;
 }
 
 function assignNumber<T extends object, K extends keyof T>(

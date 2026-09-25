@@ -506,12 +506,17 @@ function creditsOnlyHeadline(
   if (provider.windows.length > 0) return undefined;
   const credits = provider.credits;
   if (!credits) return undefined;
+  const balances = credits.balances;
   const amount =
     credits.unlimited === true
       ? "unlimited"
-      : credits.remaining === undefined
-        ? undefined
-        : `${credits.remaining} ${credits.unit ?? "credits"} remaining`;
+      : balances && balances.length > 0
+        ? `${balances
+            .map((balance) => `${balance.remaining} ${balance.unit}`)
+            .join(" · ")} remaining`
+        : credits.remaining === undefined
+          ? undefined
+          : `${credits.remaining} ${credits.unit ?? "credits"} remaining`;
   if (amount === undefined) return undefined;
   return [
     interior(

@@ -1761,6 +1761,57 @@ describe("new provider public quota output", () => {
     expect(process.exitCode).toBeUndefined();
   });
 
+  it("names every DeepSeek wallet in the default report and JSON", async () => {
+    useTempCache();
+    const key = "synthetic-deepseek-multi-wallet-key";
+    process.env.DEEPSEEK_API_KEY = key;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              is_available: true,
+              balance_infos: [
+                {
+                  currency: "USD",
+                  total_balance: "0.00",
+                  granted_balance: "0.00",
+                  topped_up_balance: "0.00",
+                },
+                {
+                  currency: "CNY",
+                  total_balance: "49.27",
+                  granted_balance: "0.00",
+                  topped_up_balance: "49.27",
+                },
+              ],
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          ),
+      ),
+    );
+
+    const report = await capture(["--provider", "deepseek"]);
+    expect(report).toContain(
+      "deepseek,all,credits,remaining 0 usd · 49.27 cny",
+    );
+
+    const json = JSON.parse(
+      await capture(["--provider", "deepseek", "--json"]),
+    ) as QuotaAxiResponse;
+    expect(json.providers[0]?.credits).toEqual({
+      remaining: 49.27,
+      unit: "cny",
+      balances: [
+        { remaining: 0, unit: "usd" },
+        { remaining: 49.27, unit: "cny" },
+      ],
+    });
+    expect(JSON.stringify(json)).not.toContain(key);
+    expect(process.exitCode).toBeUndefined();
+  });
+
   it("publishes the registered OpenRouter key cap in JSON and names it in the default report", async () => {
     useTempCache();
     const key = "synthetic-openrouter-cli-key";

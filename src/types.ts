@@ -310,6 +310,17 @@ export type ProviderQuota = {
     remaining?: number;
     unlimited?: boolean;
     unit?: "usd" | "cny" | "credits";
+    /**
+     * Every wallet a vendor reports when it reports more than one, one entry
+     * per currency with its own unit. `remaining`/`unit` above mirror the
+     * funded entry so single-value consumers keep working; this array keeps
+     * every currency visible instead of letting a zero wallet mask a funded
+     * one. Absent when a single balance makes the scalar complete.
+     */
+    balances?: {
+      remaining: number;
+      unit: "usd" | "cny" | "credits";
+    }[];
   };
   state: {
     status: ProviderStatus;
