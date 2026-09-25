@@ -127,7 +127,7 @@ const STYLES: Record<Exclude<StyleName, `accent:${ProviderId}`>, StyleSpec> = {
   marker: { rgb: [137, 220, 235], ansi16: "96" },
   track: { rgb: [69, 71, 90], ansi16: "90" },
   border: { rgb: [88, 91, 112], ansi16: "90" },
-  borderDim: { rgb: [49, 50, 68], ansi16: "90" },
+  borderDim: { rgb: [49, 50, 68], ansi16: "2;90" },
 };
 
 /**

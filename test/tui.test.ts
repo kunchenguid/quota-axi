@@ -1152,6 +1152,25 @@ describe("color handling", () => {
     expect(c16).not.toContain("38;2;");
   });
 
+  it("keeps a stale card border distinct from a fresh one at 16 colors", () => {
+    const claudeBorder = (output: string): string =>
+      findLine(output.split("\n"), " claude ").split("╭")[0];
+    const fresh = renderQuotaTui(fixtureResponse(), {
+      timeZone: "America/Los_Angeles",
+      colorDepth: "16",
+    });
+    const response = fixtureResponse();
+    response.providers[0].state.status = "stale";
+    response.providers[0].state.stale = true;
+    const stale = renderQuotaTui(response, {
+      timeZone: "America/Los_Angeles",
+      colorDepth: "16",
+    });
+
+    expect(claudeBorder(fresh)).toBe("\x1b[90m");
+    expect(claudeBorder(stale)).toBe("\x1b[2;90m");
+  });
+
   it("colors runway exhaustion independently from healthy headroom", () => {
     const response = fixtureResponse();
     const availability =
