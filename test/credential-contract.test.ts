@@ -21,7 +21,7 @@ import type { ProviderQuota, SourceAttempt } from "../src/types.js";
  */
 
 type PiProviderCase = {
-  provider: "codex" | "kimi" | "grok" | "opencode-go";
+  provider: "codex" | "kimi" | "grok" | "opencode-go" | "mimo";
   /** Property name Pi stores this provider's credential under. */
   piKey: string;
   /** Attempt source name the adapter reports for its Pi store. */
@@ -79,6 +79,11 @@ const CASES: PiProviderCase[] = [
     piKey: "opencode-go",
     piSource: "pi:opencode-go",
   },
+  {
+    provider: "mimo",
+    piKey: "xiaomi",
+    piSource: "pi:xiaomi",
+  },
 ];
 
 /** Present-but-unusable Pi entries: none of these is an absent source. */
@@ -104,6 +109,7 @@ const ENV_KEYS = [
   "GITHUB_COPILOT_APPS_JSON",
   "GH_CONFIG_DIR",
   "ELEVENLABS_API_KEY",
+  "MIMO_API_KEY",
   "WINDSURF_API_KEY",
   "WINDSURF_API_SERVER_URL",
   "QUOTA_AXI_OPENCODE_GO_PI_AUTH",
@@ -142,6 +148,7 @@ beforeEach(() => {
   delete process.env.GROK_AUTH_JSON;
   delete process.env.GROK_AUTH_PATH;
   delete process.env.ELEVENLABS_API_KEY;
+  delete process.env.MIMO_API_KEY;
   delete process.env.WINDSURF_API_KEY;
   delete process.env.WINDSURF_API_SERVER_URL;
   mkdirSync(process.env.CODEX_HOME, { recursive: true });
