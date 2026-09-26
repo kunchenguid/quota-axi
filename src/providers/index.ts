@@ -17,7 +17,11 @@ import { deepseekAdapter } from "./deepseek.js";
 import { openrouterAdapter } from "./openrouter.js";
 import { zaiAdapter } from "./zai.js";
 import { zaiCodingPlanAdapter } from "./zai-coding-plan.js";
-import { PROVIDER_IDS, type ProviderAdapter, type ProviderId } from "../types.js";
+import {
+  PROVIDER_IDS,
+  type ProviderAdapter,
+  type ProviderId,
+} from "../types.js";
 
 export const PROVIDERS: Record<ProviderId, ProviderAdapter> = {
   claude: claudeAdapter,

@@ -28,6 +28,7 @@ const originalCopilotProvider = PROVIDERS.copilot;
 const originalGrokProvider = PROVIDERS.grok;
 const originalKimiProvider = PROVIDERS.kimi;
 const originalZaiProvider = PROVIDERS.zai;
+const originalZaiCodingPlanProvider = PROVIDERS["zai-coding-plan"];
 const originalAgyProvider = PROVIDERS.agy;
 const originalAlibabaProvider = PROVIDERS.alibaba;
 const originalOpenCodeGoProvider = PROVIDERS["opencode-go"];
@@ -58,6 +59,7 @@ afterEach(() => {
   PROVIDERS.grok = originalGrokProvider;
   PROVIDERS.kimi = originalKimiProvider;
   PROVIDERS.zai = originalZaiProvider;
+  PROVIDERS["zai-coding-plan"] = originalZaiCodingPlanProvider;
   PROVIDERS.agy = originalAgyProvider;
   PROVIDERS.alibaba = originalAlibabaProvider;
   PROVIDERS["opencode-go"] = originalOpenCodeGoProvider;
@@ -97,6 +99,7 @@ describe("CLI flag parsing", () => {
       "kimi",
       "zai",
       "agy",
+      "zai-coding-plan",
       "alibaba",
       "opencode-go",
       "commandcode",
@@ -172,6 +175,7 @@ describe("CLI flag parsing", () => {
           "kimi",
           "zai",
           "agy",
+          "zai-coding-plan",
           "alibaba",
           "opencode-go",
           "commandcode",
@@ -518,6 +522,63 @@ describe("argv normalization", () => {
 });
 
 describe("CLI quota rendering", () => {
+  it("renders Z.ai Coding Plan remaining quota in compact TOON and normalized JSON", async () => {
+    useTempCache();
+    PROVIDERS["zai-coding-plan"] = providerWithQuota(freshZaiCodingPlanQuota());
+
+    const toon = await capture(["--provider", "zai-coding-plan"]);
+    expect(toon).toContain(
+      "quota[2]{provider,scope,effectivePercentRemaining,spendPriority,runway,confidence,limitedBy,resetsAt}:",
+    );
+    expect(toon).toContain(
+      'zai-coding-plan,all_models,80,unknown,unknown,unknown,weekly,"2027-02-08T04:05:06.000Z"',
+    );
+    expect(toon).toContain(
+      'zai-coding-plan,tools,100,unknown,unknown,unknown,mcp_monthly,"2027-03-01T00:00:00.000Z"',
+    );
+    expect(toon).not.toContain("synthetic-zai-key");
+    expect(toon).not.toMatch(/recommend|prefer provider|switch to/i);
+
+    const fullToon = await capture(["--provider", "zai-coding-plan", "--full"]);
+    expect(fullToon).toMatch(
+      /zai-coding-plan,five_hour,session,99,"2027-02-03T09:05:06\.000Z",/,
+    );
+    expect(fullToon).toMatch(
+      /zai-coding-plan,weekly,week,80,"2027-02-08T04:05:06\.000Z",/,
+    );
+    expect(fullToon).toMatch(/zai-coding-plan,mcp_monthly,mcp,100,/);
+
+    const json = JSON.parse(
+      await capture(["--provider", "zai-coding-plan", "--json"]),
+    ) as QuotaAxiResponse;
+    expect(json.schemaVersion).toBe(5);
+    expect(json.providers).toEqual([
+      expect.objectContaining({
+        provider: "zai-coding-plan",
+        windows: [
+          expect.objectContaining({ id: "five_hour", percentRemaining: 99 }),
+          expect.objectContaining({ id: "weekly", percentRemaining: 80 }),
+          expect.objectContaining({ id: "mcp_monthly", percentRemaining: 100 }),
+        ],
+        quotaSemantics: expect.objectContaining({
+          effectiveAvailability: expect.arrayContaining([
+            expect.objectContaining({ scope: "all_models" }),
+            expect.objectContaining({ scope: "tools" }),
+          ]),
+        }),
+        state: expect.objectContaining({ status: "fresh", stale: false }),
+      }),
+    ]);
+    expect(
+      json.providers[0].quotaSemantics?.unresolvedWindowIds,
+    ).toBeUndefined();
+    expect(json.providers[0].account).toBeUndefined();
+    expect(json.providers[0].attempts).toBeUndefined();
+    expect(JSON.stringify(json)).not.toMatch(
+      /recommend|prefer provider|switch to|route to/i,
+    );
+  });
+
   it("bypasses cache persistence only in profile-only mode", async () => {
     tempDir = mkdtempSync(join(tmpdir(), "quota-axi-profile-cache-"));
     process.env.XDG_CACHE_HOME = tempDir;
@@ -1453,14 +1514,14 @@ describe("human report folding for providers that are not set up", () => {
     const output = await capture(["--tui", "--once"]);
 
     expect(output.trimEnd().split("\n").slice(-3)).toEqual([
-      "  ○ not set up  cursor · copilot · grok · kimi · zai · agy · alibaba · opencode-go · commandcode",
-      "                minimax · mimo · deepseek · openrouter · elevenlabs · devin · muse",
-      "                quota-axi auth shows where each is read",
+      "  ○ not set up  cursor · copilot · grok · kimi · zai · agy · zai-coding-plan · alibaba",
+      "                opencode-go · commandcode · minimax · mimo · deepseek · openrouter · elevenlabs",
+      "                devin · muse   quota-axi auth shows where each is read",
     ]);
     expect(output).not.toMatch(/╭─ ○ (agy|alibaba|commandcode) /);
 
     expect(output).toMatch(
-      /· 1 live · 0 stale · 1 needs attention · 16 not set up\n/,
+      /· 1 live · 0 stale · 1 needs attention · 17 not set up\n/,
     );
     expect(output).toContain("╭─ ● codex ");
     expect(output).toContain("╭─ ○ claude ");
@@ -1473,7 +1534,7 @@ describe("human report folding for providers that are not set up", () => {
     stubFoldFleet();
     const output = await capture(["--tui", "--once", "--all"]);
 
-    expect(output).toContain("  ○ not set up · 16\n");
+    expect(output).toContain("  ○ not set up · 17\n");
     expect(output).toContain("╭─ ○ copilot ");
     expect(output).toContain("╭─ ○ elevenlabs ");
     expect(output).not.toContain("quota-axi auth shows where each is read");
@@ -1538,7 +1599,7 @@ describe("human report folding for providers that are not set up", () => {
 
       process.stdin.emit("data", Buffer.from("a"));
       await settle("a hide not set up");
-      expect(lastFrame()).toContain("  ○ not set up · 16");
+      expect(lastFrame()).toContain("  ○ not set up · 17");
       expect(lastFrame()).toContain("╭─ ○ zai ");
 
       process.stdin.emit("data", Buffer.from("q"));
@@ -1918,6 +1979,7 @@ describe("default TOON decision blocks", () => {
     PROVIDERS.kimi = providerWithQuota(rateLimitedKimiQuota());
     PROVIDERS.zai = providerWithQuota(freshZaiQuota());
     PROVIDERS.agy = providerWithQuota(unavailableAgyQuota());
+    PROVIDERS["zai-coding-plan"] = providerWithQuota(freshZaiCodingPlanQuota());
     PROVIDERS.alibaba = providerWithQuota(freshAlibabaQuota());
     PROVIDERS["opencode-go"] = providerWithQuota(freshOpenCodeGoQuota());
     PROVIDERS.commandcode = providerWithQuota(freshCommandCodeQuota());
@@ -1960,6 +2022,7 @@ describe("default TOON decision blocks", () => {
       "opencode-go",
       "openrouter",
       "zai",
+      "zai-coding-plan",
     ]);
     expect(output).not.toContain("omitted");
   });
@@ -3506,6 +3569,50 @@ function freshCodexQuota(): ProviderQuota {
       sourcesTried: ["cli-rpc"],
     },
     attempts: [{ source: "cli-rpc", status: "success" }],
+  };
+}
+
+function freshZaiCodingPlanQuota(): ProviderQuota {
+  return {
+    provider: "zai-coding-plan",
+    label: "Z.ai Coding Plan",
+    source: "api",
+    plan: "pro",
+    windows: [
+      {
+        id: "five_hour",
+        label: "session",
+        kind: "session",
+        percentUsed: 1,
+        percentRemaining: 99,
+        resetsAt: "2027-02-03T09:05:06.000Z",
+        windowSeconds: 18_000,
+      },
+      {
+        id: "weekly",
+        label: "week",
+        kind: "weekly",
+        percentUsed: 20,
+        percentRemaining: 80,
+        resetsAt: "2027-02-08T04:05:06.000Z",
+        windowSeconds: 604_800,
+      },
+      {
+        id: "mcp_monthly",
+        label: "mcp",
+        kind: "monthly",
+        percentUsed: 0,
+        percentRemaining: 100,
+        resetsAt: "2027-03-01T00:00:00.000Z",
+      },
+    ],
+    state: {
+      status: "fresh",
+      stale: false,
+      refreshedAt: "2027-02-03T04:05:06.000Z",
+      sourcesTried: ["pi:zai"],
+    },
+    attempts: [{ source: "pi:zai", status: "success" }],
   };
 }
 
