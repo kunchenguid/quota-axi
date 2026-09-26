@@ -1,19 +1,23 @@
 import { agyAdapter } from "./agy.js";
-import { antigravityAdapter } from "./antigravity.js";
+import { alibabaAdapter } from "./alibaba.js";
 import { claudeAdapter } from "./claude.js";
+import { commandCodeAdapter } from "./commandcode.js";
 import { codexAdapter } from "./codex.js";
 import { copilotAdapter } from "./copilot.js";
 import { cursorAdapter } from "./cursor.js";
+import { devinAdapter } from "./devin.js";
+import { elevenLabsAdapter } from "./elevenlabs.js";
 import { grokAdapter } from "./grok.js";
 import { kimiAdapter } from "./kimi.js";
+import { opencodeGoAdapter } from "./opencode-go.js";
+import { minimaxAdapter } from "./minimax.js";
+import { mimoAdapter } from "./mimo.js";
+import { museAdapter } from "./muse.js";
+import { deepseekAdapter } from "./deepseek.js";
+import { openrouterAdapter } from "./openrouter.js";
 import { zaiAdapter } from "./zai.js";
 import { zaiCodingPlanAdapter } from "./zai-coding-plan.js";
-import {
-  DEFAULT_PROVIDER_IDS,
-  PROVIDER_IDS,
-  type ProviderAdapter,
-  type ProviderId,
-} from "../types.js";
+import { PROVIDER_IDS, type ProviderAdapter, type ProviderId } from "../types.js";
 
 export const PROVIDERS: Record<ProviderId, ProviderAdapter> = {
   claude: claudeAdapter,
@@ -25,11 +29,20 @@ export const PROVIDERS: Record<ProviderId, ProviderAdapter> = {
   zai: zaiAdapter,
   agy: agyAdapter,
   "zai-coding-plan": zaiCodingPlanAdapter,
-  antigravity: antigravityAdapter,
+  alibaba: alibabaAdapter,
+  "opencode-go": opencodeGoAdapter,
+  commandcode: commandCodeAdapter,
+  minimax: minimaxAdapter,
+  mimo: mimoAdapter,
+  deepseek: deepseekAdapter,
+  openrouter: openrouterAdapter,
+  elevenlabs: elevenLabsAdapter,
+  devin: devinAdapter,
+  muse: museAdapter,
 };
 
 export function parseProviders(value: string | undefined): ProviderId[] {
-  if (!value) return [...DEFAULT_PROVIDER_IDS];
+  if (!value) return [...PROVIDER_IDS];
   const providers = value
     .split(",")
     .map((item) => item.trim())

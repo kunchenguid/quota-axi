@@ -22,7 +22,7 @@ The default report stays in declaration order and carries no preference, so no c
 ## Least action on someone else's credentials
 
 quota-axi acts on credentials other tools own, and it takes the least action that yields a true reading.
-It never logs in, never creates an identity, and never runs anything that spends the quota being measured.
+It never logs in or creates an identity. Default quota reads spend no inference; the narrowly scoped opt-in exception is defined in [README Provider notes](README.md#provider-notes).
 It never drives a browser or imports browser state or cookies, because a surface built for a human page is flaky and yields numbers it cannot verify.
 Running a vendor's own non-interactive command is allowed when that is what stands between quota-axi and an accurate report, and only under the limits below.
 Renewing a short-lived credential is such a case, and it is always the vendor's own CLI that renews it: quota-axi runs the smallest non-interactive command that already owns rotation, then re-reads the store that CLI just rewrote.
@@ -30,13 +30,16 @@ It never performs the refresh exchange itself, because these refresh tokens rota
 A delegated command is declared in this tree, is fixed argv rather than anything assembled at runtime, gets no interactive surface, and is chosen only when its own behavior is established from that vendor's CLI rather than assumed. quota-axi bounds how long it waits, but never terminates a delegate that may be mid-exchange; an over-budget run is left to the vendor and reported as unconfirmed.
 A provider whose vendor CLI has no such command stays read-only and keeps honest advice instead; not renewing is always allowed, and forcing a renewal through an unsafe path never is.
 A credential value leaves the process only as the bearer of the first-party request it authenticates, and is never printed, logged, cached, written into a test fixture, or exchanged for another credential.
-A refresh token is not read at all: its presence is evidence that a vendor can recover, never a value quota-axi handles.
+A refresh token may be inspected only as narrowly as the [Security Posture](README.md#security-posture) allows, and is never retained or used by quota-axi as credential material.
 A credential the user supplies explicitly is as legitimate a source as one discovered on disk, because people run this in more shapes than one machine with one seat.
 
 ## Absent data stays absent
 
 Every number reported is a number a provider reported or a figure derived from evidence quota-axi can trust.
 It never invents a window duration, a reset deadline, a relationship between windows, or a percentage.
+Across every provider and every window, `percentUsed` is how much of that window has been consumed and `percentRemaining` is what is left; adapters convert vendor fields into that direction rather than mirroring whatever polarity the wire happens to use.
+That data direction never changes; a person who reads gauges the other way may flip what the `--tui` report draws to consumption with one user-level preference, and that preference reaches only the human display, never the model, the cache, or the TOON and JSON an agent reads, because an agent has no preference to honor.
+The meaning of a vendor field is verified against a real observed reading or the vendor's own client or schema, never inferred from a UI screenshot.
 A conservative rule such as taking the lowest window as the effective bound applies only where that relationship is established as a fact about that provider, never as a default where relationships are unknown.
 Uncertainty gets louder as it propagates: an unmeasurable scope publishes no row, `spendPriority` renders the literal `unknown` rather than `0`, and an unknown pace marker is omitted rather than drawn.
 A number that has stopped being true is never served, even when labelled with its age and provenance, because it misleads the agent acting on it, and a failed read is reported as a failed read.
@@ -66,10 +69,11 @@ The `--tui` surface is a convenience for a human at a terminal, not a second pro
 
 quota-axi is not a router, not a proxy, not a gateway, not a login manager, not an auth app, not a hosted service, and not a desktop application.
 Delegating one renewal to the CLI that owns a credential store does not make it any of those: it mints nothing, stores nothing, and adds no identity of its own.
+Sending its own outbound vendor calls through the host's already-configured `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` egress path does not make it a proxy or gateway either: quota-axi routes nothing on anyone else's behalf, exposes no proxy service, and reads no proxy URL into its output; it only reaches the same address it would have reached directly, by the path the host already requires.
 Coverage of popular agents is wanted and pursued on a best-effort basis, and it grows in this tree rather than through a third-party interface that would run unreviewed code against a user's credentials.
 Where a vendor reports money as reliably as it reports capacity, reporting money is open to it; a signal that can only be made accurate for a few providers does not ship.
 Adapter behavior is clean-room from a vendor's own observable behavior, and third-party data is attributed rather than republished.
 The repo holds itself to the standard it asks of contributors, with no exemption for the contributions it most wants: every human pull request goes through the no-mistakes pipeline, generated files are regenerated rather than hand-edited, and tests exercise the published interface rather than the source text.
 
 A change aligns when it makes a real quota fact readable that was previously unreadable or wrong, keeps every existing path working, and leaves the decision with the caller.
-A change should be resisted when it publishes a number no provider supports, holds a boundary at the cost of a false report, spends the quota it is measuring, mints or rotates a credential quota-axi does not own, or grows the surface into a product this is not.
+A change should be resisted when it publishes a number no provider supports, holds a boundary at the cost of a false report, spends the quota it is measuring without the documented explicit opt-in, mints or rotates a credential quota-axi does not own, or grows the surface into a product this is not.

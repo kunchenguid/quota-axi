@@ -1,0 +1,9 @@
+{
+  "tier": "free",
+  "status": "free",
+  "character_count": 0,
+  "character_limit": 0,
+  "character_refresh_period": "monthly_period",
+  "next_character_count_reset_unix": null,
+  "can_extend_character_limit": false
+}

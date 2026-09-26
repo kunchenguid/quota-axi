@@ -21,6 +21,12 @@ export const PACE_EARLY_ELAPSED_PERCENT = 10;
 export const SELECTION_CLAMP_PERCENT_POINTS = 100;
 
 /**
+ * Maximum snapshot-clock skew accepted beyond one declared window duration
+ * when identifying a fully unused future cycle as not yet opened.
+ */
+export const UNOPENED_WINDOW_MAX_FUTURE_START_SKEW_SECONDS = 5 * 60;
+
+/**
  * Below this much remaining cycle time the selection ratio is dominated by the
  * four-decimal rounding of `timeRemainingPercent` rather than by real signal,
  * so the window is treated as unmeasurable instead of producing a runaway or
@@ -122,6 +128,12 @@ export function computeEffectiveRunway(
     return unknownRunway(windows);
   }
 
+  const accountWindows = windows.filter(({ kind }) => kind !== "model");
+  const accountBoundsEstablishRunway =
+    windows.some(({ kind }) => kind === "model") &&
+    accountWindows.length > 0 &&
+    computeEffectiveRunway(accountWindows, generatedAt).status !== "unknown";
+
   const unmeasurableWindowIds: string[] = [];
   const projections: Array<{
     window: QuotaWindow;
@@ -146,6 +158,26 @@ export function computeEffectiveRunway(
         continue;
       }
       unmeasurableWindowIds.push(window.id);
+      continue;
+    }
+
+    // A provider can publish a fresh named-model window just before its cycle
+    // opens. When both usage fields prove that nothing has been consumed, the
+    // reset is valid and no more than one declared cycle plus the bounded
+    // snapshot skew ahead, and pace identifies only that skew, the unopened
+    // window has no exhaustion projection and does not block one
+    // established by the scope's other bounds. Keep every other unknown pace
+    // fail-closed.
+    if (
+      isProvablyUnopenedFutureCycle(
+        window,
+        remaining,
+        pace,
+        resetsAt,
+        generatedAtMs,
+        accountBoundsEstablishRunway,
+      )
+    ) {
       continue;
     }
 
@@ -287,7 +319,10 @@ export function summarizeEffectivePace(
  * the window is overdrawn against its reset clock.
  *
  * Any bounding window without usable pace makes the whole scope unmeasurable:
- * an unknown window is never assumed healthy and never defaults to zero.
+ * an unknown window is never assumed healthy and never defaults to zero. The
+ * one exception is a not-yet-triggered window - no `resetsAt` at all plus zero
+ * usage - which is fully available rather than unmeasurable, so it is excluded
+ * from the aggregate the same way the runway computation excludes it.
  */
 export function summarizeEffectiveSelection(
   windows: QuotaWindow[],
@@ -302,7 +337,9 @@ export function summarizeEffectiveSelection(
     const gap = windowSelectionGap(window);
     const cycleSeconds = finiteNumber(window.pace?.cycleSeconds);
     if (gap === undefined || cycleSeconds === undefined || cycleSeconds <= 0) {
-      unmeasurableWindowIds.push(window.id);
+      if (!isNotYetTriggeredZeroUse(window)) {
+        unmeasurableWindowIds.push(window.id);
+      }
       continue;
     }
     weightedGapSum += gap * cycleSeconds;
@@ -311,6 +348,11 @@ export function summarizeEffectiveSelection(
 
   if (unmeasurableWindowIds.length > 0) {
     return { status: "unknown", unmeasurableWindowIds };
+  }
+  if (cycleSecondsSum <= 0) {
+    // Every bound is a not-yet-triggered zero-use window, so there is no
+    // measurable cycle to weight; the scope publishes no scalar.
+    return { status: "unknown" };
   }
   const scopeMetric = weightedGapSum / cycleSecondsSum;
   if (!Number.isFinite(scopeMetric)) {
@@ -387,6 +429,57 @@ function isZeroUse(window: QuotaWindow, percentRemaining: number): boolean {
   const percentUsed = finiteNumber(window.percentUsed);
   return (
     percentRemaining === 100 && (percentUsed === undefined || percentUsed === 0)
+  );
+}
+
+/**
+ * A window whose cycle countdown has not started yet: no `resetsAt` at all
+ * plus zero usage (e.g. a `five_hour` window before its first request). It is
+ * fully available rather than unmeasurable, so it never blocks an aggregate by
+ * itself. A present-but-unparseable `resetsAt` is a data defect, not
+ * "not yet triggered", and still fails closed.
+ */
+function isNotYetTriggeredZeroUse(window: QuotaWindow): boolean {
+  if (resolveResetsAtOutcome(window.resetsAt).kind !== "missing") return false;
+  // A window whose pace resolved knows its cycle, so it is not untriggered;
+  // its own measurability rules still apply.
+  if (window.pace !== undefined && window.pace.status !== "unknown") {
+    return false;
+  }
+  const remaining = finiteNumber(window.percentRemaining);
+  return remaining !== undefined && isZeroUse(window, remaining);
+}
+
+function isProvablyUnopenedFutureCycle(
+  window: QuotaWindow,
+  percentRemaining: number | undefined,
+  pace: QuotaPace | undefined,
+  resetsAt: ResetsAtOutcome,
+  generatedAtMs: number,
+  accountBoundsEstablishRunway: boolean,
+): boolean {
+  const windowSeconds = finiteNumber(window.windowSeconds);
+  if (
+    window.kind !== "model" ||
+    !accountBoundsEstablishRunway ||
+    percentRemaining !== 100 ||
+    window.percentUsed !== 0 ||
+    pace?.status !== "unknown" ||
+    pace.reason !== "future_cycle_start" ||
+    resetsAt.kind !== "ok" ||
+    windowSeconds === undefined ||
+    windowSeconds <= 0
+  ) {
+    return false;
+  }
+
+  const latestPlausibleResetMs =
+    generatedAtMs +
+    (windowSeconds + UNOPENED_WINDOW_MAX_FUTURE_START_SKEW_SECONDS) * 1000;
+  return (
+    isRepresentableDateMs(latestPlausibleResetMs) &&
+    resetsAt.ms > generatedAtMs &&
+    resetsAt.ms <= latestPlausibleResetMs
   );
 }
 

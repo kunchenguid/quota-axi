@@ -1,20 +1,25 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo, Socket } from "node:net";
 import { describe, expect, it, vi } from "vitest";
+import { withQuotaSemantics } from "../../src/interpretation.js";
+import { providerPresence } from "../../src/lib/source-attempts.js";
 import {
   createKimiAdapter,
   normalizeKimiPayload,
   normalizeRetryAfter,
 } from "../../src/providers/kimi.js";
+import { quotaJsonReport, renderQuotaToon } from "../../src/render.js";
 import type {
   KimiCodeCliCredentialInspection,
   KimiCodeCliCredentialResolution,
   KimiCodeCliCredentialSource,
+  KimiCodeSelection,
 } from "../../src/providers/kimi-code-cli-credential.js";
-import type {
-  KimiCredentialBroker,
-  KimiCredentialInspection,
-  KimiCredentialResolution,
+import {
+  createPiKimiCredentialBroker,
+  type KimiCredentialBroker,
+  type KimiCredentialInspection,
+  type KimiCredentialResolution,
 } from "../../src/providers/pi-kimi-credential.js";
 import type {
   ProviderAdapter,
@@ -43,6 +48,16 @@ const SUCCESS_PAYLOAD = {
       },
     },
   ],
+};
+
+/** Vendor `/usages` quota-model fixture from MoonshotAI/kimi-code #3787. */
+const CURRENT_USAGES_PAYLOAD = {
+  usages: {
+    limit_5h: { used_ratio: 0.3, reset_time: "2026-09-11T18:00:00Z" },
+    limit_7d: { used_ratio: 0.2, reset_time: "2026-09-17T00:00:00Z" },
+    limit_month_total: { used_ratio: 0.4, reset_time: "2026-10-01T00:00:00Z" },
+    limit_month_code: { used_ratio: 0.25, reset_time: "2026-10-01T00:00:00Z" },
+  },
 };
 
 describe("Kimi request transport", () => {
@@ -165,7 +180,7 @@ describe("Kimi request transport", () => {
     expect(report.state.untrustedWindowIds).toEqual(["limit:2"]);
   });
 
-  it.each(["missing", "unsupported"] as const)(
+  it.each(["missing", "unsupported", "error"] as const)(
     "uses a fresh CLI credential after Pi reports %s",
     async (piStatus) => {
       const cliToken = "synthetic-cli-token-529";
@@ -202,15 +217,34 @@ describe("Kimi request transport", () => {
       expect(report.attempts).toEqual([
         {
           source: "pi:kimi-coding",
-          status: "skipped",
+          status: piStatus === "error" ? "failed" : "skipped",
           error:
             piStatus === "missing"
               ? "kimi_credential_unavailable"
-              : "unsupported_credential_type",
+              : piStatus === "unsupported"
+                ? "unsupported_credential_type"
+                : "credential_resolution_failed",
+          ...(piStatus === "missing" ? {} : { credentialPresent: true }),
         },
         { source: "kimi-code-cli", status: "success" },
       ]);
       expect(JSON.stringify(report)).not.toContain(cliToken);
+      expect(
+        withQuotaSemantics(report, new Date(NOW).toISOString()).state
+          .degradedSources,
+      ).toEqual(
+        piStatus === "missing"
+          ? undefined
+          : [
+              {
+                source: "pi:kimi-coding",
+                error:
+                  piStatus === "unsupported"
+                    ? "unsupported_credential_type"
+                    : "credential_resolution_failed",
+              },
+            ],
+      );
     },
   );
 
@@ -225,7 +259,6 @@ describe("Kimi request transport", () => {
           headers: { "content-type": "application/json" },
         }),
       async () => new Response(null, { status: 503 }),
-      async () => new Response(null, { status: 401 }),
     ];
 
     for (const requestFailure of failures) {
@@ -242,6 +275,74 @@ describe("Kimi request transport", () => {
       expect(cliSource.resolve).not.toHaveBeenCalled();
       expect(report.state.sourcesTried).toEqual(["pi:kimi-coding"]);
     }
+  });
+
+  it("reports the CLI reading when the Pi credential is rejected", async () => {
+    const request = vi.fn(
+      async (_input: RequestInfo | URL, init?: RequestInit) =>
+        new Headers(init?.headers).get("authorization") ===
+        "Bearer cli-token-after-pi-rejection"
+          ? jsonResponse(SUCCESS_PAYLOAD)
+          : new Response(null, { status: 401 }),
+    );
+    const remove = vi.fn();
+    const report = await testAdapter({
+      cliCredentialSource: cliCredentialSource({
+        status: "available",
+        accessToken: "cli-token-after-pi-rejection",
+      }),
+      fetch: request,
+      deleteCachedProvider: remove,
+    }).fetchQuota(OPTIONS);
+
+    expect(report.state.status).toBe("fresh");
+    expect(report.windows.length).toBeGreaterThan(0);
+    expect(remove).not.toHaveBeenCalled();
+    expect(report.state.sourcesTried).toEqual([
+      "pi:kimi-coding",
+      "kimi-code-cli",
+    ]);
+    expect(report.attempts).toEqual([
+      {
+        source: "pi:kimi-coding",
+        status: "failed",
+        error: "provider_auth_rejected",
+      },
+      { source: "kimi-code-cli", status: "success" },
+    ]);
+  });
+
+  it("keeps a rejected Pi credential answerable when the CLI is unusable", async () => {
+    const remove = vi.fn();
+    const report = await testAdapter({
+      cliCredentialSource: cliCredentialSource({ status: "missing" }),
+      fetch: vi.fn(async () => new Response(null, { status: 401 })),
+      deleteCachedProvider: remove,
+      readCachedProvider: () => cachedQuota(),
+    }).fetchQuota(OPTIONS);
+
+    expect(report.state).toMatchObject({
+      status: "auth_required",
+      stale: false,
+      error: "provider_auth_rejected",
+    });
+    expect(remove).toHaveBeenCalledWith("kimi");
+  });
+
+  it("does not report a rejected credential as sign-out while a sibling is only unreachable", async () => {
+    const remove = vi.fn();
+    const report = await testAdapter({
+      cliCredentialSource: cliCredentialSource({ status: "error" }),
+      fetch: vi.fn(async () => new Response(null, { status: 401 })),
+      deleteCachedProvider: remove,
+      readCachedProvider: () => cachedQuota(),
+    }).fetchQuota(OPTIONS);
+
+    expect(remove).not.toHaveBeenCalled();
+    expect(report).toMatchObject({
+      source: "cache",
+      state: { status: "stale", error: "credential_resolution_failed" },
+    });
   });
 
   it("coalesces concurrent acquisitions into one provider request", async () => {
@@ -486,6 +587,13 @@ describe("Kimi request transport", () => {
         "malformed_json",
       ],
       [jsonResponse({ usage: { limit: 0, used: 0 } }), "schema_invalid"],
+      [jsonResponse({ usage: {} }), "schema_invalid"],
+      [
+        jsonResponse({
+          usages: { limit_7d: { reset_time: "2026-09-17T00:00:00Z" } },
+        }),
+        "schema_invalid",
+      ],
     ];
 
     for (const [response, code] of cases) {
@@ -494,6 +602,234 @@ describe("Kimi request transport", () => {
       }).fetchQuota(OPTIONS);
       expect(report.state.error).toBe(code);
     }
+  });
+
+  /**
+   * A Free-tier account's `/usages` answers 200 with no quota-bearing field
+   * at all. That is an authenticated, established-empty reading, not the
+   * unparseable-schema case above: report fresh with no windows and a usable
+   * auth status instead of `schema_invalid`, and still consult the sibling
+   * Kimi Code CLI source (verified below) rather than stopping at the first
+   * empty answer.
+   */
+  it.each([
+    {},
+    { usages: {} },
+    { usages: null },
+    { usage: null },
+    { limits: [] },
+    { goods_version: "2", usages: {} },
+  ])(
+    "reports an authenticated empty /usages body as a fresh no-quota reading: %j",
+    async (body) => {
+      const report = await testAdapter({
+        fetch: vi.fn(async () => jsonResponse(body)),
+      }).fetchQuota(OPTIONS);
+
+      expect(report.state).toMatchObject({
+        status: "fresh",
+        stale: false,
+        authStatus: "usable",
+      });
+      expect(report.state.error).toBeUndefined();
+      expect(report.windows).toEqual([]);
+      expect(report.attempts).toEqual([
+        { source: "pi:kimi-coding", status: "success" },
+        {
+          source: "kimi-code-cli",
+          status: "skipped",
+          error: "kimi_code_cli_credential_unavailable",
+        },
+      ]);
+
+      const generatedAt = new Date(NOW).toISOString();
+      const rendered = renderQuotaToon(
+        {
+          generatedAt,
+          schemaVersion: 5,
+          providers: [withQuotaSemantics(report, generatedAt)],
+        },
+        "quota-axi",
+        true,
+      );
+      expect(rendered).not.toContain("schema_invalid");
+      expect(rendered).toContain("no_quota");
+    },
+  );
+
+  it("consults the sibling Kimi Code CLI source after an empty Pi /usages body instead of stopping at schema_invalid", async () => {
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValueOnce(jsonResponse({}))
+      .mockResolvedValueOnce(jsonResponse(CURRENT_USAGES_PAYLOAD));
+
+    const report = await testAdapter({
+      cliCredentialSource: cliCredentialSource({
+        status: "available",
+        accessToken: "cli-token",
+      }),
+      fetch: fetch as unknown as typeof globalThis.fetch,
+    }).fetchQuota(OPTIONS);
+
+    expect(report.state).toMatchObject({ status: "fresh", stale: false });
+    expect(report.state.error).toBeUndefined();
+    expect(report.windows.map(({ id }) => id)).toEqual([
+      "five_hour",
+      "weekly",
+      "month_total",
+      "month_code",
+    ]);
+    expect(report.attempts).toEqual([
+      { source: "pi:kimi-coding", status: "success" },
+      { source: "kimi-code-cli", status: "success" },
+    ]);
+  });
+
+  it("reports current usages windows on the CLI path instead of schema_invalid", async () => {
+    const report = await testAdapter({
+      fetch: vi.fn(async () => jsonResponse(CURRENT_USAGES_PAYLOAD)),
+    }).fetchQuota(OPTIONS);
+
+    expect(report.state).toMatchObject({
+      status: "fresh",
+      stale: false,
+      sourcesTried: ["pi:kimi-coding"],
+    });
+    expect(report.state.error).toBeUndefined();
+    expect(report.windows.map(({ id }) => id)).toEqual([
+      "five_hour",
+      "weekly",
+      "month_total",
+      "month_code",
+    ]);
+
+    const generatedAt = new Date(NOW).toISOString();
+    const rendered = renderQuotaToon(
+      {
+        generatedAt,
+        schemaVersion: 5,
+        providers: [withQuotaSemantics(report, generatedAt)],
+      },
+      "quota-axi",
+      true,
+    );
+    expect(rendered).not.toContain("schema_invalid");
+    expect(rendered).toContain("month_total");
+    expect(rendered).toContain("month_code");
+    expect(rendered).toContain("code month");
+  });
+
+  it("never lets the monthly code share bound a scope of its own", async () => {
+    const report = await testAdapter({
+      fetch: vi.fn(async () =>
+        jsonResponse(CURRENT_USAGES_PAYLOAD),
+      ) as unknown as typeof fetch,
+    }).fetchQuota(OPTIONS);
+
+    const interpreted = withQuotaSemantics(report, new Date(NOW).toISOString());
+    expect(interpreted.quotaSemantics?.status).toBe("known");
+    expect(
+      interpreted.quotaSemantics?.effectiveAvailability.map(
+        ({ scope }) => scope,
+      ),
+    ).toEqual(["all_models"]);
+    expect(
+      interpreted.quotaSemantics?.effectiveAvailability[0]?.boundedBy,
+    ).toEqual(["five_hour", "weekly", "month_total"]);
+    expect(
+      interpreted.quotaSemantics?.effectiveAvailability[0]
+        ?.effectivePercentRemaining,
+    ).toBe(60);
+  });
+
+  it("names the monthly code share in default TOON without inventing remaining or a code scope", async () => {
+    const report = await testAdapter({
+      fetch: vi.fn(async () => jsonResponse(CURRENT_USAGES_PAYLOAD)),
+    }).fetchQuota(OPTIONS);
+
+    const generatedAt = new Date(NOW).toISOString();
+    const response = {
+      generatedAt,
+      schemaVersion: 5 as const,
+      providers: [withQuotaSemantics(report, generatedAt)],
+    };
+    const toon = renderQuotaToon(response, "quota-axi", false);
+    expect(toon).toContain(
+      "kimi,all,share,month_code of month_total · 25,none",
+    );
+    expect(toon).toContain("kimi,all_models,60,");
+    expect(toon).not.toMatch(/kimi,code[_,]/);
+
+    const lean = quotaJsonReport(response, false);
+    const leanShare = lean.providers[0]?.windows.find(
+      (window) => window.id === "month_code",
+    );
+    expect(leanShare?.shareOf).toBe("month_total");
+    expect(leanShare?.percentRemaining).toBeUndefined();
+    expect(leanShare?.percentUsed).toBe(25);
+
+    const full = quotaJsonReport(response, true);
+    const fullShare = full.providers[0]?.windows.find(
+      (window) => window.id === "month_code",
+    );
+    expect(fullShare).toMatchObject({
+      percentUsed: 25,
+      shareOf: "month_total",
+    });
+    expect(fullShare?.percentRemaining).toBeUndefined();
+  });
+
+  it("leaves the account bound unresolved when a declared usages limit is unparsed", async () => {
+    const report = await testAdapter({
+      fetch: vi.fn(async () =>
+        jsonResponse({
+          usages: {
+            limit_5h: { used_ratio: 0.3, reset_time: "2027-02-03T09:05:06Z" },
+            limit_7d: { reset_time: "2027-02-08T17:00:00Z" },
+          },
+        }),
+      ) as unknown as typeof fetch,
+    }).fetchQuota(OPTIONS);
+
+    expect(report.state.untrustedWindowIds).toEqual(["usages:limit_7d"]);
+
+    const interpreted = withQuotaSemantics(report, new Date(NOW).toISOString());
+    expect(interpreted.quotaSemantics?.status).toBe("partial");
+    expect(interpreted.quotaSemantics?.unresolvedWindowIds).toEqual([
+      "usages:limit_7d",
+    ]);
+    expect(interpreted.quotaSemantics?.effectiveAvailability[0]).toMatchObject({
+      scope: "all_models",
+      status: "unknown",
+      boundedBy: ["five_hour"],
+    });
+    expect(
+      interpreted.quotaSemantics?.effectiveAvailability[0]
+        ?.effectivePercentRemaining,
+    ).toBeUndefined();
+  });
+
+  it("does not let an unrecognized usages key bound the account scope", async () => {
+    const report = await testAdapter({
+      fetch: vi.fn(async () =>
+        jsonResponse({
+          usages: {
+            limit_7d: { used_ratio: 0.2, reset_time: "2027-02-08T17:00:00Z" },
+            weekly: { used_ratio: 0.95 },
+          },
+        }),
+      ) as unknown as typeof fetch,
+    }).fetchQuota(OPTIONS);
+
+    expect(report.windows.map(({ id }) => id)).toEqual(["weekly"]);
+    expect(report.state.untrustedWindowIds).toBeUndefined();
+
+    const interpreted = withQuotaSemantics(report, new Date(NOW).toISOString());
+    expect(interpreted.quotaSemantics?.status).toBe("known");
+    expect(
+      interpreted.quotaSemantics?.effectiveAvailability[0]
+        ?.effectivePercentRemaining,
+    ).toBe(80);
   });
 
   it.each([
@@ -575,9 +911,135 @@ describe("Kimi request transport", () => {
   });
 });
 
+describe("Kimi monthly subscription cycle", () => {
+  const generatedAt = new Date(NOW).toISOString();
+  const hoursFromNow = (hours: number) =>
+    new Date(NOW + hours * 3_600_000).toISOString();
+  const monthlyUsages = (withWeekly: boolean) => ({
+    usages: {
+      limit_5h: { used_ratio: 0.1, reset_time: hoursFromNow(3) },
+      ...(withWeekly
+        ? { limit_7d: { used_ratio: 0.2, reset_time: hoursFromNow(72) } }
+        : {}),
+      limit_month_total: {
+        used_ratio: 0.4,
+        reset_time: "2027-02-10T00:00:00Z",
+      },
+      limit_month_code: {
+        used_ratio: 0.25,
+        reset_time: "2027-02-10T00:00:00Z",
+      },
+    },
+  });
+
+  it.each([
+    ["with a weekly window", true],
+    ["without a weekly window", false],
+  ])(
+    "measures runway and spendPriority for a fresh reading %s",
+    async (_label, withWeekly) => {
+      const report = await testAdapter({
+        fetch: vi.fn(async () => jsonResponse(monthlyUsages(withWeekly))),
+      }).fetchQuota(OPTIONS);
+      expect(report.state).toMatchObject({ status: "fresh", stale: false });
+
+      const interpreted = withQuotaSemantics(report, generatedAt);
+      const monthTotal = interpreted.windows.find(
+        ({ id }) => id === "month_total",
+      );
+      expect(monthTotal).toMatchObject({
+        startsAt: "2027-01-10T00:00:00.000Z",
+        resetsAt: "2027-02-10T00:00:00.000Z",
+      });
+      expect(monthTotal?.windowSeconds).toBeUndefined();
+      expect(monthTotal?.pace).toMatchObject({ cycleSeconds: 31 * 86_400 });
+      expect(monthTotal?.pace?.status).not.toBe("unknown");
+
+      const [scope] = interpreted.quotaSemantics?.effectiveAvailability ?? [];
+      expect(scope?.boundedBy).toEqual(
+        withWeekly
+          ? ["five_hour", "weekly", "month_total"]
+          : ["five_hour", "month_total"],
+      );
+      expect(scope?.runway?.status).not.toBe("unknown");
+      expect(scope?.selection).toMatchObject({ status: "known" });
+      expect(scope?.selection?.spendPriority).toEqual(expect.any(Number));
+
+      const toon = renderQuotaToon(
+        { generatedAt, schemaVersion: 5, providers: [interpreted] },
+        "quota-axi",
+        false,
+      );
+      expect(toon).toMatch(/kimi,all_models,60,\d/);
+      expect(toon).not.toContain("unmeasurable");
+      expect(toon).toContain(
+        "kimi,all,share,month_code of month_total · 25,none",
+      );
+    },
+  );
+
+  it("clamps a month-end reset into the shorter previous month", () => {
+    const start = (resetTime: string) =>
+      normalizeKimiPayload({
+        usages: {
+          limit_month_total: { used_ratio: 0.4, reset_time: resetTime },
+        },
+      }).windows[0]?.startsAt;
+    expect(start("2027-03-31T07:00:00Z")).toBe("2027-02-28T07:00:00.000Z");
+    expect(start("2028-03-31T07:00:00Z")).toBe("2028-02-29T07:00:00.000Z");
+    expect(start("2027-01-31T07:00:00Z")).toBe("2026-12-31T07:00:00.000Z");
+  });
+
+  it("invents no cycle for a monthly total without a reset", async () => {
+    const report = await testAdapter({
+      fetch: vi.fn(async () =>
+        jsonResponse({
+          usages: {
+            limit_5h: { used_ratio: 0.1, reset_time: hoursFromNow(3) },
+            limit_month_total: { used_ratio: 0.4 },
+          },
+        }),
+      ),
+    }).fetchQuota(OPTIONS);
+
+    const interpreted = withQuotaSemantics(report, generatedAt);
+    const monthTotal = interpreted.windows.find(
+      ({ id }) => id === "month_total",
+    );
+    expect(monthTotal?.startsAt).toBeUndefined();
+    expect(monthTotal?.windowSeconds).toBeUndefined();
+    expect(monthTotal?.pace).toEqual({
+      status: "unknown",
+      reason: "missing_cycle",
+    });
+    expect(
+      interpreted.quotaSemantics?.effectiveAvailability[0]?.selection,
+    ).toMatchObject({
+      status: "unknown",
+      unmeasurableWindowIds: ["month_total"],
+    });
+  });
+
+  it("keeps a stale reading's monthly pace unknown", async () => {
+    const report = await testAdapter({
+      fetch: vi.fn(async () => jsonResponse(monthlyUsages(false))),
+    }).fetchQuota(OPTIONS);
+    const stale: ProviderQuota = {
+      ...report,
+      state: { ...report.state, status: "stale", stale: true },
+    };
+
+    const monthTotal = withQuotaSemantics(stale, generatedAt).windows.find(
+      ({ id }) => id === "month_total",
+    );
+    expect(monthTotal?.pace).toEqual({ status: "unknown", reason: "stale" });
+  });
+});
+
 describe("Kimi payload normalization", () => {
   it("normalizes a principal weekly detail and flags omitted limits", () => {
     expect(normalizeKimiPayload({ usage: { limit: 250, used: 55 } })).toEqual({
+      kind: "windows",
       windows: [
         {
           id: "weekly",
@@ -590,6 +1052,288 @@ describe("Kimi payload normalization", () => {
       ],
       diagnostics: [{ code: "limits_missing" }],
     });
+  });
+
+  it("normalizes the current usages map without inventing absent windows", () => {
+    expect(normalizeKimiPayload(CURRENT_USAGES_PAYLOAD)).toEqual({
+      kind: "windows",
+      windows: [
+        {
+          id: "five_hour",
+          label: "session",
+          kind: "session",
+          percentUsed: 30,
+          percentRemaining: 70,
+          windowSeconds: 18_000,
+          resetsAt: "2026-09-11T18:00:00.000Z",
+        },
+        {
+          id: "weekly",
+          label: "week",
+          kind: "weekly",
+          percentUsed: 20,
+          percentRemaining: 80,
+          windowSeconds: 604_800,
+          resetsAt: "2026-09-17T00:00:00.000Z",
+        },
+        {
+          id: "month_total",
+          label: "month",
+          kind: "monthly",
+          percentUsed: 40,
+          percentRemaining: 60,
+          startsAt: "2026-09-01T00:00:00.000Z",
+          resetsAt: "2026-10-01T00:00:00.000Z",
+        },
+        {
+          id: "month_code",
+          label: "code month",
+          kind: "monthly",
+          percentUsed: 25,
+          shareOf: "month_total",
+          resetsAt: "2026-10-01T00:00:00.000Z",
+        },
+      ],
+      diagnostics: [],
+    });
+    expect(
+      normalizeKimiPayload({
+        usages: {
+          limit_7d: { used_ratio: 0.2, reset_time: "2026-09-17T00:00:00Z" },
+        },
+      }).windows.map(({ id }) => id),
+    ).toEqual(["weekly"]);
+  });
+
+  it("does not leak binary-decimal used_ratio noise into JSON or TOON", async () => {
+    const report = await testAdapter({
+      fetch: vi.fn(async () =>
+        jsonResponse({
+          usages: {
+            limit_5h: {
+              used_ratio: 0.3,
+              reset_time: "2026-09-16T20:00:00Z",
+            },
+            limit_7d: {
+              used_ratio: 0.57,
+              reset_time: "2026-09-20T00:00:00Z",
+            },
+            limit_month_total: {
+              used_ratio: 0.4,
+              reset_time: "2026-10-01T00:00:00Z",
+            },
+          },
+        }),
+      ),
+    }).fetchQuota(OPTIONS);
+
+    const weekly = report.windows.find(({ id }) => id === "weekly");
+    expect(weekly).toMatchObject({
+      percentUsed: 57,
+      percentRemaining: 43,
+    });
+    expect(JSON.stringify(weekly)).not.toContain("56.99999999999999");
+    expect(JSON.stringify(weekly)).not.toContain("43.00000000000001");
+
+    const generatedAt = new Date(NOW).toISOString();
+    const response = {
+      generatedAt,
+      schemaVersion: 5 as const,
+      providers: [withQuotaSemantics(report, generatedAt)],
+    };
+    const json = JSON.stringify(quotaJsonReport(response, false));
+    const toon = renderQuotaToon(response, "quota-axi");
+    expect(json).toContain('"effectivePercentRemaining":43');
+    expect(json).not.toContain("43.00000000000001");
+    expect(toon).toContain("kimi,all_models,43,");
+    expect(toon).not.toContain("43.00000000000001");
+
+    expect(
+      normalizeKimiPayload({
+        usages: { limit_7d: { used_ratio: 0.571 } },
+      }).windows[0],
+    ).toMatchObject({ percentUsed: 57.1, percentRemaining: 42.9 });
+
+    expect(
+      normalizeKimiPayload({
+        usages: { limit_7d: { used_ratio: 0.873 } },
+      }).windows[0],
+    ).toMatchObject({ percentUsed: 87.3, percentRemaining: 12.7 });
+  });
+
+  it("keeps monthly total and code as distinct windows and starts the total one subscription month before its reset", () => {
+    const normalized = normalizeKimiPayload({
+      usages: {
+        limit_month_total: {
+          used_ratio: 0.4,
+          reset_time: "2026-10-01T00:00:00Z",
+        },
+        limit_month_code: {
+          used_ratio: 0.25,
+          reset_time: "2026-10-01T00:00:00Z",
+        },
+      },
+    });
+    expect(normalized.windows).toEqual([
+      {
+        id: "month_total",
+        label: "month",
+        kind: "monthly",
+        percentUsed: 40,
+        percentRemaining: 60,
+        startsAt: "2026-09-01T00:00:00.000Z",
+        resetsAt: "2026-10-01T00:00:00.000Z",
+      },
+      {
+        id: "month_code",
+        label: "code month",
+        kind: "monthly",
+        percentUsed: 25,
+        shareOf: "month_total",
+        resetsAt: "2026-10-01T00:00:00.000Z",
+      },
+    ]);
+    expect(
+      normalized.windows.every((window) => window.windowSeconds === undefined),
+    ).toBe(true);
+  });
+
+  it("reports the monthly code share as used only, never as its own headroom", () => {
+    const [monthTotal, monthCode] = normalizeKimiPayload({
+      usages: {
+        limit_month_total: {
+          used_ratio: 0.4,
+          reset_time: "2026-10-01T00:00:00Z",
+        },
+        limit_month_code: {
+          used_ratio: 0.25,
+          reset_time: "2026-10-01T00:00:00Z",
+        },
+      },
+    }).windows;
+
+    expect(monthTotal).toMatchObject({
+      id: "month_total",
+      percentUsed: 40,
+      percentRemaining: 60,
+    });
+    expect(monthCode?.percentUsed).toBe(25);
+    expect(monthCode?.percentRemaining).toBeUndefined();
+    expect(monthCode?.shareOf).toBe("month_total");
+  });
+
+  it("reads only the snake_case wire ratio", () => {
+    expect(() =>
+      normalizeKimiPayload({ usages: { limit_7d: { usedRatio: 0.2 } } }),
+    ).toThrow("schema_invalid");
+  });
+
+  it("prefers a valid usages map over a legacy usage object", () => {
+    const normalized = normalizeKimiPayload({
+      ...CURRENT_USAGES_PAYLOAD,
+      usage: { used: "20", limit: "100", resetTime: "2026-09-17T00:00:00Z" },
+    });
+    expect(normalized.windows.map(({ id }) => id)).toEqual([
+      "five_hour",
+      "weekly",
+      "month_total",
+      "month_code",
+    ]);
+    expect(normalized.windows[1]?.percentRemaining).toBe(80);
+  });
+
+  it("falls back to legacy usage when the usages map has no valid windows", () => {
+    expect(
+      normalizeKimiPayload({
+        usages: { limit_7d: { reset_time: "2026-09-17T00:00:00Z" } },
+        usage: { used: "20", limit: "100" },
+      }).windows,
+    ).toEqual([
+      {
+        id: "weekly",
+        label: "week",
+        kind: "weekly",
+        percentUsed: 20,
+        percentRemaining: 80,
+        windowSeconds: 604_800,
+      },
+    ]);
+  });
+
+  it("names a declared usages limit it cannot parse instead of dropping it", () => {
+    const normalized = normalizeKimiPayload({
+      usages: {
+        limit_5h: { used_ratio: 0.3, reset_time: "2026-09-11T18:00:00Z" },
+        limit_7d: { reset_time: "2026-09-17T00:00:00Z" },
+      },
+    });
+    expect(normalized.windows.map(({ id }) => id)).toEqual(["five_hour"]);
+    expect(normalized.diagnostics).toEqual([
+      { code: "usage_detail_invalid", key: "limit_7d" },
+    ]);
+  });
+
+  it("carries an unparsed usages limit into a legacy-usage reading", () => {
+    const normalized = normalizeKimiPayload({
+      usages: { limit_7d: { reset_time: "2026-09-17T00:00:00Z" } },
+      usage: { used: "20", limit: "100" },
+    });
+    expect(normalized.windows.map(({ id }) => id)).toEqual(["weekly"]);
+    expect(normalized.diagnostics).toEqual([
+      { code: "usage_detail_invalid", key: "limit_7d" },
+      { code: "limits_missing" },
+    ]);
+  });
+
+  it("ignores an unrecognized usages key instead of reporting it as a window", () => {
+    const normalized = normalizeKimiPayload({
+      usages: {
+        limit_7d: { used_ratio: 0.2, reset_time: "2026-09-17T00:00:00Z" },
+        weekly: { used_ratio: 0.95 },
+        five_hour: { used_ratio: 0.99 },
+      },
+    });
+    expect(normalized.windows).toEqual([
+      {
+        id: "weekly",
+        label: "week",
+        kind: "weekly",
+        percentUsed: 20,
+        percentRemaining: 80,
+        windowSeconds: 604_800,
+        resetsAt: "2026-09-17T00:00:00.000Z",
+      },
+    ]);
+    expect(normalized.diagnostics).toEqual([]);
+  });
+
+  it.each([
+    {},
+    { usages: {} },
+    { usages: null },
+    { goods_version: "2", usages: {} },
+  ])(
+    "reports an established-empty body as no_quota instead of schema_invalid: %j",
+    (payload) => {
+      expect(normalizeKimiPayload(payload)).toEqual({ kind: "no_quota" });
+    },
+  );
+
+  it("rejects payloads that declare quota fields this reader cannot parse", () => {
+    expect(() =>
+      normalizeKimiPayload({
+        usages: { limit_7d: { reset_time: "2026-09-17T00:00:00Z" } },
+      }),
+    ).toThrow("schema_invalid");
+    expect(() => normalizeKimiPayload({ usage: { used: 1 } })).toThrow(
+      "schema_invalid",
+    );
+    expect(() =>
+      normalizeKimiPayload({ usage: { limit: 0, used: 0 } }),
+    ).toThrow("schema_invalid");
+    expect(() => normalizeKimiPayload({ unknown_key: 1 })).toThrow(
+      "schema_invalid",
+    );
   });
 
   it.each([
@@ -815,6 +1559,7 @@ describe("Kimi payload normalization", () => {
 describe("Kimi credential outcomes and cache policy", () => {
   it.each([
     ["missing", "kimi_credential_unavailable"],
+    ["invalid", "pi_kimi_credential_invalid"],
     ["unsupported", "unsupported_credential_type"],
   ] as const)(
     "makes no request for %s credentials and retires cache",
@@ -856,7 +1601,7 @@ describe("Kimi credential outcomes and cache policy", () => {
         error: "credential_resolution_failed",
         refreshedAt: cached.state.refreshedAt,
         untrustedWindowIds: ["limit:2"],
-        sourcesTried: ["pi:kimi-coding", "cache"],
+        sourcesTried: ["pi:kimi-coding", "kimi-code-cli", "cache"],
       },
     });
   });
@@ -914,6 +1659,8 @@ describe("Kimi credential outcomes and cache policy", () => {
     const windows = [
       quotaWindow("five_hour", "session"),
       quotaWindow("weekly", "weekly"),
+      // No reset and no declared duration: nothing bounds how long it stays
+      // true, so it is never served from cache.
       quotaWindow("limit:2", "unknown"),
     ];
     const justBeforeFiveHours = await transientWithCache(
@@ -922,7 +1669,6 @@ describe("Kimi credential outcomes and cache policy", () => {
     expect(justBeforeFiveHours.windows.map(({ id }) => id)).toEqual([
       "five_hour",
       "weekly",
-      "limit:2",
     ]);
 
     const atFiveHours = await transientWithCache(
@@ -935,6 +1681,55 @@ describe("Kimi credential outcomes and cache policy", () => {
     );
     expect(atSevenDays.state.status).toBe("error");
     expect(atSevenDays.windows).toEqual([]);
+  });
+
+  it("keeps the five-hour bound for a resetless monthly window", async () => {
+    const windows = [
+      quotaWindow("month_total", "monthly"),
+      quotaWindow("weekly", "weekly"),
+    ];
+    const justBeforeFiveHours = await transientWithCache(
+      cachedQuota(windows, NOW - 18_000_000 + 1),
+    );
+    expect(justBeforeFiveHours.windows.map(({ id }) => id)).toEqual([
+      "month_total",
+      "weekly",
+    ]);
+
+    const atFiveHours = await transientWithCache(
+      cachedQuota(windows, NOW - 18_000_000),
+    );
+    expect(atFiveHours.windows.map(({ id }) => id)).toEqual(["weekly"]);
+
+    const onlyMonthly = await transientWithCache(
+      cachedQuota([quotaWindow("month_total", "monthly")], NOW - 18_000_000),
+    );
+    expect(onlyMonthly).toMatchObject({
+      source: "unavailable",
+      windows: [],
+      state: { status: "error", stale: false, error: "provider_unavailable" },
+    });
+  });
+
+  it("names only surviving or unwindowed untrusted ids in a stale report", async () => {
+    const cached = cachedQuota([
+      quotaWindow("weekly", "weekly", "2027-02-08T04:05:06.000Z"),
+      quotaWindow("limit:2", "unknown"),
+    ]);
+    cached.state.untrustedWindowIds = ["limit:2", "usages:limit_5h"];
+    const report = await transientWithCache(cached);
+
+    expect(report.windows.map(({ id }) => id)).toEqual(["weekly"]);
+    expect(report.state.untrustedWindowIds).toEqual(["usages:limit_5h"]);
+  });
+
+  it("serves no stale report from a snapshot written in the future", async () => {
+    const report = await transientWithCache(cachedQuota(undefined, NOW + 1));
+    expect(report).toMatchObject({
+      source: "unavailable",
+      windows: [],
+      state: { status: "error", stale: false, error: "provider_unavailable" },
+    });
   });
 
   it("returns the current failure when no stale window survives", async () => {
@@ -973,10 +1768,32 @@ describe("Kimi credential outcomes and cache policy", () => {
     expect(report.source).toBe("unavailable");
   });
 
+  it("keeps an environment it could not confirm in view rather than reading it as absent", async () => {
+    const unconfirmed = testAdapter({
+      broker: broker({ status: "missing" }),
+      cliCredentialSource: cliCredentialSource({
+        status: "environment_unconfirmed",
+      }),
+    });
+    const absent = testAdapter({
+      broker: broker({ status: "missing" }),
+      cliCredentialSource: cliCredentialSource({ status: "missing" }),
+    });
+
+    expect(
+      providerPresence(await unconfirmed.fetchQuota(OPTIONS), unconfirmed),
+    ).toBe("attention");
+    // Both stores plainly empty is the absence that may still fold.
+    expect(providerPresence(await absent.fetchQuota(OPTIONS), absent)).toBe(
+      "absent",
+    );
+  });
+
   it("reports auth availability without a path or credential", async () => {
     for (const [inspection, expected] of [
       ["available", { status: "available" }],
       ["missing", { status: "missing" }],
+      ["invalid", { status: "invalid", error: "pi_kimi_credential_invalid" }],
       [
         "unsupported",
         { status: "invalid", error: "unsupported_credential_type" },
@@ -1026,16 +1843,20 @@ describe("Kimi credential outcomes and cache policy", () => {
   );
 
   it.each([
-    ["invalid", "kimi_code_cli_credential_invalid"],
-    ["expired", "kimi_code_cli_credential_expired"],
+    ["invalid", { status: "invalid" }, "kimi_code_cli_credential_invalid"],
+    [
+      "expired",
+      { status: "expired", refreshable: false },
+      "kimi_code_cli_credential_expired",
+    ],
   ] as const)(
     "fails closed for a %s CLI credential after Pi is unavailable",
-    async (status, error) => {
+    async (_label, input, error) => {
       const request = vi.fn();
       const remove = vi.fn();
       const report = await testAdapter({
         broker: broker({ status: "missing" }),
-        cliCredentialSource: cliCredentialSource({ status }),
+        cliCredentialSource: cliCredentialSource(input),
         fetch: request,
         deleteCachedProvider: remove,
       }).fetchQuota(OPTIONS);
@@ -1048,6 +1869,61 @@ describe("Kimi credential outcomes and cache policy", () => {
         error,
         sourcesTried: ["pi:kimi-coding", "kimi-code-cli"],
       });
+    },
+  );
+
+  it("keeps a malformed Pi store degraded when the CLI returns quota", async () => {
+    const request = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        jsonResponse(SUCCESS_PAYLOAD),
+    );
+    const report = await testAdapter({
+      broker: createPiKimiCredentialBroker({
+        readFile: async () => Buffer.from("{malformed"),
+      }),
+      cliCredentialSource: cliCredentialSource({
+        status: "available",
+        accessToken: "working-cli-token",
+      }),
+      fetch: request,
+    }).fetchQuota(OPTIONS);
+    const interpreted = withQuotaSemantics(report, new Date(NOW).toISOString());
+
+    expect(report.state.status).toBe("fresh");
+    expect(report.windows.length).toBeGreaterThan(0);
+    expect(interpreted.state.degradedSources).toEqual([
+      { source: "pi:kimi-coding", error: "pi_kimi_credential_invalid" },
+    ]);
+  });
+
+  it.each([{}, null, "invalid", []])(
+    "keeps structurally invalid Pi auth %# degraded when the CLI returns quota",
+    async (entry) => {
+      const request = vi.fn(
+        async (_input: RequestInfo | URL, _init?: RequestInit) =>
+          jsonResponse(SUCCESS_PAYLOAD),
+      );
+      const report = await testAdapter({
+        broker: createPiKimiCredentialBroker({
+          readFile: async () =>
+            Buffer.from(JSON.stringify({ "kimi-coding": entry })),
+        }),
+        cliCredentialSource: cliCredentialSource({
+          status: "available",
+          accessToken: "working-cli-token",
+        }),
+        fetch: request,
+      }).fetchQuota(OPTIONS);
+      const interpreted = withQuotaSemantics(
+        report,
+        new Date(NOW).toISOString(),
+      );
+
+      expect(report.state.status).toBe("fresh");
+      expect(report.windows.length).toBeGreaterThan(0);
+      expect(interpreted.state.degradedSources).toEqual([
+        { source: "pi:kimi-coding", error: "pi_kimi_credential_invalid" },
+      ]);
     },
   );
 
@@ -1078,9 +1954,23 @@ describe("Kimi credential outcomes and cache policy", () => {
         source: "pi:kimi-coding",
         status: "skipped",
         error: "pi_kimi_credential_expired",
+        credentialPresent: true,
       },
       { source: "kimi-code-cli", status: "success" },
     ]);
+
+    const rendered = renderQuotaToon(
+      {
+        generatedAt: new Date(NOW).toISOString(),
+        schemaVersion: 5,
+        providers: [withQuotaSemantics(report, new Date(NOW).toISOString())],
+      },
+      "quota-axi",
+      false,
+    );
+    expect(rendered).toContain(
+      'kimi,all,degraded_source,"pi:kimi-coding · pi_kimi_credential_expired",none',
+    );
   });
 
   it("reports Pi OAuth expiry when no other credential is usable", async () => {
@@ -1098,6 +1988,256 @@ describe("Kimi credential outcomes and cache policy", () => {
       error: "pi_kimi_credential_expired",
       sourcesTried: ["pi:kimi-coding", "kimi-code-cli"],
     });
+  });
+
+  it("keeps a rejected non-refreshable soft-expired probe as sign-out", async () => {
+    const request = vi.fn(async () => new Response(null, { status: 401 }));
+    const remove = vi.fn();
+    const report = await testAdapter({
+      broker: broker({ status: "missing" }),
+      cliCredentialSource: cliCredentialSource({
+        status: "expired",
+        refreshable: false,
+        accessToken: "dead-non-refreshable-cli-token",
+      }),
+      fetch: request,
+      deleteCachedProvider: remove,
+    }).fetchQuota(OPTIONS);
+
+    expect(request).toHaveBeenCalledOnce();
+    expect(remove).toHaveBeenCalledWith("kimi");
+    expect(report.state).toMatchObject({
+      status: "auth_required",
+      stale: false,
+      error: "provider_auth_rejected",
+    });
+    expect(report.state.authStatus).toBeUndefined();
+  });
+
+  it("reports a rejected refreshable CLI soft-expiry probe as expired_refreshable, not sign-out", async () => {
+    const request = vi.fn(async () => new Response(null, { status: 401 }));
+    const remove = vi.fn();
+    const report = await testAdapter({
+      broker: broker({ status: "missing" }),
+      cliCredentialSource: cliCredentialSource({
+        status: "expired",
+        refreshable: true,
+        accessToken: "soft-expired-cli-token",
+      }),
+      fetch: request,
+      deleteCachedProvider: remove,
+    }).fetchQuota(OPTIONS);
+
+    expect(request).toHaveBeenCalledOnce();
+    expect(remove).not.toHaveBeenCalled();
+    expect(report.source).toBe("unavailable");
+    expect(report.windows).toEqual([]);
+    expect(report.state).toMatchObject({
+      status: "unavailable",
+      stale: false,
+      error: "kimi_code_cli_credential_expired",
+      authStatus: "expired_refreshable",
+      sourcesTried: ["pi:kimi-coding", "kimi-code-cli"],
+    });
+    expect(report.attempts).toEqual([
+      {
+        source: "pi:kimi-coding",
+        status: "skipped",
+        error: "kimi_credential_unavailable",
+      },
+      {
+        source: "kimi-code-cli",
+        status: "failed",
+        error: "kimi_code_cli_credential_expired",
+      },
+    ]);
+    expect(JSON.stringify(report)).not.toContain("soft-expired-cli-token");
+  });
+
+  it("serves eligible stale cache under a rejected refreshable soft-expiry probe", async () => {
+    const request = vi.fn(async () => new Response(null, { status: 401 }));
+    const remove = vi.fn();
+    const report = await testAdapter({
+      broker: broker({ status: "missing" }),
+      cliCredentialSource: cliCredentialSource({
+        status: "expired",
+        refreshable: true,
+        accessToken: "soft-expired-cli-token",
+      }),
+      fetch: request,
+      deleteCachedProvider: remove,
+      readCachedProvider: () => cachedQuota(),
+    }).fetchQuota(OPTIONS);
+
+    expect(remove).not.toHaveBeenCalled();
+    expect(report).toMatchObject({
+      source: "cache",
+      windows: cachedQuota().windows,
+      state: {
+        status: "stale",
+        stale: true,
+        error: "kimi_code_cli_credential_expired",
+        authStatus: "expired_refreshable",
+        sourcesTried: ["pi:kimi-coding", "kimi-code-cli", "cache"],
+      },
+    });
+  });
+
+  it("keeps probing a refreshable soft-expired CLI token that still answers", async () => {
+    const request = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        jsonResponse(SUCCESS_PAYLOAD),
+    );
+    const report = await testAdapter({
+      broker: broker({ status: "missing" }),
+      cliCredentialSource: cliCredentialSource({
+        status: "expired",
+        refreshable: true,
+        accessToken: "still-live-cli-token",
+      }),
+      fetch: request,
+    }).fetchQuota(OPTIONS);
+
+    expect(request).toHaveBeenCalledOnce();
+    expect(
+      new Headers(request.mock.calls[0][1]?.headers).get("authorization"),
+    ).toBe("Bearer still-live-cli-token");
+    expect(report.state).toMatchObject({
+      status: "fresh",
+      sourcesTried: ["pi:kimi-coding", "kimi-code-cli"],
+    });
+    expect(report.attempts).toEqual([
+      {
+        source: "pi:kimi-coding",
+        status: "skipped",
+        error: "kimi_credential_unavailable",
+      },
+      { source: "kimi-code-cli", status: "success" },
+    ]);
+  });
+
+  it("propagates the Pi refreshable flag to expired_refreshable on a rejected probe", async () => {
+    const request = vi.fn(async () => new Response(null, { status: 401 }));
+    const remove = vi.fn();
+    const report = await testAdapter({
+      broker: broker({
+        status: "expired",
+        refreshable: true,
+        credential: "soft-expired-pi-token",
+      }),
+      cliCredentialSource: cliCredentialSource({ status: "missing" }),
+      fetch: request,
+      deleteCachedProvider: remove,
+    }).fetchQuota(OPTIONS);
+
+    expect(request).toHaveBeenCalledOnce();
+    expect(remove).not.toHaveBeenCalled();
+    expect(report.state).toMatchObject({
+      status: "unavailable",
+      stale: false,
+      error: "pi_kimi_credential_expired",
+      authStatus: "expired_refreshable",
+      sourcesTried: ["pi:kimi-coding", "kimi-code-cli"],
+    });
+    expect(report.attempts).toEqual([
+      {
+        source: "pi:kimi-coding",
+        status: "failed",
+        error: "pi_kimi_credential_expired",
+      },
+      {
+        source: "kimi-code-cli",
+        status: "skipped",
+        error: "kimi_code_cli_credential_unavailable",
+      },
+    ]);
+    expect(JSON.stringify(report)).not.toContain("soft-expired-pi-token");
+  });
+
+  it("reports both sources soft-expired at once as expired_refreshable without retiring cache", async () => {
+    const request = vi.fn(async () => new Response(null, { status: 401 }));
+    const remove = vi.fn();
+    const report = await testAdapter({
+      broker: broker({
+        status: "expired",
+        refreshable: true,
+        credential: "soft-expired-pi-token",
+      }),
+      cliCredentialSource: cliCredentialSource({
+        status: "expired",
+        refreshable: true,
+        accessToken: "soft-expired-cli-token",
+      }),
+      fetch: request,
+      deleteCachedProvider: remove,
+    }).fetchQuota(OPTIONS);
+
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(remove).not.toHaveBeenCalled();
+    expect(report.source).toBe("unavailable");
+    expect(report.windows).toEqual([]);
+    expect(report.state).toMatchObject({
+      status: "unavailable",
+      stale: false,
+      error: "pi_kimi_credential_expired",
+      authStatus: "expired_refreshable",
+      sourcesTried: ["pi:kimi-coding", "kimi-code-cli"],
+    });
+    expect(report.attempts).toEqual([
+      {
+        source: "pi:kimi-coding",
+        status: "failed",
+        error: "pi_kimi_credential_expired",
+      },
+      {
+        source: "kimi-code-cli",
+        status: "failed",
+        error: "kimi_code_cli_credential_expired",
+      },
+    ]);
+
+    const rendered = renderQuotaToon(
+      {
+        generatedAt: new Date(NOW).toISOString(),
+        schemaVersion: 5,
+        providers: [withQuotaSemantics(report, new Date(NOW).toISOString())],
+      },
+      "quota-axi",
+      false,
+    );
+    expect(rendered).toContain("(auth expired_refreshable)");
+    expect(rendered).not.toContain("auth_required");
+  });
+
+  it("lets a CLI transient outrank a rejected refreshable Pi expiry", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(null, { status: 401 }))
+      .mockResolvedValueOnce(new Response(null, { status: 503 }));
+    const remove = vi.fn();
+    const report = await testAdapter({
+      broker: broker({
+        status: "expired",
+        refreshable: true,
+        credential: "soft-expired-pi-token",
+      }),
+      cliCredentialSource: cliCredentialSource({
+        status: "available",
+        accessToken: "cli-token",
+      }),
+      fetch: request,
+      deleteCachedProvider: remove,
+    }).fetchQuota(OPTIONS);
+
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(remove).not.toHaveBeenCalled();
+    expect(report.state).toMatchObject({
+      status: "error",
+      stale: false,
+      error: "provider_unavailable",
+    });
+    expect(report.state.authStatus).toBeUndefined();
+    expect(report.state.error).not.toBe("pi_kimi_credential_expired");
   });
 
   it("preserves stale cache after a CLI credential read failure", async () => {
@@ -1129,6 +2269,69 @@ describe("Kimi credential outcomes and cache policy", () => {
           error: "credential_resolution_failed",
         },
       ],
+    });
+  });
+
+  it("preserves stale cache for a CLI environment it cannot read", async () => {
+    const unreadableEnvironments = [
+      ["unsupported_storage", "kimi_code_cli_credential_storage_unsupported"],
+      ["unrecognized_region", "kimi_code_cli_region_unrecognized"],
+      ["invalid_config", "kimi_code_cli_config_invalid"],
+    ] as const;
+
+    for (const [status, error] of unreadableEnvironments) {
+      const remove = vi.fn();
+      const report = await testAdapter({
+        broker: broker({ status: "missing" }),
+        cliCredentialSource: cliCredentialSource({ status }),
+        readCachedProvider: () => cachedQuota(),
+        deleteCachedProvider: remove,
+      }).fetchQuota(OPTIONS);
+
+      expect(remove).not.toHaveBeenCalled();
+      expect(report).toMatchObject({
+        source: "cache",
+        windows: [{ id: "five_hour" }, { id: "weekly" }],
+        state: {
+          status: "stale",
+          stale: true,
+          error,
+          sourcesTried: ["pi:kimi-coding", "kimi-code-cli", "cache"],
+        },
+        attempts: [
+          { source: "pi:kimi-coding", status: "skipped" },
+          {
+            source: "kimi-code-cli",
+            status: "skipped",
+            error,
+            credentialPresent: true,
+          },
+        ],
+      });
+    }
+  });
+
+  /**
+   * The environment read is filesystem I/O like every other step of the run,
+   * and a `config.toml` that never answers - a FIFO, or a stalled mount - must
+   * expire with the operation rather than outlive it.
+   */
+  it("bounds a Kimi Code environment read that never answers", async () => {
+    const stalled: KimiCodeCliCredentialSource = {
+      select: vi.fn(() => new Promise<KimiCodeSelection>(() => {})),
+      resolve: vi.fn(async () => ({ status: "missing" }) as const),
+      inspect: vi.fn(async () => "missing" as const),
+    };
+
+    const report = await testAdapter({
+      cliCredentialSource: stalled,
+      deadlineMs: 20,
+    }).fetchQuota(OPTIONS);
+
+    expect(report).toMatchObject({
+      source: "unavailable",
+      windows: [],
+      state: { status: "error", stale: false, error: "request_timeout" },
     });
   });
 
@@ -1177,6 +2380,8 @@ function testAdapter(
   });
 }
 
+const TEST_CREDENTIAL_CONTEXT_ID = "a".repeat(64);
+
 function broker(
   resolution: KimiCredentialResolution,
   inspection: KimiCredentialInspection = resolution.status === "available"
@@ -1189,15 +2394,45 @@ function broker(
   };
 }
 
+/**
+ * A resolved CLI credential always names the base URL its environment logged in
+ * against; these cases are about credential priority rather than about the
+ * environment, so they take the default deployment unless they say otherwise.
+ */
+type CliCredentialInput =
+  | { status: "available"; accessToken: string; baseUrl?: string }
+  | Exclude<KimiCodeCliCredentialResolution, { status: "available" }>;
+
 function cliCredentialSource(
-  resolution: KimiCodeCliCredentialResolution,
-  inspection: KimiCodeCliCredentialInspection = resolution.status,
+  input: CliCredentialInput,
+  inspection: KimiCodeCliCredentialInspection = input.status,
 ): KimiCodeCliCredentialSource {
+  const resolution: KimiCodeCliCredentialResolution =
+    input.status === "available"
+      ? { ...input, baseUrl: input.baseUrl ?? "https://api.kimi.com/coding/v1" }
+      : input.status === "expired"
+        ? {
+            ...input,
+            baseUrl: input.baseUrl ?? "https://api.kimi.com/coding/v1",
+          }
+        : input;
   return {
+    select: vi.fn(async () => TEST_SELECTION),
     resolve: vi.fn(async () => resolution),
     inspect: vi.fn(async () => inspection),
   };
 }
+
+const TEST_SELECTION: KimiCodeSelection = {
+  codeHome: "/synthetic/kimi-code-home",
+  environment: {
+    status: "resolved",
+    credentialFileName: "kimi-code",
+    baseUrl: "https://api.kimi.com/coding/v1",
+    confirmed: true,
+  },
+  contextId: TEST_CREDENTIAL_CONTEXT_ID,
+};
 
 function jsonResponse(payload: unknown): Response {
   return new Response(JSON.stringify(payload), {

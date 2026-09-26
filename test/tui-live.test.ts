@@ -6,7 +6,7 @@ import { scrollFrame, scrollHint } from "../src/tui-viewport.js";
 const ENTER_SCREEN = "\x1b[?1049h";
 const LEAVE_SCREEN = "\x1b[?1049l";
 const CLEAR_SCREEN = "\x1b[H\x1b[2J";
-const HINT = "Press q to quit · refreshing every 5m";
+const HINT = "Press r to refresh · q to quit · refreshing every 5m";
 
 type Harness = {
   io: LiveTuiIo;
@@ -197,6 +197,115 @@ describe("live terminal report loop", () => {
     expect(io.pendingTimers()).toBe(0);
   });
 
+  it("refreshes immediately on r", async () => {
+    const io = harness();
+    const source = counting();
+
+    const run = runLiveTui<number>({
+      load: source.load,
+      render: (value) => `frame ${value}`,
+      intervalMillis: 300_000,
+      io: io.io,
+    });
+    await flush();
+
+    io.press("r");
+    await flush();
+    expect(source.calls()).toBe(2);
+    expect(io.frame()).toBe("frame 2");
+    expect(io.pendingTimers()).toBe(1);
+
+    io.press("q");
+    await run;
+  });
+
+  it("tells the loader why it reads: start, tick, or the operator's r", async () => {
+    const io = harness();
+    const triggers: string[] = [];
+
+    const run = runLiveTui<number>({
+      load: async (trigger) => {
+        triggers.push(trigger);
+        return triggers.length;
+      },
+      render: (value) => `frame ${value}`,
+      intervalMillis: 300_000,
+      io: io.io,
+    });
+    await flush();
+    io.tick();
+    await flush();
+    io.press("r");
+    await flush();
+    io.tick();
+    await flush();
+
+    expect(triggers).toEqual(["start", "tick", "refresh", "tick"]);
+    io.press("q");
+    await run;
+  });
+
+  it("refreshes immediately after a pending scroll repaint", async () => {
+    const io = harness();
+    const source = counting();
+
+    const run = runLiveTui<number>({
+      load: source.load,
+      render: (value) => `frame ${value}`,
+      intervalMillis: 300_000,
+      io: io.io,
+    });
+    await flush();
+
+    io.press("j");
+    io.press("r");
+    await flush();
+    expect(source.calls()).toBe(2);
+    expect(io.frame()).toBe("frame 2");
+
+    io.press("q");
+    await run;
+  });
+
+  it("keeps an r pressed while a refresh is in flight and reads again after the paint", async () => {
+    const io = harness();
+    let calls = 0;
+    const releases: Array<() => void> = [];
+    const run = runLiveTui<number>({
+      load: async () => {
+        calls += 1;
+        const call = calls;
+        await new Promise<void>((resolve) => {
+          releases.push(resolve);
+        });
+        return call;
+      },
+      render: (value) => `frame ${value}`,
+      intervalMillis: 300_000,
+      io: io.io,
+    });
+    await flush();
+    expect(calls).toBe(1);
+
+    io.press("r");
+    await flush();
+    expect(calls).toBe(1);
+
+    releases[0]?.();
+    await flush();
+    expect(io.output()).toContain("frame 1");
+    expect(calls).toBe(2);
+
+    releases[1]?.();
+    await flush();
+    expect(io.frame()).toBe("frame 2");
+    expect(calls).toBe(2);
+    expect(io.pendingTimers()).toBe(1);
+
+    io.press("q");
+    await expect(run).resolves.toBe(2);
+  });
+
   it("repaints on resize without refetching or resetting the interval", async () => {
     const io = harness();
     const source = counting();
@@ -271,6 +380,44 @@ describe("live terminal report loop", () => {
     expect(io.output()).not.toContain("frame");
     expect(io.writes.at(-1)).toContain(LEAVE_SCREEN);
     expect(io.rawModes).toEqual([true, false]);
+  });
+
+  it("runs a caller key's action and repaints without refetching", async () => {
+    const io = harness();
+    const source = counting();
+    let expanded = false;
+    const pressed: string[] = [];
+
+    const run = runLiveTui<number>({
+      load: source.load,
+      render: (value) => `frame ${value} ${expanded ? "open" : "folded"}`,
+      keys: {
+        a: () => {
+          expanded = !expanded;
+          pressed.push("a");
+        },
+        q: () => pressed.push("q"),
+      },
+      intervalMillis: 300_000,
+      io: io.io,
+    });
+    await flush();
+    const armed = io.pendingTimers();
+    expect(io.frame()).toBe("frame 1 folded");
+
+    io.press("a");
+    await flush();
+    expect(io.frame()).toBe("frame 1 open");
+    io.press("za");
+    await flush();
+    expect(io.frame()).toBe("frame 1 folded");
+    expect(source.calls()).toBe(1);
+    expect(io.pendingTimers()).toBe(armed);
+
+    // A key the loop owns keeps its meaning.
+    io.press("q");
+    await expect(run).resolves.toBe(1);
+    expect(pressed).toEqual(["a", "a"]);
   });
 
   it("restores the terminal when a refresh throws", async () => {

@@ -15,14 +15,20 @@ export const TOP_HELP = `usage: quota-axi [quota|auth|models] [flags]
 commands[3]:
   (none)=quota, auth, models
 output:
-  Default TOON reports local quota evidence. models is a deterministic data join; --sort runway is explicit opt-in ordering. --tui renders a live human terminal report instead (q quits).
+  Default TOON reports local quota evidence. Providers that are not set up are omitted and counted in one help line; --full and an explicit --provider list them. --json keeps every provider and sets notSetUp true on the absent ones. models is a deterministic data join; --sort runway is explicit opt-in ordering. --tui renders a live human terminal report instead (r refreshes, q quits); providers that are not set up fold into one line that a or --all expands.
+  Repeated --provider flags accumulate in first-seen order: --provider zai --provider codex equals --provider zai,codex.
 notes:
-  Every quota read, including each --tui refresh, may delegate an expired session's renewal to the vendor CLI that owns it. --no-credential-refresh keeps a read strictly read-only; auth always is.
-flags[12]:
-  --provider <${PROVIDER_IDS.join(",")}>, --json, --full, --tui, --refresh <30s-24h>, --once, --allow-keychain-prompt, --no-credential-refresh, --intelligence <high|medium|low>, --sort <runway>, --help, -v/--version
+  Every quota read, including each --tui refresh, may delegate an expired session's renewal to the vendor CLI that owns it. --no-credential-refresh disables delegated credential refresh; auth is always read-only.
+  {"tui":{"show":"used"}} in ~/.config/quota-axi/config.json (or $XDG_CONFIG_HOME/quota-axi/config.json) makes --tui draw what each window has used instead of what is left; it never changes TOON or JSON.
+  Every read asks the vendor unless --max-age <duration> or QUOTA_AXI_MAX_AGE (the flag wins) opts into reuse: a provider's last successful reading is then served while younger than that bound and the credential selection and local credential files are unchanged, and processes starting together make one vendor read. --full ignores QUOTA_AXI_MAX_AGE, and --tui r always reads the vendor. A reused reading stays fresh and carries reused true plus its original refreshedAt. QUOTA_AXI_SNAPSHOT=<cache-format file> answers every provider from that file instead, for tests and fixtures.
+  --profile-only requires explicit CLAUDE_CONFIG_DIR or CODEX_HOME plus exactly one matching provider. It reads only that credential file: no Keychain, Pi, CLI RPC, fallback, refresh, or cache. With --full --json, non-secret account identity, source, and attempts remain visible; tokens and file contents remain excluded, and ordinary output remains redacted.
+flags[16]:
+  --provider <${PROVIDER_IDS.join(",")}>, --json, --full, --tui, --refresh <30s-24h>, --once, --all, --max-age <0-1h>, --allow-keychain-prompt, --allow-claude-inference, --no-credential-refresh, --profile-only, --intelligence <high|medium|low>, --sort <runway>, --help, -v/--version
 examples:
   quota-axi
   quota-axi --provider claude
+  quota-axi --provider claude --allow-claude-inference
+  CLAUDE_CONFIG_DIR=/path/to/profile quota-axi --provider claude --profile-only --full --json
   quota-axi --provider agy
   quota-axi --provider cursor,copilot,grok,kimi,zai
   quota-axi --json
@@ -30,7 +36,9 @@ examples:
   quota-axi --tui
   quota-axi --tui --refresh 1m
   quota-axi --tui --once
+  quota-axi --tui --all
   quota-axi --no-credential-refresh
+  quota-axi --json --max-age 90s
   quota-axi --tui --no-credential-refresh
   quota-axi auth
   quota-axi models --intelligence high
@@ -77,6 +85,7 @@ export async function main(options: MainOptions = {}): Promise<void> {
  * the SDK own routing, help, version, and error framing.
  */
 export function normalizeArgv(raw: string[]): string[] {
+  if (raw[0] === "--") raw = raw.slice(1);
   if (raw.length === 0) return ["quota"];
   if (findLegacyFlag(raw, (arg) => arg === "--help" || arg === "-h") >= 0) {
     return ["--help"];

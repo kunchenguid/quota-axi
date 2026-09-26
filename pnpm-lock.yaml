@@ -13,6 +13,12 @@ importers:
       axi-sdk-js:
         specifier: ^0.1.10
         version: 0.1.10
+      proxy-from-env:
+        specifier: 2.1.0
+        version: 2.1.0
+      undici:
+        specifier: 6.28.0
+        version: 6.28.0
     devDependencies:
       "@eslint/js":
         specifier: 10.0.1
@@ -23,6 +29,9 @@ importers:
       "@types/node":
         specifier: 22.0.0
         version: 22.0.0
+      "@types/proxy-from-env":
+        specifier: 1.0.4
+        version: 1.0.4
       eslint:
         specifier: 10.1.0
         version: 10.1.0
@@ -870,6 +879,12 @@ packages:
         integrity: sha512-VT7KSYudcPOzP5Q0wfbowyNLaVR8QWUdw+088uFWwfvpY6uCWaXpqV6ieLAu9WBcnTa7H4Z5RLK8I5t2FuOcqw==,
       }
 
+  "@types/proxy-from-env@1.0.4":
+    resolution:
+      {
+        integrity: sha512-TPR9/bCZAr3V1eHN4G3LD3OLicdJjqX1QRXWuNcCYgE66f/K8jO2ZRtHxI2D9MbnuUP6+qiKSS8eUHp6TFHGCw==,
+      }
+
   "@typescript-eslint/eslint-plugin@8.58.0":
     resolution:
       {
@@ -1522,6 +1537,13 @@ packages:
     engines: { node: ">=14" }
     hasBin: true
 
+  proxy-from-env@2.1.0:
+    resolution:
+      {
+        integrity: sha512-cJ+oHTW1VAEa8cJslgmUZrc+sjRKgAKl3Zyse6+PV38hZe/V6Z14TbCuXcan9F9ghlz4QrFr2c92TNF82UkYHA==,
+      }
+    engines: { node: ">=10" }
+
   punycode@2.3.1:
     resolution:
       {
@@ -1671,6 +1693,13 @@ packages:
       {
         integrity: sha512-mIDEX2ek50x0OlRgxryxsenE5XaQD4on5U2inY7RApK3SOJpofyw7uW2AyfMKkhAxXIceo2DeWGVGwyvng1GNQ==,
       }
+
+  undici@6.28.0:
+    resolution:
+      {
+        integrity: sha512-LIY910g9TI13YS95lrMFrs8Rm/u/irgHeTWoKCoteeJ04CUJ92eEfj0rVn+7VKMPBpUPiUoBKfhNyLI23EE/KA==,
+      }
+    engines: { node: ">=18.17" }
 
   uri-js@4.4.1:
     resolution:
@@ -2084,6 +2113,10 @@ snapshots:
   "@types/node@22.0.0":
     dependencies:
       undici-types: 6.11.1
+
+  "@types/proxy-from-env@1.0.4":
+    dependencies:
+      "@types/node": 22.0.0
 
   "@typescript-eslint/eslint-plugin@8.58.0(@typescript-eslint/parser@8.58.0(eslint@10.1.0)(typescript@6.0.3))(eslint@10.1.0)(typescript@6.0.3)":
     dependencies:
@@ -2532,6 +2565,8 @@ snapshots:
 
   prettier@3.8.1: {}
 
+  proxy-from-env@2.1.0: {}
+
   punycode@2.3.1: {}
 
   rollup@4.62.2:
@@ -2624,6 +2659,8 @@ snapshots:
   typescript@6.0.3: {}
 
   undici-types@6.11.1: {}
+
+  undici@6.28.0: {}
 
   uri-js@4.4.1:
     dependencies:

@@ -1,0 +1,17 @@
+{
+  "userStatus": {
+    "teamsTier": "enterprise",
+    "planStatus": {
+      "dailyQuotaRemainingPercent": 80,
+      "weeklyQuotaRemainingPercent": 80,
+      "dailyQuotaResetAtUnix": "1790150400",
+      "weeklyQuotaResetAtUnix": "1790496000",
+      "overageBalanceMicros": "5000000",
+      "acuConsumed": "12",
+      "acuLimit": "100"
+    }
+  },
+  "planInfo": {
+    "billingStrategy": "BILLING_STRATEGY_ACU"
+  }
+}

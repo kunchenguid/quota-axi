@@ -1,0 +1,46 @@
+{
+  "status": "SUCCESS",
+  "response": "Gemini Models\tWeekly Limit Remaining\t0%\n",
+  "command": {
+    "name": "usage",
+    "data": {
+      "groups": [
+        {
+          "name": "Gemini Models",
+          "buckets": [
+            {
+              "id": "gemini-weekly",
+              "window": "weekly",
+              "remaining_fraction": 0,
+              "reset_time": "2026-09-12T00:33:22Z",
+              "description": "You have hit your weekly limit."
+            },
+            {
+              "id": "gemini-5h",
+              "window": "5h",
+              "remaining_fraction": 1,
+              "disabled": true
+            }
+          ]
+        },
+        {
+          "name": "Claude and GPT models",
+          "buckets": [
+            {
+              "id": "3p-weekly",
+              "window": "weekly",
+              "remaining_fraction": 0.9,
+              "reset_time": "2026-09-18T01:34:53Z"
+            },
+            {
+              "id": "3p-5h",
+              "window": "5h",
+              "remaining_fraction": 1,
+              "reset_time": "2026-09-12T04:28:16Z"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

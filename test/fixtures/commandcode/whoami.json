@@ -1,0 +1,10 @@
+{
+  "org": {
+    "id": "org_fixture",
+    "login": "fixture-org"
+  },
+  "user": {
+    "id": "user_fixture",
+    "name": "fixture-user"
+  }
+}

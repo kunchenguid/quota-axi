@@ -389,6 +389,7 @@ describe("Cursor CLI keychain credential source", () => {
       path: cliConfigPath,
       status: "skipped",
       error: "keychain_access_denied",
+      credentialPresent: true,
     });
   });
 
@@ -410,6 +411,7 @@ describe("Cursor CLI keychain credential source", () => {
       path: cliConfigPath,
       status: "invalid",
       error: "json_parse_error",
+      credentialPresent: true,
     });
   });
 
@@ -485,6 +487,7 @@ describe("Cursor CLI keychain credential source", () => {
         path: cliConfigPath,
         status: "invalid",
         error: "json_parse_error",
+        credentialPresent: true,
       },
     });
   });
