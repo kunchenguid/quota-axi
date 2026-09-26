@@ -703,6 +703,8 @@ function toCacheProvider(provider: ProviderQuota): CachedProvider | undefined {
       label: provider.label,
       source: provider.source,
       plan: provider.plan,
+      // `resetsAvailable` is never cached: a banked reset can be spent after
+      // the reading, so only a fresh vendor read reports the count.
       windows: provider.windows,
       credits: provider.credits,
       state: {

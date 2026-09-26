@@ -10,7 +10,7 @@ import {
 import { withQuotaSemantics } from "../src/interpretation.js";
 import { withUsageFetchFailure } from "../src/providers/usage-fetch-failure.js";
 import { providerPresence } from "../src/lib/source-attempts.js";
-import { redactedResponse } from "../src/render.js";
+import { redactedResponse, renderQuotaToon } from "../src/render.js";
 import { PROVIDER_IDS } from "../src/types.js";
 import type { ProviderQuota, QuotaAxiResponse } from "../src/types.js";
 import {
@@ -82,6 +82,203 @@ function displayColumns(text: string): number {
 }
 
 describe("renderQuotaTui structure", () => {
+  it("shows reported Codex resets with the weekly window in TOON and TUI", () => {
+    const response = fixtureResponse();
+    const codex = response.providers.find(
+      (provider) => provider.provider === "codex",
+    );
+    if (!codex) throw new Error("Codex fixture missing");
+    codex.resetsAvailable = 1;
+
+    const toon = renderQuotaToon(response, "quota-axi", false);
+    expect(toon).toMatch(/codex,[^\n]*,resets_available,1 banked reset,none/);
+
+    const tui = renderQuotaTui(response, {
+      timeZone: "America/Los_Angeles",
+    }).split("\n");
+    const weekly = findCardLine(tui, 1, "1 reset");
+    expect(weekly).toContain("week");
+    expect(weekly).toHaveLength(CARD_COLUMNS);
+  });
+
+  it("bounds a large Codex reset count so the card keeps its width", () => {
+    const response = fixtureResponse();
+    const codex = response.providers.find(
+      (provider) => provider.provider === "codex",
+    );
+    if (!codex) throw new Error("Codex fixture missing");
+    codex.resetsAvailable = 123_456;
+
+    expect(renderQuotaToon(response, "quota-axi", false)).toMatch(
+      /codex,[^\n]*,resets_available,123456 banked resets,none/,
+    );
+
+    const tui = renderQuotaTui(response, {
+      timeZone: "America/Los_Angeles",
+    }).split("\n");
+    const weekly = findCardLine(tui, 1, "99+ resets");
+    expect(weekly).toContain("week");
+    expect(weekly).toHaveLength(CARD_COLUMNS);
+    expect(tui.join("\n")).not.toContain("123456");
+  });
+
+  it("shows reported Codex resets on the last window row without a weekly window", () => {
+    const response = fixtureResponse();
+    const codex = response.providers.find(
+      (provider) => provider.provider === "codex",
+    );
+    if (!codex) throw new Error("Codex fixture missing");
+    codex.windows = [
+      {
+        id: "five_hour",
+        label: "session",
+        kind: "session",
+        percentUsed: 40,
+        percentRemaining: 60,
+        resetsAt: "2026-08-06T23:30:00.000Z",
+        windowSeconds: 18000,
+      },
+    ];
+    codex.quotaSemantics = {
+      status: "known",
+      description: "test",
+      effectiveAvailability: [
+        {
+          scope: "all_models",
+          status: "known",
+          effectivePercentRemaining: 60,
+          boundedBy: ["five_hour"],
+          limitingWindowIds: ["five_hour"],
+        },
+      ],
+    };
+    codex.resetsAvailable = 2;
+
+    const tui = renderQuotaTui(response, {
+      timeZone: "America/Los_Angeles",
+    }).split("\n");
+    const row = findCardLine(tui, 1, "2 resets");
+    expect(row).toContain("60%");
+    expect(row).toHaveLength(CARD_COLUMNS);
+  });
+
+  it("keeps reported Codex resets on the account row, not a per-model row", () => {
+    const response = fixtureResponse();
+    const codex = response.providers.find(
+      (provider) => provider.provider === "codex",
+    );
+    if (!codex) throw new Error("Codex fixture missing");
+    codex.windows = [
+      {
+        id: "five_hour",
+        label: "session",
+        kind: "session",
+        percentUsed: 40,
+        percentRemaining: 60,
+        resetsAt: "2026-08-06T23:30:00.000Z",
+        windowSeconds: 18000,
+      },
+      {
+        id: "model:codex_bengalfox:7d",
+        label: "GPT-5.3-Codex-Spark week",
+        kind: "model",
+        percentUsed: 10,
+        percentRemaining: 90,
+        resetsAt: "2026-08-13T23:21:15.000Z",
+        windowSeconds: 604800,
+      },
+    ];
+    codex.quotaSemantics = {
+      status: "known",
+      description: "test",
+      effectiveAvailability: [
+        {
+          scope: "all_models",
+          status: "known",
+          effectivePercentRemaining: 60,
+          boundedBy: ["five_hour"],
+          limitingWindowIds: ["five_hour"],
+        },
+      ],
+    };
+    codex.resetsAvailable = 2;
+
+    const tui = renderQuotaTui(response, {
+      timeZone: "America/Los_Angeles",
+    }).split("\n");
+    const row = findCardLine(tui, 1, "2 resets");
+    expect(row).toContain("60%");
+    expect(row).not.toContain("90%");
+    expect(tui.filter((line) => line.includes("2 resets"))).toHaveLength(1);
+  });
+
+  it("keeps reported Codex resets on the account row, not a code-review row", () => {
+    const response = fixtureResponse();
+    const codex = response.providers.find(
+      (provider) => provider.provider === "codex",
+    );
+    if (!codex) throw new Error("Codex fixture missing");
+    codex.windows = [
+      {
+        id: "five_hour",
+        label: "session",
+        kind: "session",
+        percentUsed: 40,
+        percentRemaining: 60,
+        resetsAt: "2026-08-06T23:30:00.000Z",
+        windowSeconds: 18000,
+      },
+      {
+        id: "code_review_weekly",
+        label: "code review week",
+        kind: "weekly",
+        percentUsed: 10,
+        percentRemaining: 90,
+        resetsAt: "2026-08-13T23:21:15.000Z",
+        windowSeconds: 604800,
+      },
+    ];
+    codex.quotaSemantics = {
+      status: "known",
+      description: "test",
+      effectiveAvailability: [
+        {
+          scope: "all_models",
+          status: "known",
+          effectivePercentRemaining: 60,
+          boundedBy: ["five_hour"],
+          limitingWindowIds: ["five_hour"],
+        },
+      ],
+    };
+    codex.resetsAvailable = 2;
+
+    const tui = renderQuotaTui(response, {
+      timeZone: "America/Los_Angeles",
+    }).split("\n");
+    const row = findCardLine(tui, 1, "2 resets");
+    expect(row).toContain("60%");
+    expect(row).not.toContain("90%");
+    expect(tui.filter((line) => line.includes("2 resets"))).toHaveLength(1);
+  });
+
+  it("keeps the reset display absent when Codex does not report a count", () => {
+    const response = fixtureResponse();
+    const codex = response.providers.find(
+      (provider) => provider.provider === "codex",
+    );
+    if (!codex) throw new Error("Codex fixture missing");
+    delete codex.resetsAvailable;
+
+    expect(renderQuotaToon(response, "quota-axi", false)).not.toContain(
+      "resets_available",
+    );
+    const tui = renderQuotaTui(response, {
+      timeZone: "America/Los_Angeles",
+    }).split("\n");
+    expect(tui.join("\n")).not.toContain("1 reset");
+  });
+
   it("summarizes the fleet in the dim header with local time", () => {
     const lines = render();
     expect(lines[0]).toBe(

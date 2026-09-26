@@ -66,6 +66,36 @@ describe("Codex quota parsing", () => {
     ]);
   });
 
+  it("reads available banked resets only from the reported count", () => {
+    const result = normalizeCodexUsage({
+      rate_limit: { primary_window: { used_percent: 10 } },
+      rate_limit_reset_credits: {
+        available_count: 3,
+        applicable_available_count: 0,
+      },
+    });
+
+    expect(result?.resetsAvailable).toBe(3);
+  });
+
+  it("omits the reset count when the source does not report it", () => {
+    const result = normalizeCodexUsage({
+      rate_limit: { primary_window: { used_percent: 10 } },
+      rate_limit_reset_credits: { applicable_available_count: 0 },
+    });
+
+    expect(result).not.toHaveProperty("resetsAvailable");
+  });
+
+  it("preserves a reported zero reset count", () => {
+    const result = normalizeCodexUsage({
+      rate_limit: { primary_window: { used_percent: 10 } },
+      rate_limit_reset_credits: { available_count: 0 },
+    });
+
+    expect(result?.resetsAvailable).toBe(0);
+  });
+
   it("merges app-server account and rate limit RPC responses", () => {
     const merged = mergeAccountAndLimits(
       { account: { email: "person@example.invalid", planType: "pro" } },

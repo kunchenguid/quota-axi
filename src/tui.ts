@@ -61,6 +61,12 @@ const TWO_COLUMN_MIN = CARD_WIDTH * 2 + CARD_GUTTER;
 const EFFECTIVE_BAR_WIDTH = 41;
 /** 3 gutter + 8 label + bar + 1 + 4 percent + 2 + 6 reset + 1 = CARD_INTERIOR. */
 const WINDOW_BAR_WIDTH = CARD_INTERIOR - 25;
+/**
+ * Banked resets are granted a few at a time, so a real count is one or two
+ * digits; anything larger is shown bounded so the row keeps the card width.
+ * TOON and JSON keep the exact count.
+ */
+const MAX_SHOWN_RESETS = 99;
 const MIN_COLUMNS = 80;
 const MAX_COLUMNS = 120;
 const GRAPHEME_SEGMENTER = new Intl.Segmenter("en", {
@@ -397,10 +403,24 @@ function buildLiveCard(
 
   if (provider.windows.length > 0) {
     lines.push(interior([], border));
+    const resetsWindow =
+      provider.provider === "codex"
+        ? (provider.windows.find((window) => window.id === "weekly") ??
+          [...provider.windows]
+            .reverse()
+            .find((window) => CODEX_ACCOUNT_WINDOW_ID.test(window.id)) ??
+          provider.windows[provider.windows.length - 1])
+        : undefined;
     for (const window of provider.windows) {
       lines.push(
         interior(
-          windowRow(window, generatedAtMs, provider.windows, show),
+          windowRow(
+            window,
+            generatedAtMs,
+            provider.windows,
+            show,
+            window === resetsWindow ? provider.resetsAvailable : undefined,
+          ),
           border,
         ),
       );
@@ -659,11 +679,14 @@ function interior(content: Line, borderStyle: StyleName): Line {
   ];
 }
 
+const CODEX_ACCOUNT_WINDOW_ID = /^(?:(?:five_hour|weekly)(?:_\d+)?$|window:)/;
+
 function windowRow(
   window: QuotaWindow,
   generatedAtMs: number,
   windows: QuotaWindow[],
   show: TuiShow,
+  resetsAvailable?: number,
 ): Line {
   if (window.shareOf) {
     return shareWindowRow(window, generatedAtMs, windows);
@@ -671,10 +694,21 @@ function windowRow(
   const pct = window.percentRemaining;
   const marker = window.pace?.timeRemainingPercent;
   const reset = resetCountdown(window, generatedAtMs);
+  const resetCount =
+    resetsAvailable === undefined
+      ? undefined
+      : resetsAvailable > MAX_SHOWN_RESETS
+        ? `${MAX_SHOWN_RESETS}+ resets`
+        : `${resetsAvailable} reset${resetsAvailable === 1 ? "" : "s"}`;
   return [
     { text: "   " },
     { text: padEndDisplay(shortWindowLabel(window), 8), style: "label" },
-    ...thinBar(pct, marker, WINDOW_BAR_WIDTH, show),
+    ...thinBar(
+      pct,
+      marker,
+      WINDOW_BAR_WIDTH - (resetCount === undefined ? 0 : resetCount.length + 1),
+      show,
+    ),
     { text: " " },
     {
       text: (pct === undefined
@@ -685,6 +719,9 @@ function windowRow(
     },
     { text: "  " },
     { text: padEndDisplay(reset, 6), style: "dim" },
+    ...(resetCount === undefined
+      ? []
+      : [{ text: " " }, { text: resetCount, style: "label" as const }]),
     { text: " " },
   ];
 }

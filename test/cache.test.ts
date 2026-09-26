@@ -18,6 +18,7 @@ import {
   readCachedDevinProvider,
   readCachedMiniMaxProvider,
   readCachedProvider,
+  readSnapshotProviders,
   retireCodexAccount,
   writeCachedProviders,
   stampCodexStoredAccountId,
@@ -39,7 +40,13 @@ import {
   publishDevinReadingContextId,
 } from "../src/providers/devin-cache-context.js";
 import { publishMiniMaxReadingContextId } from "../src/providers/minimax-cache-context.js";
-import type { ProviderId, ProviderQuota } from "../src/types.js";
+import { quotaJsonReport, renderQuotaToon } from "../src/render.js";
+import { renderQuotaTui } from "../src/tui.js";
+import type {
+  ProviderId,
+  ProviderQuota,
+  QuotaAxiResponse,
+} from "../src/types.js";
 
 const originalXdgCacheHome = process.env.XDG_CACHE_HOME;
 const originalClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
@@ -74,6 +81,57 @@ describe("quota cache", () => {
     ).toMatchObject({
       windows: [{ percentUsed: 42 }],
     });
+  });
+
+  it("never serves a Codex reset count from a stale or reused reading", () => {
+    useTempCache();
+    const counted = { ...quota("codex", 42), resetsAvailable: 2 };
+    stampCodexStoredAccountId(counted, "acct-signed-in");
+    writeCachedProviders([counted]);
+
+    expect(readFileSync(cacheFilePath(), "utf8")).not.toContain(
+      "resetsAvailable",
+    );
+    const cached = readCachedCodexProvider(undefined, ["acct-signed-in"]);
+    expect(cached).toMatchObject({ windows: [{ percentUsed: 42 }] });
+    expect(cached).not.toHaveProperty("resetsAvailable");
+
+    const now = Date.parse("2026-07-06T19:00:00Z");
+    const stale = staleFromCache(
+      cached as ProviderQuota,
+      "Codex quota unavailable",
+      ["oauth"],
+      [],
+      now,
+    );
+    expect(stale?.state.stale).toBe(true);
+    const response: QuotaAxiResponse = {
+      generatedAt: "2026-07-06T19:00:00.000Z",
+      schemaVersion: 5,
+      providers: [
+        withQuotaSemantics(stale as ProviderQuota, "2026-07-06T19:00:00.000Z"),
+      ],
+    };
+    expect(renderQuotaToon(response, "quota-axi", false)).not.toContain(
+      "resets_available",
+    );
+    expect(quotaJsonReport(response, false).providers[0]).not.toHaveProperty(
+      "resetsAvailable",
+    );
+    expect(renderQuotaTui(response, { timeZone: "UTC" })).not.toMatch(
+      /\d+ resets?\b/,
+    );
+
+    const snapshotFile = join(tempDir as string, "snapshot.json");
+    writeFileSync(
+      snapshotFile,
+      JSON.stringify({ schemaVersion: 3, providers: [counted] }),
+    );
+    const reused = readSnapshotProviders(snapshotFile, "codex", now);
+    expect(reused).toMatchObject([{ state: { reused: true } }]);
+    expect((reused as ProviderQuota[])[0]).not.toHaveProperty(
+      "resetsAvailable",
+    );
   });
 
   it("continues from a mismatched Codex home snapshot to a matching keyless snapshot", () => {
