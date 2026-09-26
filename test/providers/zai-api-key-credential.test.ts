@@ -4,7 +4,7 @@ import { createZaiApiKeyCredentialSource } from "../../src/providers/zai-api-key
 describe("Z.ai API key credential source", () => {
   it("resolves a literal ZAI_API_KEY from the environment", async () => {
     const source = createZaiApiKeyCredentialSource({
-      environment: { ZAI_API_KEY: "synthetic-env-key-204" },
+      environment: () => ({ ZAI_API_KEY: "synthetic-env-key-204" }),
     });
 
     await expect(source.resolve()).resolves.toEqual({
@@ -16,7 +16,7 @@ describe("Z.ai API key credential source", () => {
 
   it("trims surrounding whitespace", async () => {
     const source = createZaiApiKeyCredentialSource({
-      environment: { ZAI_API_KEY: "  synthetic-env-key-with-space  " },
+      environment: () => ({ ZAI_API_KEY: "  synthetic-env-key-with-space  " }),
     });
 
     await expect(source.resolve()).resolves.toEqual({
@@ -31,7 +31,7 @@ describe("Z.ai API key credential source", () => {
     ["whitespace only", "   "],
   ])("reports a %s ZAI_API_KEY as missing", async (_label, value) => {
     const source = createZaiApiKeyCredentialSource({
-      environment: { ZAI_API_KEY: value },
+      environment: () => ({ ZAI_API_KEY: value }),
     });
 
     await expect(source.resolve()).resolves.toEqual({ status: "missing" });
@@ -40,7 +40,7 @@ describe("Z.ai API key credential source", () => {
 
   it("rejects a value containing control bytes without exposing it", async () => {
     const source = createZaiApiKeyCredentialSource({
-      environment: { ZAI_API_KEY: "bad\tkey" },
+      environment: () => ({ ZAI_API_KEY: "bad\tkey" }),
     });
 
     const resolution = await source.resolve();

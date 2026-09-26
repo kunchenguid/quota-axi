@@ -35,7 +35,7 @@ metadata:
 
 # quota-axi
 
-Report local Claude, Codex, Cursor, GitHub Copilot, Grok, Kimi, Z.AI, Alibaba, OpenCode Go, Antigravity, Command Code, MiniMax, MiMo, DeepSeek, OpenRouter, ElevenLabs, Devin, and Muse quota windows.
+Report local Claude, Codex, Cursor, GitHub Copilot, Grok, Kimi, Z.AI, Z.ai Coding Plan, Alibaba, OpenCode Go, Antigravity, Command Code, MiniMax, MiMo, DeepSeek, OpenRouter, ElevenLabs, Devin, and Muse quota windows.
 quota-axi is data only: it never routes, recommends, ranks, or mints credentials. When the same stored
 access token is expired, refreshable, and definitively rejected, it may delegate renewal to the vendor's
 own CLI and re-read the result.
