@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.1.55](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.54...quota-axi-v0.1.55) (2026-09-25)
+
+
+### Features
+
+* **providers:** add Muse subscription quota provider ([#290](https://github.com/kunchenguid/quota-axi/issues/290)) ([3277b9d](https://github.com/kunchenguid/quota-axi/commit/3277b9d62cc8b23a7f4d7f94257b33ddcad78445))
+
+
+### Bug Fixes
+
+* **pace:** exclude untriggered zero-use windows from spendPriority ([#286](https://github.com/kunchenguid/quota-axi/issues/286)) ([43bd789](https://github.com/kunchenguid/quota-axi/commit/43bd789efbd2f60f0951b330d50bf04b54feadfc)), closes [#255](https://github.com/kunchenguid/quota-axi/issues/255)
+* **providers:** advise which CLI restores a soft-expired Kimi login ([#285](https://github.com/kunchenguid/quota-axi/issues/285)) ([6ee88d0](https://github.com/kunchenguid/quota-axi/commit/6ee88d0d8113f37504a1a7604aa378b864a3c0d4))
+* **providers:** bind Codex stale cache to account identity ([#289](https://github.com/kunchenguid/quota-axi/issues/289)) ([f840ea7](https://github.com/kunchenguid/quota-axi/commit/f840ea7c04008ba25ea59437478269ab2bf3b7ef))
+* **providers:** retire cached quota on definitive sign-out ([#283](https://github.com/kunchenguid/quota-axi/issues/283)) ([a7abf51](https://github.com/kunchenguid/quota-axi/commit/a7abf510e7748bb937c938c113f6bd92e8a6db7e))
+* **tui:** count stale cached readings apart from live ([#287](https://github.com/kunchenguid/quota-axi/issues/287)) ([067d1e0](https://github.com/kunchenguid/quota-axi/commit/067d1e02fb8186f7788fae87b0eb6a5cff2c64ab))
+
 ## [0.1.54](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.53...quota-axi-v0.1.54) (2026-09-24)
 
 
