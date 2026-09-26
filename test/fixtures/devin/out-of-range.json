@@ -1,0 +1,14 @@
+{
+  "userStatus": {
+    "planStatus": {
+      "dailyQuotaRemainingPercent": 40,
+      "weeklyQuotaRemainingPercent": 140,
+      "dailyQuotaResetAtUnix": "1790150400",
+      "weeklyQuotaResetAtUnix": "1790496000"
+    }
+  },
+  "planInfo": {
+    "billingStrategy": "BILLING_STRATEGY_QUOTA",
+    "hideDailyQuota": false
+  }
+}

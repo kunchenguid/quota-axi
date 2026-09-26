@@ -24,3 +24,16 @@ export function usableLiteralSecret(value: unknown): string | undefined {
   }
   return value;
 }
+
+/**
+ * Strip a credential out of text that is about to be reported. Error messages
+ * from a request carry the actual cause an operator needs, and sometimes the
+ * bearer that produced it; keep the cause, drop the secret.
+ *
+ * @param message text about to be reported
+ * @param secret credential value that must not appear in it
+ * @returns the message with every occurrence of the secret replaced
+ */
+export function redactSecret(message: string, secret: string): string {
+  return message.replaceAll(secret, "[redacted]");
+}

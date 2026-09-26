@@ -1,0 +1,10 @@
+{
+  "userStatus": {
+    "email": "person@example.invalid",
+    "userId": "fixture-user",
+    "planStatus": {}
+  },
+  "planInfo": {
+    "billingStrategy": "BILLING_STRATEGY_QUOTA"
+  }
+}

@@ -59,12 +59,15 @@
   },
   "dependencies": {
     "@toon-format/toon": "2.1.0",
-    "axi-sdk-js": "^0.1.10"
+    "axi-sdk-js": "^0.1.10",
+    "proxy-from-env": "2.1.0",
+    "undici": "6.28.0"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
     "@types/js-yaml": "^4.0.9",
     "@types/node": "22.0.0",
+    "@types/proxy-from-env": "1.0.4",
     "eslint": "10.1.0",
     "globals": "17.7.0",
     "js-yaml": "^4.1.1",

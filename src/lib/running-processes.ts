@@ -1,4 +1,4 @@
-import { execFileText } from "./process.js";
+import { currentUserProcessListArgs, execFileText } from "./process.js";
 
 /**
  * Read-only listing of the current user's running processes.
@@ -33,7 +33,7 @@ export async function listRunningCommandLines(): Promise<RunningProcessList> {
   try {
     const output = await execFileText(
       "ps",
-      ["-x", "-u", String(effectiveUid), "-o", "pid=,command="],
+      currentUserProcessListArgs(effectiveUid),
       PROCESS_LIST_TIMEOUT_MS,
     );
     return {

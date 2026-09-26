@@ -454,7 +454,7 @@ describe("release-please CI exclusions", () => {
 
     const steps = gateJobs[0]!.steps ?? [];
     expect(steps.map((step) => step.uses)).toEqual([
-      "kunchenguid/no-mistakes/.github/actions/require-no-mistakes@32d396ac0f29135daf7fcb9964aba9d5f4e796d6",
+      "kunchenguid/no-mistakes/.github/actions/require-no-mistakes@f6441c96c352a18b9cadcaef6b6c7017e9ac3970",
     ]);
     // No local enforcement copy, and nothing checked out to run it from.
     expect(steps.some((step) => typeof step.run === "string")).toBe(false);

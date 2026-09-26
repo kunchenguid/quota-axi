@@ -1,7 +1,14 @@
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import * as http from "node:http";
 import * as https from "node:https";
+import { tmpdir } from "node:os";
+import { delimiter, isAbsolute, join } from "node:path";
 import { deleteCachedProvider, readCachedProvider } from "../cache.js";
-import { execFileText } from "../lib/process.js";
+import {
+  currentUserProcessListArgs,
+  execFileText,
+  type ExecFileTextOptions,
+} from "../lib/process.js";
 import {
   clampPercent,
   nowIso,
@@ -36,8 +43,10 @@ const UNLEASH_PATH =
 const PROCESS_TIMEOUT_MS = 5_000;
 const PORT_TIMEOUT_MS = 2_000;
 const REQUEST_TIMEOUT_MS = 3_000;
+const CLI_QUOTA_TIMEOUT_MS = 15_000;
 const PROBE_BUDGET_MS = 10_000;
 const MAX_RESPONSE_BYTES = 1024 * 1024;
+const AGY_BINARY_ENV = "QUOTA_AXI_AGY_BINARY";
 
 type AgyProcessSource = "agy" | "app";
 
@@ -61,10 +70,12 @@ export type AgyConnectionEndpoint = {
 };
 
 export type AgyProbeRuntime = {
+  findCommandPath(command: string): Promise<string | undefined>;
   execFileText(
     command: string,
     args: string[],
     timeoutMs: number,
+    options?: ExecFileTextOptions,
   ): Promise<string>;
   requestJson(
     endpoint: AgyConnectionEndpoint,
@@ -73,9 +84,25 @@ export type AgyProbeRuntime = {
   ): Promise<unknown>;
 };
 
+/**
+ * The only two outcomes that show Antigravity genuinely absent: no `agy` on
+ * PATH, and no Antigravity process listening. Every other skip - an installed
+ * CLI that timed out, a discovered endpoint that would not answer - leaves
+ * presence unknown, so the human report keeps Antigravity in view.
+ */
+export const AGY_CLI_NOT_INSTALLED = "agy CLI is not installed";
+export const AGY_NOT_RUNNING = "Antigravity/agy is not running";
+export const AGY_BINARY_OVERRIDE_NOT_ABSOLUTE =
+  "QUOTA_AXI_AGY_BINARY override is not an absolute path";
+export const AGY_BINARY_OVERRIDE_NOT_EXECUTABLE =
+  "QUOTA_AXI_AGY_BINARY override is not an executable file";
+
 export const agyAdapter: ProviderAdapter = {
   id: "agy",
   label: "Antigravity",
+  isUncertainSkip: (attempt) =>
+    attempt.error !== AGY_CLI_NOT_INSTALLED &&
+    attempt.error !== AGY_NOT_RUNNING,
   fetchQuota,
   inspectAuth,
 };
@@ -89,13 +116,41 @@ export async function fetchQuota(
 export async function fetchQuotaWithRuntime(
   runtime: AgyProbeRuntime,
 ): Promise<ProviderQuota> {
-  const attempts: SourceAttempt[] = [{ source: "loopback", status: "failed" }];
+  const attempts: SourceAttempt[] = [{ source: "cli", status: "failed" }];
   let finalFailure: unknown;
 
   try {
+    const quota = await fetchCliQuota(runtime);
+    attempts[0] = { source: "cli", status: "success" };
+    const provider = successProvider({
+      provider: "agy",
+      label: "Antigravity",
+      source: "cli",
+      plan: quota.plan,
+      account: quota.account,
+      windows: quota.windows,
+      refreshedAt: quota.refreshedAt,
+      sourcesTried: sourceNames(attempts),
+      attempts,
+    });
+    return provider;
+  } catch (error) {
+    finalFailure = error;
+    const skipped =
+      error instanceof AgyUnavailableError || isMissingCommandError(error);
+    attempts[0] = {
+      source: "cli",
+      status: skipped ? "skipped" : "failed",
+      error: errorMessage(error),
+      degraded: false,
+    };
+  }
+
+  attempts.push({ source: "loopback", status: "failed", degraded: false });
+  try {
     const quota = await fetchLoopbackQuota(runtime);
-    attempts[0] = { source: "loopback", status: "success" };
-    return successProvider({
+    attempts[attempts.length - 1] = { source: "loopback", status: "success" };
+    const provider = successProvider({
       provider: "agy",
       label: "Antigravity",
       source: "cli-rpc",
@@ -106,27 +161,30 @@ export async function fetchQuotaWithRuntime(
       sourcesTried: sourceNames(attempts),
       attempts,
     });
+    return provider;
   } catch (error) {
-    finalFailure = error;
-    const finalError = errorMessage(error);
-    attempts[0] = {
+    const skipped =
+      error instanceof AgyUnavailableError || isMissingCommandError(error);
+    if (attempts[0].status === "skipped") {
+      finalFailure = error;
+    } else {
+      finalFailure = strongerFailure(finalFailure, error);
+    }
+    attempts[attempts.length - 1] = {
       source: "loopback",
-      status: error instanceof AgyUnavailableError ? "skipped" : "failed",
-      error: finalError,
+      status: skipped ? "skipped" : "failed",
+      error: errorMessage(error),
+      degraded: false,
     };
   }
 
   const finalError = errorMessage(finalFailure);
   if (staleEligibleFailure(finalFailure)) {
     const cached = readCachedProvider("agy");
-    if (cached) {
-      return staleFromCache(
-        cached,
-        finalError,
-        sourceNames(attempts),
-        attempts,
-      );
-    }
+    const stale = cached
+      ? staleFromCache(cached, finalError, sourceNames(attempts), attempts)
+      : undefined;
+    if (stale) return stale;
   } else if (isDefinitiveAuthFailure(finalFailure)) {
     try {
       deleteCachedProvider("agy");
@@ -138,7 +196,7 @@ export async function fetchQuotaWithRuntime(
   return failedProvider({
     provider: "agy",
     label: "Antigravity",
-    status: statusForError(finalError),
+    status: statusForFailure(finalFailure),
     error: finalError,
     sourcesTried: sourceNames(attempts),
     attempts,
@@ -182,6 +240,187 @@ export async function inspectAuthWithRuntime(
   }
 }
 
+async function fetchCliQuota(runtime: AgyProbeRuntime): Promise<{
+  plan?: string;
+  account?: ProviderQuota["account"];
+  windows: QuotaWindow[];
+  refreshedAt: string;
+}> {
+  const commandPath = await resolveCliCommandPath(runtime);
+
+  let text: string;
+  let openerGuard: Awaited<ReturnType<typeof createOpenerGuard>> | undefined;
+  let workspace: Awaited<ReturnType<typeof createCliWorkspace>> | undefined;
+  try {
+    openerGuard = await createOpenerGuard();
+    workspace = await createCliWorkspace();
+    text = await runtime.execFileText(
+      commandPath,
+      ["-p", "/quota", "--output-format", "json"],
+      CLI_QUOTA_TIMEOUT_MS,
+      {
+        cwd: workspace.cwd,
+        env: {
+          ...openerGuard.env,
+          XDG_CONFIG_HOME: workspace.configHome,
+          XDG_CACHE_HOME: workspace.cacheHome,
+          XDG_STATE_HOME: workspace.stateHome,
+        },
+      },
+    );
+  } catch (error) {
+    throw sanitizeCliError(error);
+  } finally {
+    // execFileText settles only after the child has exited (a timeout kill
+    // included), so neither removal can race a live process. The opener
+    // guard goes last: its directory must stay resolvable on the child's
+    // PATH for the child's whole lifetime, while the workspace only has to
+    // outlive the child's working directory and XDG reads.
+    await workspace?.dispose();
+    await openerGuard?.dispose();
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new AgyMalformedResponseError("agy /quota returned invalid JSON");
+  }
+  const summary = normalizeAgyPrintUsage(parsed);
+  if (!summary || summary.windows.length === 0) {
+    throw new AgyMalformedResponseError("agy /quota quota summary malformed");
+  }
+  return summary;
+}
+
+/**
+ * The executable for the CLI quota probe: the `QUOTA_AXI_AGY_BINARY` value
+ * when it is set and non-blank, otherwise `agy` from PATH. The override must
+ * be an absolute path to an executable file and is resolved without
+ * consulting PATH; a relative or non-executable override fails closed, and a
+ * blank value is ignored.
+ */
+async function resolveCliCommandPath(
+  runtime: AgyProbeRuntime,
+): Promise<string> {
+  const configured = process.env[AGY_BINARY_ENV]?.trim() ?? "";
+  if (configured === "") {
+    let resolved: string | undefined;
+    try {
+      resolved = await runtime.findCommandPath("agy");
+    } catch {
+      throw new AgyUnavailableError("Antigravity CLI discovery failed");
+    }
+    if (!resolved) throw new AgyUnavailableError(AGY_CLI_NOT_INSTALLED);
+    return resolved;
+  }
+  if (!isAbsolute(configured)) {
+    throw new AgyUnavailableError(AGY_BINARY_OVERRIDE_NOT_ABSOLUTE);
+  }
+  let resolved: string | undefined;
+  try {
+    resolved = await runtime.findCommandPath(configured);
+  } catch {
+    throw new AgyUnavailableError("Antigravity CLI discovery failed");
+  }
+  if (!resolved) {
+    throw new AgyUnavailableError(AGY_BINARY_OVERRIDE_NOT_EXECUTABLE);
+  }
+  return resolved;
+}
+
+/**
+ * A throwaway working directory plus throwaway XDG config/cache/state
+ * directories, so the CLI child cannot discover the caller's repo-local
+ * `.agents`/MCP configuration from quota-axi's cwd and cannot read or write
+ * quota-axi's own XDG state. Everything lives under one 0700 temp root that
+ * is removed, best effort, once the child has exited.
+ */
+async function createCliWorkspace(): Promise<{
+  cwd: string;
+  configHome: string;
+  cacheHome: string;
+  stateHome: string;
+  dispose(): Promise<void>;
+}> {
+  const root = await mkdtemp(join(tmpdir(), "quota-axi-agy-"));
+  const configHome = join(root, "config");
+  const cacheHome = join(root, "cache");
+  const stateHome = join(root, "state");
+  try {
+    await Promise.all(
+      [configHome, cacheHome, stateHome].map((directory) =>
+        mkdir(directory, { recursive: true, mode: 0o700 }),
+      ),
+    );
+    return {
+      cwd: root,
+      configHome,
+      cacheHome,
+      stateHome,
+      dispose() {
+        return rm(root, { recursive: true, force: true }).catch(
+          () => undefined,
+        );
+      },
+    };
+  } catch (error) {
+    await rm(root, { recursive: true, force: true }).catch(() => undefined);
+    throw error;
+  }
+}
+
+async function createOpenerGuard(): Promise<{
+  env: NodeJS.ProcessEnv;
+  dispose(): Promise<void>;
+}> {
+  const directory = await mkdtemp(join(tmpdir(), "quota-axi-agy-"));
+  try {
+    if (process.platform === "win32") {
+      await Promise.all(
+        ["xdg-open.cmd", "open.cmd"].map((name) =>
+          writeFile(join(directory, name), "@exit /b 1\r\n"),
+        ),
+      );
+    } else {
+      await Promise.all([
+        ...["xdg-open", "open"].map((name) =>
+          writeFile(join(directory, name), "#!/bin/sh\nexit 1\n", {
+            mode: 0o700,
+          }),
+        ),
+        symlink(process.execPath, join(directory, "node")),
+      ]);
+    }
+    const inheritedPath = process.env.PATH;
+    return {
+      env: {
+        ...process.env,
+        ...(process.platform === "win32"
+          ? { NoDefaultCurrentDirectoryInExePath: "1" }
+          : {}),
+        PATH: inheritedPath
+          ? `${directory}${delimiter}${inheritedPath}`
+          : directory,
+      },
+      async dispose() {
+        await rm(directory, { recursive: true, force: true }).catch(
+          () => undefined,
+        );
+      },
+    };
+  } catch (error) {
+    await rm(directory, { recursive: true, force: true }).catch(
+      () => undefined,
+    );
+    throw error;
+  }
+}
+
+function isMissingCommandError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  return code === "ENOENT";
+}
+
 export function normalizeAgyQuotaSummary(raw: unknown):
   | {
       windows: QuotaWindow[];
@@ -195,6 +434,25 @@ export function normalizeAgyQuotaSummary(raw: unknown):
     .sort(compareAgyWindows);
   if (windows.length === 0) return undefined;
   return { windows, refreshedAt: nowIso() };
+}
+
+export function normalizeAgyPrintUsage(raw: unknown):
+  | {
+      windows: QuotaWindow[];
+      refreshedAt: string;
+    }
+  | undefined {
+  const root = objectValue(raw);
+  const command = objectValue(root?.command);
+  const name = stringValue(command?.name);
+  if (
+    name !== "usage" &&
+    name !== "/usage" &&
+    name !== "quota" &&
+    name !== "/quota"
+  )
+    return undefined;
+  return normalizeAgyQuotaSummary(objectValue(command?.data));
 }
 
 export function normalizeAgyUserStatus(raw: unknown):
@@ -270,8 +528,7 @@ async function fetchLoopbackQuota(runtime: AgyProbeRuntime): Promise<{
 }> {
   const deadline = createProbeDeadline();
   const endpoints = await discoverAgyEndpoints(runtime, deadline);
-  if (endpoints.length === 0)
-    throw new AgyUnavailableError("Antigravity/agy is not running");
+  if (endpoints.length === 0) throw new AgyUnavailableError(AGY_NOT_RUNNING);
 
   let lastError: unknown;
   for (const endpoint of endpoints) {
@@ -481,7 +738,7 @@ async function readProcessList(
     return await withinProbeBudget(deadline, PROCESS_TIMEOUT_MS, (timeoutMs) =>
       runtime.execFileText(
         "ps",
-        ["-x", "-u", String(effectiveUid), "-o", "pid=,command="],
+        currentUserProcessListArgs(effectiveUid),
         timeoutMs,
       ),
     );
@@ -516,7 +773,8 @@ async function readListeningPorts(
 function normalizeQuotaSummaryGroup(raw: unknown): QuotaWindow[] {
   const group = objectValue(raw);
   if (!group) return [];
-  const groupName = stringValue(group.displayName) ?? "Quota";
+  const groupName =
+    stringValue(group.displayName) ?? stringValue(group.name) ?? "Quota";
   return arrayValue(group.buckets)
     .map((bucket) => normalizeQuotaSummaryBucket(groupName, bucket))
     .filter((window): window is QuotaWindow => Boolean(window));
@@ -531,7 +789,9 @@ function normalizeQuotaSummaryBucket(
   const disabled = booleanValue(bucket.disabled) ?? false;
   if (disabled) return undefined;
   const bucketId =
-    stringValue(bucket.bucketId) ?? stringValue(bucket.bucket_id);
+    stringValue(bucket.bucketId) ??
+    stringValue(bucket.bucket_id) ??
+    stringValue(bucket.id);
   if (!bucketId) return undefined;
   const windowKind = agyWindowKind(bucket);
   const group = agyWindowGroup(groupName, bucketId);
@@ -635,6 +895,7 @@ function agyWindowKind(bucket: Record<string, unknown>): {
     stringValue(bucket.bucketId),
     stringValue(bucket.bucket_id),
     stringValue(bucket.displayName),
+    stringValue(bucket.name),
   ]
     .filter((value): value is string => Boolean(value))
     .join(" ")
@@ -736,9 +997,10 @@ function isAgyMcpScript(token: string | undefined): boolean {
 
 function isAgyAppExecutable(command: string): boolean {
   const normalized = normalizedPath(command);
+  const executablePath = normalized.split(/\s+--/, 1)[0];
   if (
-    /^\/applications\/[^\n]*antigravity\.app\/contents\/[^\n]*\/language[-_]server(?:_[a-z0-9_]+)?(?=\s+--|$)/.test(
-      normalized,
+    /^\/applications\/(?:[^/\n]+\/)*[^/\n]*antigravity[^/\n]*\.app\/contents\/[^\n]*\/language[-_]server(?:_[a-z0-9_]+)?$/.test(
+      executablePath,
     )
   )
     return true;
@@ -793,12 +1055,17 @@ function schemeSortRank(scheme: AgyConnectionEndpoint["scheme"]): number {
 
 function statusForError(error: string): ProviderStatus {
   if (
-    /not running|no local|loopback unavailable|(?:loopback|probe) timed out|ECONNREFUSED|ECONNRESET|ECONNABORTED|ENOTFOUND|EHOSTUNREACH|ETIMEDOUT|EPIPE|EPROTO|socket hang up/i.test(
+    /not running|no local|loopback (?:access )?unavailable|(?:loopback|probe) timed out|ECONNREFUSED|ECONNRESET|ECONNABORTED|ENOTFOUND|EHOSTUNREACH|ETIMEDOUT|EPIPE|EPROTO|socket hang up/i.test(
       error,
     )
   )
     return "unavailable";
   return statusFromError(error);
+}
+
+function statusForFailure(error: unknown): ProviderStatus {
+  if (error instanceof AgyUnavailableError) return "unavailable";
+  return statusForError(errorMessage(error));
 }
 
 export function requestLoopbackJson(
@@ -842,14 +1109,6 @@ export function requestLoopbackJson(
     };
     const request = client.request(options, (incoming) => {
       response = incoming;
-      if (
-        !incoming.statusCode ||
-        incoming.statusCode < 200 ||
-        incoming.statusCode >= 300
-      ) {
-        finish(new AgyHttpError(incoming.statusCode ?? 0));
-        return;
-      }
       const chunks: Uint8Array[] = [];
       let receivedBytes = 0;
       incoming.on("data", (chunk: Buffer | string) => {
@@ -869,6 +1128,14 @@ export function requestLoopbackJson(
       incoming.on("end", () => {
         if (settled) return;
         const text = Buffer.concat(chunks).toString("utf8");
+        if (
+          !incoming.statusCode ||
+          incoming.statusCode < 200 ||
+          incoming.statusCode >= 300
+        ) {
+          finish(httpResponseError(incoming.statusCode ?? 0, text));
+          return;
+        }
         try {
           finish(undefined, JSON.parse(text) as unknown);
         } catch {
@@ -891,7 +1158,7 @@ export function requestLoopbackJson(
 }
 
 function requestBodyForPath(path: string): Record<string, unknown> {
-  if (path === QUOTA_SUMMARY_PATH) return { forceRefresh: false };
+  if (path === QUOTA_SUMMARY_PATH) return { request: {}, forceRefresh: false };
   return {
     metadata: {
       ideName: "antigravity",
@@ -957,13 +1224,27 @@ function sanitizeTransportError(error: Error): Error {
   return new AgyUnavailableError("Antigravity loopback unavailable");
 }
 
+function sanitizeCliError(error: unknown): Error {
+  const details = objectValue(error);
+  const code = stringValue(details?.code);
+  if (details?.killed === true || code === "ETIMEDOUT")
+    return new AgyUnavailableError("Antigravity CLI /quota timed out");
+  if (code === "ENOENT") return new AgyUnavailableError(AGY_CLI_NOT_INSTALLED);
+  if (code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER")
+    return new AgyMalformedResponseError(
+      "Antigravity CLI /quota response too large",
+    );
+  return new Error("Antigravity CLI /quota failed");
+}
+
 function strongerFailure(current: unknown, candidate: unknown): unknown {
   if (current === undefined) return candidate;
   return failureRank(candidate) > failureRank(current) ? candidate : current;
 }
 
 function failureRank(error: unknown): number {
-  const status = statusForError(errorMessage(error));
+  if (error instanceof AgyCsrfError) return 2;
+  const status = statusForFailure(error);
   if (status === "auth_required") return 4;
   if (status === "rate_limited") return 3;
   if (status === "error") return 2;
@@ -972,12 +1253,14 @@ function failureRank(error: unknown): number {
 }
 
 function staleEligibleFailure(error: unknown): boolean {
+  if (error instanceof AgyCsrfError) return false;
   if (error instanceof AgyHttpError)
     return error.status === 429 || error.status >= 500;
-  return statusForError(errorMessage(error)) === "unavailable";
+  return statusForFailure(error) === "unavailable";
 }
 
 function isDefinitiveAuthFailure(error: unknown): boolean {
+  if (error instanceof AgyCsrfError) return false;
   return statusForError(errorMessage(error)) === "auth_required";
 }
 
@@ -1016,6 +1299,8 @@ function withinProbeBudget<T>(
 
 class AgyUnavailableError extends Error {}
 
+class AgyCsrfError extends AgyUnavailableError {}
+
 class AgyProbeBudgetError extends AgyUnavailableError {}
 
 class AgyMalformedResponseError extends Error {}
@@ -1028,6 +1313,26 @@ class AgyHttpError extends Error {
   }
 }
 
+function httpResponseError(status: number, body: string): Error {
+  if ((status === 401 || status === 403) && isCsrfRejection(body)) {
+    return new AgyCsrfError(
+      "Antigravity CLI quota unavailable because its runtime CSRF token is not exposed; use Antigravity /quota",
+    );
+  }
+  return new AgyHttpError(status);
+}
+
+function isCsrfRejection(body: string): boolean {
+  if (/missing\s+CSRF\s+token/i.test(body)) return true;
+  try {
+    const payload = objectValue(JSON.parse(body) as unknown);
+    const message = stringValue(payload?.message);
+    return /^(?:missing|invalid) CSRF token$/i.test(message ?? "");
+  } catch {
+    return false;
+  }
+}
+
 function httpErrorMessage(status: number): string {
   if (status === 401 || status === 403) return "Antigravity sign-in required";
   if (status === 429) return "Antigravity quota endpoint rate limited";
@@ -1035,6 +1340,10 @@ function httpErrorMessage(status: number): string {
 }
 
 const defaultRuntime: AgyProbeRuntime = {
+  findCommandPath: async (command) => {
+    const { findCommandPath } = await import("../lib/process.js");
+    return findCommandPath(command);
+  },
   execFileText,
   requestJson: requestLoopbackJson,
 };

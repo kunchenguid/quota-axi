@@ -13,7 +13,7 @@ export type ZaiApiKeyCredentialSource = {
 };
 
 type CredentialSourceDependencies = {
-  environment: Readonly<Record<string, string | undefined>>;
+  environment: () => Readonly<Record<string, string | undefined>>;
 };
 
 /**
@@ -25,7 +25,9 @@ export function createZaiApiKeyCredentialSource(
   overrides: Partial<CredentialSourceDependencies> = {},
 ): ZaiApiKeyCredentialSource {
   const dependencies: CredentialSourceDependencies = {
-    environment: process.env,
+    // Read lazily so a recording environment installed after this factory
+    // runs (test/reuse-context.test.ts) still observes the lookup.
+    environment: () => process.env,
     ...overrides,
   };
 
@@ -41,7 +43,7 @@ export function createZaiApiKeyCredentialSource(
 function resolveCredential(
   dependencies: CredentialSourceDependencies,
 ): ZaiApiKeyCredentialResolution {
-  const raw = dependencies.environment.ZAI_API_KEY;
+  const raw = dependencies.environment().ZAI_API_KEY;
   const apiKey = usableLiteralSecret(raw);
   return apiKey !== undefined
     ? { status: "available", apiKey }

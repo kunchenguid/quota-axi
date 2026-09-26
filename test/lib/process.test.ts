@@ -1,9 +1,20 @@
 import { spawn } from "node:child_process";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { commandExists, terminateChild } from "../../src/lib/process.js";
+import {
+  commandExists,
+  currentUserProcessListArgs,
+  execFileText,
+  terminateChild,
+} from "../../src/lib/process.js";
 
 const originalPath = process.env.PATH;
 const originalPathExt = process.env.PATHEXT;
@@ -39,6 +50,23 @@ describe("commandExists", () => {
   });
 });
 
+describe("execFileText", () => {
+  it.skipIf(process.platform === "win32")(
+    "runs the child in the requested working directory",
+    async () => {
+      const cwd = mkdtempSync(join(tmpdir(), "quota-axi-cwd-"));
+      try {
+        const output = await execFileText("pwd", [], 5_000, { cwd });
+        // macOS hands back /var/... but reports the physical /private/var/...
+        expect(output.trim()).toBe(realpathSync(cwd));
+      } finally {
+        rmSync(cwd, { recursive: true, force: true });
+      }
+    },
+    10_000,
+  );
+});
+
 describe("terminateChild", () => {
   it.skipIf(process.platform === "win32")(
     "force-kills a child that ignores SIGTERM",
@@ -53,6 +81,29 @@ describe("terminateChild", () => {
         child.once("exit", (_code, exitSignal) => resolve(exitSignal)),
       );
       expect(signal).toBe("SIGKILL");
+    },
+    10_000,
+  );
+});
+
+describe("currentUserProcessListArgs", () => {
+  it("omits the BSD -x selector on Linux, where procps rejects it", () => {
+    expect(currentUserProcessListArgs(1000)).toEqual(
+      process.platform === "linux"
+        ? ["-u", "1000", "-o", "pid=,command="]
+        : ["-x", "-u", "1000", "-o", "pid=,command="],
+    );
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "lists this process when handed to the real ps",
+    async () => {
+      const output = await execFileText(
+        "ps",
+        currentUserProcessListArgs(process.geteuid?.() ?? 0),
+        5_000,
+      );
+      expect(output).toMatch(new RegExp(`^\\s*${process.pid}\\s`, "m"));
     },
     10_000,
   );

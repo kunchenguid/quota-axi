@@ -1,0 +1,64 @@
+{
+  "conversation_id": "",
+  "status": "success",
+  "response": "Sanitized quota summary",
+  "duration_seconds": 0,
+  "num_turns": 0,
+  "usage": {
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "thinking_tokens": 0,
+    "cache_read_tokens": 0,
+    "total_tokens": 0
+  },
+  "command": {
+    "name": "usage",
+    "data": {
+      "description": "Sanitized Antigravity CLI 1.2.2 usage data",
+      "groups": [
+        {
+          "name": "Gemini Models",
+          "description": "Sanitized Gemini quota group",
+          "buckets": [
+            {
+              "id": "gemini-5-hour",
+              "name": "Five Hour Limit",
+              "description": "Resets on the vendor schedule",
+              "window": "5-hour",
+              "remaining_fraction": 0.88,
+              "reset_time": "2026-09-13T18:00:00Z"
+            },
+            {
+              "id": "gemini-7d",
+              "name": "Weekly Limit",
+              "description": "Resets on the vendor schedule",
+              "window": "7d",
+              "remaining_fraction": 0.76,
+              "reset_time": "2026-09-18T18:00:00Z"
+            }
+          ]
+        },
+        {
+          "name": "Claude and GPT Models",
+          "description": "Sanitized third-party model quota group",
+          "buckets": [
+            {
+              "id": "third-party-5-hour",
+              "name": "Five Hour Limit",
+              "window": "5-hour",
+              "remaining_fraction": 0.64,
+              "reset_time": "2026-09-13T19:00:00Z"
+            },
+            {
+              "id": "third-7d",
+              "name": "Weekly Limit",
+              "window": "7d",
+              "remaining_fraction": 0.52,
+              "reset_time": "2026-09-19T19:00:00Z"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

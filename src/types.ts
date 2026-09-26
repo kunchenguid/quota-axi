@@ -8,7 +8,16 @@ export type ProviderId =
   | "zai"
   | "agy"
   | "zai-coding-plan"
-  | "antigravity";
+  | "alibaba"
+  | "opencode-go"
+  | "commandcode"
+  | "minimax"
+  | "mimo"
+  | "deepseek"
+  | "openrouter"
+  | "elevenlabs"
+  | "devin"
+  | "muse";
 
 export const PROVIDER_IDS = [
   "claude",
@@ -20,25 +29,24 @@ export const PROVIDER_IDS = [
   "zai",
   "agy",
   "zai-coding-plan",
-  "antigravity",
-] as const satisfies readonly ProviderId[];
-
-export const DEFAULT_PROVIDER_IDS = [
-  "claude",
-  "codex",
-  "cursor",
-  "copilot",
-  "grok",
-  "kimi",
-  "zai",
-  "agy",
-  "zai-coding-plan",
+  "alibaba",
+  "opencode-go",
+  "commandcode",
+  "minimax",
+  "mimo",
+  "deepseek",
+  "openrouter",
+  "elevenlabs",
+  "devin",
+  "muse",
 ] as const satisfies readonly ProviderId[];
 
 export type ProviderSource =
   | "oauth"
+  | "pi:openai-codex"
+  | `pi:openai-codex-${string}`
   | "cli-rpc"
-  | "cli-print"
+  | "cli"
   | "api"
   | "web"
   | "cache"
@@ -60,7 +68,8 @@ export type ProviderAuthStatus = "usable" | "expired_refreshable" | "unusable";
 
 export type ProviderStateReason =
   | "keychain_access_required"
-  | "credentials_expired";
+  | "credentials_expired"
+  | "inference_opt_in_required";
 
 export type QuotaPaceStatus = "ahead" | "on_pace" | "behind" | "unknown";
 
@@ -162,10 +171,29 @@ export type EffectiveSelection = Partial<
 > & {
   status: "known" | "unknown";
   /**
-   * Bounding windows whose pace is unknown or unusable. Any such window makes
-   * the whole scope unmeasurable and suppresses the scalar.
+   * Bounding windows that blocked the scalar. Any named window makes the whole
+   * scope unmeasurable. Omitted when `status` is `unknown` only because every
+   * bound is untriggered (no cycle to weight).
    */
   unmeasurableWindowIds?: string[];
+};
+
+/**
+ * A contradiction between what a scope's own meter reports and what a bound it
+ * only inherits from a broader scope reports: the inherited window reports
+ * nothing left while every window metered for this scope alone still reports
+ * allowance.
+ *
+ * Publishing the inherited zero as the scope's effective remaining would assert
+ * an exhaustion the readings themselves dispute, so the conflict is published
+ * as data instead and the scope's `status` stays `unknown`. It is a disclosure
+ * of uncertainty, not a claim that the scope is available.
+ */
+export type BoundConflict = {
+  /** Inherited bounds reporting zero remaining. */
+  exhaustedWindowIds: string[];
+  /** Windows metered for this scope alone, all still reporting allowance. */
+  liveWindowIds: string[];
 };
 
 export type QuotaWindow = {
@@ -174,6 +202,12 @@ export type QuotaWindow = {
   kind: "session" | "weekly" | "monthly" | "model" | "credits" | "unknown";
   percentUsed?: number;
   percentRemaining?: number;
+  /**
+   * Parent window this used-share belongs to. Present only when the window is
+   * not an independent allowance: `percentUsed` is the share of that parent,
+   * and `percentRemaining` is omitted rather than derived.
+   */
+  shareOf?: string;
   startsAt?: string;
   resetsAt?: string;
   resetText?: string;
@@ -190,6 +224,13 @@ export type EffectiveAvailability = {
   effectivePercentRemaining?: number;
   boundedBy: string[];
   limitingWindowIds?: string[];
+  /**
+   * Present only when this scope's own windows contradict an inherited bound
+   * that reads zero. `status` is then `unknown` and no effective percentage,
+   * runway, or selection scalar is asserted: the conflict itself is the
+   * reported fact.
+   */
+  boundConflict?: BoundConflict;
   /** Compact pace over every bounding window, not only the current limiter. */
   pace?: EffectivePaceSummary;
   /**
@@ -218,10 +259,44 @@ export type SourceAttempt = {
   status: "success" | "failed" | "skipped";
   error?: string;
   credentialPresent?: boolean;
+  /**
+   * Whether this credential source was not genuinely absent and failed to
+   * yield a reading. Left unset it is derived by `isDegradedSourceAttempt`; set it explicitly
+   * only to correct that derivation for an attempt that is not a credential
+   * problem.
+   */
+  degraded?: boolean;
+};
+
+/** A non-absent credential source that did not yield the reported reading. */
+export type DegradedSource = {
+  source: string;
+  error?: string;
+};
+
+export type ProviderAccount = {
+  /** Opaque local lane identity, stable across refresh and discovery order. */
+  accountKey: string;
+  /**
+   * Resolves undefined when the lane establishes no distinct account. A
+   * reading that covers credential keys folded into this lane names them in
+   * its `accountKeys`; the collector puts the lane's own key first.
+   */
+  fetchQuota(options: ProviderOptions): Promise<ProviderQuota | undefined>;
+  inspectAuth(options: ProviderOptions): Promise<AuthProviderReport>;
 };
 
 export type ProviderQuota = {
   provider: ProviderId;
+  /** Present in account-expanded reports; absent for the legacy single lane. */
+  accountKey?: string;
+  /**
+   * Every credential key this row covers, own `accountKey` first. Present on
+   * every quota-axi output quota row; optional here so package consumers can
+   * construct ProviderQuota without it. A row covering one credential lists
+   * just its own key, and a provider without account discovery lists `default`.
+   */
+  accountKeys?: string[];
   /** Display name. Omitted from default `--json`; see `--full`. */
   label?: string;
   /** Report provenance. Omitted from default `--json`; see `--full`. */
@@ -238,7 +313,7 @@ export type ProviderQuota = {
   credits?: {
     remaining?: number;
     unlimited?: boolean;
-    unit?: "usd" | "credits";
+    unit?: "usd" | "cny" | "credits";
   };
   state: {
     status: ProviderStatus;
@@ -255,21 +330,46 @@ export type ProviderQuota = {
     reason?: ProviderStateReason;
     remedyCommand?: string;
     untrustedWindowIds?: string[];
+    /**
+     * Sources that were superseded: a working source answered for this
+     * provider while these were broken or could not be read. Present only on a
+     * fresh reading, so the breakage behind a healthy row stays visible.
+     */
+    degradedSources?: DegradedSource[];
     /** Omitted from default `--json`; see `--full`. */
     sourcesTried?: string[];
+    /**
+     * Sparse marker: this fresh reading is the last successful one, served
+     * from the cache instead of asking the vendor again, and `refreshedAt`
+     * (kept in default `--json` when this is set) says when it was taken.
+     */
+    reused?: true;
   };
   attempts?: SourceAttempt[];
+  /**
+   * Sparse JSON marker, present only when this lane has positive evidence it
+   * is not set up. Default TOON omits those providers; `--json` keeps the lane.
+   * Applied at serialization from `providerPresence`, never by an adapter.
+   */
+  notSetUp?: true;
 };
 
 export type QuotaAxiResponse = {
   generatedAt: string;
-  schemaVersion: 5;
+  schemaVersion: 5 | 6;
   providers: ProviderQuota[];
   help?: string[];
 };
 
 export type ProviderOptions = {
   allowKeychainPrompt: boolean;
+  /**
+   * Explicitly permit one bounded Claude Code inference to read quota response
+   * headers when an env bearer cannot use the zero-spend usage endpoint.
+   */
+  allowClaudeInference?: boolean;
+  /** Restrict discovery to the provider's selected native profile file. */
+  credentialMode?: "profile-only";
   /**
    * Permit the quota path to run a vendor CLI's own non-interactive refresh
    * command when the same stored access token is expired, refreshable, and
@@ -284,6 +384,24 @@ export type ProviderOptions = {
 export type ProviderAdapter = {
   id: ProviderId;
   label: string;
+  /**
+   * Credential sources that can hold a credential without showing the user
+   * has this provider, such as Copilot's GitHub CLI fallback. A skip there,
+   * or a request through it that was definitively refused, is not evidence
+   * of use when the human report folds providers that are not set up; a
+   * request through it that failed transiently still is.
+   */
+  incidentalSources?: readonly string[];
+  /**
+   * Whether a skipped attempt this adapter recorded left presence unknown
+   * rather than showing the source genuinely absent, such as a configuration
+   * naming no confirmable account or an installed tool that failed. The
+   * adapter that owns the source is the only thing that can read its own
+   * skips, so it decides here instead of the human report guessing from
+   * error wording. A provider with such a skip is never folded as not set up.
+   */
+  isUncertainSkip?(attempt: SourceAttempt): boolean;
+  discoverAccounts?(): Promise<ProviderAccount[] | undefined>;
   fetchQuota(options: ProviderOptions): Promise<ProviderQuota>;
   inspectAuth(options: ProviderOptions): Promise<AuthProviderReport>;
 };
@@ -298,6 +416,7 @@ export type AuthSourceReport = {
 
 export type AuthProviderReport = {
   provider: ProviderId;
+  accountKey?: string;
   sources: AuthSourceReport[];
 };
 
@@ -306,7 +425,7 @@ export type IntelligenceBucket = "high" | "medium" | "low";
 
 /** Native-provider model knowledge used by the `models` evidence join. */
 export type ModelCatalogEntry = {
-  provider: "claude" | "codex" | "grok" | "kimi";
+  provider: ProviderId;
   id: string;
   label: string;
   intelligence: IntelligenceBucket;
@@ -330,6 +449,7 @@ export type ProviderStateSummary = Pick<
 >;
 
 export type ModelQuotaRecord = {
+  accountKey?: string;
   provider: ModelCatalogEntry["provider"];
   id: string;
   label: string;
@@ -341,7 +461,10 @@ export type ModelQuotaRecord = {
   state: ProviderStateSummary;
 };
 
-export type ModelReference = Pick<ModelQuotaRecord, "provider" | "id">;
+export type ModelReference = Pick<
+  ModelQuotaRecord,
+  "provider" | "accountKey" | "id"
+>;
 
 /** Opt-in ordering keys. Future keys require their own evidence and docs. */
 export type ModelSortKey = "runway";
@@ -354,7 +477,7 @@ export type ModelSortResult = {
 
 export type ModelsResponse = {
   generatedAt: string;
-  schemaVersion: 1;
+  schemaVersion: 1 | 2;
   catalog: Pick<ModelCatalog, "version" | "provenance">;
   models: ModelQuotaRecord[];
   /** Provider/model window scopes with no corresponding catalog entry. */

@@ -1,0 +1,24 @@
+{
+  "api_key": "SENTINEL-MUSE-ISSUED-KEY-must-never-appear",
+  "key_id": "SENTINEL-MUSE-KEY-ID",
+  "email": "sentinel-muse-user@example.invalid",
+  "name": "SENTINEL Muse Display Name",
+  "payment_method": {
+    "brand": "SENTINEL-CARD-BRAND",
+    "last4": "0000"
+  },
+  "is_subs_active": true,
+  "subs_tier_name": "pro",
+  "subs_usage": {
+    "owner_email": "sentinel-muse-user@example.invalid",
+    "window": {
+      "used_percent": 42.5,
+      "window_duration_mins": 300,
+      "resets_at": 1781964000
+    },
+    "weekly": {
+      "used_percent": 17,
+      "resets_at": 1782216000
+    }
+  }
+}

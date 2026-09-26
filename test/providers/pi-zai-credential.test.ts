@@ -212,6 +212,24 @@ describe("Pi Z.ai credential broker", () => {
     expectSnapshotEqual(authPath, fixture.before);
   });
 
+  it.each([
+    ["a non-object root", "[1, 2]"],
+    ["a present non-object zai entry", JSON.stringify({ zai: "k" })],
+  ])("reports %s as missing without changing it", async (_label, contents) => {
+    const home = temporaryDirectory();
+    const authPath = join(home, ".pi", "agent", "auth.json");
+    mkdirSync(dirname(authPath), { recursive: true, mode: 0o700 });
+    writeFileSync(authPath, contents, { mode: 0o600 });
+    process.env.HOME = home;
+    process.env.PI_CODING_AGENT_DIR = dirname(authPath);
+    const before = snapshot(authPath);
+
+    await expect(createPiZaiCredentialBroker().resolve()).resolves.toEqual({
+      status: "missing",
+    });
+    expectSnapshotEqual(authPath, before);
+  });
+
   it("reports oversized Pi auth files as missing without loading them fully", async () => {
     const oversized = Buffer.alloc(64 * 1024 + 8, 0x61);
     const readFile = vi.fn(async () => oversized);

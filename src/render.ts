@@ -1,10 +1,12 @@
 import { encode } from "@toon-format/toon";
 import { quotaHelpLines } from "./advice.js";
+import { accountColumns } from "./providers/accounts.js";
 import { collapseHome } from "./lib/fs.js";
 import { isUsageFetchFailure } from "./providers/usage-fetch-failure.js";
 import { SELECTION_SCALAR_KEY } from "./types.js";
 import type {
   AuthProviderReport,
+  BoundConflict,
   EffectiveAvailability,
   ModelsResponse,
   ProviderId,
@@ -27,11 +29,12 @@ export function renderHelp(lines: string[]): string {
 
 /**
  * One measurable scope. Every column is populated for every row, and rows stay
- * in provider-declaration order: a `spendPriority` column must never read as a
- * published ranking.
+ * in provider-declaration and account-discovery order: a `spendPriority`
+ * column must never read as a published ranking.
  */
 type QuotaRow = {
   provider: ProviderId;
+  accountKey?: string;
   scope: string;
   effectivePercentRemaining: number;
   [SELECTION_SCALAR_KEY]: number | string;
@@ -43,10 +46,12 @@ type QuotaRow = {
 
 /**
  * Sparse: a scope appears only when it has a finite exhaustion point, so it
- * joins back to exactly one `quota[]` row on `provider` + `scope`.
+ * joins back to exactly one `quota[]` row on `provider` + `scope`, plus
+ * `accountKey` when the report is account-expanded.
  */
 type ExhaustionRow = {
   provider: ProviderId;
+  accountKey?: string;
   scope: string;
   usableRunwaySeconds: number | string;
   projectedExhaustedAt: string;
@@ -56,6 +61,7 @@ type ExhaustionRow = {
 /** Sparse: every non-nominal fact, so uncertainty is named rather than padded. */
 type AttentionRow = {
   provider: ProviderId;
+  accountKey?: string;
   scope: string;
   kind: string;
   detail: string;
@@ -70,16 +76,29 @@ type ProviderBlocks = {
 
 /**
  * Render the default decision-shaped report: one `quota[]` row per measurable
- * scope, plus the sparse `exhaustion[]` and `attention[]` blocks. `--full` adds
- * the audit blocks. Demotion happens here, never at computation, so `--tui` and
- * the normalized model keep every field.
+ * scope, plus the sparse `exhaustion[]` and `attention[]` blocks. Providers
+ * named in `omitProviderIds` drop out of those blocks and are counted in one
+ * help line. `--full` ignores that list (it adds the audit blocks and never
+ * subtracts) and prints no omission line. Demotion happens here, never at
+ * computation, so `--tui` and the normalized model keep every field.
  */
 export function renderQuotaToon(
   response: QuotaAxiResponse,
   binPath: string,
   full: boolean,
+  omitProviderIds: readonly ProviderId[] = [],
 ): string {
-  const { quota, exhaustion, attention } = quotaBlocks(response);
+  const omit = new Set(full ? [] : omitProviderIds);
+  const shown =
+    omit.size === 0
+      ? response
+      : {
+          ...response,
+          providers: response.providers.filter(
+            (provider) => !omit.has(provider.provider),
+          ),
+        };
+  const { quota, exhaustion, attention } = quotaBlocks(shown);
   const blocks = [
     encode({
       bin: collapseHome(binPath),
@@ -93,13 +112,14 @@ export function renderQuotaToon(
   ];
 
   if (full) blocks.push(...auditBlocks(response));
-  blocks.push(renderHelp(quotaHelpLines(response)));
+  blocks.push(renderHelp(quotaHelpLines(response, omit.size)));
   return blocks.filter(Boolean).join("\n");
 }
 
 /**
- * Contract invariant: every requested provider appears at least once, in
- * `quota[]` or `attention[]` or both, and never in metric order.
+ * Contract invariant: every provider this function is given appears at least
+ * once, in `quota[]` or `attention[]`, and never in metric order. Default
+ * TOON omission of not-set-up providers happens before this runs.
  */
 function quotaBlocks(response: QuotaAxiResponse): ProviderBlocks {
   const blocks: ProviderBlocks = { quota: [], exhaustion: [], attention: [] };
@@ -111,10 +131,12 @@ function quotaBlocks(response: QuotaAxiResponse): ProviderBlocks {
     for (const scope of scopes) {
       if (scope.effectivePercentRemaining === undefined) {
         scopeAttention.push({
-          provider: provider.provider,
+          ...providerColumns(provider),
           scope: scope.scope,
-          kind: "headroom_unknown",
-          detail: unknownHeadroomDetail(scope),
+          kind: scope.boundConflict ? "bound_conflict" : "headroom_unknown",
+          detail: scope.boundConflict
+            ? boundConflictDetail(scope.boundConflict)
+            : unknownHeadroomDetail(scope),
           remedy: NONE,
         });
       } else {
@@ -125,7 +147,7 @@ function quotaBlocks(response: QuotaAxiResponse): ProviderBlocks {
         const blocked = blockedSignals(scope);
         if (blocked) {
           scopeAttention.push({
-            provider: provider.provider,
+            ...providerColumns(provider),
             scope: scope.scope,
             kind: "unmeasurable",
             detail: blocked,
@@ -138,6 +160,7 @@ function quotaBlocks(response: QuotaAxiResponse): ProviderBlocks {
     blocks.attention.push(
       ...providerAttention(provider, measured, scopeAttention.length),
     );
+    blocks.attention.push(...shareRows(provider));
     blocks.attention.push(...scopeAttention);
   }
   return blocks;
@@ -148,7 +171,7 @@ function quotaRow(
   scope: EffectiveAvailability,
 ): QuotaRow {
   return {
-    provider: provider.provider,
+    ...providerColumns(provider),
     scope: scope.scope,
     effectivePercentRemaining: scope.effectivePercentRemaining as number,
     // `unknown`, never `0`: `0` is exact utilization, a different claim.
@@ -172,7 +195,7 @@ function exhaustionRow(
     return undefined;
   }
   return {
-    provider: provider.provider,
+    ...providerColumns(provider),
     scope: scope.scope,
     usableRunwaySeconds: runway.usableRunwaySeconds ?? UNKNOWN,
     projectedExhaustedAt: runway.projectedExhaustedAt ?? UNKNOWN,
@@ -191,13 +214,70 @@ function providerAttention(
   measured: boolean,
   scopeRows: number,
 ): AttentionRow[] {
+  // Degraded sources are appended, never counted: they name the provider but
+  // not why a scope is missing, so they must not suppress the `no_quota` row.
+  return [
+    ...providerStateRows(provider, measured, scopeRows),
+    ...degradedSourceRows(provider),
+  ];
+}
+
+function shareRows(provider: ProviderQuota): AttentionRow[] {
+  return provider.windows
+    .filter((window) => window.shareOf)
+    .map((window) => ({
+      ...providerColumns(provider),
+      scope: "all",
+      kind: "share",
+      detail: shareDetail(window),
+      remedy: NONE,
+    }));
+}
+
+function shareDetail(window: QuotaWindow): string {
+  const relationship = `${window.id} of ${window.shareOf}`;
+  return window.percentUsed === undefined
+    ? relationship
+    : `${relationship}${DETAIL_SEPARATOR}${window.percentUsed}`;
+}
+
+/**
+ * A working sibling answered for this provider, so the rows above are healthy
+ * and this is the only place the superseded breakage is still stated.
+ */
+function degradedSourceRows(provider: ProviderQuota): AttentionRow[] {
+  return (provider.state.degradedSources ?? []).map((degraded) => ({
+    ...providerColumns(provider),
+    scope: "all",
+    kind: "degraded_source",
+    detail: degraded.error
+      ? `${degraded.source}${DETAIL_SEPARATOR}${degraded.error}`
+      : degraded.source,
+    remedy: NONE,
+  }));
+}
+
+function providerStateRows(
+  provider: ProviderQuota,
+  measured: boolean,
+  scopeRows: number,
+): AttentionRow[] {
   const rows: AttentionRow[] = [];
   const primary = primaryProviderRow(provider);
   if (primary) rows.push(primary);
+  if (provider.state.reused) {
+    rows.push({
+      ...providerColumns(provider),
+      scope: "all",
+      kind: "reused",
+      detail: `last refreshed ${provider.state.refreshedAt ?? UNKNOWN}`,
+      remedy: NONE,
+    });
+  }
   const unresolved = joinIds(provider.quotaSemantics?.unresolvedWindowIds);
   if (unresolved) {
     rows.push({
-      provider: provider.provider,
+      ...providerColumns(provider),
       scope: "all",
       kind: "unresolved_windows",
       detail: unresolved,
@@ -207,7 +287,7 @@ function providerAttention(
   const untrusted = joinIds(provider.state.untrustedWindowIds);
   if (untrusted) {
     rows.push({
-      provider: provider.provider,
+      ...providerColumns(provider),
       scope: "all",
       kind: "untrusted_windows",
       detail: untrusted,
@@ -222,17 +302,42 @@ function providerAttention(
     primary.detail += suffix;
     return rows;
   }
+  const credits = creditBalance(provider);
+  if (credits) {
+    rows.unshift({
+      ...providerColumns(provider),
+      scope: "all",
+      kind: "credits",
+      detail: `${credits}${suffix}`,
+      remedy: provider.state.remedyCommand ?? NONE,
+    });
+    return rows;
+  }
   // No status row to carry the auth fact. Emit one when there is an auth
   // status to state, or when nothing else would name this provider at all.
   if (suffix === "" && rows.length + scopeRows > 0) return rows;
   rows.unshift({
-    provider: provider.provider,
+    ...providerColumns(provider),
     scope: "all",
     kind: "no_quota",
     detail: `${provider.state.error ?? "no measurable scope"}${suffix}`,
     remedy: provider.state.remedyCommand ?? NONE,
   });
   return rows;
+}
+
+/**
+ * A provider that reports a raw credit balance but no measurable scope has a
+ * real number to state. Naming it keeps the default report from contradicting
+ * the same run's `credits` with a bare `no_quota`, without inventing a
+ * percentage or a routing bound from a balance that has no cap.
+ */
+function creditBalance(provider: ProviderQuota): string | undefined {
+  const credits = provider.credits;
+  if (!credits) return undefined;
+  if (credits.unlimited) return "credits unlimited";
+  if (credits.remaining === undefined) return undefined;
+  return `remaining ${credits.remaining} ${credits.unit ?? "credits"}`;
 }
 
 function primaryProviderRow(provider: ProviderQuota): AttentionRow | undefined {
@@ -252,7 +357,7 @@ function primaryProviderRow(provider: ProviderQuota): AttentionRow | undefined {
     ? `${baseDetail}${DETAIL_SEPARATOR}reason ${state.reason}`
     : baseDetail;
   return {
-    provider: provider.provider,
+    ...providerColumns(provider),
     scope: "all",
     kind,
     detail: state.retryAfter
@@ -260,6 +365,17 @@ function primaryProviderRow(provider: ProviderQuota): AttentionRow | undefined {
       : detail,
     remedy: state.remedyCommand ?? NONE,
   };
+}
+
+/**
+ * State both sides of a bound conflict, so the reason the scope has no number
+ * is the contradiction itself rather than a bare list of blocking windows.
+ */
+function boundConflictDetail(conflict: BoundConflict): string {
+  return [
+    `${joinIds(conflict.exhaustedWindowIds) ?? UNKNOWN} reads 0`,
+    `${joinIds(conflict.liveWindowIds) ?? UNKNOWN} still report allowance`,
+  ].join(DETAIL_SEPARATOR);
 }
 
 /** Which windows suppress the scope's headroom, so absence is explained. */
@@ -332,7 +448,7 @@ function joinIds(ids: string[] | undefined): string | undefined {
 /** `--full` audit tier: every derivation input the lean blocks summarize. */
 function auditBlocks(response: QuotaAxiResponse): string[] {
   const providers = response.providers.map((provider) => ({
-    provider: provider.provider,
+    ...providerColumns(provider),
     plan: provider.plan ?? UNKNOWN,
     source: provider.source ?? UNKNOWN,
     status: provider.state.status,
@@ -342,7 +458,7 @@ function auditBlocks(response: QuotaAxiResponse): string[] {
   }));
   const windows = response.providers.flatMap((provider) =>
     provider.windows.map((window) => ({
-      provider: provider.provider,
+      ...providerColumns(provider),
       id: window.id,
       label: window.label,
       percentRemaining: window.percentRemaining ?? UNKNOWN,
@@ -359,7 +475,7 @@ function auditBlocks(response: QuotaAxiResponse): string[] {
   );
   const scopeAudit = response.providers.flatMap((provider) =>
     (provider.quotaSemantics?.effectiveAvailability ?? []).map((scope) => ({
-      provider: provider.provider,
+      ...providerColumns(provider),
       scope: scope.scope,
       boundedBy: joinIds(scope.boundedBy) ?? NONE,
       relationships: provider.quotaSemantics?.status ?? UNKNOWN,
@@ -373,7 +489,7 @@ function auditBlocks(response: QuotaAxiResponse): string[] {
     })),
   );
   const accounts = response.providers.map((provider) => ({
-    provider: provider.provider,
+    ...providerColumns(provider),
     email: provider.account?.email ?? "hidden",
     organization: provider.account?.organization ?? NONE,
     accountId: provider.account?.accountId ?? NONE,
@@ -398,6 +514,7 @@ export function renderAuthToon(
   const sources = reports.flatMap((report) =>
     report.sources.map((source) => ({
       provider: report.provider,
+      ...accountColumns(report),
       source: source.source,
       path: source.path ? collapseHome(source.path) : "none",
       status: source.status,
@@ -412,7 +529,7 @@ export function renderAuthToon(
     }),
     encode({ auth: sources }),
     renderHelp([
-      "Run `quota-axi --allow-keychain-prompt auth` to permit macOS Keychain access",
+      "Run `quota-axi --allow-keychain-prompt auth` to permit native secure-store access",
     ]),
   ].join("\n");
 }
@@ -424,6 +541,7 @@ export function renderModelsToon(
 ): string {
   const models = response.models.map((model) => ({
     provider: model.provider,
+    ...accountColumns(model),
     id: model.id,
     label: model.label,
     intelligence: model.intelligence,
@@ -453,6 +571,7 @@ export function renderModelsToon(
   if (full) {
     const evidence = response.models.map((model) => ({
       provider: model.provider,
+      ...accountColumns(model),
       id: model.id,
       boundedBy: model.effective?.boundedBy.join(" + ") ?? "unknown",
       limitingWindowIds:
@@ -467,7 +586,9 @@ export function renderModelsToon(
   }
   blocks.push(
     renderHelp([
-      "Default model order is deterministic and non-preferential (provider, then id)",
+      response.schemaVersion === 2
+        ? "Default model order is deterministic and non-preferential (provider, accountKey, then id)"
+        : "Default model order is deterministic and non-preferential (provider, then id)",
       "Run `quota-axi models --sort runway` for the documented opt-in runway comparator",
       "Run `quota-axi models --json` for catalog provenance and full quota evidence",
     ]),
@@ -499,8 +620,9 @@ export function redactedResponse(
 export function quotaJsonReport(
   response: QuotaAxiResponse,
   full: boolean,
+  laneAbsent: readonly boolean[] = [],
 ): QuotaAxiResponse {
-  const redacted = redactedResponse(response, full);
+  const redacted = redactedResponse(markNotSetUp(response, laneAbsent), full);
   if (full) return redacted;
   return {
     ...redacted,
@@ -514,17 +636,38 @@ export function quotaJsonReport(
         : {}),
       state: {
         ...provider.state,
-        refreshedAt: undefined,
+        // A reused reading's age is load-bearing, so its fetch time stays.
+        refreshedAt: provider.state.reused
+          ? provider.state.refreshedAt
+          : undefined,
         sourcesTried: undefined,
       },
     })),
   };
 }
 
+/**
+ * Sparse `notSetUp: true` on lanes the caller already classified absent.
+ * The flags are computed before redaction strips `attempts`. An empty list
+ * leaves the model untouched, so a caller that has not classified adds nothing.
+ */
+function markNotSetUp(
+  response: QuotaAxiResponse,
+  laneAbsent: readonly boolean[],
+): QuotaAxiResponse {
+  if (!laneAbsent.some(Boolean)) return response;
+  return {
+    ...response,
+    providers: response.providers.map((provider, index) =>
+      laneAbsent[index] ? { ...provider, notSetUp: true } : provider,
+    ),
+  };
+}
+
 function demotedWindow(window: QuotaWindow): QuotaWindow {
   return {
     ...window,
-    percentUsed: undefined,
+    percentUsed: window.shareOf === undefined ? undefined : window.percentUsed,
     startsAt: undefined,
     windowSeconds: undefined,
     ...(window.pace
@@ -565,9 +708,16 @@ function demotedSemantics(semantics: QuotaSemantics): QuotaSemantics {
 
 function attemptRow(provider: ProviderQuota, attempt: SourceAttempt) {
   return {
-    provider: provider.provider,
+    ...providerColumns(provider),
     source: attempt.source,
     status: attempt.status,
     error: attempt.error ?? "none",
+  };
+}
+
+function providerColumns(provider: ProviderQuota) {
+  return {
+    provider: provider.provider,
+    ...accountColumns(provider),
   };
 }

@@ -1,0 +1,17 @@
+{
+  "planName": "Alibaba Coding Plan",
+  "per1WeekPercentage": 0.0023405264824,
+  "per1WeekResetTime": 1788447600000,
+  "limits": [
+    {
+      "model": "qwen3-max",
+      "per1WeekPercentage": 0.25,
+      "per1WeekResetTime": 1788447600000
+    },
+    {
+      "modelName": "qwen-plus",
+      "percentUsed": 40,
+      "resetAt": "2026-09-03T15:00:00Z"
+    }
+  ]
+}

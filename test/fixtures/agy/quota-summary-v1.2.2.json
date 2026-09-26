@@ -1,0 +1,51 @@
+{
+  "response": {
+    "groups": [
+      {
+        "displayName": "Gemini Models",
+        "description": "Sanitized Gemini quota group",
+        "buckets": [
+          {
+            "bucketId": "gemini-five-hour",
+            "displayName": "Five Hour Limit",
+            "description": "Resets on the vendor schedule",
+            "window": "FIVE_HOUR",
+            "remainingFraction": 0.88,
+            "resetTime": "2026-09-13T18:00:00Z"
+          },
+          {
+            "bucketId": "gemini-weekly",
+            "displayName": "Weekly Limit",
+            "description": "Resets on the vendor schedule",
+            "window": "WEEKLY",
+            "remainingFraction": 0.76,
+            "resetTime": "2026-09-18T18:00:00Z"
+          }
+        ]
+      },
+      {
+        "displayName": "Claude and GPT Models",
+        "description": "Sanitized third-party model quota group",
+        "buckets": [
+          {
+            "bucketId": "third-party-five-hour",
+            "displayName": "Five Hour Limit",
+            "description": "Resets on the vendor schedule",
+            "window": "FIVE_HOUR",
+            "remainingFraction": 0.64,
+            "resetTime": "2026-09-13T19:00:00Z"
+          },
+          {
+            "bucketId": "third-party-weekly",
+            "displayName": "Weekly Limit",
+            "description": "Resets on the vendor schedule",
+            "window": "WEEKLY",
+            "remainingFraction": 0.52,
+            "resetTime": "2026-09-19T19:00:00Z"
+          }
+        ]
+      }
+    ],
+    "description": "Sanitized Antigravity CLI 1.2.2 quota summary"
+  }
+}
