@@ -22,6 +22,9 @@ import {
 } from "../../src/lib/process.js";
 import { readCachedProvider, writeCachedProviders } from "../../src/cache.js";
 import {
+  AGY_BINARY_OVERRIDE_NOT_ABSOLUTE,
+  AGY_BINARY_OVERRIDE_NOT_EXECUTABLE,
+  AGY_NOT_RUNNING,
   fetchQuota,
   fetchQuotaWithRuntime,
   inspectAuthWithRuntime,
@@ -39,6 +42,7 @@ import type { ProviderQuota } from "../../src/types.js";
 
 const originalXdgCacheHome = process.env.XDG_CACHE_HOME;
 const originalPath = process.env.PATH;
+const originalAgyBinary = process.env.QUOTA_AXI_AGY_BINARY;
 const originalWorkingDirectory = process.cwd();
 let tempDir: string | undefined;
 const servers: ReturnType<typeof createServer>[] = [];
@@ -60,6 +64,8 @@ afterEach(async () => {
   else process.env.XDG_CACHE_HOME = originalXdgCacheHome;
   if (originalPath === undefined) delete process.env.PATH;
   else process.env.PATH = originalPath;
+  if (originalAgyBinary === undefined) delete process.env.QUOTA_AXI_AGY_BINARY;
+  else process.env.QUOTA_AXI_AGY_BINARY = originalAgyBinary;
   process.chdir(originalWorkingDirectory);
   if (tempDir) rmSync(tempDir, { recursive: true, force: true });
   tempDir = undefined;
@@ -721,6 +727,182 @@ exec node "$0-cli.js" "$@"
 
       expect(result.state.status).toBe("fresh");
       expect(result.source).toBe("cli");
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "runs the CLI child in throwaway cwd and XDG directories and removes them afterwards",
+    async () => {
+      const bin = join(tempDir as string, "bin");
+      const record = join(tempDir as string, "record.json");
+      mkdirSync(bin);
+      const payload = JSON.stringify(fixture("usage-print-v1.2.2.json"));
+      writeFileSync(
+        join(bin, "agy"),
+        `#!/bin/sh
+printf '{"cwd":"%s","config":"%s","cache":"%s","state":"%s","path":"%s","exists":[%s,%s,%s]}' "$PWD" "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME" "$XDG_STATE_HOME" "$PATH" "$([ -d "$XDG_CONFIG_HOME" ] && echo true || echo false)" "$([ -d "$XDG_CACHE_HOME" ] && echo true || echo false)" "$([ -d "$XDG_STATE_HOME" ] && echo true || echo false)" > '${record}'
+printf '%s' '${payload}'
+`,
+      );
+      chmodSync(join(bin, "agy"), 0o700);
+      process.env.PATH = bin;
+
+      const result = await fetchQuota({
+        allowKeychainPrompt: false,
+        refreshCredentials: false,
+      });
+
+      expect(result.state.status).toBe("fresh");
+      expect(result.source).toBe("cli");
+      const seen = JSON.parse(readFileSync(record, "utf8")) as {
+        cwd: string;
+        config: string;
+        cache: string;
+        state: string;
+        path: string;
+        exists: boolean[];
+      };
+      for (const key of ["cwd", "config", "cache", "state"] as const) {
+        expect(seen[key]).toContain("quota-axi-agy-");
+        expect(seen[key]).not.toContain(originalWorkingDirectory);
+      }
+      expect(seen.exists).toEqual([true, true, true]);
+      expect(seen.path.split(delimiter)[0]).not.toBe(bin);
+      expect(seen.path.split(delimiter).slice(1).join(delimiter)).toBe(bin);
+      expect(existsSync(seen.cwd)).toBe(false);
+      expect(existsSync(seen.config)).toBe(false);
+      expect(existsSync(seen.cache)).toBe(false);
+      expect(existsSync(seen.state)).toBe(false);
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "runs the QUOTA_AXI_AGY_BINARY override executable when PATH has no agy",
+    async () => {
+      const bin = join(tempDir as string, "bin");
+      const overrideDir = join(tempDir as string, "override");
+      mkdirSync(bin);
+      mkdirSync(overrideDir);
+      const payload = JSON.stringify(fixture("usage-print-v1.2.2.json"));
+      const override = join(overrideDir, "agy-override");
+      writeFileSync(override, `#!/bin/sh\nprintf '%s' '${payload}'\n`);
+      chmodSync(override, 0o700);
+      process.env.PATH = bin;
+      process.env.QUOTA_AXI_AGY_BINARY = override;
+
+      const result = await fetchQuota({
+        allowKeychainPrompt: false,
+        refreshCredentials: false,
+      });
+
+      expect(result.state.status).toBe("fresh");
+      expect(result.source).toBe("cli");
+      expect(result.windows.map((window) => window.id)).toEqual([
+        "gemini_5h",
+        "gemini_weekly",
+        "claude_gpt_5h",
+        "claude_gpt_weekly",
+      ]);
+    },
+  );
+
+  it("ignores a blank QUOTA_AXI_AGY_BINARY and resolves agy from PATH", async () => {
+    const agyPath = join(tempDir as string, "agy-on-path");
+    process.env.QUOTA_AXI_AGY_BINARY = "   ";
+    const commands: string[] = [];
+
+    const result = await fetchQuotaWithRuntime(
+      runtimeWith({
+        ps: "",
+        agyPath,
+        agyOutput: JSON.stringify(fixture("usage-print-v1.2.2.json")),
+        onExec(command) {
+          commands.push(command);
+        },
+      }),
+    );
+
+    expect(result.state.status).toBe("fresh");
+    expect(result.source).toBe("cli");
+    expect(commands).toContain(agyPath);
+  });
+
+  it("fails closed when QUOTA_AXI_AGY_BINARY is not an absolute path", async () => {
+    process.env.QUOTA_AXI_AGY_BINARY = "agy-relative-override";
+
+    const result = await fetchQuotaWithRuntime(runtimeWith({ ps: "" }));
+
+    expect(result.state.status).toBe("unavailable");
+    expect(result.attempts[0]).toMatchObject({
+      source: "cli",
+      status: "skipped",
+      error: AGY_BINARY_OVERRIDE_NOT_ABSOLUTE,
+    });
+    expect(result.attempts[1]).toMatchObject({
+      source: "loopback",
+      status: "skipped",
+      error: AGY_NOT_RUNNING,
+    });
+  });
+
+  it("fails closed when the QUOTA_AXI_AGY_BINARY override is not an executable file", async () => {
+    const missing = join(tempDir as string, "no-such-agy");
+    process.env.QUOTA_AXI_AGY_BINARY = missing;
+
+    const result = await fetchQuotaWithRuntime({
+      ...runtimeWith({ ps: "" }),
+      findCommandPath: async (command) => {
+        if (command !== missing)
+          throw new Error(`unexpected command: ${command}`);
+        return undefined;
+      },
+    });
+
+    expect(result.attempts[0]).toMatchObject({
+      source: "cli",
+      status: "skipped",
+      error: AGY_BINARY_OVERRIDE_NOT_EXECUTABLE,
+    });
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "still denies desktop openers when QUOTA_AXI_AGY_BINARY is set",
+    async () => {
+      const bin = join(tempDir as string, "bin");
+      const overrideDir = join(tempDir as string, "override");
+      const record = join(tempDir as string, "record.txt");
+      const marker = join(tempDir as string, "browser-opened");
+      mkdirSync(bin);
+      mkdirSync(overrideDir);
+      writeFileSync(
+        join(bin, "open"),
+        `#!/bin/sh
+printf opened > '${marker}'
+`,
+      );
+      const override = join(overrideDir, "agy-override");
+      writeFileSync(
+        override,
+        `#!/usr/bin/env node
+require("node:fs").writeFileSync(${JSON.stringify(record)}, process.cwd());
+require("node:child_process").execSync("open 'https://accounts.example.invalid/oauth'");
+`,
+      );
+      chmodSync(join(bin, "open"), 0o700);
+      chmodSync(override, 0o700);
+      process.env.PATH = bin;
+      process.env.QUOTA_AXI_AGY_BINARY = override;
+
+      const result = await fetchQuota({
+        allowKeychainPrompt: false,
+        refreshCredentials: false,
+      });
+
+      expect(existsSync(marker)).toBe(false);
+      expect(result.state.error).toBe("Antigravity CLI /quota failed");
+      const childCwd = readFileSync(record, "utf8");
+      expect(childCwd).toContain("quota-axi-agy-");
+      expect(existsSync(childCwd)).toBe(false);
     },
   );
 

@@ -6,6 +6,7 @@ import * as path from "node:path";
 export type ExecFileTextOptions = {
   maxBufferBytes?: number;
   env?: NodeJS.ProcessEnv;
+  cwd?: string;
 };
 
 export function execFileText(
@@ -39,6 +40,7 @@ export function execFileText(
           : options.env
             ? { env: options.env }
             : {}),
+        ...(options.cwd ? { cwd: options.cwd } : {}),
       },
       (error, stdout) => {
         if (error) {

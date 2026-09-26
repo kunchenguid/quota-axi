@@ -1,5 +1,11 @@
 import { spawn } from "node:child_process";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -42,6 +48,23 @@ describe("commandExists", () => {
     expect(await commandExists(command)).toBe(true);
     expect(await commandExists("quota-axi-missing")).toBe(false);
   });
+});
+
+describe("execFileText", () => {
+  it.skipIf(process.platform === "win32")(
+    "runs the child in the requested working directory",
+    async () => {
+      const cwd = mkdtempSync(join(tmpdir(), "quota-axi-cwd-"));
+      try {
+        const output = await execFileText("pwd", [], 5_000, { cwd });
+        // macOS hands back /var/... but reports the physical /private/var/...
+        expect(output.trim()).toBe(realpathSync(cwd));
+      } finally {
+        rmSync(cwd, { recursive: true, force: true });
+      }
+    },
+    10_000,
+  );
 });
 
 describe("terminateChild", () => {

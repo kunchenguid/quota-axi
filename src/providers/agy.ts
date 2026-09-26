@@ -1,8 +1,8 @@
-import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import * as http from "node:http";
 import * as https from "node:https";
 import { tmpdir } from "node:os";
-import { delimiter, join } from "node:path";
+import { delimiter, isAbsolute, join } from "node:path";
 import { deleteCachedProvider, readCachedProvider } from "../cache.js";
 import {
   currentUserProcessListArgs,
@@ -46,6 +46,7 @@ const REQUEST_TIMEOUT_MS = 3_000;
 const CLI_QUOTA_TIMEOUT_MS = 15_000;
 const PROBE_BUDGET_MS = 10_000;
 const MAX_RESPONSE_BYTES = 1024 * 1024;
+const AGY_BINARY_ENV = "QUOTA_AXI_AGY_BINARY";
 
 type AgyProcessSource = "agy" | "app";
 
@@ -91,6 +92,10 @@ export type AgyProbeRuntime = {
  */
 export const AGY_CLI_NOT_INSTALLED = "agy CLI is not installed";
 export const AGY_NOT_RUNNING = "Antigravity/agy is not running";
+export const AGY_BINARY_OVERRIDE_NOT_ABSOLUTE =
+  "QUOTA_AXI_AGY_BINARY override is not an absolute path";
+export const AGY_BINARY_OVERRIDE_NOT_EXECUTABLE =
+  "QUOTA_AXI_AGY_BINARY override is not an executable file";
 
 export const agyAdapter: ProviderAdapter = {
   id: "agy",
@@ -241,29 +246,37 @@ async function fetchCliQuota(runtime: AgyProbeRuntime): Promise<{
   windows: QuotaWindow[];
   refreshedAt: string;
 }> {
-  let commandPath: string | undefined;
-  try {
-    commandPath = await runtime.findCommandPath("agy");
-  } catch {
-    throw new AgyUnavailableError("Antigravity CLI discovery failed");
-  }
-  if (!commandPath) {
-    throw new AgyUnavailableError(AGY_CLI_NOT_INSTALLED);
-  }
+  const commandPath = await resolveCliCommandPath(runtime);
 
   let text: string;
   let openerGuard: Awaited<ReturnType<typeof createOpenerGuard>> | undefined;
+  let workspace: Awaited<ReturnType<typeof createCliWorkspace>> | undefined;
   try {
     openerGuard = await createOpenerGuard();
+    workspace = await createCliWorkspace();
     text = await runtime.execFileText(
       commandPath,
       ["-p", "/quota", "--output-format", "json"],
       CLI_QUOTA_TIMEOUT_MS,
-      { env: openerGuard.env },
+      {
+        cwd: workspace.cwd,
+        env: {
+          ...openerGuard.env,
+          XDG_CONFIG_HOME: workspace.configHome,
+          XDG_CACHE_HOME: workspace.cacheHome,
+          XDG_STATE_HOME: workspace.stateHome,
+        },
+      },
     );
   } catch (error) {
     throw sanitizeCliError(error);
   } finally {
+    // execFileText settles only after the child has exited (a timeout kill
+    // included), so neither removal can race a live process. The opener
+    // guard goes last: its directory must stay resolvable on the child's
+    // PATH for the child's whole lifetime, while the workspace only has to
+    // outlive the child's working directory and XDG reads.
+    await workspace?.dispose();
     await openerGuard?.dispose();
   }
   let parsed: unknown;
@@ -277,6 +290,83 @@ async function fetchCliQuota(runtime: AgyProbeRuntime): Promise<{
     throw new AgyMalformedResponseError("agy /quota quota summary malformed");
   }
   return summary;
+}
+
+/**
+ * The executable for the CLI quota probe: the `QUOTA_AXI_AGY_BINARY` value
+ * when it is set and non-blank, otherwise `agy` from PATH. The override must
+ * be an absolute path to an executable file and is resolved without
+ * consulting PATH; a relative or non-executable override fails closed, and a
+ * blank value is ignored.
+ */
+async function resolveCliCommandPath(
+  runtime: AgyProbeRuntime,
+): Promise<string> {
+  const configured = process.env[AGY_BINARY_ENV]?.trim() ?? "";
+  if (configured === "") {
+    let resolved: string | undefined;
+    try {
+      resolved = await runtime.findCommandPath("agy");
+    } catch {
+      throw new AgyUnavailableError("Antigravity CLI discovery failed");
+    }
+    if (!resolved) throw new AgyUnavailableError(AGY_CLI_NOT_INSTALLED);
+    return resolved;
+  }
+  if (!isAbsolute(configured)) {
+    throw new AgyUnavailableError(AGY_BINARY_OVERRIDE_NOT_ABSOLUTE);
+  }
+  let resolved: string | undefined;
+  try {
+    resolved = await runtime.findCommandPath(configured);
+  } catch {
+    throw new AgyUnavailableError("Antigravity CLI discovery failed");
+  }
+  if (!resolved) {
+    throw new AgyUnavailableError(AGY_BINARY_OVERRIDE_NOT_EXECUTABLE);
+  }
+  return resolved;
+}
+
+/**
+ * A throwaway working directory plus throwaway XDG config/cache/state
+ * directories, so the CLI child cannot discover the caller's repo-local
+ * `.agents`/MCP configuration from quota-axi's cwd and cannot read or write
+ * quota-axi's own XDG state. Everything lives under one 0700 temp root that
+ * is removed, best effort, once the child has exited.
+ */
+async function createCliWorkspace(): Promise<{
+  cwd: string;
+  configHome: string;
+  cacheHome: string;
+  stateHome: string;
+  dispose(): Promise<void>;
+}> {
+  const root = await mkdtemp(join(tmpdir(), "quota-axi-agy-"));
+  const configHome = join(root, "config");
+  const cacheHome = join(root, "cache");
+  const stateHome = join(root, "state");
+  try {
+    await Promise.all(
+      [configHome, cacheHome, stateHome].map((directory) =>
+        mkdir(directory, { recursive: true, mode: 0o700 }),
+      ),
+    );
+    return {
+      cwd: root,
+      configHome,
+      cacheHome,
+      stateHome,
+      dispose() {
+        return rm(root, { recursive: true, force: true }).catch(
+          () => undefined,
+        );
+      },
+    };
+  } catch (error) {
+    await rm(root, { recursive: true, force: true }).catch(() => undefined);
+    throw error;
+  }
 }
 
 async function createOpenerGuard(): Promise<{
