@@ -932,7 +932,7 @@ describe("quota semantics", () => {
       provider("zai-coding-plan", [
         window("five_hour", "session", 99),
         window("weekly", "weekly", 80),
-        window("mcp_monthly", "monthly", 100),
+        window("mcp_month", "monthly", 100),
       ]),
       GENERATED_AT,
     );
@@ -951,7 +951,7 @@ describe("quota semantics", () => {
           scope: "tools",
           status: "known",
           effectivePercentRemaining: 100,
-          boundedBy: ["mcp_monthly"],
+          boundedBy: ["mcp_month"],
         },
       ],
     });
@@ -959,7 +959,7 @@ describe("quota semantics", () => {
     // "prevents a definitive conclusion" per README, and the MCP window
     // doesn't. It's still disclosed on the raw report: result.windows.
     expect(result.quotaSemantics?.unresolvedWindowIds).toBeUndefined();
-    expect(result.windows.map(({ id }) => id)).toContain("mcp_monthly");
+    expect(result.windows.map(({ id }) => id)).toContain("mcp_month");
   });
 
   it("still reports known Z.ai Coding Plan availability when the MCP window is absent", () => {

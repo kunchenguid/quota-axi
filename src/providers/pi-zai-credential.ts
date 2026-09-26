@@ -1,6 +1,8 @@
 import { open } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { classifyPiAuthEntry } from "../lib/pi-auth-store.js";
+import { usableLiteralSecret } from "../lib/secret.js";
 
 const PI_PROVIDER_ID = "zai";
 const AUTH_FILE_LIMIT_BYTES = 64 * 1024;
@@ -76,11 +78,12 @@ async function resolveCredential(
     return { status: "missing" };
   }
 
-  const root = objectValue(parsed);
-  if (!root) return { status: "missing" };
-
-  const entry = objectValue(root[PI_PROVIDER_ID]);
-  if (!entry) return { status: "missing" };
+  // Pi entries are classified through the shared pi-auth-store machinery;
+  // every classified absence or structural invalidity is a broker "missing",
+  // because this provider never treats a malformed store as a sign-out.
+  const classified = classifyPiAuthEntry(parsed, PI_PROVIDER_ID);
+  if (classified.status !== "present") return { status: "missing" };
+  const entry = classified.entry;
 
   // Pi stores a `zai` login as either a literal API key or the OAuth record
   // it received from Z.ai. Both are read in place: an expired OAuth record is
@@ -132,25 +135,6 @@ function piAgentDirectory(dependencies: BrokerDependencies): string {
   return configured;
 }
 
-function usableLiteralSecret(value: unknown): string | undefined {
-  if (typeof value !== "string" || value.trim().length === 0) {
-    return undefined;
-  }
-  // Reject environment, template, and command references without resolving them.
-  if (value.startsWith("!") || value.includes("$")) {
-    return undefined;
-  }
-  if (
-    [...value].some((character) => {
-      const code = character.charCodeAt(0);
-      return code <= 0x1f || code === 0x7f;
-    })
-  ) {
-    return undefined;
-  }
-  return value;
-}
-
 async function readBoundedFile(
   path: string,
   maxBytes: number,
@@ -197,12 +181,6 @@ function nonempty(value: string | undefined): string | undefined {
 
 function stringValue(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
-}
-
-function objectValue(value: unknown): Record<string, unknown> | undefined {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
 }
 
 function errorCode(error: unknown): string | undefined {

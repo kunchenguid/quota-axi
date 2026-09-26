@@ -139,13 +139,8 @@ function semanticsFor(
         generatedAt,
       );
     case "zai":
-      return zaiSemantics(
-        provider.windows,
-        provider.state.untrustedWindowIds ?? [],
-        generatedAt,
-      );
     case "zai-coding-plan":
-      return zaiCodingPlanSemantics(
+      return zaiSemantics(
         provider.windows,
         provider.state.untrustedWindowIds ?? [],
         generatedAt,
@@ -813,54 +808,6 @@ function unresolvedAvailability(
       unmeasurableWindowIds,
     },
   };
-}
-
-function zaiCodingPlanSemantics(
-  windows: QuotaWindow[],
-  untrustedWindowIds: string[],
-  generatedAt: string,
-): QuotaSemantics {
-  const token = windows.filter(
-    ({ id }) => id === "five_hour" || id === "weekly",
-  );
-  const tool = windows.filter(({ id }) => id === "mcp_monthly");
-  const recognized = new Set([...token, ...tool]);
-  const unresolved = windows.filter((window) => !recognized.has(window));
-  const unresolvedWindowIds = [
-    ...new Set([...unresolved.map(({ id }) => id), ...untrustedWindowIds]),
-  ];
-  if (unresolvedWindowIds.length > 0) {
-    const effectiveAvailability: EffectiveAvailability[] = [];
-    if (token.length > 0) {
-      effectiveAvailability.push(
-        unresolvedAvailability("all_models", token, unresolvedWindowIds),
-      );
-    }
-    if (tool.length > 0) {
-      effectiveAvailability.push(
-        unresolvedAvailability("tools", tool, unresolvedWindowIds),
-      );
-    }
-    return {
-      status: "partial",
-      description:
-        "Z.ai Coding Plan's five-hour and weekly account windows jointly bound model usage and the monthly MCP/web-tool window is a separate resource, but unfamiliar windows prevent a definitive effective percentage.",
-      effectiveAvailability,
-      unresolvedWindowIds,
-    };
-  }
-
-  const effectiveAvailability: EffectiveAvailability[] = [];
-  if (token.length > 0) {
-    effectiveAvailability.push(availability("all_models", token, generatedAt));
-  }
-  if (tool.length > 0) {
-    effectiveAvailability.push(availability("tools", tool, generatedAt));
-  }
-  return knownSemantics(
-    effectiveAvailability,
-    "Z.ai Coding Plan's five-hour and weekly account windows jointly bound model usage, so effective remaining is the minimum across the named windows. The monthly MCP/web-tool window caps a separate workload and does not bound model availability.",
-  );
 }
 
 /**

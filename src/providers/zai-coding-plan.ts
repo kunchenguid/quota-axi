@@ -2,6 +2,7 @@ import {
   deleteCachedProvider as deleteCachedProviderFromDisk,
   readCachedProvider as readCachedProviderFromDisk,
 } from "../cache.js";
+import { providerFetch } from "../lib/http.js";
 import { clampPercent, retryAfterToIso } from "../lib/time.js";
 import type {
   AuthProviderReport,
@@ -13,7 +14,11 @@ import type {
   SourceAttempt,
 } from "../types.js";
 import { VERSION } from "../version.js";
-import { withRemaining } from "./common.js";
+import {
+  servableStaleWindows,
+  servableUntrustedWindowIds,
+  withRemaining,
+} from "./common.js";
 import {
   createPiZaiCredentialBroker,
   type ZaiCredentialBroker,
@@ -34,13 +39,16 @@ const FIVE_HOUR_SECONDS = 18_000;
 const WEEK_SECONDS = 7 * 24 * 60 * 60;
 const USER_AGENT = `quota-axi/${VERSION}`;
 
+const zaiCodingPlanProviderFetch: typeof globalThis.fetch = (input, init) =>
+  providerFetch(input, init, { retryOverIpv4: true });
+
 /**
- * Only these three verified `(type, unit, number)` triples are trusted to
- * derive a duration. `unit` is a working-hypothesis time-unit enum and
- * `number` its multiplier, but that mapping is not verified beyond these
- * exact combinations (see the issue's "working interpretation, not
- * verified" note); any other combination degrades to `kind: "unknown"`
- * with no invented `windowSeconds`.
+ * Window recognition mirrors upstream `zai`'s vocabulary: token and credit
+ * limits are identified by the endpoint's own `(type, unit, number)` magic
+ * values (`3`/`5` and `6`/`1`), while any `TIME_LIMIT` is the monthly
+ * MCP/web-tool window regardless of its unit and number. Any other
+ * combination degrades to `kind: "unknown"` with no invented
+ * `windowSeconds`.
  */
 type RecognizedWindow = {
   id: string;
@@ -54,7 +62,11 @@ function recognizeWindow(
   unit: number,
   count: number,
 ): RecognizedWindow | undefined {
-  if (type === "TOKENS_LIMIT" && unit === 3 && count === 5) {
+  if (
+    (type === "TOKENS_LIMIT" || type === "CREDIT_LIMIT") &&
+    unit === 3 &&
+    count === 5
+  ) {
     return {
       id: "five_hour",
       label: "session",
@@ -62,7 +74,11 @@ function recognizeWindow(
       windowSeconds: FIVE_HOUR_SECONDS,
     };
   }
-  if (type === "TOKENS_LIMIT" && unit === 6 && count === 1) {
+  if (
+    (type === "TOKENS_LIMIT" || type === "CREDIT_LIMIT") &&
+    unit === 6 &&
+    count === 1
+  ) {
     return {
       id: "weekly",
       label: "week",
@@ -70,10 +86,10 @@ function recognizeWindow(
       windowSeconds: WEEK_SECONDS,
     };
   }
-  if (type === "TIME_LIMIT" && unit === 5 && count === 1) {
+  if (type === "TIME_LIMIT") {
     // A calendar month has no fixed duration, so windowSeconds is
     // deliberately omitted rather than approximated.
-    return { id: "mcp_monthly", label: "mcp", kind: "monthly" };
+    return { id: "mcp_month", label: "mcp", kind: "monthly" };
   }
   return undefined;
 }
@@ -114,7 +130,7 @@ export function createZaiCodingPlanAdapter(
   const dependencies: ZaiDependencies = {
     broker: createPiZaiCredentialBroker(),
     apiKeySource: createZaiApiKeyCredentialSource(),
-    fetch: globalThis.fetch,
+    fetch: zaiCodingPlanProviderFetch,
     readCachedProvider: readCachedProviderFromDisk,
     deleteCachedProvider: deleteCachedProviderFromDisk,
     now: Date.now,
@@ -417,23 +433,10 @@ function staleZaiReport(
   ) {
     return undefined;
   }
-  const refreshedAt = Date.parse(cached.state.refreshedAt);
-  if (!Number.isFinite(refreshedAt)) return undefined;
-  const ageMilliseconds = Math.max(0, now - refreshedAt);
-  const windows = cached.windows.filter((window) => {
-    if (window.resetsAt) {
-      const resetsAt = Date.parse(window.resetsAt);
-      if (Number.isFinite(resetsAt)) return resetsAt > now;
-    }
-    // A window with no trusted resetsAt and no known fixed duration (the
-    // MCP monthly window, or anything unrecognized) is dropped rather than
-    // aged by an invented duration.
-    if (window.kind === "weekly") return ageMilliseconds < WEEK_SECONDS * 1000;
-    if (window.kind === "session")
-      return ageMilliseconds < FIVE_HOUR_SECONDS * 1000;
-    return false;
-  });
+  if (!Number.isFinite(Date.parse(cached.state.refreshedAt))) return undefined;
+  const windows = servableStaleWindows(cached, now);
   if (windows.length === 0) return undefined;
+  const untrustedWindowIds = servableUntrustedWindowIds(cached, windows);
 
   return {
     provider: "zai-coding-plan",
@@ -447,9 +450,7 @@ function staleZaiReport(
       refreshedAt: cached.state.refreshedAt,
       error,
       ...(retryAfter ? { retryAfter } : {}),
-      ...(cached.state.untrustedWindowIds
-        ? { untrustedWindowIds: cached.state.untrustedWindowIds }
-        : {}),
+      ...(untrustedWindowIds ? { untrustedWindowIds } : {}),
       sourcesTried: [...attempts.map(({ source }) => source), "cache"],
     },
     attempts,

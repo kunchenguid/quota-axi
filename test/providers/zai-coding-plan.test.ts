@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { providerFetch } from "../../src/lib/http.js";
 import {
   createZaiCodingPlanAdapter,
   normalizeZaiLimits,
@@ -18,6 +19,8 @@ import type {
   ProviderQuota,
   QuotaWindow,
 } from "../../src/types.js";
+
+vi.mock("../../src/lib/http.js", () => ({ providerFetch: vi.fn() }));
 
 const NOW = Date.parse("2027-02-03T04:05:06.000Z");
 const OPTIONS = { allowKeychainPrompt: false };
@@ -125,7 +128,39 @@ describe("Z.ai Coding Plan request transport", () => {
     expect(apiKeySource.resolve).not.toHaveBeenCalled();
   });
 
-  it("maps the verified triples to five_hour, weekly, and mcp_monthly windows", async () => {
+  it("routes the quota request through the shared providerFetch transport", async () => {
+    vi.mocked(providerFetch).mockImplementation(async () =>
+      jsonResponse(SUCCESS_PAYLOAD),
+    );
+    const report = await createZaiCodingPlanAdapter({
+      broker: broker({
+        status: "available",
+        kind: "api_key",
+        credential: "synthetic-zai-key-741",
+      }),
+      apiKeySource: apiKeyCredentialSource({ status: "missing" }),
+      readCachedProvider: () => undefined,
+      deleteCachedProvider: () => undefined,
+      now: () => NOW,
+    }).fetchQuota(OPTIONS);
+
+    expect(providerFetch).toHaveBeenCalledTimes(1);
+    expect(providerFetch).toHaveBeenCalledWith(
+      "https://api.z.ai/api/monitor/usage/quota/limit",
+      expect.objectContaining({
+        method: "GET",
+        credentials: "omit",
+        redirect: "manual",
+      }),
+      { retryOverIpv4: true },
+    );
+    const init = vi.mocked(providerFetch).mock.calls[0][1];
+    const headers = new Headers(init?.headers);
+    expect(headers.get("authorization")).toBe("Bearer synthetic-zai-key-741");
+    expect(report.state.status).toBe("fresh");
+  });
+
+  it("maps the verified triples to five_hour, weekly, and mcp_month windows", async () => {
     const report = await testAdapter({
       fetch: vi.fn(async () => jsonResponse(SUCCESS_PAYLOAD)),
     }).fetchQuota(OPTIONS);
@@ -150,7 +185,7 @@ describe("Z.ai Coding Plan request transport", () => {
         windowSeconds: 604_800,
       },
       {
-        id: "mcp_monthly",
+        id: "mcp_month",
         label: "mcp",
         kind: "monthly",
         percentUsed: 0,
@@ -428,6 +463,104 @@ describe("Z.ai Coding Plan unexpected envelope shape", () => {
 });
 
 describe("Z.ai Coding Plan unit x number derivation", () => {
+  it("identifies CREDIT_LIMIT windows by the same unit and number magic values", () => {
+    const normalized = normalizeZaiLimits({
+      level: "pro",
+      limits: [
+        {
+          type: "CREDIT_LIMIT",
+          unit: 3,
+          number: 5,
+          percentage: 10,
+          nextResetTime: 1_786_476_331_693,
+        },
+        {
+          type: "CREDIT_LIMIT",
+          unit: 6,
+          number: 1,
+          percentage: 47,
+          nextResetTime: 1_786_602_064_998,
+        },
+      ],
+    });
+
+    expect(normalized.diagnostics).toEqual([]);
+    expect(normalized.windows).toEqual([
+      {
+        id: "five_hour",
+        label: "session",
+        kind: "session",
+        percentUsed: 10,
+        percentRemaining: 90,
+        resetsAt: new Date(1_786_476_331_693).toISOString(),
+        windowSeconds: 18_000,
+      },
+      {
+        id: "weekly",
+        label: "week",
+        kind: "weekly",
+        percentUsed: 47,
+        percentRemaining: 53,
+        resetsAt: new Date(1_786_602_064_998).toISOString(),
+        windowSeconds: 604_800,
+      },
+    ]);
+  });
+
+  it("reports CREDIT_LIMIT windows as trusted in the provider report", async () => {
+    const report = await testAdapter({
+      fetch: vi.fn(async () =>
+        jsonResponse({
+          code: 200,
+          msg: "ok",
+          success: true,
+          data: {
+            level: "pro",
+            limits: [
+              {
+                type: "CREDIT_LIMIT",
+                unit: 3,
+                number: 5,
+                percentage: 10,
+                nextResetTime: 1_786_476_331_693,
+              },
+              {
+                type: "CREDIT_LIMIT",
+                unit: 6,
+                number: 1,
+                percentage: 47,
+                nextResetTime: 1_786_602_064_998,
+              },
+            ],
+          },
+        }),
+      ),
+    }).fetchQuota(OPTIONS);
+
+    expect(report.state.status).toBe("fresh");
+    expect(report.state.untrustedWindowIds).toBeUndefined();
+    expect(report.windows.map(({ id, kind }) => ({ id, kind }))).toEqual([
+      { id: "five_hour", kind: "session" },
+      { id: "weekly", kind: "weekly" },
+    ]);
+  });
+
+  it("recognizes any TIME_LIMIT as the monthly MCP window without inventing a duration", () => {
+    const normalized = normalizeZaiLimits({
+      limits: [{ type: "TIME_LIMIT", unit: 4, number: 3, percentage: 25 }],
+    });
+
+    expect(normalized.windows).toEqual([
+      {
+        id: "mcp_month",
+        label: "mcp",
+        kind: "monthly",
+        percentUsed: 25,
+        percentRemaining: 75,
+      },
+    ]);
+  });
+
   it("degrades an unrecognized (type, unit, number) triple to an unknown window without inventing a duration", () => {
     const normalized = normalizeZaiLimits({
       level: "pro",
@@ -504,17 +637,17 @@ describe("Z.ai Coding Plan cache fallback", () => {
     expect(report.windows.length).toBeGreaterThan(0);
   });
 
-  it("drops reset-expired windows and resetless windows without an invented duration", async () => {
+  it("drops reset-expired windows and serves a resetless monthly window within its bound", async () => {
     const cached = cachedQuota([
       quotaWindow("five_hour", "session", "2027-02-03T09:05:06.000Z"), // future
       quotaWindow("weekly", "weekly", "2027-01-01T00:00:00.000Z"), // expired
       {
-        id: "mcp_monthly",
+        id: "mcp_month",
         label: "mcp",
         kind: "monthly",
         percentUsed: 0,
         percentRemaining: 100,
-      }, // no resetsAt
+      }, // no resetsAt, 60s old
     ]);
 
     const report = await testAdapter({
@@ -522,7 +655,65 @@ describe("Z.ai Coding Plan cache fallback", () => {
       readCachedProvider: () => cached,
     }).fetchQuota(OPTIONS);
 
+    expect(report.windows.map(({ id }) => id)).toEqual([
+      "five_hour",
+      "mcp_month",
+    ]);
+  });
+
+  it("expires a resetless monthly window at the shortest-month bound", async () => {
+    const windows: QuotaWindow[] = [
+      {
+        id: "mcp_month",
+        label: "mcp",
+        kind: "monthly",
+        percentUsed: 0,
+        percentRemaining: 100,
+      },
+    ];
+    const shortestMonthMs = 28 * 24 * 60 * 60 * 1_000;
+
+    const justInside = await transientWithCache(
+      cachedQuota(windows, NOW - shortestMonthMs + 1),
+    );
+    expect(justInside.windows.map(({ id }) => id)).toEqual(["mcp_month"]);
+
+    const atBound = await transientWithCache(
+      cachedQuota(windows, NOW - shortestMonthMs),
+    );
+    expect(atBound.state.status).toBe("error");
+    expect(atBound.windows).toEqual([]);
+  });
+
+  it("serves nothing from a cache stamped after now", async () => {
+    const cached = cachedQuota();
+    cached.state.refreshedAt = new Date(NOW + 60_000).toISOString();
+
+    const report = await testAdapter({
+      fetch: vi.fn(async () => new Response(null, { status: 503 })),
+      readCachedProvider: () => cached,
+    }).fetchQuota(OPTIONS);
+
+    expect(report.source).toBe("unavailable");
+    expect(report.state.status).toBe("error");
+    expect(report.windows).toEqual([]);
+  });
+
+  it("prunes untrusted window ids whose windows the stale filter dropped", async () => {
+    const cached = cachedQuota([
+      quotaWindow("five_hour", "session", "2027-02-03T09:05:06.000Z"),
+      quotaWindow("limit:2", "unknown", "2027-01-01T00:00:00.000Z"), // expired
+    ]);
+    cached.state.untrustedWindowIds = ["limit:2", "limit:9"];
+
+    const report = await testAdapter({
+      fetch: vi.fn(async () => new Response(null, { status: 503 })),
+      readCachedProvider: () => cached,
+    }).fetchQuota(OPTIONS);
+
+    expect(report.state.status).toBe("stale");
     expect(report.windows.map(({ id }) => id)).toEqual(["five_hour"]);
+    expect(report.state.untrustedWindowIds).toEqual(["limit:9"]);
   });
 
   it("does not use cache fallback for a definitive auth failure", async () => {
@@ -724,6 +915,15 @@ function jsonResponse(payload: unknown): Response {
     status: 200,
     headers: { "content-type": "application/json; charset=utf-8" },
   });
+}
+
+async function transientWithCache(
+  cached: ProviderQuota,
+): Promise<ProviderQuota> {
+  return testAdapter({
+    fetch: vi.fn(async () => new Response(null, { status: 503 })),
+    readCachedProvider: () => cached,
+  }).fetchQuota(OPTIONS);
 }
 
 function cachedQuota(

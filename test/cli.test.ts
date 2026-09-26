@@ -534,7 +534,7 @@ describe("CLI quota rendering", () => {
       'zai-coding-plan,all_models,80,unknown,unknown,unknown,weekly,"2027-02-08T04:05:06.000Z"',
     );
     expect(toon).toContain(
-      'zai-coding-plan,tools,100,unknown,unknown,unknown,mcp_monthly,"2027-03-01T00:00:00.000Z"',
+      'zai-coding-plan,tools,100,unknown,unknown,unknown,mcp_month,"2027-03-01T00:00:00.000Z"',
     );
     expect(toon).not.toContain("synthetic-zai-key");
     expect(toon).not.toMatch(/recommend|prefer provider|switch to/i);
@@ -546,7 +546,7 @@ describe("CLI quota rendering", () => {
     expect(fullToon).toMatch(
       /zai-coding-plan,weekly,week,80,"2027-02-08T04:05:06\.000Z",/,
     );
-    expect(fullToon).toMatch(/zai-coding-plan,mcp_monthly,mcp,100,/);
+    expect(fullToon).toMatch(/zai-coding-plan,mcp_month,mcp,100,/);
 
     const json = JSON.parse(
       await capture(["--provider", "zai-coding-plan", "--json"]),
@@ -558,7 +558,7 @@ describe("CLI quota rendering", () => {
         windows: [
           expect.objectContaining({ id: "five_hour", percentRemaining: 99 }),
           expect.objectContaining({ id: "weekly", percentRemaining: 80 }),
-          expect.objectContaining({ id: "mcp_monthly", percentRemaining: 100 }),
+          expect.objectContaining({ id: "mcp_month", percentRemaining: 100 }),
         ],
         quotaSemantics: expect.objectContaining({
           effectiveAvailability: expect.arrayContaining([
@@ -3598,7 +3598,7 @@ function freshZaiCodingPlanQuota(): ProviderQuota {
         windowSeconds: 604_800,
       },
       {
-        id: "mcp_monthly",
+        id: "mcp_month",
         label: "mcp",
         kind: "monthly",
         percentUsed: 0,
