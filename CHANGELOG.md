@@ -1,5 +1,71 @@
 # Changelog
 
+## [0.1.55](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.54...quota-axi-v0.1.55) (2026-09-25)
+
+
+### Features
+
+* **providers:** add Muse subscription quota provider ([#290](https://github.com/kunchenguid/quota-axi/issues/290)) ([3277b9d](https://github.com/kunchenguid/quota-axi/commit/3277b9d62cc8b23a7f4d7f94257b33ddcad78445))
+
+
+### Bug Fixes
+
+* **pace:** exclude untriggered zero-use windows from spendPriority ([#286](https://github.com/kunchenguid/quota-axi/issues/286)) ([43bd789](https://github.com/kunchenguid/quota-axi/commit/43bd789efbd2f60f0951b330d50bf04b54feadfc)), closes [#255](https://github.com/kunchenguid/quota-axi/issues/255)
+* **providers:** advise which CLI restores a soft-expired Kimi login ([#285](https://github.com/kunchenguid/quota-axi/issues/285)) ([6ee88d0](https://github.com/kunchenguid/quota-axi/commit/6ee88d0d8113f37504a1a7604aa378b864a3c0d4))
+* **providers:** bind Codex stale cache to account identity ([#289](https://github.com/kunchenguid/quota-axi/issues/289)) ([f840ea7](https://github.com/kunchenguid/quota-axi/commit/f840ea7c04008ba25ea59437478269ab2bf3b7ef))
+* **providers:** retire cached quota on definitive sign-out ([#283](https://github.com/kunchenguid/quota-axi/issues/283)) ([a7abf51](https://github.com/kunchenguid/quota-axi/commit/a7abf510e7748bb937c938c113f6bd92e8a6db7e))
+* **tui:** count stale cached readings apart from live ([#287](https://github.com/kunchenguid/quota-axi/issues/287)) ([067d1e0](https://github.com/kunchenguid/quota-axi/commit/067d1e02fb8186f7788fae87b0eb6a5cff2c64ab))
+
+## [0.1.54](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.53...quota-axi-v0.1.54) (2026-09-24)
+
+
+### Features
+
+* **cache:** add opt-in fresh reuse with single-flight cold reads ([#279](https://github.com/kunchenguid/quota-axi/issues/279)) ([9b102bc](https://github.com/kunchenguid/quota-axi/commit/9b102bc44611973e9ed1aec9ab96e7d7d8a7d414))
+
+## [0.1.53](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.52...quota-axi-v0.1.53) (2026-09-23)
+
+
+### Features
+
+* **providers:** add read-only Devin quota reporting ([#273](https://github.com/kunchenguid/quota-axi/issues/273)) ([d7e1205](https://github.com/kunchenguid/quota-axi/commit/d7e120545f69eeef8f58453a7ed27524b8b2b0fe))
+* **providers:** expose credential lane membership in quota JSON ([#275](https://github.com/kunchenguid/quota-axi/issues/275)) ([32f91de](https://github.com/kunchenguid/quota-axi/commit/32f91dea5776c82405862fefa9729d019b46cde9))
+
+
+### Bug Fixes
+
+* **docs:** align TUI used-view headline example with rounded used figure ([#271](https://github.com/kunchenguid/quota-axi/issues/271)) ([98224f1](https://github.com/kunchenguid/quota-axi/commit/98224f11efb1edd0f9fd14f7830d5f8d7c5f041e))
+* omit not-set-up providers from default TOON ([#274](https://github.com/kunchenguid/quota-axi/issues/274)) ([569d7cc](https://github.com/kunchenguid/quota-axi/commit/569d7cc2ce8906efae0e6521efa799f30389072c))
+* **tui:** refresh immediately on r ([#187](https://github.com/kunchenguid/quota-axi/issues/187)) ([1da4d0c](https://github.com/kunchenguid/quota-axi/commit/1da4d0cd8d9ce20ee5a733dcc4f4ee5b907cf910))
+
+## [0.1.52](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.51...quota-axi-v0.1.52) (2026-09-23)
+
+
+### Features
+
+* add a user-configurable TUI quota direction ([#268](https://github.com/kunchenguid/quota-axi/issues/268)) ([654ddd0](https://github.com/kunchenguid/quota-axi/commit/654ddd08653e5f46c80b0d80448cb7a33ab65346))
+
+
+### Bug Fixes
+
+* **kimi:** derive the monthly total's cycle from the subscription reset ([#265](https://github.com/kunchenguid/quota-axi/issues/265)) ([3ac7aac](https://github.com/kunchenguid/quota-axi/commit/3ac7aac9750a68293e2e2410470813373812b55e)), closes [#263](https://github.com/kunchenguid/quota-axi/issues/263)
+* **providers:** never serve stale cached windows that stopped being true ([#270](https://github.com/kunchenguid/quota-axi/issues/270)) ([ec2c865](https://github.com/kunchenguid/quota-axi/commit/ec2c865cb1094b21c7b06061dcd0018956efb1bf))
+
+## [0.1.51](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.50...quota-axi-v0.1.51) (2026-09-22)
+
+
+### Features
+
+* **tui:** fold providers that are not set up ([#259](https://github.com/kunchenguid/quota-axi/issues/259)) ([2f05e10](https://github.com/kunchenguid/quota-axi/commit/2f05e10f5ad6d245f854157f015b18a719f2f614))
+
+
+### Bug Fixes
+
+* **claude:** restore correct quota percentage polarity ([#267](https://github.com/kunchenguid/quota-axi/issues/267)) ([36cf431](https://github.com/kunchenguid/quota-axi/commit/36cf431db826daea0f0935815ce98ecd66fb819a))
+* **kimi:** report authenticated empty usage as no quota ([#261](https://github.com/kunchenguid/quota-axi/issues/261)) ([a1f86a6](https://github.com/kunchenguid/quota-axi/commit/a1f86a64d62a1a45328c2180f2855807212c9539))
+* **opencode-go:** stop reporting a false unresolved_windows row for a never-set-up account ([#258](https://github.com/kunchenguid/quota-axi/issues/258)) ([218351c](https://github.com/kunchenguid/quota-axi/commit/218351c6cecf1106415700ea59296528fe028af2))
+* prevent Antigravity quota probes from opening sign-in tabs ([#250](https://github.com/kunchenguid/quota-axi/issues/250)) ([fcad447](https://github.com/kunchenguid/quota-axi/commit/fcad4478669fa6423b2ad97050ff60724a6396d2))
+
 ## [0.1.50](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.49...quota-axi-v0.1.50) (2026-09-22)
 
 

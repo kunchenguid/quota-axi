@@ -108,7 +108,7 @@ beforeEach(() => {
   Object.defineProperty(process, "platform", { value: "darwin" });
   fetchMock = vi.fn();
   vi.stubGlobal("fetch", fetchMock);
-  respondWith({ five_hour: { utilization: 88 } });
+  respondWith({ five_hour: { utilization: 12 } });
 });
 
 afterEach(() => {
@@ -422,7 +422,7 @@ describe("Claude CLAUDE_CODE_OAUTH_TOKEN credential source", () => {
       }
       // The stored credential is healthy and would succeed if tried, so a
       // fresh report here would mean quota-axi reported a bystander account.
-      return new Response(JSON.stringify({ five_hour: { utilization: 88 } }), {
+      return new Response(JSON.stringify({ five_hour: { utilization: 12 } }), {
         status: 200,
       });
     });
@@ -443,7 +443,7 @@ describe("Claude CLAUDE_CODE_OAUTH_TOKEN credential source", () => {
       if (bearer === `Bearer ${ENV_TOKEN}`) {
         return new Response("{}", { status: 403 });
       }
-      return new Response(JSON.stringify({ five_hour: { utilization: 88 } }), {
+      return new Response(JSON.stringify({ five_hour: { utilization: 12 } }), {
         status: 200,
       });
     });

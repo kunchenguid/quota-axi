@@ -2,6 +2,7 @@ import {
   providerPresence,
   type ProviderPresence,
 } from "./lib/source-attempts.js";
+import { isUsageFetchFailure } from "./providers/usage-fetch-failure.js";
 import type {
   EffectiveAvailability,
   ProviderId,
@@ -20,6 +21,14 @@ import type {
  */
 
 export type TuiColorDepth = "none" | "16" | "256" | "truecolor";
+
+/**
+ * Which side of each window the human report draws: what is left (the
+ * canonical `percentRemaining` direction, the default) or what has been
+ * consumed. It is a display preference only - the model, cache, TOON, and
+ * JSON keep the canonical direction whatever it is set to.
+ */
+export type TuiShow = "remaining" | "used";
 
 export type TuiOptions = {
   /** Raw terminal width; clamped to [80, 120], defaults to 100. */
@@ -41,6 +50,8 @@ export type TuiOptions = {
    * into one footer line (`a` in the live report, `--all`, or `--provider`).
    */
   showNotSetUp?: boolean;
+  /** Draw percentages and bars as what is left (default) or what is used. */
+  show?: TuiShow;
 };
 
 const CARD_WIDTH = 49;
@@ -99,6 +110,8 @@ const ACCENTS: Record<ProviderId, StyleSpec> = {
   deepseek: { rgb: [88, 160, 242], ansi16: "94", bold: true },
   openrouter: { rgb: [183, 148, 232], ansi16: "95", bold: true },
   elevenlabs: { rgb: [214, 170, 255], ansi16: "95", bold: true },
+  devin: { rgb: [126, 196, 224], ansi16: "96", bold: true },
+  muse: { rgb: [0, 132, 255], ansi16: "94", bold: true },
 };
 
 const STYLES: Record<Exclude<StyleName, `accent:${ProviderId}`>, StyleSpec> = {
@@ -115,7 +128,7 @@ const STYLES: Record<Exclude<StyleName, `accent:${ProviderId}`>, StyleSpec> = {
   marker: { rgb: [137, 220, 235], ansi16: "96" },
   track: { rgb: [69, 71, 90], ansi16: "90" },
   border: { rgb: [88, 91, 112], ansi16: "90" },
-  borderDim: { rgb: [49, 50, 68], ansi16: "90" },
+  borderDim: { rgb: [49, 50, 68], ansi16: "2;90" },
 };
 
 /**
@@ -149,9 +162,11 @@ export function renderQuotaTui(
   const twoColumn = columns >= TWO_COLUMN_MIN;
   const generatedAtMs = Date.parse(response.generatedAt);
   const timeZone = options.timeZone;
+  const show = options.show ?? "remaining";
 
   const tiers: Record<ProviderPresence, ProviderQuota[]> = {
     live: [],
+    stale: [],
     attention: [],
     absent: [],
   };
@@ -160,10 +175,10 @@ export function renderQuotaTui(
       provider,
     );
   });
-  const { live, attention, absent } = tiers;
-  const carded = [...live, ...attention];
+  const { live, stale, attention, absent } = tiers;
+  const carded = [...live, ...stale, ...attention];
   const card = (provider: ProviderQuota): Card =>
-    buildCard(provider, generatedAtMs);
+    buildCard(provider, generatedAtMs, show);
 
   const lines: Line[] = [];
   lines.push([
@@ -279,9 +294,11 @@ function resolveColumns(columns: number | undefined): number {
   );
 }
 
-function isLive(provider: ProviderQuota): boolean {
+function hasReading(provider: ProviderQuota): boolean {
   return provider.state.status === "fresh" || provider.state.status === "stale";
 }
+
+type CardBorder = "border" | "borderDim";
 
 /**
  * The fleet summary, never wider than the report. Every tier count is
@@ -297,6 +314,7 @@ function headerText(
   const attention = tiers.attention.length;
   const counts = [
     `${tiers.live.length} live`,
+    `${tiers.stale.length} stale`,
     `${attention} ${attention === 1 ? "needs" : "need"} attention`,
     `${tiers.absent.length} not set up`,
   ];
@@ -311,64 +329,95 @@ function headerText(
 
 type Card = Line[];
 
-function buildCard(provider: ProviderQuota, generatedAtMs: number): Card {
-  return isLive(provider)
-    ? buildLiveCard(provider, generatedAtMs)
+function buildCard(
+  provider: ProviderQuota,
+  generatedAtMs: number,
+  show: TuiShow,
+): Card {
+  return hasReading(provider)
+    ? buildLiveCard(provider, generatedAtMs, show)
     : buildFailedCard(provider);
 }
 
-function buildLiveCard(provider: ProviderQuota, generatedAtMs: number): Card {
-  const stale = provider.state.stale;
+/** How old a reused reading is, as the card title's `reused 42s` marker. */
+function reusedAge(
+  refreshedAt: string | undefined,
+  generatedAtMs: number,
+): string {
+  const seconds = Math.floor(
+    (generatedAtMs - Date.parse(refreshedAt ?? "")) / 1_000,
+  );
+  if (!Number.isFinite(seconds) || seconds < 0) return "reused";
+  return seconds < 120
+    ? `reused ${seconds}s`
+    : `reused ${Math.floor(seconds / 60)}m`;
+}
+
+function buildLiveCard(
+  provider: ProviderQuota,
+  generatedAtMs: number,
+  show: TuiShow,
+): Card {
+  const stale = provider.state.status === "stale";
+  const border: CardBorder = stale ? "borderDim" : "border";
   const rightTitle = [
     provider.plan,
     provider.source,
     stale ? "stale" : undefined,
+    provider.state.reused
+      ? reusedAge(provider.state.refreshedAt, generatedAtMs)
+      : undefined,
   ]
     .filter((part): part is string => part !== undefined)
     .join(" · ");
   const lines: Line[] = [
     titleLine(
-      {
-        text: ` ● ${provider.provider} `,
-        style: `accent:${provider.provider}`,
-      },
+      stale
+        ? { text: ` ◐ ${provider.provider} `, style: "warnBold" }
+        : {
+            text: ` ● ${provider.provider} `,
+            style: `accent:${provider.provider}`,
+          },
       rightTitle,
-      "border",
+      border,
     ),
-    ...accountCardLines(provider, "border"),
-    interior([], "border"),
+    ...accountCardLines(provider, border),
+    interior([], border),
   ];
 
   const headline = pickHeadlineAvailability(provider);
-  const creditsLine = creditsOnlyHeadline(provider, stale);
+  const creditsLine = creditsOnlyHeadline(provider, stale, border);
   if (creditsLine) {
     lines.push(...creditsLine);
   } else if (hasWhollyUnknownWindowRelationships(provider)) {
-    lines.push(...windowsOnlyHeadline(stale));
+    lines.push(...windowsOnlyHeadline(stale, border));
   } else {
-    lines.push(...effectiveHeadline(provider, headline, stale));
+    lines.push(...effectiveHeadline(provider, headline, stale, show, border));
   }
 
   if (provider.windows.length > 0) {
-    lines.push(interior([], "border"));
+    lines.push(interior([], border));
     for (const window of provider.windows) {
       lines.push(
-        interior(windowRow(window, generatedAtMs, provider.windows), "border"),
+        interior(
+          windowRow(window, generatedAtMs, provider.windows, show),
+          border,
+        ),
       );
     }
   }
 
-  for (const note of cardNotes(provider)) {
+  for (const note of cardNotes(provider, generatedAtMs)) {
     lines.push(
       interior(
         [{ text: `   ${truncate(note, CARD_INTERIOR - 4)}`, style: "dimmer" }],
-        "border",
+        border,
       ),
     );
   }
 
-  lines.push(interior([], "border"));
-  lines.push(bottomLine("border"));
+  lines.push(interior([], border));
+  lines.push(bottomLine(border));
   return lines;
 }
 
@@ -380,7 +429,9 @@ function buildLiveCard(provider: ProviderQuota, generatedAtMs: number): Card {
 function effectiveHeadline(
   provider: ProviderQuota,
   headline: EffectiveAvailability | undefined,
-  stale: boolean | undefined,
+  stale: boolean,
+  show: TuiShow,
+  border: CardBorder,
 ): Line[] {
   const lines: Line[] = [];
   const effectivePct = headline?.effectivePercentRemaining;
@@ -388,14 +439,18 @@ function effectiveHeadline(
 
   const verdict = runwayVerdict(headline);
   const percentText =
-    effectivePct === undefined ? undefined : `${Math.round(effectivePct)}%`;
+    effectivePct === undefined ? undefined : shownPercent(effectivePct, show);
+  // The remaining view has always read as bare headroom; the flipped view
+  // says so, because the same number would otherwise read the other way.
+  const direction = show === "used" ? "used · " : "";
   const headlineLabelWidth = Math.max(
     0,
     EFFECTIVE_BAR_WIDTH -
       lineWidth(verdict) -
       1 -
       displayWidth(percentText ?? "") -
-      1,
+      1 -
+      displayWidth(direction),
   );
   const left: Line =
     effectivePct !== undefined && percentText !== undefined
@@ -405,7 +460,7 @@ function effectiveHeadline(
             style: boldHealthStyle(effectivePct),
           },
           {
-            text: ` ${headlineLabel(provider, headline, headlineLabelWidth)}`,
+            text: ` ${direction}${headlineLabel(provider, headline, headlineLabelWidth)}`,
             style: "dim",
           },
         ]
@@ -422,17 +477,17 @@ function effectiveHeadline(
         ...padBetween(left, verdict, EFFECTIVE_BAR_WIDTH),
         { text: "   " },
       ],
-      "border",
+      border,
     ),
   );
   lines.push(
     interior(
       [
         { text: "   " },
-        ...thinBar(effectivePct, markerPct, EFFECTIVE_BAR_WIDTH),
+        ...thinBar(effectivePct, markerPct, EFFECTIVE_BAR_WIDTH, show),
         { text: "   " },
       ],
-      "border",
+      border,
     ),
   );
   return lines;
@@ -446,7 +501,8 @@ function effectiveHeadline(
  */
 function creditsOnlyHeadline(
   provider: ProviderQuota,
-  stale: boolean | undefined,
+  stale: boolean,
+  border: CardBorder,
 ): Line[] | undefined {
   if (provider.windows.length > 0) return undefined;
   const credits = provider.credits;
@@ -467,7 +523,7 @@ function creditsOnlyHeadline(
           style: "dimBold",
         },
       ],
-      "border",
+      border,
     ),
   ];
 }
@@ -493,7 +549,7 @@ function hasWhollyUnknownWindowRelationships(provider: ProviderQuota): boolean {
   return provider.windows.every(({ id }) => unresolved.has(id));
 }
 
-function windowsOnlyHeadline(stale: boolean | undefined): Line[] {
+function windowsOnlyHeadline(stale: boolean, border: CardBorder): Line[] {
   const left: Line = [
     {
       text: stale ? "stale · per-window usage" : "per-window usage",
@@ -510,7 +566,7 @@ function windowsOnlyHeadline(stale: boolean | undefined): Line[] {
         ...padBetween(left, right, CARD_INTERIOR - 4),
         { text: " " },
       ],
-      "border",
+      border,
     ),
   ];
 }
@@ -607,6 +663,7 @@ function windowRow(
   window: QuotaWindow,
   generatedAtMs: number,
   windows: QuotaWindow[],
+  show: TuiShow,
 ): Line {
   if (window.shareOf) {
     return shareWindowRow(window, generatedAtMs, windows);
@@ -617,10 +674,13 @@ function windowRow(
   return [
     { text: "   " },
     { text: padEndDisplay(shortWindowLabel(window), 8), style: "label" },
-    ...thinBar(pct, marker, WINDOW_BAR_WIDTH),
+    ...thinBar(pct, marker, WINDOW_BAR_WIDTH, show),
     { text: " " },
     {
-      text: (pct === undefined ? "?" : `${Math.round(pct)}%`).padStart(4),
+      text: (pct === undefined
+        ? "?"
+        : shownPercent(pct, show, window.percentUsed)
+      ).padStart(4),
       style: pct === undefined ? "dim" : healthStyle(pct),
     },
     { text: "  " },
@@ -666,21 +726,38 @@ function shareCaption(window: QuotaWindow, windows: QuotaWindow[]): string {
 }
 
 /**
+ * The percentage a row or headline prints. A window uses its raw consumed
+ * figure; an effective headline derives consumption from raw remaining.
+ */
+function shownPercent(
+  percentRemaining: number,
+  show: TuiShow,
+  percentUsed = 100 - percentRemaining,
+): string {
+  return `${Math.round(show === "used" ? percentUsed : percentRemaining)}%`;
+}
+
+/**
  * Quiet-Ledger thin bar with the linear-pace marker: fill is current
  * headroom at half-cell resolution, `┃` overwrites the cell at
  * `timeRemainingPercent` (the fill position of exactly linear burn), and the
- * marker is omitted when pace is unknown rather than faked.
+ * marker is omitted when pace is unknown rather than faked. The used view
+ * mirrors both: fill is consumption and the marker sits at the elapsed share
+ * of the window, so fill running past the marker means burning ahead of the
+ * reset clock. Color always follows headroom, whichever side is drawn.
  */
 export function thinBar(
   percentRemaining: number | undefined,
   markerPercent: number | undefined,
   width: number,
+  show: TuiShow = "remaining",
 ): Line {
   const fillStyle: StyleName =
     percentRemaining === undefined ? "track" : healthStyle(percentRemaining);
   let halfUnits = 0;
   if (percentRemaining !== undefined) {
-    const pct = Math.min(100, Math.max(0, percentRemaining));
+    const remaining = Math.min(100, Math.max(0, percentRemaining));
+    const pct = show === "used" ? 100 - remaining : remaining;
     halfUnits = Math.round((pct / 100) * width * 2);
     if (pct > 0 && halfUnits === 0) halfUnits = 1;
     if (pct < 100 && halfUnits === width * 2) halfUnits = width * 2 - 1;
@@ -693,9 +770,10 @@ export function thinBar(
     else cells.push({ text: "─", style: "track" });
   }
   if (markerPercent !== undefined && Number.isFinite(markerPercent)) {
+    const position = show === "used" ? 100 - markerPercent : markerPercent;
     const cell = Math.min(
       width - 1,
-      Math.max(0, Math.round((markerPercent / 100) * width)),
+      Math.max(0, Math.round((position / 100) * width)),
     );
     cells[cell] = { text: "┃", style: "marker" };
   }
@@ -752,8 +830,32 @@ function runwayVerdict(headline: EffectiveAvailability | undefined): Line {
   return [{ text, style: "warnBold" }];
 }
 
-function cardNotes(provider: ProviderQuota): string[] {
+function staleAge(
+  refreshedAt: string | undefined,
+  generatedAtMs: number,
+): string {
+  const seconds = Math.floor(
+    (generatedAtMs - Date.parse(refreshedAt ?? "")) / 1_000,
+  );
+  if (!Number.isFinite(seconds) || seconds < 0) return "unknown";
+  if (seconds < 60) return `${seconds}s ago`;
+  return `${formatCountdown(seconds)} ago`;
+}
+
+function cardNotes(provider: ProviderQuota, generatedAtMs: number): string[] {
   const notes: string[] = [];
+  if (provider.state.status === "stale") {
+    notes.push(
+      `last refreshed ${staleAge(provider.state.refreshedAt, generatedAtMs)}`,
+    );
+    if (provider.state.error) {
+      const prefix = isUsageFetchFailure(provider) ? "fetch failed " : "";
+      notes.push(`${prefix}${humanize(provider.state.error)}`);
+    }
+    if (provider.state.reason) {
+      notes.push(`reason ${humanize(provider.state.reason)}`);
+    }
+  }
   if (provider.state.retryAfter) {
     notes.push(`retry after ${provider.state.retryAfter}`);
   }

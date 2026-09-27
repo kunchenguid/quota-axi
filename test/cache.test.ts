@@ -13,10 +13,14 @@ import {
   deleteCachedProvider,
   readCachedClaudeProvider,
   readCachedCommandCodeProvider,
+  readCachedCodexProvider,
   readCachedKimiProvider,
+  readCachedDevinProvider,
   readCachedMiniMaxProvider,
   readCachedProvider,
+  retireCodexAccount,
   writeCachedProviders,
+  stampCodexStoredAccountId,
 } from "../src/cache.js";
 import { annotateQuotaAdvice } from "../src/advice.js";
 import { cacheFilePath, claudeCredentialContextId } from "../src/lib/fs.js";
@@ -29,6 +33,11 @@ import { staleFromCache } from "../src/providers/common.js";
 import { withQuotaSemantics } from "../src/interpretation.js";
 import { createKimiCodeCliCredentialSource } from "../src/providers/kimi-code-cli-credential.js";
 import { createKimiAdapter } from "../src/providers/kimi.js";
+import {
+  clearDevinReadingContextId,
+  devinCacheContextId,
+  publishDevinReadingContextId,
+} from "../src/providers/devin-cache-context.js";
 import { publishMiniMaxReadingContextId } from "../src/providers/minimax-cache-context.js";
 import type { ProviderId, ProviderQuota } from "../src/types.js";
 
@@ -48,9 +57,74 @@ afterEach(() => {
   if (tempDir) rmSync(tempDir, { recursive: true, force: true });
   tempDir = undefined;
   clearCommandCodeReadingContextId();
+  clearDevinReadingContextId();
 });
 
 describe("quota cache", () => {
+  it("serves Codex stale quota only for a matching stored account", () => {
+    useTempCache();
+    const snapshot = quota("codex", 42);
+    stampCodexStoredAccountId(snapshot, "acct-signed-in");
+    writeCachedProviders([snapshot]);
+
+    expect(readCachedCodexProvider(undefined, [])).toBeUndefined();
+    expect(readCachedCodexProvider(undefined, ["acct-other"])).toBeUndefined();
+    expect(
+      readCachedCodexProvider(undefined, ["acct-signed-in"]),
+    ).toMatchObject({
+      windows: [{ percentUsed: 42 }],
+    });
+  });
+
+  it("continues from a mismatched Codex home snapshot to a matching keyless snapshot", () => {
+    useTempCache();
+    const foreignHome = quota("codex", 10);
+    foreignHome.accountKey = "codex-home";
+    stampCodexStoredAccountId(foreignHome, "acct-foreign");
+    const signedIn = quota("codex", 80);
+    stampCodexStoredAccountId(signedIn, "acct-signed-in");
+    writeCachedProviders([foreignHome, signedIn]);
+
+    expect(
+      readCachedCodexProvider("codex-home", ["acct-signed-in"]),
+    ).toMatchObject({ windows: [{ percentUsed: 80 }] });
+  });
+
+  it("retires only Codex snapshots stamped for rejected accounts", () => {
+    useTempCache();
+    const defaultA = quota("codex", 10);
+    const keyedA = quota("codex", 20);
+    keyedA.accountKey = "openai-codex";
+    const keyedB = quota("codex", 30);
+    keyedB.accountKey = "openai-codex-work";
+    const unstamped = quota("codex", 40);
+    unstamped.accountKey = "openai-codex-unstamped";
+    stampCodexStoredAccountId(defaultA, "acct-a");
+    stampCodexStoredAccountId(keyedA, "acct-a");
+    stampCodexStoredAccountId(keyedB, "acct-b");
+    writeCachedProviders([defaultA, keyedA, keyedB, unstamped]);
+
+    retireCodexAccount(["acct-a"]);
+
+    expect(readCachedProvider("codex")).toBeUndefined();
+    expect(readCachedProvider("codex", "openai-codex")).toBeUndefined();
+    expect(readCachedProvider("codex", "openai-codex-work")).toMatchObject({
+      windows: [{ percentUsed: 30 }],
+    });
+    expect(readCachedProvider("codex", "openai-codex-unstamped")).toMatchObject(
+      { windows: [{ percentUsed: 40 }] },
+    );
+  });
+
+  it("withholds legacy Codex snapshots without account context", () => {
+    useTempCache();
+    writeCachedProviders([quota("codex", 42)]);
+
+    expect(
+      readCachedCodexProvider(undefined, ["acct-signed-in"]),
+    ).toBeUndefined();
+  });
+
   it.each([true, false])(
     "leaves persistent snapshots untouched by native Claude reads with windows %s",
     (hasWindows) => {
@@ -192,7 +266,15 @@ describe("quota cache", () => {
 
     const later = annotateQuotaAdvice({
       generatedAt: "2026-07-06T19:10:00Z",
-      providers: [staleFromCache(cached!, "fetch failed", ["api"], [])],
+      providers: [
+        staleFromCache(
+          cached!,
+          "fetch failed",
+          ["api"],
+          [],
+          Date.parse("2026-07-06T19:10:00Z"),
+        )!,
+      ],
     });
     expect(later.schemaVersion).toBe(5);
     expect(later.providers[0]?.accountKey).toBeUndefined();
@@ -652,7 +734,8 @@ oauth_host = "https://auth.kimi.ai"
       "fetch failed: synthetic outage",
       ["kimi-code"],
       [],
-    );
+      Date.parse("2026-07-06T18:20:00Z"),
+    )!;
     const monthCode = stale.windows.find(
       (window) => window.id === "month_code",
     );
@@ -770,6 +853,44 @@ oauth_host = "https://auth.kimi.ai"
     expect(readCachedCommandCodeProvider(contextId)).toBeUndefined();
     expect(readCachedProvider("commandcode")).toBeUndefined();
   });
+
+  it("reuses a Devin snapshot only for the source, host, and key that wrote it", () => {
+    useTempCache();
+    const contextId = devinCacheContextId(
+      "env:WINDSURF_API_KEY",
+      "https://server.codeium.com",
+      "synthetic-devin-cache-key",
+    );
+    const otherId = devinCacheContextId(
+      "file:credentials.toml",
+      "https://server.codeium.com",
+      "synthetic-devin-cache-key",
+    );
+    publishDevinReadingContextId(contextId);
+    writeCachedProviders([quota("devin", 40)]);
+
+    clearDevinReadingContextId();
+    writeCachedProviders([quota("devin", 5)]);
+
+    expect(readCachedDevinProvider(contextId)?.windows[0].percentUsed).toBe(40);
+    expect(readCachedDevinProvider(otherId)).toBeUndefined();
+    expect(readCachedProvider("devin")?.windows[0].percentUsed).toBe(40);
+  });
+
+  it("clears a Devin snapshot after an identified no-window report", () => {
+    useTempCache();
+    const contextId = devinCacheContextId(
+      "env:WINDSURF_API_KEY",
+      "https://server.codeium.com",
+      "synthetic-devin-cache-key",
+    );
+    publishDevinReadingContextId(contextId);
+    writeCachedProviders([quota("devin", 40)]);
+    writeCachedProviders([quotaWithoutWindows("devin")]);
+
+    expect(readCachedDevinProvider(contextId)).toBeUndefined();
+    expect(readCachedProvider("devin")).toBeUndefined();
+  });
 });
 
 function useTempCache(): void {
@@ -828,5 +949,6 @@ function providerLabel(provider: ProviderId): string {
   if (provider === "commandcode") return "Command Code";
   if (provider === "opencode-go") return "OpenCode Go";
   if (provider === "minimax") return "MiniMax";
+  if (provider === "devin") return "Devin";
   return "Kimi";
 }

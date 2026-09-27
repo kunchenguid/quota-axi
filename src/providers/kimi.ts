@@ -13,7 +13,9 @@ import type {
   QuotaWindow,
   SourceAttempt,
 } from "../types.js";
+import { calendarMonthsBefore } from "../lib/time.js";
 import { VERSION } from "../version.js";
+import { servableStaleWindows, servableUntrustedWindowIds } from "./common.js";
 import { publishKimiReadingContextId } from "./kimi-cache-context.js";
 import {
   selectCredential,
@@ -926,17 +928,17 @@ function staleKimiReport(
   }
   const refreshedAt = Date.parse(cached.state.refreshedAt);
   if (!Number.isFinite(refreshedAt)) return undefined;
-  const ageMilliseconds = Math.max(0, now - refreshedAt);
-  const windows = cached.windows.filter((window) => {
-    if (window.resetsAt) {
-      const resetsAt = Date.parse(window.resetsAt);
-      if (Number.isFinite(resetsAt)) return resetsAt > now;
+  const ageMilliseconds = now - refreshedAt;
+  const windows = servableStaleWindows(cached, now).filter((window) => {
+    if (window.resetsAt && Number.isFinite(Date.parse(window.resetsAt))) {
+      return true;
     }
     const maxAgeSeconds =
       window.kind === "weekly" ? WEEK_SECONDS : FIVE_HOURS_SECONDS;
     return ageMilliseconds < maxAgeSeconds * 1_000;
   });
   if (windows.length === 0) return undefined;
+  const untrustedWindowIds = servableUntrustedWindowIds(cached, windows);
 
   return {
     provider: "kimi",
@@ -950,9 +952,7 @@ function staleKimiReport(
       error,
       ...(retryAfter ? { retryAfter } : {}),
       ...(authStatus ? { authStatus } : {}),
-      ...(cached.state.untrustedWindowIds
-        ? { untrustedWindowIds: cached.state.untrustedWindowIds }
-        : {}),
+      ...(untrustedWindowIds ? { untrustedWindowIds } : {}),
       sourcesTried: [...attempts.map(({ source }) => source), "cache"],
     },
     attempts,
@@ -1157,12 +1157,25 @@ function createResponseBodyLifetime(response: Response): ResponseBodyLifetime {
   };
 }
 
+/**
+ * `cycleMonths` marks a window whose cycle is the member's monthly
+ * subscription cycle, so its start is the reported reset stepped back that
+ * many calendar months. The evidence is Kimi's own documentation: the Help
+ * Center's "Membership Credit Updates and Usage Rules"
+ * (https://www.kimi.com/en/help/membership/membership-update-rules) says
+ * membership credits refresh monthly on the subscription date, "not by
+ * calendar month", for monthly and annual memberships alike, and Kimi Code's
+ * "Membership Benefits" (https://www.kimi.com/code/docs/en/kimi-code/membership.html)
+ * says Kimi Code shares that "Kimi membership monthly total quota" until "the
+ * monthly quota resets".
+ */
 const KIMI_USAGES_WINDOWS: ReadonlyArray<{
   key: string;
   id: string;
   label: string;
   kind: QuotaWindow["kind"];
   windowSeconds?: number;
+  cycleMonths?: number;
   shareOf?: string;
 }> = [
   {
@@ -1184,6 +1197,7 @@ const KIMI_USAGES_WINDOWS: ReadonlyArray<{
     id: "month_total",
     label: "month",
     kind: "monthly",
+    cycleMonths: 1,
   },
   {
     key: "limit_month_code",
@@ -1310,6 +1324,12 @@ function normalizeUsagesMap(
       diagnostics.push({ code: "usage_detail_invalid", key: spec.key });
       continue;
     }
+    // A monthly cycle's start exists only relative to a reported reset; with
+    // no reset the window keeps no cycle rather than an invented one.
+    const startsAt =
+      spec.cycleMonths !== undefined && detail.resetsAt
+        ? calendarMonthsBefore(detail.resetsAt, spec.cycleMonths)
+        : undefined;
     windows.push({
       id: spec.id,
       label: spec.label,
@@ -1321,6 +1341,7 @@ function normalizeUsagesMap(
       ...(typeof spec.windowSeconds === "number"
         ? { windowSeconds: spec.windowSeconds }
         : {}),
+      ...(startsAt ? { startsAt } : {}),
       ...(detail.resetsAt ? { resetsAt: detail.resetsAt } : {}),
     });
   }

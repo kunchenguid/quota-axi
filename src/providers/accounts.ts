@@ -70,12 +70,32 @@ export async function fetchAccountQuotas(
     }
     if (report) readings.push({ account, report });
   }
-  if (accounts.length > 1) {
-    for (const { account, report } of readings) {
-      report.accountKey = account.accountKey;
-    }
+  for (const { account, report } of readings) {
+    if (accounts.length > 1) report.accountKey = account.accountKey;
+    report.accountKeys = coveredAccountKeys(
+      account.accountKey,
+      report.accountKeys,
+    );
   }
   return readings.map(({ report }) => report);
+}
+
+/**
+ * Credential keys one account row covers.
+ *
+ * The lane's own key is first. A provider that folded other credentials into
+ * the lane lists them after it, in the order it recorded them. Callers that
+ * hold a credential key match the row by membership, not by `accountKey` alone.
+ */
+export function coveredAccountKeys(
+  accountKey: string,
+  covered: readonly string[] | undefined,
+): string[] {
+  const keys = [accountKey];
+  for (const key of covered ?? []) {
+    if (!keys.includes(key)) keys.push(key);
+  }
+  return keys;
 }
 
 export async function inspectAccountAuth(

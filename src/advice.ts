@@ -1,3 +1,4 @@
+import { coveredAccountKeys } from "./providers/accounts.js";
 import {
   REFRESH_COMMAND_NOT_FOUND,
   REFRESH_EXIT_STATUS,
@@ -16,6 +17,10 @@ export const KEYCHAIN_ACCESS_REMEDY_COMMAND =
 export const CREDENTIALS_EXPIRED_REASON = "credentials_expired";
 export const GROK_TOKEN_REFRESH_REMEDY_COMMAND = "grok";
 export const CLAUDE_TOKEN_REFRESH_REMEDY_COMMAND = "claude";
+export const PI_KIMI_TOKEN_REFRESH_REMEDY_COMMAND = "pi";
+export const KIMI_CODE_TOKEN_REFRESH_REMEDY_COMMAND = "kimi";
+const PI_KIMI_EXPIRED_ERROR = "pi_kimi_credential_expired";
+const KIMI_CODE_EXPIRED_ERROR = "kimi_code_cli_credential_expired";
 export const INFERENCE_OPT_IN_REASON = "inference_opt_in_required";
 export const CLAUDE_INFERENCE_REMEDY_COMMAND =
   "quota-axi --provider claude --allow-claude-inference";
@@ -25,13 +30,19 @@ export function annotateQuotaAdvice(
   response: Omit<QuotaAxiResponse, "schemaVersion">,
 ): QuotaAxiResponse {
   const expanded = response.providers.some((provider) => provider.accountKey);
-  const providers = response.providers.map((provider) =>
-    annotateProviderAdvice(
-      expanded
-        ? { ...provider, accountKey: provider.accountKey ?? "default" }
-        : provider,
-    ),
-  );
+  const providers = response.providers.map((provider) => {
+    const accountKey = expanded
+      ? (provider.accountKey ?? "default")
+      : undefined;
+    return annotateProviderAdvice({
+      ...provider,
+      ...(accountKey ? { accountKey } : {}),
+      accountKeys: coveredAccountKeys(
+        accountKey ?? provider.accountKeys?.[0] ?? "default",
+        provider.accountKeys,
+      ),
+    });
+  });
   const help = providers.flatMap(providerHelpLines);
   return {
     generatedAt: response.generatedAt,
@@ -45,11 +56,30 @@ export function annotateQuotaAdvice(
  * Situational advice stays first because it is actionable; only the tier hint
  * is worth repeating on every invocation.
  */
-export function quotaHelpLines(response: QuotaAxiResponse): string[] {
-  return [
+export function quotaHelpLines(
+  response: QuotaAxiResponse,
+  omittedNotSetUp = 0,
+): string[] {
+  const lines = [
     ...(response.help ?? []),
     "Run `quota-axi --full` for windows, pace, reserve, and account evidence",
   ];
+  if (omittedNotSetUp > 0) {
+    lines.splice(lines.length - 1, 0, omittedNotSetUpHelpLine(omittedNotSetUp));
+  }
+  return lines;
+}
+
+/**
+ * The omission sentence the default report uses when it drops providers that
+ * are not set up. Situational advice stays ahead of it; the tier hint stays
+ * last.
+ */
+function omittedNotSetUpHelpLine(count: number): string {
+  const subject = count === 1 ? "1 provider" : `${count} providers`;
+  const verb = count === 1 ? "is" : "are";
+  const pronoun = count === 1 ? "it" : "them";
+  return `${subject} not set up ${verb} omitted; run \`quota-axi --full\` to list ${pronoun}`;
 }
 
 function annotateProviderAdvice(provider: ProviderQuota): ProviderQuota {
@@ -90,6 +120,17 @@ function annotateProviderAdvice(provider: ProviderQuota): ProviderQuota {
         ...provider.state,
         reason: CREDENTIALS_EXPIRED_REASON,
         remedyCommand: CLAUDE_TOKEN_REFRESH_REMEDY_COMMAND,
+      },
+    };
+  }
+  const kimiRemedy = kimiTokenRefreshRemedy(provider);
+  if (kimiRemedy) {
+    return {
+      ...provider,
+      state: {
+        ...provider.state,
+        reason: CREDENTIALS_EXPIRED_REASON,
+        remedyCommand: kimiRemedy,
       },
     };
   }
@@ -178,6 +219,29 @@ function isCredentialSourceReading(attempt: SourceAttempt): boolean {
   );
 }
 
+/**
+ * Kimi has no delegated refresh. A soft-expired login stays read-only, and the
+ * remedy names the CLI that owns the store the reading came from: `pi` when
+ * Pi's `kimi-coding` entry defines it, `kimi` when the Kimi Code CLI store
+ * does. A hard sign-out has no `expired_refreshable` status, so it stays silent.
+ */
+function kimiTokenRefreshRemedy(provider: ProviderQuota): string | undefined {
+  if (
+    provider.provider !== "kimi" ||
+    provider.state.status === "fresh" ||
+    provider.state.authStatus !== "expired_refreshable"
+  ) {
+    return undefined;
+  }
+  if (provider.state.error === PI_KIMI_EXPIRED_ERROR) {
+    return PI_KIMI_TOKEN_REFRESH_REMEDY_COMMAND;
+  }
+  if (provider.state.error === KIMI_CODE_EXPIRED_ERROR) {
+    return KIMI_CODE_TOKEN_REFRESH_REMEDY_COMMAND;
+  }
+  return undefined;
+}
+
 function needsGrokTokenRefreshAdvice(provider: ProviderQuota): boolean {
   return (
     provider.provider === "grok" &&
@@ -236,6 +300,8 @@ function providerHelpLines(provider: ProviderQuota): string[] {
   if (hasClaudeTokenRefreshAdvice(provider))
     return [claudeTokenRefreshHelpLine(provider)];
   if (hasClaudeInferenceAdvice(provider)) return [claudeInferenceHelpLine()];
+  if (hasKimiTokenRefreshAdvice(provider))
+    return [kimiTokenRefreshHelpLine(provider.state.remedyCommand)];
   return [];
 }
 
@@ -258,6 +324,15 @@ function hasKeychainAccessAdvice(provider: ProviderQuota): boolean {
   return (
     provider.state.reason === KEYCHAIN_ACCESS_REASON &&
     provider.state.remedyCommand === KEYCHAIN_ACCESS_REMEDY_COMMAND
+  );
+}
+
+function hasKimiTokenRefreshAdvice(provider: ProviderQuota): boolean {
+  return (
+    provider.provider === "kimi" &&
+    provider.state.reason === CREDENTIALS_EXPIRED_REASON &&
+    (provider.state.remedyCommand === PI_KIMI_TOKEN_REFRESH_REMEDY_COMMAND ||
+      provider.state.remedyCommand === KIMI_CODE_TOKEN_REFRESH_REMEDY_COMMAND)
   );
 }
 
@@ -287,6 +362,13 @@ function claudeTokenRefreshHelpLine(provider: ProviderQuota): string {
     return "Tell your user: quota-axi could not run the Claude CLI; run `claude` once where it is installed.";
   }
   return `Tell your user: run \`${CLAUDE_TOKEN_REFRESH_REMEDY_COMMAND}\` once so Claude Code can refresh its own session token; \`claude doctor\` did not recover it. quota-axi delegates that refresh to the Claude CLI and never rotates credentials itself.`;
+}
+
+function kimiTokenRefreshHelpLine(remedy: string | undefined): string {
+  if (remedy === KIMI_CODE_TOKEN_REFRESH_REMEDY_COMMAND) {
+    return "Tell your user: run a Kimi Code session with `kimi` once so Kimi Code refreshes its own session token. quota-axi stays read-only and never rotates Kimi credentials.";
+  }
+  return "Tell your user: use a Kimi model in `pi` once so Pi refreshes its own Kimi session token; Pi refreshes a provider's token only when that provider is used. quota-axi stays read-only and never rotates Kimi credentials.";
 }
 
 function grokTokenRefreshHelpLine(): string {

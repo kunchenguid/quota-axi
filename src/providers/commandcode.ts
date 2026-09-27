@@ -31,6 +31,7 @@ import {
   commandCodeCacheContextId,
   publishCommandCodeReadingContextId,
 } from "./commandcode-cache-context.js";
+import { servableStaleWindows, servableUntrustedWindowIds } from "./common.js";
 import {
   selectCredential,
   type CandidateLocalState,
@@ -1071,18 +1072,10 @@ function staleCommandCodeReport(
   ) {
     return undefined;
   }
-  const refreshedAt = Date.parse(cached.state.refreshedAt);
-  if (!Number.isFinite(refreshedAt)) return undefined;
-  const ageMilliseconds = Math.max(0, now - refreshedAt);
-  const windows = cached.windows.filter((window) => {
-    if (window.resetsAt) {
-      const resetsAt = Date.parse(window.resetsAt);
-      if (Number.isFinite(resetsAt)) return resetsAt > now;
-    }
-    const maxAgeSeconds = maxStaleAgeSeconds(window);
-    return maxAgeSeconds > 0 && ageMilliseconds < maxAgeSeconds * 1_000;
-  });
+  if (!Number.isFinite(Date.parse(cached.state.refreshedAt))) return undefined;
+  const windows = servableStaleWindows(cached, now);
   if (windows.length === 0) return undefined;
+  const untrustedWindowIds = servableUntrustedWindowIds(cached, windows);
 
   return {
     provider: "commandcode",
@@ -1097,27 +1090,11 @@ function staleCommandCodeReport(
       refreshedAt: cached.state.refreshedAt,
       error: failure.code,
       ...(failure.retryAfter ? { retryAfter: failure.retryAfter } : {}),
-      ...(cached.state.untrustedWindowIds
-        ? { untrustedWindowIds: cached.state.untrustedWindowIds }
-        : {}),
+      ...(untrustedWindowIds ? { untrustedWindowIds } : {}),
       sourcesTried: [...attempts.map(({ source }) => source), "cache"],
     },
     attempts,
   };
-}
-
-function maxStaleAgeSeconds(window: QuotaWindow): number {
-  if (window.windowSeconds !== undefined && window.windowSeconds > 0) {
-    return window.windowSeconds;
-  }
-  switch (window.kind) {
-    case "session":
-      return FIVE_HOURS_SECONDS;
-    case "weekly":
-      return WEEK_SECONDS;
-    default:
-      return 0;
-  }
 }
 
 async function readBoundedBody(

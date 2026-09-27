@@ -28,6 +28,7 @@ import {
   staleFromCache,
   successProvider,
 } from "./common.js";
+import { traceInput } from "../lib/input-trace.js";
 
 export const MINIMAX_QUOTA_PATH = "/v1/token_plan/remains";
 export const MINIMAX_BALANCE_PATH = "/account/query_balance";
@@ -317,14 +318,16 @@ async function fetchQuotaWithDependencies(
           const cached = dependencies.readCachedProvider(
             miniMaxCacheContextId(resolution.source, resolution.baseUrl),
           );
-          if (cached) {
-            return staleFromCache(
-              cached,
-              failure.code,
-              sourceNames(attempts),
-              attempts,
-            );
-          }
+          const stale = cached
+            ? staleFromCache(
+                cached,
+                failure.code,
+                sourceNames(attempts),
+                attempts,
+                dependencies.now(),
+              )
+            : undefined;
+          if (stale) return stale;
         } catch {
           // Cache I/O cannot replace the bounded provider failure.
         }
@@ -364,14 +367,16 @@ async function fetchQuotaWithDependencies(
             : configuredBaseUrl(),
         ),
       );
-      if (cached) {
-        return staleFromCache(
-          cached,
-          failure.code,
-          sourceNames(attempts),
-          attempts,
-        );
-      }
+      const stale = cached
+        ? staleFromCache(
+            cached,
+            failure.code,
+            sourceNames(attempts),
+            attempts,
+            dependencies.now(),
+          )
+        : undefined;
+      if (stale) return stale;
     } catch {
       // Cache I/O cannot replace the bounded provider failure.
     }
@@ -805,6 +810,7 @@ function safeBaseUrl(value: string | undefined): string | undefined {
 
 function readBoundedJsonFile(path: string): JsonFileReadResult {
   let text: string;
+  traceInput(path);
   try {
     const size = statSync(path).size;
     if (size > CONFIG_FILE_LIMIT_BYTES)

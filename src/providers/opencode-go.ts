@@ -3,7 +3,11 @@ import { join } from "node:path";
 import { readJsonFileResult, type JsonFileReadResult } from "../lib/fs.js";
 import { resolvePiAuthFilePath } from "../lib/pi-agent-dir.js";
 import { classifyPiAuthEntry } from "../lib/pi-auth-store.js";
-import { parseEpochOrIso, clampPercent } from "../lib/time.js";
+import {
+  calendarMonthsBefore,
+  parseEpochOrIso,
+  clampPercent,
+} from "../lib/time.js";
 import { usableLiteralSecret } from "../lib/secret.js";
 import type {
   AuthProviderReport,
@@ -773,7 +777,7 @@ function normalizeWindow(
           : undefined;
   const derivedStartsAt =
     id === "monthly" && !hasPayloadDuration && parsedReset !== undefined
-      ? isoFromTimestamp(oneCalendarMonthBefore(Date.parse(parsedReset)))
+      ? calendarMonthsBefore(parsedReset, 1)
       : undefined;
   const normalizedIdentity =
     id === "five_hour" && !hasAuthoritativeDuration
@@ -804,27 +808,6 @@ function isoFromTimestamp(timestamp: number): string | undefined {
   if (!Number.isFinite(timestamp)) return undefined;
   const date = new Date(timestamp);
   return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
-}
-
-function oneCalendarMonthBefore(timestampMs: number): number {
-  const date = new Date(timestampMs);
-  // Clamp the day of month (e.g. Mar 31 steps back to Feb 28/29) so the UTC
-  // month arithmetic stays deterministic across month lengths.
-  const day = Math.min(
-    date.getUTCDate(),
-    new Date(
-      Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 0),
-    ).getUTCDate(),
-  );
-  return Date.UTC(
-    date.getUTCFullYear(),
-    date.getUTCMonth() - 1,
-    day,
-    date.getUTCHours(),
-    date.getUTCMinutes(),
-    date.getUTCSeconds(),
-    date.getUTCMilliseconds(),
-  );
 }
 
 function credentialError(

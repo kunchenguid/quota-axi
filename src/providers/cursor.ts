@@ -1,9 +1,16 @@
+import { statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { readCachedProvider } from "../cache.js";
+import { readCachedProvider, retireCachedSlot } from "../cache.js";
 import { providerFetch } from "../lib/http.js";
+import { traceInput } from "../lib/input-trace.js";
 import { execFileText, commandExists } from "../lib/process.js";
-import { clampPercent, nowIso, retryAfterToIso } from "../lib/time.js";
+import {
+  calendarMonthsBefore,
+  clampPercent,
+  nowIso,
+  retryAfterToIso,
+} from "../lib/time.js";
 import type {
   AuthProviderReport,
   AuthSourceReport,
@@ -16,7 +23,7 @@ import type {
 import {
   failedProvider,
   sourceNames,
-  staleFromCache,
+  staleUnlessSignOut,
   statusFromError,
   successProvider,
   withRemaining,
@@ -143,6 +150,12 @@ export async function fetchQuota(
               ? {}
               : { credentialPresent: cliState.source.credentialPresent }),
           });
+          if (cliState.source.credentialPresent === true) {
+            finalError = cursorFinalError(
+              cliState,
+              cursorCredentialError(cliState),
+            );
+          }
         }
       } else if (error instanceof RateLimitError) {
         retryAfter = error.retryAfter;
@@ -154,9 +167,17 @@ export async function fetchQuota(
   }
 
   const cached = readCachedProvider("cursor");
-  if (cached) {
-    return staleFromCache(cached, finalError, sourceNames(attempts), attempts);
-  }
+  const stale = staleUnlessSignOut(
+    cached,
+    finalError,
+    sourceNames(attempts),
+    attempts,
+    {
+      definitive: finalError === "Cursor sign-in required",
+      retire: () => retireCachedSlot("cursor"),
+    },
+  );
+  if (stale) return stale;
 
   return failedProvider({
     provider: "cursor",
@@ -438,6 +459,16 @@ function rejectUnusableUsageResponse(response: Response): void {
 
 async function readCredentialState(): Promise<CredentialState> {
   if (!(await commandExists("sqlite3"))) {
+    // Without sqlite3 the database cannot be opened, so only the file's
+    // existence can say whether an editor sign-in might be there; an absent
+    // database must not hold back a sign-out verdict from the CLI source.
+    traceInput(STATE_DB);
+    if (stateDbAbsent()) {
+      return {
+        status: "missing",
+        source: { source: "state-vscdb", path: STATE_DB, status: "missing" },
+      };
+    }
     return {
       status: "skipped",
       source: {
@@ -484,6 +515,19 @@ async function readCredentialState(): Promise<CredentialState> {
         credentialPresent: true,
       },
     };
+  }
+}
+
+/**
+ * Only a missing entry counts as absent: a path that cannot be checked (for
+ * example EACCES on a parent directory) may still hold an editor sign-in, and
+ * `existsSync` would misreport it as absent and retire a live login's cache.
+ */
+function stateDbAbsent(): boolean {
+  try {
+    return statSync(STATE_DB, { throwIfNoEntry: false }) === undefined;
+  } catch {
+    return false;
   }
 }
 
@@ -591,29 +635,7 @@ function billingCycleStart(
     parseEpochMillisOrIso(data.billingCycleStart) ??
     parseEpochMillisOrIso(plan?.billingCycleStart);
   if (reported !== undefined) return reported;
-  return cycleEnd === undefined ? undefined : previousCalendarMonth(cycleEnd);
-}
-
-/**
- * The same civil (UTC) date one month earlier, clamped to the last day of that
- * month when the day does not exist there (a 31st renewal lands on Feb 28/29).
- */
-function previousCalendarMonth(iso: string): string | undefined {
-  const end = new Date(iso);
-  if (Number.isNaN(end.getTime())) return undefined;
-  const month = end.getUTCMonth();
-  const year = month === 0 ? end.getUTCFullYear() - 1 : end.getUTCFullYear();
-  const targetMonth = month === 0 ? 11 : month - 1;
-  const daysInTargetMonth = new Date(
-    Date.UTC(year, targetMonth + 1, 0),
-  ).getUTCDate();
-  const start = new Date(end.getTime());
-  start.setUTCFullYear(
-    year,
-    targetMonth,
-    Math.min(end.getUTCDate(), daysInTargetMonth),
-  );
-  return Number.isNaN(start.getTime()) ? undefined : start.toISOString();
+  return cycleEnd === undefined ? undefined : calendarMonthsBefore(cycleEnd, 1);
 }
 
 function parseEpochMillisOrIso(value: unknown): string | undefined {

@@ -265,6 +265,7 @@ describe("live report viewport", () => {
     );
     expect(scrolling).toContain("↑ 2 more");
     expect(scrolling).toContain("↓ 7 more");
+    expect(scrolling).toContain("r refresh");
     expect(scrolling).not.toContain(HINT);
   });
 
@@ -273,7 +274,9 @@ describe("live report viewport", () => {
       scrollHint({ scrollable: true, offset: 0, maxOffset: 4 }, HINT, [
         "a show not set up",
       ]),
-    ).toBe("↓ 4 more · j/k PgUp/PgDn g/G scroll · a show not set up · q quit");
+    ).toBe(
+      "↓ 4 more · j/k PgUp/PgDn g/G scroll · r refresh · a show not set up · q quit",
+    );
     expect(
       scrollHint({ scrollable: false, offset: 0, maxOffset: 0 }, HINT, [
         "a show not set up",

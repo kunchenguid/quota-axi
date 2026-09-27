@@ -8,6 +8,7 @@ import {
   thinBar,
 } from "../src/tui.js";
 import { withQuotaSemantics } from "../src/interpretation.js";
+import { withUsageFetchFailure } from "../src/providers/usage-fetch-failure.js";
 import { providerPresence } from "../src/lib/source-attempts.js";
 import { redactedResponse } from "../src/render.js";
 import { PROVIDER_IDS } from "../src/types.js";
@@ -84,7 +85,7 @@ describe("renderQuotaTui structure", () => {
   it("summarizes the fleet in the dim header with local time", () => {
     const lines = render();
     expect(lines[0]).toBe(
-      "  quota-axi · 2026-08-06 16:21 PDT · 3 live · 3 need attention · 0 not set up",
+      "  quota-axi · 2026-08-06 16:21 PDT · 3 live · 0 stale · 3 need attention · 0 not set up",
     );
   });
 
@@ -596,6 +597,21 @@ describe("renderQuotaTui structure", () => {
     expect(output).not.toContain("\u0085");
   });
 
+  it("marks a reused reading with its age and keeps it live", () => {
+    const response = fixtureResponse();
+    const claude = response.providers[0];
+    claude.state.reused = true;
+    claude.state.refreshedAt = new Date(
+      Date.parse(GENERATED_AT) - 42_000,
+    ).toISOString();
+    const lines = renderQuotaTui(response, {
+      timeZone: "America/Los_Angeles",
+    }).split("\n");
+    const title = findLine(lines, "● claude");
+    expect(title).toContain("max · oauth · reused 42s");
+    expect(title).not.toContain("stale");
+  });
+
   it("marks a stale provider and keeps effective headroom unknown", () => {
     const response = fixtureResponse();
     const claude = response.providers[0];
@@ -605,12 +621,55 @@ describe("renderQuotaTui structure", () => {
     const lines = renderQuotaTui(response, {
       timeZone: "America/Los_Angeles",
     }).split("\n");
-    const title = findLine(lines, "● claude");
+    const title = findLine(lines, "◐ claude");
     expect(title).toContain("max · oauth · stale");
+    expect(lines[0]).toContain(
+      "2 live · 1 stale · 3 need attention · 0 not set up",
+    );
     findLine(lines, "stale · effective unknown");
     expect(findLine(lines, "stale · effective unknown")).toContain(
       "runway unknown",
     );
+  });
+
+  it("draws a stale reading apart from a fresh one, with age and the live-read error", () => {
+    const fresh = renderQuotaTui(fixtureResponse(), {
+      timeZone: "America/Los_Angeles",
+      colorDepth: "truecolor",
+    });
+    const response = fixtureResponse();
+    const claude = response.providers[0];
+    claude.state.status = "stale";
+    claude.state.stale = true;
+    claude.state.refreshedAt = new Date(
+      Date.parse(GENERATED_AT) - 90 * 60 * 1_000,
+    ).toISOString();
+    claude.state.error = "provider_unavailable";
+    claude.state.reason = "keychain_access_required";
+    response.providers[0] = withUsageFetchFailure(
+      withQuotaSemantics(claude, GENERATED_AT),
+    );
+    const stale = renderQuotaTui(response, {
+      timeZone: "America/Los_Angeles",
+      colorDepth: "truecolor",
+    });
+    const lines = stale.split("\n");
+
+    expect(lines[0]).toContain(
+      "2 live · 1 stale · 3 need attention · 0 not set up",
+    );
+    expect(fresh.split("\n")[0]).toContain(
+      "3 live · 0 stale · 3 need attention · 0 not set up",
+    );
+    expect(stale).toContain("\x1b[1;38;2;249;226;175m ◐ claude ");
+    expect(stale).toContain("\x1b[38;2;49;50;68m╭─");
+    expect(stale).not.toContain("\x1b[1;38;2;250;179;135m ● claude ");
+    expect(fresh).toContain("\x1b[1;38;2;250;179;135m ● claude ");
+    expect(findLine(lines, "last refreshed 1h 30m ago")).toBeDefined();
+    expect(findLine(lines, "fetch failed provider unavailable")).toBeDefined();
+    expect(findLine(lines, "reason keychain access required")).toBeDefined();
+    expect(fresh).not.toContain("last refreshed");
+    expect(fresh).not.toContain("◐");
   });
 });
 
@@ -707,7 +766,7 @@ describe("cards for providers with no combinable bound", () => {
 
   it("still marks the card stale when the snapshot is stale", () => {
     const lines = renderWithCopilot(true);
-    expect(findCardLine(lines, 1, "\u25cf copilot")).toContain("stale");
+    expect(findCardLine(lines, 1, "\u25d0 copilot")).toContain("stale");
     expect(findCardLine(lines, 1, "stale \u00b7 per-window usage")).toContain(
       "no combined bound",
     );
@@ -886,6 +945,16 @@ describe("used-share window rows", () => {
     expect(code).not.toContain("─");
     expect(findLine(lines, "│   session")).toContain(" 70%");
     expect(findLine(lines, "│   month")).toContain(" 60%");
+
+    // A share is already a used figure, so the used view leaves it as is and
+    // flips only the windows around it.
+    const used = renderQuotaTui(
+      { generatedAt: GENERATED_AT, schemaVersion: 5, providers: [kimi] },
+      { timeZone: "America/Los_Angeles", show: "used" },
+    ).split("\n");
+    expect(findLine(used, "│   code")).toBe(code);
+    expect(findLine(used, "│   session")).toContain(" 30%");
+    expect(findLine(used, "│   month")).toContain(" 40%");
   });
 
   it("still shows ? when remaining is absent on a window that is not a share", () => {
@@ -913,6 +982,14 @@ describe("used-share window rows", () => {
     const chat = findLine(lines, "│   chat");
     expect(chat).toContain("?");
     expect(chat).not.toContain("% of");
+
+    // The used view is a display of the same remaining figure, so it does not
+    // turn an unmeasured window into a measured one either.
+    const used = renderQuotaTui(
+      { generatedAt: GENERATED_AT, schemaVersion: 5, providers: [copilot] },
+      { timeZone: "America/Los_Angeles", show: "used" },
+    ).split("\n");
+    expect(findLine(used, "│   chat")).toBe(chat);
   });
 });
 
@@ -945,6 +1022,85 @@ describe("thin bars with pace markers", () => {
     expect(barText(thinBar(1, undefined, 13))).toBe("╸────────────");
     expect(barText(thinBar(99.9, undefined, 5))).toBe("━━━━╸");
     expect(barText(thinBar(0, undefined, 5))).toBe("─────");
+  });
+});
+
+describe("used display preference", () => {
+  it("keeps the canonical remaining view by default", () => {
+    expect(render({ show: "remaining" })).toEqual(render());
+  });
+
+  it("labels each headline with how much of its binding window is used", () => {
+    const lines = render({ show: "used" });
+    expect(findCardLine(lines, 0, "28% used · week")).toContain("on pace ✓");
+    expect(findCardLine(lines, 1, "95% used · week")).toContain(
+      "empty in 7h 21m",
+    );
+    expect(findLine(lines, "55% used · credits")).toContain("empty in 2d 13h");
+    expect(lines.join("\n")).not.toContain("72% week");
+  });
+
+  it("prints each window row as the complement of its remaining figure", () => {
+    const lines = render({ show: "used" });
+    expect(findCardLine(lines, 0, "│   session")).toContain("  3%");
+    expect(findCardLine(lines, 0, "│   week")).toContain(" 28%");
+    expect(findCardLine(lines, 0, "│   fable")).toContain(" 15%");
+    expect(findCardLine(lines, 1, "│   week")).toContain(" 95%");
+    expect(findCardLine(lines, 1, "│   spark")).toContain("  0%");
+  });
+
+  it("rounds raw consumption independently of remaining in the headline and row", () => {
+    const response = fixtureResponse();
+    const claude = response.providers[0];
+    const session = claude.windows[0];
+    session.percentUsed = 48.5;
+    session.percentRemaining = 51.5;
+    const availability = claude.quotaSemantics?.effectiveAvailability[0];
+    expect(availability).toBeDefined();
+    if (!availability) return;
+    availability.effectivePercentRemaining = 51.5;
+    availability.limitingWindowIds = [session.id];
+    const lines = (show: "remaining" | "used"): string[] =>
+      renderQuotaTui(response, {
+        timeZone: "America/Los_Angeles",
+        show,
+      }).split("\n");
+    expect(findCardLine(lines("remaining"), 0, "52% session")).toBeDefined();
+    expect(findCardLine(lines("remaining"), 0, "│   session")).toContain(
+      " 52%",
+    );
+    expect(findCardLine(lines("used"), 0, "49% used · session")).toBeDefined();
+    expect(findCardLine(lines("used"), 0, "│   session")).toContain(" 49%");
+  });
+
+  it("mirrors the bar fill and pace marker onto the used side", () => {
+    expect(barText(thinBar(97, 92.9, 13, "used"))).toBe("╸┃───────────");
+    expect(barText(thinBar(5, 16.8, 13, "used"))).toBe("━━━━━━━━━━━┃╸");
+    expect(barText(thinBar(100, 100, 13, "used"))).toBe("┃────────────");
+    expect(barText(thinBar(85, 70, 13, "used"))).toBe("━━──┃────────");
+    expect(barText(thinBar(undefined, undefined, 13, "used"))).toBe(
+      "─────────────",
+    );
+  });
+
+  it("keeps coloring the fill by headroom", () => {
+    expect(thinBar(5, 16.8, 13, "used")[0]?.style).toBe("crit");
+    expect(thinBar(45, undefined, 10, "used")[0]?.style).toBe("warn");
+    expect(thinBar(97, undefined, 10, "used")[0]?.style).toBe("ok");
+  });
+
+  it("changes only the percentages, bars, and headline direction", () => {
+    const remaining = render();
+    const used = render({ show: "used" });
+    expect(used).toHaveLength(remaining.length);
+    const neutral = (line: string): string =>
+      line
+        .replace(/\d+%( used ·)?/g, "N%")
+        .replace(/[━╸┃─]{8,}/g, (bar) => "=".repeat(bar.length))
+        .replace(/ +/g, " ");
+    expect(used.map(neutral)).toEqual(remaining.map(neutral));
+    for (const line of used)
+      expect(displayColumns(line)).toBeLessThanOrEqual(100);
   });
 });
 
@@ -994,6 +1150,25 @@ describe("color handling", () => {
     });
     expect(c16).toContain("\x1b[32m");
     expect(c16).not.toContain("38;2;");
+  });
+
+  it("keeps a stale card border distinct from a fresh one at 16 colors", () => {
+    const claudeBorder = (output: string): string =>
+      findLine(output.split("\n"), " claude ").split("╭")[0];
+    const fresh = renderQuotaTui(fixtureResponse(), {
+      timeZone: "America/Los_Angeles",
+      colorDepth: "16",
+    });
+    const response = fixtureResponse();
+    response.providers[0].state.status = "stale";
+    response.providers[0].state.stale = true;
+    const stale = renderQuotaTui(response, {
+      timeZone: "America/Los_Angeles",
+      colorDepth: "16",
+    });
+
+    expect(claudeBorder(fresh)).toBe("\x1b[90m");
+    expect(claudeBorder(stale)).toBe("\x1b[2;90m");
   });
 
   it("colors runway exhaustion independently from healthy headroom", () => {
@@ -1178,7 +1353,7 @@ describe("providers that are not set up", () => {
     const lines = frame(fleet());
 
     expect(lines[0]).toBe(
-      "  quota-axi · 2026-08-06 16:21 PDT · 2 live · 1 needs attention · 10 not set up",
+      "  quota-axi · 2026-08-06 16:21 PDT · 2 live · 0 stale · 1 needs attention · 10 not set up",
     );
     expect(findLine(lines, "● claude")).toMatch(/● claude .*● codex /);
     const kimi = lines.findIndex((line) => line.includes("○ kimi"));
@@ -1218,7 +1393,9 @@ describe("providers that are not set up", () => {
       expect.stringContaining("elevenlabs credential unavailable"),
     );
     expect(lines.join("\n")).not.toContain("quota-axi auth shows where");
-    expect(lines[0]).toContain("2 live · 1 needs attention · 10 not set up");
+    expect(lines[0]).toContain(
+      "2 live · 0 stale · 1 needs attention · 10 not set up",
+    );
   });
 
   it("takes presence from the caller, since redaction removes the attempts", () => {
@@ -1226,14 +1403,18 @@ describe("providers that are not set up", () => {
     const redacted = redactedResponse(complete, false);
 
     // Without attempts nothing proves absence, so nothing folds.
-    expect(frame(redacted)[0]).toContain("2 live · 11 need attention");
+    expect(frame(redacted)[0]).toContain(
+      "2 live · 0 stale · 11 need attention",
+    );
     expect(frame(redacted).join("\n")).toContain("╭─ ○ zai ");
 
     const presence = complete.providers.map((provider) =>
       providerPresence(provider),
     );
     const lines = frame(redacted, { presence });
-    expect(lines[0]).toContain("2 live · 1 needs attention · 10 not set up");
+    expect(lines[0]).toContain(
+      "2 live · 0 stale · 1 needs attention · 10 not set up",
+    );
     expect(lines.join("\n")).not.toContain("╭─ ○ zai ");
   });
 
@@ -1245,14 +1426,14 @@ describe("providers that are not set up", () => {
     };
 
     expect(frame(response)).toEqual([
-      "  quota-axi · 2026-08-06 16:21 PDT · 0 live · 0 need attention · 3 not set up",
+      "  quota-axi · 2026-08-06 16:21 PDT · 0 live · 0 stale · 0 need attention · 3 not set up",
       "",
       "  ○ not set up  zai · mimo · deepseek   quota-axi auth shows where each is read",
     ]);
 
     const expanded = frame(response, { showNotSetUp: true });
     expect(expanded.slice(0, 4)).toEqual([
-      "  quota-axi · 2026-08-06 16:21 PDT · 0 live · 0 need attention · 3 not set up",
+      "  quota-axi · 2026-08-06 16:21 PDT · 0 live · 0 stale · 0 need attention · 3 not set up",
       "",
       "  ○ not set up · 3",
       "",
@@ -1273,10 +1454,10 @@ describe("providers that are not set up", () => {
     // The unabridged header does not fit the narrowest supported terminal.
     expect(displayColumns(wide[0])).toBeGreaterThan(80);
     expect(displayColumns(narrow[0])).toBeLessThanOrEqual(80);
-    // The time zone is spent to make room; every count survives.
+    // The time zone, then the date, is spent to make room; every count survives.
     expect(narrow[0]).toMatch(
       new RegExp(
-        `^ {2}quota-axi · \\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2} · 0 live · 0 need attention · ${PROVIDER_IDS.length} not set up$`,
+        `^ {2}quota-axi · \\d{2}:\\d{2} · 0 live · 0 stale · 0 need attention · ${PROVIDER_IDS.length} not set up$`,
       ),
     );
   });
@@ -1289,7 +1470,7 @@ describe("providers that are not set up", () => {
     });
 
     expect(lines[0]).toBe(
-      "  quota-axi · 2026-08-06 16:21 PDT · 2 live · 0 need attention · 0 not set up",
+      "  quota-axi · 2026-08-06 16:21 PDT · 2 live · 0 stale · 0 need attention · 0 not set up",
     );
   });
 

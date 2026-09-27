@@ -9,6 +9,7 @@ import {
   kimiCredentialPath,
   resolveKimiCodeEnvironment,
 } from "./kimi-code-config.js";
+import { traceInput } from "../lib/input-trace.js";
 
 export const KIMI_CODE_CLI_CREDENTIAL_SOURCE = "kimi-code-cli";
 
@@ -287,6 +288,7 @@ async function readBoundedFile(
   path: string,
   maxBytes: number,
 ): Promise<Buffer> {
+  traceInput(path);
   const file = await open(path, "r");
   try {
     const contents = new Uint8Array(maxBytes + 1);

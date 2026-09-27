@@ -183,7 +183,7 @@ describe("Claude credential-state reporting", () => {
           );
         }
         return new Response(
-          JSON.stringify({ five_hour: { utilization: 88 } }),
+          JSON.stringify({ five_hour: { utilization: 12 } }),
           { status: 200 },
         );
       }),
@@ -270,7 +270,7 @@ describe("Claude credential-state reporting", () => {
                 status: 200,
               },
             )
-          : new Response(JSON.stringify({ five_hour: { utilization: 88 } }), {
+          : new Response(JSON.stringify({ five_hour: { utilization: 12 } }), {
               status: 200,
             });
       }),
@@ -600,7 +600,7 @@ describe("Claude credential-state reporting", () => {
       "fetch",
       vi.fn(
         async () =>
-          new Response(JSON.stringify({ five_hour: { utilization: 88 } }), {
+          new Response(JSON.stringify({ five_hour: { utilization: 12 } }), {
             status: 200,
           }),
       ),
@@ -647,7 +647,7 @@ describe("Claude credential-state reporting", () => {
       });
       const fetchMock = vi.fn(
         async () =>
-          new Response(JSON.stringify({ five_hour: { utilization: 88 } }), {
+          new Response(JSON.stringify({ five_hour: { utilization: 12 } }), {
             status: 200,
           }),
       );
@@ -706,7 +706,7 @@ describe("Claude credential-state reporting", () => {
     vi.doMock("../../src/lib/process.js", () => ({ execFileText }));
     const fetchMock = vi.fn(
       async () =>
-        new Response(JSON.stringify({ five_hour: { utilization: 88 } }), {
+        new Response(JSON.stringify({ five_hour: { utilization: 12 } }), {
           status: 200,
         }),
     );
@@ -747,7 +747,7 @@ describe("Claude credential-state reporting", () => {
     });
     const fetchMock = vi.fn(
       async () =>
-        new Response(JSON.stringify({ five_hour: { utilization: 88 } }), {
+        new Response(JSON.stringify({ five_hour: { utilization: 12 } }), {
           status: 200,
         }),
     );
@@ -1635,7 +1635,7 @@ describe("Claude credential-state reporting", () => {
     );
     const fetchMock = vi.fn(
       async () =>
-        new Response(JSON.stringify({ five_hour: { utilization: 88 } }), {
+        new Response(JSON.stringify({ five_hour: { utilization: 12 } }), {
           status: 200,
         }),
     );
@@ -2052,7 +2052,7 @@ describe("Claude credential-state reporting", () => {
         }
         return url.includes("/oauth/profile")
           ? Response.json({ account: { uuid: "account-uuid-fixture" } })
-          : Response.json({ five_hour: { utilization: 79 } });
+          : Response.json({ five_hour: { utilization: 21 } });
       }),
     );
 
@@ -2205,7 +2205,7 @@ describe("Claude credential-state reporting", () => {
           throw new TypeError("network unavailable");
         }
         return new Response(
-          JSON.stringify({ five_hour: { utilization: 88 } }),
+          JSON.stringify({ five_hour: { utilization: 12 } }),
           { status: 200 },
         );
       }),
@@ -2500,7 +2500,7 @@ describe("Claude credential-state reporting", () => {
     );
     const fetchMock = vi.fn(
       async () =>
-        new Response(JSON.stringify({ five_hour: { utilization: 88 } }), {
+        new Response(JSON.stringify({ five_hour: { utilization: 12 } }), {
           status: 200,
         }),
     );
@@ -2549,7 +2549,7 @@ describe("Claude credential-state reporting", () => {
           { status: 200 },
         );
       }
-      return new Response(JSON.stringify({ five_hour: { utilization: 88 } }), {
+      return new Response(JSON.stringify({ five_hour: { utilization: 12 } }), {
         status: 200,
       });
     });
@@ -2602,7 +2602,7 @@ describe("Claude credential-state reporting", () => {
               JSON.stringify({ email_address: "person@example.invalid" }),
               { status: 200 },
             )
-          : new Response(JSON.stringify({ five_hour: { utilization: 88 } }), {
+          : new Response(JSON.stringify({ five_hour: { utilization: 12 } }), {
               status: 200,
             }),
       ),
@@ -2752,7 +2752,7 @@ describe("Claude credential-state reporting", () => {
     vi.doMock("../../src/lib/process.js", () => ({ execFileText }));
     const fetchMock = vi.fn(
       async () =>
-        new Response(JSON.stringify({ five_hour: { utilization: 88 } }), {
+        new Response(JSON.stringify({ five_hour: { utilization: 12 } }), {
           status: 200,
         }),
     );
@@ -2830,7 +2830,7 @@ describe("Claude credential-state reporting", () => {
     vi.doMock("../../src/lib/process.js", () => ({ execFileText }));
     const fetchMock = vi.fn(
       async () =>
-        new Response(JSON.stringify({ five_hour: { utilization: 88 } }), {
+        new Response(JSON.stringify({ five_hour: { utilization: 12 } }), {
           status: 200,
         }),
     );
@@ -2877,7 +2877,7 @@ describe("Claude credential-state reporting", () => {
       "fetch",
       vi.fn(
         async () =>
-          new Response(JSON.stringify({ five_hour: { utilization: 88 } }), {
+          new Response(JSON.stringify({ five_hour: { utilization: 12 } }), {
             status: 200,
           }),
       ),
@@ -2931,7 +2931,7 @@ describe("Claude credential-state reporting", () => {
       vi.fn(async (input: string | URL | Request) =>
         String(input).endsWith("/api/oauth/profile")
           ? new Response(JSON.stringify({ account: {} }), { status: 200 })
-          : new Response(JSON.stringify({ five_hour: { utilization: 88 } }), {
+          : new Response(JSON.stringify({ five_hour: { utilization: 12 } }), {
               status: 200,
             }),
       ),
@@ -2984,7 +2984,7 @@ describe("Claude credential-state reporting", () => {
             }),
             { status: 200 },
           )
-        : new Response(JSON.stringify({ five_hour: { utilization: 88 } }), {
+        : new Response(JSON.stringify({ five_hour: { utilization: 12 } }), {
             status: 200,
           }),
     );

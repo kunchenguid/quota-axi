@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ProviderQuota } from "../../src/types.js";
 
 const originalCodexHome = process.env.CODEX_HOME;
 const originalCodexBinary = process.env.QUOTA_AXI_CODEX_BINARY;
@@ -53,6 +54,30 @@ function writeAuth(value: unknown): void {
     authFile(),
     typeof value === "string" ? value : JSON.stringify(value),
   );
+}
+
+function cachedCodexSnapshot(): ProviderQuota {
+  return {
+    provider: "codex",
+    label: "Codex",
+    source: "oauth",
+    windows: [
+      {
+        id: "weekly",
+        label: "week",
+        kind: "weekly",
+        percentUsed: 10,
+        percentRemaining: 90,
+        windowSeconds: 604_800,
+      },
+    ],
+    state: {
+      status: "fresh",
+      stale: false,
+      refreshedAt: new Date().toISOString(),
+      sourcesTried: ["oauth"],
+    },
+  };
 }
 
 function piAuthFile(): string {
@@ -251,6 +276,271 @@ describe("Codex credential-state reporting", () => {
         error: "Codex sign-in required",
       }),
     );
+  });
+
+  it.each([
+    ["reports signed out", { account: null }, {}],
+    ["cannot read its account's limits", { account: { type: "chatgpt" } }, {}],
+  ])(
+    "keeps a rejected token's sign-out when the Codex CLI %s",
+    async (_case, accountRead, rateLimitsRead) => {
+      const { writeCachedProviders, readCachedProvider } =
+        await import("../../src/cache.js");
+      writeCachedProviders([cachedCodexSnapshot()]);
+      writeAuth({
+        tokens: {
+          access_token: jwt({ exp: Math.floor(Date.now() / 1000) + 3600 }),
+        },
+      });
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => new Response(null, { status: 401 })),
+      );
+      const binary = join(tempDir!, "codex-fixture");
+      process.env.QUOTA_AXI_CODEX_BINARY = binary;
+      const spawn = vi.fn(() => successfulChild(accountRead, rateLimitsRead));
+      vi.doMock("node:child_process", () => ({ spawn }));
+      vi.doMock("../../src/lib/process.js", () => ({
+        findCommandPath: vi.fn(async () => binary),
+        terminateChild: vi.fn(),
+      }));
+
+      const { fetchQuota } = await import("../../src/providers/codex.js");
+      const result = await fetchQuota({
+        allowKeychainPrompt: false,
+        refreshCredentials: false,
+      });
+
+      expect(spawn).toHaveBeenCalledOnce();
+      expect(result.state).toMatchObject({
+        status: "auth_required",
+        stale: false,
+        error: "Codex sign-in required",
+      });
+      expect(result.windows).toEqual([]);
+      expect(readCachedProvider("codex")).toBeDefined();
+    },
+  );
+
+  it("keeps the stale snapshot when a Pi entry is rejected and the Codex CLI's own login cannot read its limits", async () => {
+    const {
+      stampCodexStoredAccountId,
+      writeCachedProviders,
+      readCachedProvider,
+    } = await import("../../src/cache.js");
+    const snapshot = cachedCodexSnapshot();
+    stampCodexStoredAccountId(snapshot, "acct-pi-fixture");
+    writeCachedProviders([snapshot]);
+    writePiAuth(piOauthEntry());
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(null, { status: 401 })),
+    );
+    const binary = join(tempDir!, "codex-fixture");
+    process.env.QUOTA_AXI_CODEX_BINARY = binary;
+    const spawn = vi.fn(() =>
+      successfulChild({ account: { type: "chatgpt" } }, {}),
+    );
+    vi.doMock("node:child_process", () => ({ spawn }));
+    vi.doMock("../../src/lib/process.js", () => ({
+      findCommandPath: vi.fn(async () => binary),
+      terminateChild: vi.fn(),
+    }));
+
+    const { fetchQuota } = await import("../../src/providers/codex.js");
+    const result = await fetchQuota({
+      allowKeychainPrompt: false,
+      refreshCredentials: false,
+    });
+
+    expect(spawn).toHaveBeenCalledOnce();
+    expect(result.state.status).toBe("stale");
+    expect(result.state.error).not.toBe("Codex sign-in required");
+    expect(result.windows).toHaveLength(1);
+    expect(readCachedProvider("codex")).toBeDefined();
+  });
+
+  it("withholds cached quota when the present auth.json cannot name an account", async () => {
+    const { writeCachedProviders } = await import("../../src/cache.js");
+    writeCachedProviders([cachedCodexSnapshot()]);
+    writeAuth("{malformed");
+
+    const { fetchQuota } = await import("../../src/providers/codex.js");
+    const result = await fetchQuota({
+      allowKeychainPrompt: false,
+      refreshCredentials: false,
+    });
+
+    expect(result.state.stale).toBe(false);
+    expect(result.windows).toEqual([]);
+  });
+
+  it("retires the rejected native cache despite malformed Pi auth", async () => {
+    const {
+      readCachedProvider,
+      stampCodexStoredAccountId,
+      writeCachedProviders,
+    } = await import("../../src/cache.js");
+    const native = cachedCodexSnapshot();
+    stampCodexStoredAccountId(native, "acct-native");
+    const other = cachedCodexSnapshot();
+    other.accountKey = "openai-codex-work";
+    stampCodexStoredAccountId(other, "acct-other");
+    writeCachedProviders([native, other]);
+    writeAuth({
+      tokens: {
+        access_token: jwt({ exp: Math.floor(Date.now() / 1000) + 3600 }),
+        account_id: "acct-native",
+      },
+    });
+    mkdirSync(process.env.PI_CODING_AGENT_DIR!, { recursive: true });
+    writeFileSync(piAuthFile(), "{malformed", { mode: 0o600 });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(null, { status: 401 })),
+    );
+    const binary = join(tempDir!, "codex-fixture");
+    process.env.QUOTA_AXI_CODEX_BINARY = binary;
+    const spawn = vi.fn(() => successfulChild({ account: null }, {}));
+    vi.doMock("node:child_process", () => ({ spawn }));
+    vi.doMock("../../src/lib/process.js", () => ({
+      findCommandPath: vi.fn(async () => binary),
+      terminateChild: vi.fn(),
+    }));
+
+    const { fetchQuota } = await import("../../src/providers/codex.js");
+    const result = await fetchQuota({
+      allowKeychainPrompt: false,
+      refreshCredentials: false,
+    });
+
+    expect(result.state).toMatchObject({
+      status: "auth_required",
+      stale: false,
+      error: "Codex sign-in required",
+    });
+    expect(result.windows).toEqual([]);
+    expect(readCachedProvider("codex")).toBeUndefined();
+    expect(readCachedProvider("codex", "openai-codex-work")).toBeDefined();
+  });
+
+  it("retires a cached snapshot on sign-out and keeps it for soft expiry or a transient probe", async () => {
+    const {
+      stampCodexStoredAccountId,
+      writeCachedProviders,
+      readCachedProvider,
+      deleteCachedProvider,
+    } = await import("../../src/cache.js");
+    const snapshot = {
+      provider: "codex" as const,
+      label: "Codex",
+      source: "oauth" as const,
+      windows: [
+        {
+          id: "weekly",
+          label: "week",
+          kind: "weekly" as const,
+          percentUsed: 10,
+          percentRemaining: 90,
+          windowSeconds: 604_800,
+        },
+      ],
+      state: {
+        status: "fresh" as const,
+        stale: false,
+        refreshedAt: new Date().toISOString(),
+        sourcesTried: ["oauth"],
+      },
+    };
+    stampCodexStoredAccountId(snapshot, "acct-fixture");
+    writeCachedProviders([snapshot]);
+    const { fetchQuota } = await import("../../src/providers/codex.js");
+    const signedOut = await fetchQuota({
+      allowKeychainPrompt: false,
+      refreshCredentials: false,
+    });
+    expect(signedOut.state).toMatchObject({
+      status: "auth_required",
+      stale: false,
+      error: "Codex sign-in required",
+    });
+    expect(signedOut.windows).toEqual([]);
+    expect(readCachedProvider("codex")).toBeDefined();
+
+    writeAuth({
+      tokens: { access_token: jwt({ exp: 1 }), account_id: "acct-fixture" },
+    });
+    writeCachedProviders([snapshot]);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(null, { status: 401 })),
+    );
+    const rejected = await fetchQuota({
+      allowKeychainPrompt: false,
+      refreshCredentials: false,
+    });
+    expect(rejected.state).toMatchObject({
+      status: "auth_required",
+      stale: false,
+      error: "Codex sign-in required",
+    });
+    expect(rejected.windows).toEqual([]);
+    expect(readCachedProvider("codex")).toBeUndefined();
+    const rejectedUncached = await fetchQuota({
+      allowKeychainPrompt: false,
+      refreshCredentials: false,
+    });
+    expect(rejectedUncached.state).toMatchObject({
+      status: "auth_required",
+      error: "Codex sign-in required",
+    });
+
+    writeAuth({
+      tokens: {
+        access_token: jwt({ exp: 1 }),
+        refresh_token: "refresh",
+        account_id: "acct-fixture",
+      },
+    });
+    writeCachedProviders([snapshot]);
+    const softExpired = await fetchQuota({
+      allowKeychainPrompt: false,
+      refreshCredentials: false,
+    });
+    expect(softExpired.state).toMatchObject({
+      status: "stale",
+      error: "Codex access token expired",
+      authStatus: "expired_refreshable",
+    });
+    expect(softExpired.windows).toHaveLength(1);
+    expect(readCachedProvider("codex")).toBeDefined();
+    deleteCachedProvider("codex");
+    const softExpiredUncached = await fetchQuota({
+      allowKeychainPrompt: false,
+      refreshCredentials: false,
+    });
+    expect(softExpiredUncached.state).toMatchObject({
+      status: "unavailable",
+      error: "Codex access token expired",
+      authStatus: "expired_refreshable",
+    });
+
+    writeAuth({
+      tokens: { access_token: jwt({ exp: 1 }), account_id: "acct-fixture" },
+    });
+    writeCachedProviders([snapshot]);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new TypeError("network unavailable");
+      }),
+    );
+    const transient = await fetchQuota({
+      allowKeychainPrompt: false,
+      refreshCredentials: false,
+    });
+    expect(transient.state.status).toBe("stale");
+    expect(readCachedProvider("codex")).toBeDefined();
   });
 
   it("treats access-token usability as authoritative when id_token is expired", async () => {
@@ -723,6 +1013,7 @@ describe("Codex credential-state reporting", () => {
     writePiAuth(
       piOauthEntry({
         access: "expired-pi-access-token",
+        refresh: undefined,
         expires: Date.now() - 1,
       }),
     );
@@ -750,6 +1041,7 @@ describe("Codex credential-state reporting", () => {
     writePiAuth(
       piOauthEntry({
         access: "expired-pi-access-token",
+        refresh: undefined,
         expires: Date.now() - 1,
       }),
     );
@@ -899,7 +1191,11 @@ describe("Codex credential-state reporting", () => {
       status: "expired",
       error: "credentials_expired_refreshable",
     });
-    expect(result.state.status).toBe("auth_required");
+    expect(result.state).toMatchObject({
+      status: "unavailable",
+      error: "Codex access token expired",
+      authStatus: "expired_refreshable",
+    });
     expect(result.attempts).toContainEqual({
       source: "pi:openai-codex",
       status: "failed",
@@ -1395,7 +1691,17 @@ function failingChild(): ChildProcessWithoutNullStreams {
   return child;
 }
 
-function successfulChild(): ChildProcessWithoutNullStreams {
+function successfulChild(
+  accountRead: unknown = { account: { planType: "plus" } },
+  rateLimitsRead: unknown = {
+    rateLimits: {
+      primary: {
+        usedPercent: 12,
+        windowDurationMins: 300,
+      },
+    },
+  },
+): ChildProcessWithoutNullStreams {
   const child = failingChild();
   let buffer = "";
   child.stdin.setEncoding("utf8");
@@ -1408,16 +1714,9 @@ function successfulChild(): ChildProcessWithoutNullStreams {
       const request = JSON.parse(line) as { id: number; method: string };
       const result =
         request.method === "account/read"
-          ? { account: { planType: "plus" } }
+          ? accountRead
           : request.method === "account/rateLimits/read"
-            ? {
-                rateLimits: {
-                  primary: {
-                    usedPercent: 12,
-                    windowDurationMins: 300,
-                  },
-                },
-              }
+            ? rateLimitsRead
             : {};
       queueMicrotask(() => {
         child.stdout.write(`${JSON.stringify({ id: request.id, result })}\n`);

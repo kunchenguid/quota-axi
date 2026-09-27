@@ -5,12 +5,14 @@ import { commandCodeAdapter } from "./commandcode.js";
 import { codexAdapter } from "./codex.js";
 import { copilotAdapter } from "./copilot.js";
 import { cursorAdapter } from "./cursor.js";
+import { devinAdapter } from "./devin.js";
 import { elevenLabsAdapter } from "./elevenlabs.js";
 import { grokAdapter } from "./grok.js";
 import { kimiAdapter } from "./kimi.js";
 import { opencodeGoAdapter } from "./opencode-go.js";
 import { minimaxAdapter } from "./minimax.js";
 import { mimoAdapter } from "./mimo.js";
+import { museAdapter } from "./muse.js";
 import { deepseekAdapter } from "./deepseek.js";
 import { openrouterAdapter } from "./openrouter.js";
 import { zaiAdapter } from "./zai.js";
@@ -37,6 +39,8 @@ export const PROVIDERS: Record<ProviderId, ProviderAdapter> = {
   deepseek: deepseekAdapter,
   openrouter: openrouterAdapter,
   elevenlabs: elevenLabsAdapter,
+  devin: devinAdapter,
+  muse: museAdapter,
 };
 
 export function parseProviders(value: string | undefined): ProviderId[] {
