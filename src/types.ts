@@ -15,7 +15,8 @@ export type ProviderId =
   | "deepseek"
   | "openrouter"
   | "elevenlabs"
-  | "devin";
+  | "devin"
+  | "muse";
 
 export const PROVIDER_IDS = [
   "claude",
@@ -35,6 +36,7 @@ export const PROVIDER_IDS = [
   "openrouter",
   "elevenlabs",
   "devin",
+  "muse",
 ] as const satisfies readonly ProviderId[];
 
 export type ProviderSource =
@@ -167,8 +169,9 @@ export type EffectiveSelection = Partial<
 > & {
   status: "known" | "unknown";
   /**
-   * Bounding windows whose pace is unknown or unusable. Any such window makes
-   * the whole scope unmeasurable and suppresses the scalar.
+   * Bounding windows that blocked the scalar. Any named window makes the whole
+   * scope unmeasurable. Omitted when `status` is `unknown` only because every
+   * bound is untriggered (no cycle to weight).
    */
   unmeasurableWindowIds?: string[];
 };
@@ -333,6 +336,12 @@ export type ProviderQuota = {
     degradedSources?: DegradedSource[];
     /** Omitted from default `--json`; see `--full`. */
     sourcesTried?: string[];
+    /**
+     * Sparse marker: this fresh reading is the last successful one, served
+     * from the cache instead of asking the vendor again, and `refreshedAt`
+     * (kept in default `--json` when this is set) says when it was taken.
+     */
+    reused?: true;
   };
   attempts?: SourceAttempt[];
   /**

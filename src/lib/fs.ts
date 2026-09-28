@@ -1,5 +1,6 @@
 import { mkdirSync, readFileSync } from "node:fs";
 import { open } from "node:fs/promises";
+import { traceInput } from "./input-trace.js";
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -127,6 +128,22 @@ export function copilotCliKeychainAccessMarkerPath(
   return join(cacheDirPath(), `copilot-cli-keychain-access-granted-${suffix}`);
 }
 
+/** Non-secret proof scoped to the exact Muse Keychain service and account. */
+export function museKeychainAccessMarkerPath(
+  service: string,
+  account: string,
+): string {
+  const suffix = createHash("sha256")
+    .update(JSON.stringify([service, account]))
+    .digest("hex");
+  return join(cacheDirPath(), `muse-keychain-access-granted-${suffix}`);
+}
+
+/** Path of Muse's key-endpoint attempt ledger, beside the quota cache. */
+export function museKeyReadLedgerPath(): string {
+  return join(cacheDirPath(), "muse-key-reads.json");
+}
+
 function cacheDirPath(): string {
   const base = process.env.XDG_CACHE_HOME || join(homedir(), ".cache");
   return join(base, "quota-axi");
@@ -142,6 +159,20 @@ export function readJsonFile(file: string): unknown | undefined {
 }
 
 export function readJsonFileResult(file: string): JsonFileReadResult {
+  traceInput(file);
+  return readUntracedJsonFileResult(file);
+}
+
+/**
+ * The same read without recording it as an input of the current reading, for
+ * quota-axi's own state such as the cache, which every write changes.
+ */
+export function readUntracedJsonFile(file: string): unknown | undefined {
+  const result = readUntracedJsonFileResult(file);
+  return result.status === "success" ? result.value : undefined;
+}
+
+function readUntracedJsonFileResult(file: string): JsonFileReadResult {
   let text: string;
   try {
     text = readFileSync(file, "utf8");
@@ -164,6 +195,7 @@ export async function readBoundedFile(
   path: string,
   maxBytes: number,
 ): Promise<Buffer> {
+  traceInput(path);
   const file = await open(path, "r");
   try {
     const contents = new Uint8Array(maxBytes + 1);

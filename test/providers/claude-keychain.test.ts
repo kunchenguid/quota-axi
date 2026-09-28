@@ -266,6 +266,36 @@ describe("Claude macOS Keychain discovery", () => {
     });
   });
 
+  it("reuses a granted Keychain reading across back-to-back reads with --max-age", async () => {
+    mockItems(item());
+    const { claudeKeychainAccessMarkerPath } =
+      await import("../../src/lib/fs.js");
+    const marker = claudeKeychainAccessMarkerPath("fixture-user", service);
+    mkdirSync(dirname(marker), { recursive: true });
+    writeFileSync(marker, "granted\n", { mode: 0o600 });
+    const { quotaCommand } = await import("../../src/commands.js");
+
+    for (let read = 0; read < 3; read++) {
+      const output = await quotaCommand(
+        [
+          "--provider",
+          "claude",
+          "--json",
+          "--no-credential-refresh",
+          "--max-age",
+          "90s",
+        ],
+        undefined,
+      );
+      expect(JSON.parse(output).providers[0].state.status).toBe("fresh");
+    }
+    expect(
+      vi
+        .mocked(fetch)
+        .mock.calls.filter(([url]) => String(url).endsWith("/api/oauth/usage")),
+    ).toHaveLength(1);
+  });
+
   it("never lets a newer explicit-profile item replace the default profile", async () => {
     const explicitService = profileService("/fixture/explicit-profile");
     mockItems(

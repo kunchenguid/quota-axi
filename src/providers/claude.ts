@@ -49,6 +49,7 @@ import {
 } from "./delegated-refresh.js";
 import { withUsageFetchFailure } from "./usage-fetch-failure.js";
 import { fetchClaudeNativeQuota } from "./claude-native-quota.js";
+import { traceInput } from "../lib/input-trace.js";
 
 const API_URL = "https://api.anthropic.com/api/oauth/usage";
 const PROFILE_API_URL = "https://api.anthropic.com/api/oauth/profile";
@@ -1412,6 +1413,7 @@ function withDiscoveredKeychainItem(
 }
 
 function hasKeychainAccessMarker(locations: ClaudeProfileLocations): boolean {
+  traceInput(locations.keychainAccessMarker);
   return existsSync(locations.keychainAccessMarker);
 }
 
@@ -1420,6 +1422,7 @@ function writeKeychainAccessMarkerBestEffort(
 ): void {
   try {
     const file = locations.keychainAccessMarker;
+    if (existsSync(file)) return;
     ensurePrivateParent(file);
     const temp = `${file}.${process.pid}.tmp`;
     writeFileSync(temp, "granted\n", { mode: 0o600 });

@@ -188,7 +188,65 @@ function semanticsFor(
         provider.state.untrustedWindowIds ?? [],
         generatedAt,
       );
+    case "muse":
+      return museSemantics(
+        provider.windows,
+        provider.state.untrustedWindowIds ?? [],
+        generatedAt,
+      );
   }
+}
+
+/**
+ * Muse's key endpoint reports the subscription's rolling five-hour `window`
+ * and its `weekly` usage, and both gate the same subscription usage, so they
+ * jointly bound every model at `all_models` - Kimi's session-plus-week shape.
+ * A window of any other length, an entry that carried no usable percentage, or
+ * one of those two windows missing while the other remains, is not folded in:
+ * it stays unresolved and leaves the bound non-definitive.
+ */
+const MUSE_ACCOUNT_WINDOW_IDS = new Set(["five_hour", "weekly"]);
+
+function museSemantics(
+  windows: QuotaWindow[],
+  untrustedWindowIds: string[],
+  generatedAt: string,
+): QuotaSemantics {
+  const bounds = windows.filter(({ id }) => MUSE_ACCOUNT_WINDOW_IDS.has(id));
+  // The two windows jointly bound every model. A live weekly (or five-hour)
+  // figure alone is not a complete bound: the missing partner may still gate
+  // usage, so it stays unresolved rather than publishing a definitive remaining.
+  const missing =
+    bounds.length > 0
+      ? [...MUSE_ACCOUNT_WINDOW_IDS].filter(
+          (id) => !bounds.some((window) => window.id === id),
+        )
+      : [];
+  const unresolvedWindowIds = [
+    ...new Set([
+      ...windows
+        .filter(({ id }) => !MUSE_ACCOUNT_WINDOW_IDS.has(id))
+        .map(({ id }) => id),
+      ...untrustedWindowIds,
+      ...missing,
+    ]),
+  ];
+  if (unresolvedWindowIds.length > 0) {
+    return {
+      status: "partial",
+      description:
+        "Muse's five-hour and weekly subscription windows jointly bound every model, but a missing, unrecognized, or unparsed window leaves a bound unknown, so effective remaining is unknown.",
+      effectiveAvailability:
+        bounds.length > 0
+          ? [unresolvedAvailability("all_models", bounds, unresolvedWindowIds)]
+          : [],
+      unresolvedWindowIds,
+    };
+  }
+  return knownSemantics(
+    bounds.length > 0 ? [availability("all_models", bounds, generatedAt)] : [],
+    "Muse's five-hour and weekly subscription windows jointly bound every model, so effective remaining is the minimum across them.",
+  );
 }
 
 /**

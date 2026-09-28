@@ -102,7 +102,10 @@ process.stdin.on("data", (chunk) => {
       const run = runs++;
       const cacheHome = join(root, `cache-${run}`);
       mkdirSync(cacheHome, { mode: 0o700 });
-      const configHome = join(root, `config-${run}`);
+      // One config path for every run: it is part of the credential
+      // selection a cached reading is stamped with, so only the file differs.
+      const configHome = join(root, "config");
+      rmSync(configHome, { recursive: true, force: true });
       if (config !== undefined) {
         mkdirSync(join(configHome, "quota-axi"), { recursive: true });
         writeFileSync(join(configHome, "quota-axi", "config.json"), config);

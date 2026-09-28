@@ -1,7 +1,9 @@
+import { statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { readCachedProvider } from "../cache.js";
+import { readCachedProvider, retireCachedSlot } from "../cache.js";
 import { providerFetch } from "../lib/http.js";
+import { traceInput } from "../lib/input-trace.js";
 import { execFileText, commandExists } from "../lib/process.js";
 import {
   calendarMonthsBefore,
@@ -21,7 +23,7 @@ import type {
 import {
   failedProvider,
   sourceNames,
-  staleFromCache,
+  staleUnlessSignOut,
   statusFromError,
   successProvider,
   withRemaining,
@@ -148,6 +150,12 @@ export async function fetchQuota(
               ? {}
               : { credentialPresent: cliState.source.credentialPresent }),
           });
+          if (cliState.source.credentialPresent === true) {
+            finalError = cursorFinalError(
+              cliState,
+              cursorCredentialError(cliState),
+            );
+          }
         }
       } else if (error instanceof RateLimitError) {
         retryAfter = error.retryAfter;
@@ -159,9 +167,16 @@ export async function fetchQuota(
   }
 
   const cached = readCachedProvider("cursor");
-  const stale = cached
-    ? staleFromCache(cached, finalError, sourceNames(attempts), attempts)
-    : undefined;
+  const stale = staleUnlessSignOut(
+    cached,
+    finalError,
+    sourceNames(attempts),
+    attempts,
+    {
+      definitive: finalError === "Cursor sign-in required",
+      retire: () => retireCachedSlot("cursor"),
+    },
+  );
   if (stale) return stale;
 
   return failedProvider({
@@ -444,6 +459,16 @@ function rejectUnusableUsageResponse(response: Response): void {
 
 async function readCredentialState(): Promise<CredentialState> {
   if (!(await commandExists("sqlite3"))) {
+    // Without sqlite3 the database cannot be opened, so only the file's
+    // existence can say whether an editor sign-in might be there; an absent
+    // database must not hold back a sign-out verdict from the CLI source.
+    traceInput(STATE_DB);
+    if (stateDbAbsent()) {
+      return {
+        status: "missing",
+        source: { source: "state-vscdb", path: STATE_DB, status: "missing" },
+      };
+    }
     return {
       status: "skipped",
       source: {
@@ -490,6 +515,19 @@ async function readCredentialState(): Promise<CredentialState> {
         credentialPresent: true,
       },
     };
+  }
+}
+
+/**
+ * Only a missing entry counts as absent: a path that cannot be checked (for
+ * example EACCES on a parent directory) may still hold an editor sign-in, and
+ * `existsSync` would misreport it as absent and retire a live login's cache.
+ */
+function stateDbAbsent(): boolean {
+  try {
+    return statSync(STATE_DB, { throwIfNoEntry: false }) === undefined;
+  } catch {
+    return false;
   }
 }
 

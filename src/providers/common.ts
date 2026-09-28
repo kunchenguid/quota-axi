@@ -5,6 +5,7 @@ import type {
   QuotaWindow,
   SourceAttempt,
 } from "../types.js";
+import { isDegradedSourceAttempt } from "../lib/source-attempts.js";
 import { percentRemaining } from "../lib/time.js";
 
 export function withRemaining(
@@ -143,6 +144,47 @@ export function resetlessStaleMaxAgeSeconds(window: QuotaWindow): number {
     default:
       return 0;
   }
+}
+
+/**
+ * A definitive sign-out retires the snapshot and returns undefined, so the
+ * caller reports the same failure it would with no cache. Soft expiry and
+ * transport failures stay eligible for {@link staleFromCache}, and so does a
+ * sign-out while a present store was skipped unprobed: only a credential the
+ * vendor rejected, or no credential at all, proves the snapshot's login gone.
+ * A skip on an incidental source (another tool's login) is no such store.
+ */
+export function staleUnlessSignOut(
+  cached: ProviderQuota | undefined,
+  error: string,
+  sourcesTried: string[],
+  attempts: SourceAttempt[],
+  signOut: {
+    definitive: boolean;
+    retire: () => void;
+    incidentalSources?: readonly string[];
+  },
+  now: number = Date.now(),
+): ProviderQuota | undefined {
+  if (
+    signOut.definitive &&
+    !attempts.some(
+      (attempt) =>
+        attempt.status === "skipped" &&
+        !signOut.incidentalSources?.includes(attempt.source) &&
+        isDegradedSourceAttempt(attempt),
+    )
+  ) {
+    try {
+      signOut.retire();
+    } catch {
+      // The sign-out stands when the cache cannot be rewritten.
+    }
+    return undefined;
+  }
+  return cached
+    ? staleFromCache(cached, error, sourcesTried, attempts, now)
+    : undefined;
 }
 
 /**

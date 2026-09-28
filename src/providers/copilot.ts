@@ -1,6 +1,6 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { readCachedProvider } from "../cache.js";
+import { readCachedProvider, retireCachedSlot } from "../cache.js";
 import { readJsonFileResult, type JsonFileReadResult } from "../lib/fs.js";
 import { providerFetch } from "../lib/http.js";
 import {
@@ -21,7 +21,7 @@ import type {
 import {
   failedProvider,
   sourceNames,
-  staleFromCache,
+  staleUnlessSignOut,
   statusFromError,
   successProvider,
 } from "./common.js";
@@ -245,10 +245,20 @@ export async function fetchQuota(
   // profile/account changes. Never serve them as stale, or substitute an older
   // legacy source snapshot for a present but unmeasurable native selection.
   const cached = readCachedProvider("copilot");
-  const stale =
+  const signOut = verdict.error === SIGN_IN_REQUIRED;
+  const stale = staleUnlessSignOut(
     cached && cached.source !== "cli" && nativeSilent && !nativePromptRequired
-      ? staleFromCache(cached, verdict.error, sourceNames(attempts), attempts)
-      : undefined;
+      ? cached
+      : undefined,
+    verdict.error,
+    sourceNames(attempts),
+    attempts,
+    {
+      definitive: signOut,
+      retire: () => retireCachedSlot("copilot"),
+      incidentalSources: copilotAdapter.incidentalSources,
+    },
+  );
   if (stale) return stale;
 
   const result = failedProvider({

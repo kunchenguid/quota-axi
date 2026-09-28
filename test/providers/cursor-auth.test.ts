@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -73,7 +73,58 @@ describe("Cursor credential-state reporting", () => {
     });
   });
 
+  it("retires a cached snapshot when every Cursor store is absent", async () => {
+    vi.doMock("../../src/lib/process.js", () => ({
+      commandExists: vi.fn(async () => true),
+      execFileText: vi.fn(async () => ""),
+    }));
+    const { writeCachedProviders, readCachedProvider } =
+      await import("../../src/cache.js");
+    writeCachedProviders([
+      {
+        provider: "cursor",
+        label: "Cursor",
+        source: "api",
+        windows: [
+          {
+            id: "included_usage",
+            label: "included usage",
+            kind: "monthly",
+            percentUsed: 10,
+            percentRemaining: 90,
+            resetsAt: new Date(Date.now() + 86_400_000).toISOString(),
+          },
+        ],
+        state: {
+          status: "fresh",
+          stale: false,
+          refreshedAt: "2026-09-12T12:00:00.000Z",
+          sourcesTried: ["api"],
+        },
+      },
+    ]);
+    const { fetchQuota } = await import("../../src/providers/cursor.js");
+    const cached = await fetchQuota({
+      allowKeychainPrompt: false,
+      refreshCredentials: false,
+    });
+    const bare = await fetchQuota({
+      allowKeychainPrompt: false,
+      refreshCredentials: false,
+    });
+
+    expect(cached.state).toMatchObject({
+      status: "auth_required",
+      stale: false,
+      error: "Cursor sign-in required",
+    });
+    expect(cached.windows).toEqual([]);
+    expect(bare.state.status).toBe("auth_required");
+    expect(readCachedProvider("cursor")).toBeUndefined();
+  });
+
   it("preserves skipped sqlite discovery failures", async () => {
+    writeFileSync(process.env.CURSOR_STATE_DB!, "");
     vi.doMock("../../src/lib/process.js", () => ({
       commandExists: vi.fn(async () => false),
       execFileText: vi.fn(),
@@ -356,6 +407,9 @@ describe("Cursor credential-state reporting", () => {
     const xdgConfigHome = join(tempDir!, "xdg-config");
     process.env.XDG_CONFIG_HOME = xdgConfigHome;
     process.env.HOME = join(tempDir!, "home");
+    const stateDir = join(xdgConfigHome, "Cursor", "User", "globalStorage");
+    mkdirSync(stateDir, { recursive: true });
+    writeFileSync(join(stateDir, "state.vscdb"), "");
     vi.doMock("../../src/lib/process.js", () => ({
       commandExists: vi.fn(async () => false),
       execFileText: vi.fn(),

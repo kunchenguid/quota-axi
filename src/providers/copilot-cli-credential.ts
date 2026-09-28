@@ -9,6 +9,7 @@ import {
 import { execFileText } from "../lib/process.js";
 import { readWindowsGenericPassword } from "../lib/windows-credential.js";
 import type { AuthSourceReport, ProviderOptions } from "../types.js";
+import { traceInput } from "../lib/input-trace.js";
 
 export const COPILOT_CLI_SOURCE = "copilot-cli:keychain";
 /**
@@ -79,8 +80,11 @@ function dependencies(overrides: Partial<Dependencies>): Dependencies {
     readFile: readBoundedFile,
     run: execFileText,
     readWindows: readWindowsGenericPassword,
-    hasGrant: (path, account) =>
-      existsSync(copilotCliKeychainAccessMarkerPath(path, SERVICE, account)),
+    hasGrant: (path, account) => {
+      const marker = copilotCliKeychainAccessMarkerPath(path, SERVICE, account);
+      traceInput(marker);
+      return existsSync(marker);
+    },
     recordGrant,
     ...overrides,
   };
@@ -335,6 +339,7 @@ function code(error: unknown): unknown {
 function recordGrant(path: string, account: string): void {
   try {
     const file = copilotCliKeychainAccessMarkerPath(path, SERVICE, account);
+    if (existsSync(file)) return;
     ensurePrivateParent(file);
     const temp = `${file}.${process.pid}.tmp`;
     writeFileSync(temp, "granted\n", { mode: 0o600 });

@@ -1,6 +1,6 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { readCachedProvider } from "../cache.js";
+import { readCachedProvider, retireCachedSlot } from "../cache.js";
 import { readJsonFileResult, type JsonFileReadResult } from "../lib/fs.js";
 import { providerFetch } from "../lib/http.js";
 import { nowIso, retryAfterToIso } from "../lib/time.js";
@@ -19,6 +19,7 @@ import {
   failedProvider,
   sourceNames,
   staleFromCache,
+  staleUnlessSignOut,
   statusFromError,
   successProvider,
 } from "./common.js";
@@ -373,10 +374,16 @@ async function fetchQuotaWithDependencies(
   }
 
   const cached = readCachedProvider("grok");
-  const stale =
-    cached?.source === GROK_SOURCE
-      ? staleFromCache(cached, finalError, sourceNames(attempts), attempts)
-      : undefined;
+  const stale = staleUnlessSignOut(
+    cached?.source === GROK_SOURCE ? cached : undefined,
+    finalError,
+    sourceNames(attempts),
+    attempts,
+    {
+      definitive: finalError === GROK_SIGN_IN_REQUIRED_ERROR,
+      retire: () => retireCachedSlot("grok"),
+    },
+  );
   if (stale) return withAuthStatus(stale, authStatus, cliRefreshNeeded);
 
   return withAuthStatus(
