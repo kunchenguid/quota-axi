@@ -336,6 +336,12 @@ function creditBalance(provider: ProviderQuota): string | undefined {
   const credits = provider.credits;
   if (!credits) return undefined;
   if (credits.unlimited) return "credits unlimited";
+  const balances = credits.balances;
+  if (balances && balances.length > 0) {
+    return `remaining ${balances
+      .map((balance) => `${balance.remaining} ${balance.unit}`)
+      .join(DETAIL_SEPARATOR)}`;
+  }
   if (credits.remaining === undefined) return undefined;
   return `remaining ${credits.remaining} ${credits.unit ?? "credits"}`;
 }
