@@ -962,9 +962,26 @@ describe("GitHub Copilot credential sources", () => {
           status: "skipped",
           error: "selected_host_unsupported",
           credentialPresent: true,
+          degraded: false,
         });
       },
     );
+
+    it("retires a cached snapshot when Pi switches to an enterprise login and nothing else answers", async () => {
+      writePiCopilot({ ...piEntry, enterpriseUrl: "ghe.example.test" });
+      const api = stubUserEndpoint({ ghu_pi_github_fixture: 200 });
+      writeCachedProviders([cachedCopilotSnapshot()]);
+
+      const result = await fetchQuota(options);
+
+      expect(result.state).toMatchObject({
+        status: "auth_required",
+        stale: false,
+      });
+      expect(result.windows).toEqual([]);
+      expect(readCachedProvider("copilot")).toBeUndefined();
+      expect(api.bearers).toEqual([]);
+    });
 
     it.each(["", "github.com", "https://github.com"])(
       "sends a Pi login whose enterprise URL names public GitHub (%j)",
@@ -1017,6 +1034,9 @@ describe("GitHub Copilot credential sources", () => {
           status: "skipped",
           error,
           credentialPresent: true,
+          ...(error === "unsupported_credential_type"
+            ? { degraded: false }
+            : {}),
         });
         expect(providerPresence(result, copilotAdapter)).toBe("attention");
       },

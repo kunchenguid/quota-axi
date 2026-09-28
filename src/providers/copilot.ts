@@ -484,14 +484,24 @@ function unavailableAttempt(
       degraded: false,
     };
   }
+  if (
+    source === PI_COPILOT_CREDENTIAL_SOURCE &&
+    resolution.status === "unsupported"
+  ) {
+    // An enterprise host or non-oauth entry is Pi working as designed, not a
+    // broken store, so it does not withhold a stale cache retirement.
+    return {
+      source,
+      status: "skipped",
+      error: resolution.report.error ?? "credentials_invalid",
+      credentialPresent: true,
+      degraded: false,
+    };
+  }
   return {
     source,
     status: "skipped",
-    error:
-      source === PI_COPILOT_CREDENTIAL_SOURCE &&
-      resolution.status === "unsupported"
-        ? (resolution.report.error ?? "credentials_invalid")
-        : "credentials_invalid",
+    error: "credentials_invalid",
     credentialPresent: true,
   };
 }
