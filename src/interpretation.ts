@@ -194,6 +194,12 @@ function semanticsFor(
         provider.state.untrustedWindowIds ?? [],
         generatedAt,
       );
+    case "kiro":
+      return kiroSemantics(
+        provider.windows,
+        provider.state.untrustedWindowIds ?? [],
+        generatedAt,
+      );
   }
 }
 
@@ -206,6 +212,54 @@ function semanticsFor(
  * it stays unresolved and leaves the bound non-definitive.
  */
 const MUSE_ACCOUNT_WINDOW_IDS = new Set(["five_hour", "weekly"]);
+
+/**
+ * Kiro's monthly window meters the plan's included credits. Add-on credits
+ * are purchasable past the included allowance, so a zeroed window says the
+ * included allowance is spent, not that requests stop - it bounds
+ * `included_credits` rather than `all_models`.
+ */
+function kiroSemantics(
+  windows: QuotaWindow[],
+  untrustedWindowIds: string[],
+  generatedAt: string,
+): QuotaSemantics {
+  const monthly = windows.filter(({ id }) => id === "monthly");
+  const recognized = new Set(monthly);
+  const unresolved = windows.filter((window) => !recognized.has(window));
+  const unresolvedWindowIds = [
+    ...new Set([...unresolved.map(({ id }) => id), ...untrustedWindowIds]),
+  ];
+  const description =
+    "Kiro's monthly window bounds included plan credits. Add-on credits can be purchased past a zeroed window, so it is not an all-model bound.";
+  if (unresolvedWindowIds.length > 0) {
+    return {
+      status: "partial",
+      description,
+      effectiveAvailability:
+        monthly.length > 0
+          ? [
+              unresolvedAvailability(
+                "included_credits",
+                monthly,
+                unresolvedWindowIds,
+              ),
+            ]
+          : [],
+      unresolvedWindowIds,
+    };
+  }
+  if (monthly.length === 0) {
+    return knownSemantics(
+      [],
+      "Kiro reported no monthly included-credit window, so no effective remaining percentage can be computed.",
+    );
+  }
+  return knownSemantics(
+    [availability("included_credits", monthly, generatedAt)],
+    description,
+  );
+}
 
 function museSemantics(
   windows: QuotaWindow[],

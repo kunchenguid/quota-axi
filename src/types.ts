@@ -16,7 +16,8 @@ export type ProviderId =
   | "openrouter"
   | "elevenlabs"
   | "devin"
-  | "muse";
+  | "muse"
+  | "kiro";
 
 export const PROVIDER_IDS = [
   "claude",
@@ -37,6 +38,7 @@ export const PROVIDER_IDS = [
   "elevenlabs",
   "devin",
   "muse",
+  "kiro",
 ] as const satisfies readonly ProviderId[];
 
 export type ProviderSource =

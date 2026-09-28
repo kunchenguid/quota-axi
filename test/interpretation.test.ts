@@ -343,6 +343,37 @@ describe("quota semantics", () => {
     });
   });
 
+  it("bounds Kiro included credits with its monthly window, not all models", () => {
+    const result = withQuotaSemantics(
+      provider("kiro", [
+        window("monthly", "monthly", 0, {
+          resetsAt: "2026-10-01T00:00:00.000Z",
+        }),
+      ]),
+      GENERATED_AT,
+    );
+
+    expect(result.quotaSemantics).toMatchObject({
+      status: "known",
+      effectiveAvailability: [
+        expect.objectContaining({
+          scope: "included_credits",
+          effectivePercentRemaining: 0,
+          boundedBy: ["monthly"],
+        }),
+      ],
+    });
+  });
+
+  it("reports Kiro with no windows as unknown", () => {
+    const result = withQuotaSemantics(provider("kiro", []), GENERATED_AT);
+
+    expect(result.quotaSemantics).toMatchObject({
+      status: "unknown",
+      effectiveAvailability: [],
+    });
+  });
+
   it("treats OpenCode Go rolling, weekly, and monthly windows as stacked plan caps", () => {
     const result = withQuotaSemantics(
       provider("opencode-go", [
