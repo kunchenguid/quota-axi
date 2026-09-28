@@ -1,4 +1,10 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -21,6 +27,7 @@ const originalXdgConfigHome = process.env.XDG_CONFIG_HOME;
 const originalHome = process.env.HOME;
 const originalLocalAppData = process.env.LOCALAPPDATA;
 const originalGhConfigDir = process.env.GH_CONFIG_DIR;
+const originalPiAgentDir = process.env.PI_CODING_AGENT_DIR;
 let tempDir: string | undefined;
 
 beforeEach(() => {
@@ -28,6 +35,7 @@ beforeEach(() => {
   process.env.GITHUB_COPILOT_APPS_JSON = join(tempDir, "apps.json");
   process.env.XDG_CACHE_HOME = join(tempDir, "cache");
   process.env.GH_CONFIG_DIR = join(tempDir, "gh");
+  process.env.PI_CODING_AGENT_DIR = join(tempDir, "pi-agent");
 });
 
 afterEach(() => {
@@ -45,6 +53,8 @@ afterEach(() => {
   else process.env.LOCALAPPDATA = originalLocalAppData;
   if (originalGhConfigDir === undefined) delete process.env.GH_CONFIG_DIR;
   else process.env.GH_CONFIG_DIR = originalGhConfigDir;
+  if (originalPiAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+  else process.env.PI_CODING_AGENT_DIR = originalPiAgentDir;
   if (tempDir) rmSync(tempDir, { recursive: true, force: true });
   tempDir = undefined;
 });
@@ -553,6 +563,11 @@ describe("GitHub Copilot credential sources", () => {
         status: "skipped",
         error: "credentials_missing",
       },
+      {
+        source: "pi:github-copilot",
+        status: "skipped",
+        error: "credentials_missing",
+      },
     ]);
   });
 
@@ -587,6 +602,11 @@ describe("GitHub Copilot credential sources", () => {
         source: "gh:hosts.yml",
         status: "failed",
         error: "GitHub Copilot sign-in required",
+      },
+      {
+        source: "pi:github-copilot",
+        status: "skipped",
+        error: "credentials_missing",
       },
     ]);
   });
@@ -678,6 +698,7 @@ describe("GitHub Copilot credential sources", () => {
       status: "skipped",
       error: "credentials_keyring_storage",
       credentialPresent: true,
+      degraded: false,
     });
   });
 
@@ -716,7 +737,7 @@ describe("GitHub Copilot credential sources", () => {
     expect(api.bearers).toEqual([]);
   });
 
-  it("inspects both stores in declared order without printing a token", async () => {
+  it("inspects every store in declared order without printing a token", async () => {
     writeGhToken("gho_cli_fixture");
 
     const result = await inspectAuth(options);
@@ -737,8 +758,314 @@ describe("GitHub Copilot credential sources", () => {
         path: join(process.env.GH_CONFIG_DIR!, "hosts.yml"),
         status: "available",
       },
+      {
+        source: "pi:github-copilot",
+        path: join(process.env.PI_CODING_AGENT_DIR!, "auth.json"),
+        status: "missing",
+      },
     ]);
     expect(JSON.stringify(result)).not.toContain("gho_cli_fixture");
+  });
+
+  describe("Pi's GitHub Copilot login", () => {
+    const piAuthPath = () =>
+      join(process.env.PI_CODING_AGENT_DIR!, "auth.json");
+
+    /** Pi keeps the GitHub OAuth token in `refresh`; `access` is a session token. */
+    function writePiCopilot(entry: unknown): void {
+      writeJson(piAuthPath(), { "github-copilot": entry });
+    }
+
+    const piEntry = {
+      type: "oauth",
+      refresh: "ghu_pi_github_fixture",
+      access: "tid=pi-session-fixture;exp=1",
+      expires: Date.now() + 3_600_000,
+    };
+
+    /** The Linux shape from issue 296: both earlier logins sit in the keyring. */
+    function writeLinuxKeyringLogins(): void {
+      const originalCopilotHome = process.env.COPILOT_HOME;
+      process.env.COPILOT_HOME = join(tempDir!, "copilot");
+      writeJson(join(process.env.COPILOT_HOME, "config.json"), {
+        lastLoggedInUser: { host: "https://github.com", login: "octocat" },
+      });
+      restoreCopilotHome = () => {
+        if (originalCopilotHome === undefined) delete process.env.COPILOT_HOME;
+        else process.env.COPILOT_HOME = originalCopilotHome;
+      };
+      writeGhHosts(
+        "github.com:\n    users:\n        fixture-user:\n    user: fixture-user\n",
+      );
+    }
+    let restoreCopilotHome: (() => void) | undefined;
+    afterEach(() => {
+      restoreCopilotHome?.();
+      restoreCopilotHome = undefined;
+    });
+
+    it("reads quota from Pi's login when the Copilot CLI and gh keep theirs in the keyring", async () => {
+      writeLinuxKeyringLogins();
+      writePiCopilot(piEntry);
+      const api = stubUserEndpoint({ ghu_pi_github_fixture: 200 });
+
+      const result = await withPlatform("linux", () => fetchQuota(options));
+
+      expect(result.state.status).toBe("fresh");
+      expect(result.source).toBe("api");
+      expect(result.plan).toBe("business");
+      expect(result.windows.map((window) => window.id)).toEqual([
+        "premium_interactions",
+      ]);
+      expect(api.bearers).toEqual(["Bearer ghu_pi_github_fixture"]);
+      expect(result.attempts).toEqual([
+        {
+          source: "apps-json",
+          status: "skipped",
+          error: "credentials_missing",
+        },
+        {
+          source: "copilot-cli:keychain",
+          status: "skipped",
+          error: "secure_store_unsupported",
+          degraded: false,
+        },
+        {
+          source: "gh:hosts.yml",
+          status: "skipped",
+          error: "credentials_keyring_storage",
+          credentialPresent: true,
+          degraded: false,
+        },
+        { source: "pi:github-copilot", status: "success" },
+      ]);
+      // Neither keyring login is broken, so neither reads as degraded.
+      expect(degradedSources(result.attempts)).toEqual([]);
+      expect(result.state.sourcesTried).toContain("pi:github-copilot");
+      expect(providerPresence(result, copilotAdapter)).toBe("live");
+      const text = JSON.stringify(result);
+      expect(text).not.toContain("ghu_pi_github_fixture");
+      expect(text).not.toContain("pi-session-fixture");
+    });
+
+    it("never sends Pi's Copilot session token and ignores its stored expiry", async () => {
+      writePiCopilot({ ...piEntry, expires: Date.now() - 60_000 });
+      const api = stubUserEndpoint({ ghu_pi_github_fixture: 200 });
+
+      const result = await fetchQuota(options);
+
+      expect(result.state.status).toBe("fresh");
+      expect(api.bearers).toEqual(["Bearer ghu_pi_github_fixture"]);
+    });
+
+    it.each([
+      [
+        "apps.json",
+        () => writeAppsJson({ "github.com": { oauth_token: "apps-token" } }),
+        "apps-token",
+      ],
+      [
+        "the GitHub CLI login",
+        () => writeGhToken("gho_cli_fixture"),
+        "gho_cli_fixture",
+      ],
+    ])(
+      "leaves %s ahead of Pi, which is not consulted when it answers",
+      async (_label, writeEarlier, token) => {
+        writeEarlier();
+        writePiCopilot(piEntry);
+        const api = stubUserEndpoint({
+          [token]: 200,
+          ghu_pi_github_fixture: 200,
+        });
+
+        const result = await fetchQuota(options);
+
+        expect(result.state.status).toBe("fresh");
+        expect(api.bearers).toEqual([`Bearer ${token}`]);
+        expect(
+          result.attempts?.some(
+            (attempt) => attempt.source === "pi:github-copilot",
+          ),
+        ).toBe(false);
+      },
+    );
+
+    it("hands over to Pi when an earlier store's token is rejected, naming the superseded store", async () => {
+      writeGhToken("gho_revoked_fixture");
+      writePiCopilot(piEntry);
+      const api = stubUserEndpoint({
+        gho_revoked_fixture: 401,
+        ghu_pi_github_fixture: 200,
+      });
+
+      const result = await fetchQuota(options);
+
+      expect(result.state.status).toBe("fresh");
+      expect(api.bearers).toEqual([
+        "Bearer gho_revoked_fixture",
+        "Bearer ghu_pi_github_fixture",
+      ]);
+      expect(degradedSources(result.attempts)).toEqual([
+        { source: "gh:hosts.yml", error: "GitHub Copilot sign-in required" },
+      ]);
+    });
+
+    it("reports sign-in required when Pi's token is rejected, with no refresh or retry", async () => {
+      writePiCopilot(piEntry);
+      const before = readFileSync(piAuthPath(), "utf8");
+      const api = stubUserEndpoint({ ghu_pi_github_fixture: 401 });
+
+      const result = await fetchQuota(options);
+
+      expect(result.state.status).toBe("auth_required");
+      expect(result.state.error).toBe("GitHub Copilot sign-in required");
+      expect(api.bearers).toEqual(["Bearer ghu_pi_github_fixture"]);
+      expect(result.attempts?.[3]).toEqual({
+        source: "pi:github-copilot",
+        status: "failed",
+        error: "GitHub Copilot sign-in required",
+      });
+      expect(providerPresence(result, copilotAdapter)).toBe("attention");
+      expect(readFileSync(piAuthPath(), "utf8")).toBe(before);
+    });
+
+    it("reports a Pi server failure as an error, not a sign-out", async () => {
+      writePiCopilot(piEntry);
+      stubUserEndpoint({ ghu_pi_github_fixture: 500 });
+
+      const result = await fetchQuota(options);
+
+      expect(result.state.status).toBe("error");
+      expect(result.attempts?.[3]).toMatchObject({
+        source: "pi:github-copilot",
+        status: "failed",
+        error: result.state.error,
+      });
+    });
+
+    it.each([
+      ["an enterprise host", "ghe.example.test"],
+      ["an enterprise URL", "https://ghe.example.test/"],
+    ])(
+      "does not send a Pi login for %s to the public endpoint",
+      async (_label, enterpriseUrl) => {
+        writePiCopilot({ ...piEntry, enterpriseUrl });
+        const api = stubUserEndpoint({ ghu_pi_github_fixture: 200 });
+
+        const result = await fetchQuota(options);
+
+        expect(result.state.status).toBe("auth_required");
+        expect(api.bearers).toEqual([]);
+        expect(result.attempts?.[3]).toEqual({
+          source: "pi:github-copilot",
+          status: "skipped",
+          error: "selected_host_unsupported",
+          credentialPresent: true,
+        });
+      },
+    );
+
+    it.each(["", "github.com", "https://github.com"])(
+      "sends a Pi login whose enterprise URL names public GitHub (%j)",
+      async (enterpriseUrl) => {
+        writePiCopilot({ ...piEntry, enterpriseUrl });
+        const api = stubUserEndpoint({ ghu_pi_github_fixture: 200 });
+
+        const result = await fetchQuota(options);
+
+        expect(result.state.status).toBe("fresh");
+        expect(api.bearers).toEqual(["Bearer ghu_pi_github_fixture"]);
+      },
+    );
+
+    it.each([
+      [
+        "no GitHub token",
+        { type: "oauth", access: "tid=session" },
+        "credentials_invalid",
+      ],
+      [
+        "a token reference",
+        { type: "oauth", refresh: "$GH_TOKEN" },
+        "credentials_invalid",
+      ],
+      ["no type", { refresh: "ghu_pi_github_fixture" }, "credentials_invalid"],
+      [
+        "a non-string enterprise URL",
+        { ...piEntry, enterpriseUrl: 42 },
+        "credentials_invalid",
+      ],
+      [
+        "an API key",
+        { type: "api_key", key: "pi-key-fixture" },
+        "unsupported_credential_type",
+      ],
+      ["a scalar entry", "ghu_pi_github_fixture", "credentials_invalid"],
+    ])(
+      "keeps a present but unusable Pi entry (%s) visible without a request",
+      async (_label, entry, error) => {
+        writePiCopilot(entry);
+        const api = stubUserEndpoint({ ghu_pi_github_fixture: 200 });
+
+        const result = await fetchQuota(options);
+
+        expect(result.state.status).toBe("auth_required");
+        expect(api.bearers).toEqual([]);
+        expect(result.attempts?.[3]).toEqual({
+          source: "pi:github-copilot",
+          status: "skipped",
+          error,
+          credentialPresent: true,
+        });
+        expect(providerPresence(result, copilotAdapter)).toBe("attention");
+      },
+    );
+
+    it("names an unreadable Pi store as degraded rather than absent", async () => {
+      mkdirSync(piAuthPath(), { recursive: true });
+      stubUserEndpoint({});
+
+      const result = await fetchQuota(options);
+
+      expect(result.attempts?.[3]).toEqual({
+        source: "pi:github-copilot",
+        status: "skipped",
+        error: "credentials_read_error",
+        degraded: true,
+      });
+    });
+
+    it("treats a Pi store without a github-copilot entry as absent", async () => {
+      writeJson(piAuthPath(), { "openai-codex": { type: "oauth" } });
+      stubUserEndpoint({});
+
+      const result = await fetchQuota(options);
+
+      expect(result.attempts?.[3]).toEqual({
+        source: "pi:github-copilot",
+        status: "skipped",
+        error: "credentials_missing",
+      });
+      expect(providerPresence(result, copilotAdapter)).toBe("absent");
+    });
+
+    it("reports Pi's login in auth without printing a token or sending a request", async () => {
+      writePiCopilot(piEntry);
+      const api = stubUserEndpoint({ ghu_pi_github_fixture: 200 });
+
+      const result = await inspectAuth(options);
+
+      expect(result.sources.at(-1)).toEqual({
+        source: "pi:github-copilot",
+        path: piAuthPath(),
+        status: "available",
+      });
+      expect(api.bearers).toEqual([]);
+      const text = JSON.stringify(result);
+      expect(text).not.toContain("ghu_pi_github_fixture");
+      expect(text).not.toContain("pi-session-fixture");
+    });
   });
 
   describe("presence in the human report", () => {

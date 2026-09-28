@@ -30,6 +30,13 @@ process.env.COPILOT_HOME = join(
   `quota-axi-test-no-copilot-config-${process.pid}-${randomUUID()}`,
 );
 
+// No test may read this machine's real Pi login, which can hold a GitHub
+// Copilot token Copilot now reads. Tests that exercise Pi set their own store.
+process.env.PI_CODING_AGENT_DIR = join(
+  tmpdir(),
+  `quota-axi-test-no-pi-agent-${process.pid}-${randomUUID()}`,
+);
+
 // Quota snapshots must never land in the developer's real ~/.cache/quota-axi.
 // Commands such as `models` write the cache; without this, a suite run can
 // stamp a fixture into the live Claude slot under the machine's real context.

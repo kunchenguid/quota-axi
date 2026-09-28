@@ -42,6 +42,11 @@ import {
   COPILOT_CLI_UNCONFIRMED_ACCOUNT,
   resolveCopilotCliCredential,
 } from "./copilot-cli-credential.js";
+import {
+  PI_COPILOT_CREDENTIAL_SOURCE,
+  type PiCopilotCredentialResolution,
+  resolvePiCopilotCredential,
+} from "./pi-copilot-credential.js";
 
 const USER_URL = "https://api.github.com/copilot_internal/user";
 const USER_HOST = new URL(USER_URL).hostname;
@@ -60,13 +65,16 @@ const DECODE_FAILED = "GitHub Copilot quota response could not be decoded";
  * GitHub Copilot's credential stores in ownership-stability order. `apps.json`
  * is Copilot's legacy store and answers first exactly as it always has. Its
  * native CLI secure-store source is next. The GitHub CLI login belongs to a sibling
- * tool and answers last. Handover is for credential problems only; transport, decoding,
- * rate-limit, or server failure is about the request and stops the search.
+ * tool and answers next. Pi's `github-copilot` login is additive and answers
+ * last, so every earlier store keeps its precedence. Handover is for credential
+ * problems only; transport, decoding, rate-limit, or server failure is about
+ * the request and stops the search.
  */
 const COPILOT_SOURCE_ORDER = [
   APPS_JSON_SOURCE,
   COPILOT_CLI_SOURCE,
   GH_CLI_CREDENTIAL_SOURCE,
+  PI_COPILOT_CREDENTIAL_SOURCE,
 ] as const;
 
 type CopilotSource = (typeof COPILOT_SOURCE_ORDER)[number];
@@ -154,8 +162,8 @@ export async function fetchQuota(
       continue;
     }
 
-    // `apps.json` keeps its established `api` attempt name; a GitHub CLI fetch
-    // is named for its store so `sourcesTried` shows which login answered.
+    // `apps.json` keeps its established `api` attempt name; a GitHub CLI or Pi
+    // fetch is named for its store so `sourcesTried` shows which login answered.
     const attemptSource = source === APPS_JSON_SOURCE ? "api" : source;
     attempts.push({ source: attemptSource, status: "failed" });
     const selection = await selectCredential(
@@ -323,7 +331,55 @@ async function resolveCopilotCredential(
         }
       : { ...result };
   }
-  return fromGhCliResolution(await resolveGhCliCredential());
+  if (source === GH_CLI_CREDENTIAL_SOURCE) {
+    return fromGhCliResolution(await resolveGhCliCredential());
+  }
+  return fromPiResolution(await resolvePiCopilotCredential());
+}
+
+function fromPiResolution(
+  resolution: PiCopilotCredentialResolution,
+): CopilotCredentialResolution {
+  const { path } = resolution;
+  const source = PI_COPILOT_CREDENTIAL_SOURCE;
+  switch (resolution.status) {
+    case "resolved":
+      return {
+        status: "resolved",
+        credentials: { oauthToken: resolution.token },
+        report: { source, path, status: "available" },
+        silent: false,
+      };
+    case "absent":
+      return { status: "absent", report: { source, path, status: "missing" } };
+    case "structurally_invalid":
+      return {
+        status: "structurally_invalid",
+        report: {
+          source,
+          path,
+          status: "invalid",
+          error: "credentials_invalid",
+          credentialPresent: true,
+        },
+      };
+    case "unsupported":
+      return {
+        status: "unsupported",
+        report: {
+          source,
+          path,
+          status: "skipped",
+          error: resolution.error,
+          credentialPresent: true,
+        },
+      };
+    case "read_error":
+      return {
+        status: "read_error",
+        report: { source, path, status: "error", error: "file_read_error" },
+      };
+  }
 }
 
 function fromGhCliResolution(
@@ -414,12 +470,27 @@ function unavailableAttempt(
       degraded: true,
     };
   }
+  if (
+    source === GH_CLI_CREDENTIAL_SOURCE &&
+    resolution.status === "unsupported"
+  ) {
+    // A keyring login is `gh` working as designed, not a broken store, so a
+    // later sibling (Pi) answering does not name it as degraded.
+    return {
+      source,
+      status: "skipped",
+      error: "credentials_keyring_storage",
+      credentialPresent: true,
+      degraded: false,
+    };
+  }
   return {
     source,
     status: "skipped",
     error:
-      source === GH_CLI_CREDENTIAL_SOURCE && resolution.status === "unsupported"
-        ? "credentials_keyring_storage"
+      source === PI_COPILOT_CREDENTIAL_SOURCE &&
+      resolution.status === "unsupported"
+        ? (resolution.report.error ?? "credentials_invalid")
         : "credentials_invalid",
     credentialPresent: true,
   };

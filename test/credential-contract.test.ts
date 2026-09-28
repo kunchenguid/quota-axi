@@ -315,6 +315,7 @@ describe("credential source contract", { timeout: 30_000 }, () => {
       "apps-json",
       "copilot-cli:keychain",
       "gh:hosts.yml",
+      "pi:github-copilot",
     ];
 
     function writeAppsJson(text: string): void {
@@ -420,9 +421,34 @@ describe("credential source contract", { timeout: 30_000 }, () => {
       },
     );
 
+    it.each(BROKEN_ENTRIES)(
+      "marks a present but broken Pi github-copilot entry (%s) as a credential that exists",
+      async (_label, entry) => {
+        writePiStore({ "github-copilot": entry });
+        const api = stubRejectingApi();
+
+        const result = await readQuota("copilot");
+        const attempts = attemptsFor(result, "pi:github-copilot");
+
+        expect(attempts.length).toBeGreaterThan(0);
+        for (const attempt of attempts) {
+          expect(attempt.credentialPresent).toBe(true);
+        }
+        expect(api.bearers).toEqual([]);
+      },
+    );
+
     it("probes every readable store's token, in declared order, before a sign-in verdict", async () => {
       writeAppsJson('{"github.com":{"oauth_token":"apps-probe-token"}}');
       writeGhHosts("github.com:\n  oauth_token: gho_probe_fixture\n");
+      writePiStore({
+        "github-copilot": {
+          type: "oauth",
+          refresh: "ghu_pi_probe_fixture",
+          access: "tid=pi-session-fixture",
+          expires: Date.now() - 1,
+        },
+      });
       const api = stubRejectingApi();
 
       const result = await readQuota("copilot");
@@ -430,6 +456,7 @@ describe("credential source contract", { timeout: 30_000 }, () => {
       expect(api.bearers).toEqual([
         "Bearer apps-probe-token",
         "Bearer gho_probe_fixture",
+        "Bearer ghu_pi_probe_fixture",
       ]);
       expect(result.state.status).toBe("auth_required");
     });
