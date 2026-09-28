@@ -22,6 +22,7 @@ import { providerPresence } from "./lib/source-attempts.js";
 import { readTuiShowPreference } from "./lib/user-config.js";
 import { nowIso } from "./lib/time.js";
 import {
+  coalesceVerifiedSubscriptions,
   fetchAccountQuotas,
   inspectAccountAuth,
 } from "./providers/accounts.js";
@@ -532,10 +533,14 @@ function snapshotReadings(provider: ProviderId, file: string): ProviderQuota[] {
     readings = undefined;
   }
   if (Array.isArray(readings)) {
-    return readings.map((reading) => ({
-      ...reading,
-      state: { ...reading.state, sourcesTried: ["snapshot"] },
-    }));
+    // A snapshot holds every lane's slot, so it publishes one report per
+    // verified subscription the same way a live read does
+    return coalesceVerifiedSubscriptions(
+      readings.map((reading) => ({
+        ...reading,
+        state: { ...reading.state, sourcesTried: ["snapshot"] },
+      })),
+    );
   }
   return [
     failedProvider({

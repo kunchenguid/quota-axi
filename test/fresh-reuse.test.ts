@@ -564,6 +564,61 @@ describe("QUOTA_AXI_SNAPSHOT", () => {
     });
   });
 
+  it("reports two routes of one verified subscription once, keeping unverified lanes apart", async () => {
+    const file = writeSnapshot("2026-09-26T00:00:00Z");
+    const snapshot = JSON.parse(readFileSync(file, "utf8")) as {
+      providers: {
+        windows: Record<string, unknown>[];
+        [key: string]: unknown;
+      }[];
+    };
+    const [claude] = snapshot.providers;
+    const route = (
+      accountKey: string,
+      percentRemaining: number,
+      subscription?: string,
+    ) => ({
+      ...claude,
+      accountKey,
+      ...(subscription ? { subscription } : {}),
+      windows: [
+        {
+          ...claude.windows[0],
+          percentUsed: 100 - percentRemaining,
+          percentRemaining,
+        },
+      ],
+    });
+    const shared = "a".repeat(64);
+    writeFileSync(
+      file,
+      JSON.stringify({
+        ...snapshot,
+        providers: [
+          route("claude-code", 75, shared),
+          route("pi", 60, shared),
+          route("work", 40),
+        ],
+      }),
+    );
+    process.env.QUOTA_AXI_SNAPSHOT = file;
+
+    const output = JSON.parse(
+      await quotaCommand(["--provider", "claude", "--json"], undefined),
+    ) as QuotaAxiResponse;
+
+    expect(usageCalls).toBe(0);
+    expect(
+      output.providers.map((provider) => ({
+        accountKey: provider.accountKey,
+        windows: provider.windows.map((window) => window.percentRemaining),
+      })),
+    ).toEqual([
+      { accountKey: "claude-code", windows: [75] },
+      { accountKey: "work", windows: [40] },
+    ]);
+  });
+
   it("cannot be combined with --profile-only", async () => {
     process.env.QUOTA_AXI_SNAPSHOT = writeSnapshot("2026-09-26T00:00:00Z");
     await expect(readJson("--profile-only")).rejects.toThrow(

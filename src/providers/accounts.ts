@@ -167,7 +167,7 @@ export function accountColumns(report: {
  * stale lane keeps the snapshot it has: that stamp is what lets a route that
  * fails later coalesce again instead of resurfacing as a separate card.
  */
-function coalesceVerifiedSubscriptions(
+export function coalesceVerifiedSubscriptions(
   reports: ProviderQuota[],
 ): ProviderQuota[] {
   const result: ProviderQuota[] = [];
