@@ -1,4 +1,7 @@
+import { homedir } from "node:os";
+import { join } from "node:path";
 import * as processUtils from "../lib/process.js";
+import { traceInput } from "../lib/input-trace.js";
 import type {
   AuthProviderReport,
   AuthSourceReport,
@@ -18,19 +21,33 @@ import {
 const KIRO_COMMAND = "kiro-cli";
 const KIRO_SOURCE = "kiro-cli";
 const KIRO_ARGS = ["chat", "--no-interactive", "/usage"];
+const KIRO_WHOAMI_ARGS = ["whoami", "-f", "json"];
 const KIRO_TIMEOUT_MS = 15_000;
+const KIRO_SIGN_IN_ERROR = "kiro_sign_in_required";
+const KIRO_SIGN_IN_REMEDY = "kiro-cli login";
 const LABEL = "Kiro";
 
 type KiroDependencies = {
   findCommandPath: typeof processUtils.findCommandPath;
   execFileText: typeof processUtils.execFileText;
   now: () => number;
+  credentialStorePath: () => string | undefined;
 };
 
 export type NormalizedKiroUsage = {
   plan?: string;
   windows: QuotaWindow[];
 };
+
+/**
+ * The signed-in identity `kiro-cli whoami -f json` reports for the account the
+ * usage view would read. `signed_out` is the CLI's own "Not logged in" answer;
+ * `malformed` is output the published shape does not explain.
+ */
+type KiroIdentity =
+  | { status: "signed_in"; email?: string; accountType?: string }
+  | { status: "signed_out" }
+  | { status: "malformed" };
 
 export function createKiroAdapter(
   overrides: Partial<KiroDependencies> = {},
@@ -39,6 +56,7 @@ export function createKiroAdapter(
     findCommandPath: (...args) => processUtils.findCommandPath(...args),
     execFileText: (...args) => processUtils.execFileText(...args),
     now: Date.now,
+    credentialStorePath: kiroCredentialStorePath,
     ...overrides,
   };
 
@@ -61,6 +79,7 @@ export async function fetchQuota(
     findCommandPath: (...args) => processUtils.findCommandPath(...args),
     execFileText: (...args) => processUtils.execFileText(...args),
     now: Date.now,
+    credentialStorePath: kiroCredentialStorePath,
   });
 }
 
@@ -80,6 +99,20 @@ async function fetchQuotaWithDependencies(
       throw new Error("kiro_cli_unavailable");
     }
 
+    // The usage read derives entirely from the vendor CLI's credential store,
+    // so a sign-out or account switch must invalidate a cached reading. The
+    // store is stat-traced, never opened, which binds --max-age fresh reuse to
+    // the exact store state this reading came from without reading a secret.
+    const storePath = dependencies.credentialStorePath();
+    if (storePath) traceInput(storePath);
+
+    // `chat` launches a browser sign-in flow when no account is logged in, so
+    // identity is established first and a signed-out CLI never reaches it.
+    const identity = await readKiroIdentity(commandPath, dependencies);
+    if (identity.status === "signed_out") throw new Error(KIRO_SIGN_IN_ERROR);
+    if (identity.status === "malformed")
+      throw new Error("kiro_whoami_malformed");
+
     const output = await dependencies.execFileText(
       commandPath,
       KIRO_ARGS,
@@ -94,6 +127,7 @@ async function fetchQuotaWithDependencies(
       label: LABEL,
       source: "cli",
       plan: normalized.plan,
+      ...(identity.email ? { account: { email: identity.email } } : {}),
       windows: normalized.windows,
       refreshedAt: new Date(dependencies.now()).toISOString(),
       sourcesTried: sourceNames(attempts),
@@ -103,7 +137,7 @@ async function fetchQuotaWithDependencies(
     const message = errorMessage(error);
     if (attempts[0]?.status !== "skipped")
       attempts[0] = { source: KIRO_SOURCE, status: "failed", error: message };
-    return failedProvider({
+    const report = failedProvider({
       provider: "kiro",
       label: LABEL,
       status:
@@ -114,6 +148,9 @@ async function fetchQuotaWithDependencies(
       sourcesTried: sourceNames(attempts),
       attempts,
     });
+    if (message === KIRO_SIGN_IN_ERROR)
+      report.state.remedyCommand = KIRO_SIGN_IN_REMEDY;
+    return report;
   }
 }
 
@@ -122,9 +159,34 @@ async function inspectAuthWithDependencies(
 ): Promise<AuthProviderReport> {
   let source: AuthSourceReport;
   try {
-    source = (await dependencies.findCommandPath(KIRO_COMMAND))
-      ? { source: KIRO_SOURCE, status: "available" }
-      : { source: KIRO_SOURCE, status: "missing" };
+    const commandPath = await dependencies.findCommandPath(KIRO_COMMAND);
+    if (!commandPath) {
+      source = { source: KIRO_SOURCE, status: "missing" };
+    } else {
+      try {
+        const identity = await readKiroIdentity(commandPath, dependencies);
+        source =
+          identity.status === "signed_in"
+            ? { source: KIRO_SOURCE, status: "available" }
+            : identity.status === "signed_out"
+              ? {
+                  source: KIRO_SOURCE,
+                  status: "missing",
+                  error: KIRO_SIGN_IN_ERROR,
+                }
+              : {
+                  source: KIRO_SOURCE,
+                  status: "error",
+                  error: "kiro_whoami_malformed",
+                };
+      } catch (error) {
+        source = {
+          source: KIRO_SOURCE,
+          status: "error",
+          error: errorMessage(error),
+        };
+      }
+    }
   } catch (error) {
     source = {
       source: KIRO_SOURCE,
@@ -133,6 +195,95 @@ async function inspectAuthWithDependencies(
     };
   }
   return { provider: "kiro", sources: [source] };
+}
+
+/**
+ * `kiro-cli whoami -f json` is the vendor's own signed-in probe: it exits 0
+ * with `{"accountType": ..., "email": ...}` for a logged-in account and exits
+ * nonzero with `{"account": null}` ("Not logged in" in plain output) when no
+ * account is signed in. A nonzero exit from `whoami` means the CLI ran and
+ * reported no session; a spawn failure, signal, or timeout is not a sign-out
+ * and propagates as a plain error.
+ */
+async function readKiroIdentity(
+  commandPath: string,
+  dependencies: KiroDependencies,
+): Promise<KiroIdentity> {
+  let output: string;
+  try {
+    output = await dependencies.execFileText(
+      commandPath,
+      KIRO_WHOAMI_ARGS,
+      KIRO_TIMEOUT_MS,
+    );
+  } catch (error) {
+    if (isCleanNonzeroExit(error)) return { status: "signed_out" };
+    throw error;
+  }
+  return parseKiroWhoami(output);
+}
+
+export function parseKiroWhoami(output: unknown): KiroIdentity {
+  if (typeof output !== "string") return { status: "malformed" };
+  let data: unknown;
+  try {
+    data = JSON.parse(output);
+  } catch {
+    return { status: "malformed" };
+  }
+  if (!data || typeof data !== "object" || Array.isArray(data))
+    return { status: "malformed" };
+  const root = data as Record<string, unknown>;
+  // Current builds print top-level accountType/email; the `account` key is
+  // `null` when signed out and may wrap the same fields on others.
+  if ("account" in root && root.account === null)
+    return { status: "signed_out" };
+  const record =
+    root.account &&
+    typeof root.account === "object" &&
+    !Array.isArray(root.account)
+      ? (root.account as Record<string, unknown>)
+      : root;
+  const email = nonempty(record.email);
+  const accountType = nonempty(record.accountType);
+  if (!email && !accountType) return { status: "signed_out" };
+  return {
+    status: "signed_in",
+    ...(email ? { email } : {}),
+    ...(accountType ? { accountType } : {}),
+  };
+}
+
+function nonempty(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0
+    ? value.trim()
+    : undefined;
+}
+
+function isCleanNonzeroExit(error: unknown): boolean {
+  const failure = error as {
+    code?: unknown;
+    signal?: unknown;
+    killed?: unknown;
+  } | null;
+  return (
+    typeof failure?.code === "number" &&
+    failure.code !== 0 &&
+    !failure.signal &&
+    !failure.killed
+  );
+}
+
+/**
+ * The credential store `kiro-cli` reads for this user. Stat-traced as a
+ * reading input so a login that rewrites it can never be served another
+ * account's cached reading; a store that lives elsewhere traces as absent,
+ * which still distinguishes absent from present on the next reuse check.
+ */
+function kiroCredentialStorePath(): string | undefined {
+  const home = homedir();
+  if (!home) return undefined;
+  return join(home, ".local", "share", "kiro-cli", "data.sqlite3");
 }
 
 /**
@@ -215,11 +366,26 @@ export function normalizeKiroUsage(
   };
 }
 
+/**
+ * A `YYYY-MM-DD` the vendor printed is a calendar claim, and `Date.parse`
+ * normalizes impossible dates (`2026-02-30` becomes `2026-03-02`), which
+ * would publish a reset the vendor never stated. Only a date that round-trips
+ * its own year, month, and day in UTC is accepted.
+ */
 function parseResetDate(value: string | undefined): string | undefined {
-  if (!value) return undefined;
-  const ms = Date.parse(`${value}T00:00:00.000Z`);
-  if (!Number.isFinite(ms)) return undefined;
-  return new Date(ms).toISOString();
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value ?? "");
+  if (!match) return undefined;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month - 1 ||
+    date.getUTCDate() !== day
+  )
+    return undefined;
+  return date.toISOString();
 }
 
 function clampPercentage(value: number): number {

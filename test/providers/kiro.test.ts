@@ -8,12 +8,16 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { withInputTrace } from "../../src/lib/input-trace.js";
 import {
   createKiroAdapter,
   normalizeKiroUsage,
+  parseKiroWhoami,
 } from "../../src/providers/kiro.js";
 
 const OPTIONS = { allowKeychainPrompt: false, refreshCredentials: false };
+const WHOAMI_SIGNED_IN =
+  '{"accountType":"SocialGoogle","email":"kiro@example.com"}';
 const originalPath = process.env.PATH;
 let tempDir: string;
 
@@ -36,15 +40,15 @@ describe("Kiro kiro-cli usage provider", () => {
     const report = await createKiroAdapter().fetchQuota(OPTIONS);
 
     expect(readFileSync(argsFile, "utf8").trim().split("\n")).toEqual([
-      "chat",
-      "--no-interactive",
-      "/usage",
+      "whoami -f json",
+      "chat --no-interactive /usage",
     ]);
     expect(report).toMatchObject({
       provider: "kiro",
       label: "Kiro",
       source: "cli",
       plan: "KIRO PRO+",
+      account: { email: "kiro@example.com" },
       state: {
         status: "fresh",
         stale: false,
@@ -64,6 +68,25 @@ describe("Kiro kiro-cli usage provider", () => {
     ]);
   });
 
+  it("traces the vendor credential store so a sign-in switch invalidates reuse", async () => {
+    const storePath = join(tempDir, "data.sqlite3");
+    writeFileSync(storePath, "store");
+    const commandPath = join(tempDir, "kiro-cli");
+    const report = await withInputTrace(() =>
+      createKiroAdapter({
+        findCommandPath: async () => commandPath,
+        execFileText: async (_command, args) =>
+          args[0] === "whoami"
+            ? WHOAMI_SIGNED_IN
+            : readFixture("usage-partial.txt"),
+        credentialStorePath: () => storePath,
+      }).fetchQuota(OPTIONS),
+    );
+
+    expect(report.value.state.status).toBe("fresh");
+    expect(report.inputs.paths).toEqual([storePath]);
+  });
+
   it("executes the resolved command path", async () => {
     const commandPath = join(tempDir, "kiro-cli");
     const execFileText = async (
@@ -72,12 +95,14 @@ describe("Kiro kiro-cli usage provider", () => {
       _timeoutMs: number,
     ): Promise<string> => {
       expect(command).toBe(commandPath);
-      expect(args).toEqual(["chat", "--no-interactive", "/usage"]);
-      return readFixture("usage-partial.txt");
+      return args[0] === "whoami"
+        ? WHOAMI_SIGNED_IN
+        : readFixture("usage-partial.txt");
     };
     const report = await createKiroAdapter({
       findCommandPath: async () => commandPath,
       execFileText,
+      credentialStorePath: () => undefined,
     }).fetchQuota(OPTIONS);
 
     expect(report.state.status).toBe("fresh");
@@ -94,6 +119,35 @@ describe("Kiro kiro-cli usage provider", () => {
     ]);
   });
 
+  it("never invokes the usage view on a signed-out CLI", async () => {
+    const argsFile = join(tempDir, "args");
+    installMockKiroCli(argsFile, readFixture("usage-exhausted.txt"), {
+      signedOut: true,
+    });
+    process.env.PATH = tempDir;
+
+    const report = await createKiroAdapter().fetchQuota(OPTIONS);
+
+    expect(readFileSync(argsFile, "utf8").trim()).toBe("whoami -f json");
+    expect(report.account).toBeUndefined();
+    expect(report).toMatchObject({
+      provider: "kiro",
+      windows: [],
+      state: {
+        status: "auth_required",
+        error: "kiro_sign_in_required",
+        remedyCommand: "kiro-cli login",
+      },
+      attempts: [
+        {
+          source: "kiro-cli",
+          status: "failed",
+          error: "kiro_sign_in_required",
+        },
+      ],
+    });
+  });
+
   it("fails closed when the percentage disagrees with the used/total ratio", () => {
     expect(
       normalizeKiroUsage(
@@ -101,6 +155,22 @@ describe("Kiro kiro-cli usage provider", () => {
           "Credits (100.00 of 2000 covered in plan), 99.9%\n",
       ),
     ).toBeUndefined();
+  });
+
+  it("rejects reset dates that cannot exist on a calendar", () => {
+    for (const date of [
+      "2026-02-30",
+      "2026-13-01",
+      "2026-00-10",
+      "0099-01-01",
+    ]) {
+      expect(
+        normalizeKiroUsage(
+          `Estimated Usage | resets on ${date} | KIRO PRO+\n` +
+            "Credits (250.50 of 2000 covered in plan), 12.5%\n",
+        ),
+      ).toBeUndefined();
+    }
   });
 
   it("returns undefined for malformed usage views", () => {
@@ -166,7 +236,7 @@ describe("Kiro kiro-cli usage provider", () => {
 
   it("reports a failed CLI without throwing", async () => {
     const argsFile = join(tempDir, "args");
-    installMockKiroCli(argsFile, "not used", true);
+    installMockKiroCli(argsFile, "not used", { failUsage: true });
     process.env.PATH = tempDir;
 
     const report = await createKiroAdapter().fetchQuota(OPTIONS);
@@ -176,7 +246,20 @@ describe("Kiro kiro-cli usage provider", () => {
     expect(report.attempts?.[0]?.status).toBe("failed");
   });
 
-  it("reports CLI presence through auth inspection", async () => {
+  it("parses the vendor whoami identity", () => {
+    expect(parseKiroWhoami(WHOAMI_SIGNED_IN)).toEqual({
+      status: "signed_in",
+      email: "kiro@example.com",
+      accountType: "SocialGoogle",
+    });
+    expect(parseKiroWhoami('{"account":null}')).toEqual({
+      status: "signed_out",
+    });
+    expect(parseKiroWhoami("Not logged in")).toEqual({ status: "malformed" });
+    expect(parseKiroWhoami("{}")).toEqual({ status: "signed_out" });
+  });
+
+  it("reports sign-in state through auth inspection", async () => {
     const argsFile = join(tempDir, "args");
     installMockKiroCli(argsFile, readFixture("usage-exhausted.txt"));
     process.env.PATH = tempDir;
@@ -185,6 +268,21 @@ describe("Kiro kiro-cli usage provider", () => {
     expect(present).toEqual({
       provider: "kiro",
       sources: [{ source: "kiro-cli", status: "available" }],
+    });
+
+    installMockKiroCli(argsFile, readFixture("usage-exhausted.txt"), {
+      signedOut: true,
+    });
+    const signedOut = await createKiroAdapter().inspectAuth(OPTIONS);
+    expect(signedOut).toEqual({
+      provider: "kiro",
+      sources: [
+        {
+          source: "kiro-cli",
+          status: "missing",
+          error: "kiro_sign_in_required",
+        },
+      ],
     });
 
     process.env.PATH = join(tempDir, "empty");
@@ -199,17 +297,27 @@ describe("Kiro kiro-cli usage provider", () => {
 function installMockKiroCli(
   argsFile: string,
   output: string,
-  fail = false,
+  options: { failUsage?: boolean; signedOut?: boolean } = {},
 ): void {
   const script = join(tempDir, "kiro-cli");
   const shellQuote = (value: string): string =>
     `'${value.replaceAll("'", "'\\''")}'`;
+  const whoami = options.signedOut
+    ? "echo '{\"account\":null}'; exit 1"
+    : `printf '%s' ${shellQuote(WHOAMI_SIGNED_IN)}`;
+  const usage = options.failUsage
+    ? "exit 7"
+    : `printf '%s' ${shellQuote(output)}`;
   writeFileSync(
     script,
     [
       "#!/bin/sh",
-      `printf '%s\\n' "$@" > ${shellQuote(argsFile)}`,
-      fail ? "exit 7" : `printf '%s' ${shellQuote(output)}`,
+      `printf '%s\\n' "$*" >> ${shellQuote(argsFile)}`,
+      'if [ "$1" = "whoami" ]; then',
+      `  ${whoami}`,
+      "else",
+      `  ${usage}`,
+      "fi",
       "",
     ].join("\n"),
   );
