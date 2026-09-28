@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   chmodSync,
   mkdirSync,
@@ -79,9 +80,16 @@ function fixture(seed?: { timing: WindowTiming; refreshedAt: string }) {
       tokens: { access_token: "fixture", account_id: "acct-fixture" },
     }),
   );
+  // Linux reads accessToken from this auth file; macOS reads the same path as
+  // identity-only cli-config.json, so authInfo is required for the CLI source
+  // to be present (Keychain-gated) rather than missing. A missing CLI source
+  // is a definitive sign-out and would retire the stale snapshot under test.
   writeFileSync(
     join(root, "cursor-auth.json"),
-    JSON.stringify({ accessToken: "fixture" }),
+    JSON.stringify({
+      accessToken: "fixture",
+      authInfo: { email: "fixture@example.com", userId: "fixture-user" },
+    }),
   );
   writeFileSync(
     join(root, "apps.json"),
@@ -127,12 +135,17 @@ function fixture(seed?: { timing: WindowTiming; refreshedAt: string }) {
             label: "credits",
             kind: "credits",
           }),
-          snapshot("codex", "Codex", "oauth", {
-            id: "weekly",
-            label: "week",
-            kind: "weekly",
-            windowSeconds: 604_800,
-          }),
+          {
+            ...snapshot("codex", "Codex", "oauth", {
+              id: "weekly",
+              label: "week",
+              kind: "weekly",
+              windowSeconds: 604_800,
+            }),
+            credentialContext: createHash("sha256")
+              .update(JSON.stringify(["codex-account-v1", "acct-fixture"]))
+              .digest("hex"),
+          },
           snapshot("cursor", "Cursor", "api", {
             id: "included_usage",
             label: "included_usage",

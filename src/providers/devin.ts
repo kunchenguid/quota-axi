@@ -27,6 +27,7 @@ import {
   devinCacheContextId,
   publishDevinReadingContextId,
 } from "./devin-cache-context.js";
+import { traceInput } from "../lib/input-trace.js";
 
 export const DEVIN_API_ORIGIN = "https://server.codeium.com";
 export const DEVIN_USER_STATUS_PATH =
@@ -192,6 +193,7 @@ export function createDevinFileSource(
   const readFile =
     io.readFile ??
     ((path: string): Uint8Array => {
+      traceInput(path);
       const bytes = readFileSync(path);
       return new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     });
@@ -249,7 +251,8 @@ export function createDevinAdapter(
     fetch: providerFetch,
     readCachedProvider: readCachedProviderFromDisk,
     deleteCachedProvider: () => deleteCachedProviderFromDisk("devin"),
-    now: Date.now,
+    // Resolve Date at call time so a clock swapped in after load still applies
+    now: () => Date.now(),
     deadlineMs: OPERATION_DEADLINE_MS,
     ...overrides,
   };

@@ -17,6 +17,10 @@ export const KEYCHAIN_ACCESS_REMEDY_COMMAND =
 export const CREDENTIALS_EXPIRED_REASON = "credentials_expired";
 export const GROK_TOKEN_REFRESH_REMEDY_COMMAND = "grok";
 export const CLAUDE_TOKEN_REFRESH_REMEDY_COMMAND = "claude";
+export const PI_KIMI_TOKEN_REFRESH_REMEDY_COMMAND = "pi";
+export const KIMI_CODE_TOKEN_REFRESH_REMEDY_COMMAND = "kimi";
+const PI_KIMI_EXPIRED_ERROR = "pi_kimi_credential_expired";
+const KIMI_CODE_EXPIRED_ERROR = "kimi_code_cli_credential_expired";
 export const INFERENCE_OPT_IN_REASON = "inference_opt_in_required";
 export const CLAUDE_INFERENCE_REMEDY_COMMAND =
   "quota-axi --provider claude --allow-claude-inference";
@@ -119,6 +123,17 @@ function annotateProviderAdvice(provider: ProviderQuota): ProviderQuota {
       },
     };
   }
+  const kimiRemedy = kimiTokenRefreshRemedy(provider);
+  if (kimiRemedy) {
+    return {
+      ...provider,
+      state: {
+        ...provider.state,
+        reason: CREDENTIALS_EXPIRED_REASON,
+        remedyCommand: kimiRemedy,
+      },
+    };
+  }
   return provider;
 }
 
@@ -204,6 +219,29 @@ function isCredentialSourceReading(attempt: SourceAttempt): boolean {
   );
 }
 
+/**
+ * Kimi has no delegated refresh. A soft-expired login stays read-only, and the
+ * remedy names the CLI that owns the store the reading came from: `pi` when
+ * Pi's `kimi-coding` entry defines it, `kimi` when the Kimi Code CLI store
+ * does. A hard sign-out has no `expired_refreshable` status, so it stays silent.
+ */
+function kimiTokenRefreshRemedy(provider: ProviderQuota): string | undefined {
+  if (
+    provider.provider !== "kimi" ||
+    provider.state.status === "fresh" ||
+    provider.state.authStatus !== "expired_refreshable"
+  ) {
+    return undefined;
+  }
+  if (provider.state.error === PI_KIMI_EXPIRED_ERROR) {
+    return PI_KIMI_TOKEN_REFRESH_REMEDY_COMMAND;
+  }
+  if (provider.state.error === KIMI_CODE_EXPIRED_ERROR) {
+    return KIMI_CODE_TOKEN_REFRESH_REMEDY_COMMAND;
+  }
+  return undefined;
+}
+
 function needsGrokTokenRefreshAdvice(provider: ProviderQuota): boolean {
   return (
     provider.provider === "grok" &&
@@ -262,6 +300,8 @@ function providerHelpLines(provider: ProviderQuota): string[] {
   if (hasClaudeTokenRefreshAdvice(provider))
     return [claudeTokenRefreshHelpLine(provider)];
   if (hasClaudeInferenceAdvice(provider)) return [claudeInferenceHelpLine()];
+  if (hasKimiTokenRefreshAdvice(provider))
+    return [kimiTokenRefreshHelpLine(provider.state.remedyCommand)];
   return [];
 }
 
@@ -284,6 +324,15 @@ function hasKeychainAccessAdvice(provider: ProviderQuota): boolean {
   return (
     provider.state.reason === KEYCHAIN_ACCESS_REASON &&
     provider.state.remedyCommand === KEYCHAIN_ACCESS_REMEDY_COMMAND
+  );
+}
+
+function hasKimiTokenRefreshAdvice(provider: ProviderQuota): boolean {
+  return (
+    provider.provider === "kimi" &&
+    provider.state.reason === CREDENTIALS_EXPIRED_REASON &&
+    (provider.state.remedyCommand === PI_KIMI_TOKEN_REFRESH_REMEDY_COMMAND ||
+      provider.state.remedyCommand === KIMI_CODE_TOKEN_REFRESH_REMEDY_COMMAND)
   );
 }
 
@@ -313,6 +362,13 @@ function claudeTokenRefreshHelpLine(provider: ProviderQuota): string {
     return "Tell your user: quota-axi could not run the Claude CLI; run `claude` once where it is installed.";
   }
   return `Tell your user: run \`${CLAUDE_TOKEN_REFRESH_REMEDY_COMMAND}\` once so Claude Code can refresh its own session token; \`claude doctor\` did not recover it. quota-axi delegates that refresh to the Claude CLI and never rotates credentials itself.`;
+}
+
+function kimiTokenRefreshHelpLine(remedy: string | undefined): string {
+  if (remedy === KIMI_CODE_TOKEN_REFRESH_REMEDY_COMMAND) {
+    return "Tell your user: run a Kimi Code session with `kimi` once so Kimi Code refreshes its own session token. quota-axi stays read-only and never rotates Kimi credentials.";
+  }
+  return "Tell your user: use a Kimi model in `pi` once so Pi refreshes its own Kimi session token; Pi refreshes a provider's token only when that provider is used. quota-axi stays read-only and never rotates Kimi credentials.";
 }
 
 function grokTokenRefreshHelpLine(): string {

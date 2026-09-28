@@ -58,6 +58,14 @@ See the [no-mistakes quick start](https://kunchenguid.github.io/no-mistakes/star
   It is generated from `src/skill.ts`, including frontmatter metadata; run `pnpm run build:skill` and commit the result.
 - Keep changes within the product and credential boundaries defined in [VISION.md](VISION.md); the user-facing safety contract lives in [README.md](README.md#safety-guarantees).
 
+## Release and gate maintenance
+
+Release-please cuts releases from conventional commits on `main`; merging its release PR triggers npm publication through `.github/workflows/release-please.yml` using OIDC trusted publishing (`id-token: write` and `--provenance`), not an `NPM_TOKEN` secret. The published `0.1.0` baseline is recorded by `bootstrap-sha` in `release-please-config.json`; do not retarget it unless correcting that baseline.
+
+Every `pull_request` workflow must `paths-ignore` release-please's output set (`.release-please-manifest.json`, `CHANGELOG.md`, `package.json`) except `.github/workflows/no-mistakes-required.yml`. The gate workflow must have no path filter because its verdict depends on the PR body, not changed files. `test/release-ci-exclusions.test.ts` checks both rules. That workflow calls the shared `kunchenguid/no-mistakes` composite action at an immutable commit SHA, never `@main`; change enforcement upstream and bump the pin in a separate PR. This repo owns the workflow's `on:`, `concurrency`, `permissions`, job name, and author-exemption `if:`.
+
+The trusted default-branch `.no-mistakes.yaml` leaves `allow_repo_commands` off so a pushed branch cannot supply executable `commands` or `agent`. See `test/no-mistakes-config.test.ts` for the configuration contract.
+
 ## Questions
 
 Open an issue, or talk to me on [Discord](https://discord.gg/Wsy2NpnZDu).

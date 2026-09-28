@@ -1,4 +1,10 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -84,13 +90,17 @@ type ProcessMock = {
   editorError?: string;
   keychainToken?: string;
   keychainPresent?: boolean;
+  sqlite3Missing?: boolean;
 };
 
 /** Mirrors how the provider shells out: `sqlite3` for the editor store, `security` for the Keychain. */
 function mockProcess(mock: ProcessMock): { calls: string[][] } {
   const calls: string[][] = [];
   vi.doMock("../../src/lib/process.js", () => ({
-    commandExists: vi.fn(async () => true),
+    commandExists: vi.fn(
+      async (command: string) =>
+        !(mock.sqlite3Missing && command === "sqlite3"),
+    ),
     execFileText: vi.fn(async (command: string, args: string[]) => {
       calls.push([command, ...args]);
       if (command === "sqlite3") {
@@ -239,7 +249,7 @@ describe("Cursor CLI-only quota refresh", () => {
     });
   });
 
-  it("falls back to stale quota when the Linux auth-file token is rejected", async () => {
+  it("retires the cache when the Linux auth-file token is rejected", async () => {
     writeCliAuthFile();
     mockProcess({});
     vi.stubGlobal(
@@ -249,19 +259,22 @@ describe("Cursor CLI-only quota refresh", () => {
 
     await onLinux(async () => {
       await seedCache();
+      const { readCachedProvider } = await import("../../src/cache.js");
       const { fetchQuota } = await import("../../src/providers/cursor.js");
       const result = await fetchQuota({
         allowKeychainPrompt: false,
         refreshCredentials: false,
       });
 
-      expect(result.state.status).toBe("stale");
+      expect(result.state.status).toBe("auth_required");
+      expect(result.state.stale).toBe(false);
+      expect(result.windows).toEqual([]);
       expect(result.state.error).toBe("Cursor sign-in required");
       expect(result.state.sourcesTried).toEqual([
         "state-vscdb",
         "cli-authfile",
-        "cache",
       ]);
+      expect(readCachedProvider("cursor")).toBeUndefined();
       expect(result.attempts).toEqual([
         {
           source: "state-vscdb",
@@ -274,6 +287,136 @@ describe("Cursor CLI-only quota refresh", () => {
           error: "Cursor sign-in required",
         },
       ]);
+    });
+  });
+
+  it("retires the cache when the Linux auth-file token is rejected on a host without sqlite3", async () => {
+    writeCliAuthFile();
+    mockProcess({ sqlite3Missing: true });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("{}", { status: 401 })),
+    );
+
+    await onLinux(async () => {
+      await seedCache();
+      const { readCachedProvider } = await import("../../src/cache.js");
+      const { fetchQuota } = await import("../../src/providers/cursor.js");
+      const cached = await fetchQuota({
+        allowKeychainPrompt: false,
+        refreshCredentials: false,
+      });
+      const bare = await fetchQuota({
+        allowKeychainPrompt: false,
+        refreshCredentials: false,
+      });
+
+      expect(cached.state).toMatchObject({
+        status: "auth_required",
+        stale: false,
+        error: "Cursor sign-in required",
+      });
+      expect(cached.windows).toEqual([]);
+      expect(bare.state.status).toBe("auth_required");
+      expect(readCachedProvider("cursor")).toBeUndefined();
+      expect(cached.attempts).toContainEqual({
+        source: "state-vscdb",
+        status: "skipped",
+        error: "credentials_missing",
+      });
+    });
+  });
+
+  it("keeps the cache when sqlite3 is missing but the editor database exists", async () => {
+    writeCliAuthFile();
+    writeFileSync(process.env.CURSOR_STATE_DB!, "");
+    mockProcess({ sqlite3Missing: true });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("{}", { status: 401 })),
+    );
+
+    await onLinux(async () => {
+      await seedCache();
+      const { readCachedProvider } = await import("../../src/cache.js");
+      const { fetchQuota } = await import("../../src/providers/cursor.js");
+      const result = await fetchQuota({
+        allowKeychainPrompt: false,
+        refreshCredentials: false,
+      });
+
+      expect(result.state.status).toBe("stale");
+      expect(readCachedProvider("cursor")).toBeDefined();
+      expect(result.attempts).toContainEqual({
+        source: "state-vscdb",
+        status: "skipped",
+        error: "sqlite3_unavailable",
+        credentialPresent: true,
+      });
+    });
+  });
+
+  // Root bypasses directory permissions, so the parent would stay checkable.
+  it.skipIf(process.getuid?.() === 0)(
+    "keeps the cache when sqlite3 is missing and the editor database cannot be checked",
+    async () => {
+      writeCliAuthFile();
+      const lockedDir = join(tempDir, "locked");
+      mkdirSync(lockedDir);
+      process.env.CURSOR_STATE_DB = join(lockedDir, "state.vscdb");
+      writeFileSync(process.env.CURSOR_STATE_DB, "");
+      chmodSync(lockedDir, 0o000);
+      mockProcess({ sqlite3Missing: true });
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => new Response("{}", { status: 401 })),
+      );
+
+      try {
+        await onLinux(async () => {
+          await seedCache();
+          const { readCachedProvider } = await import("../../src/cache.js");
+          const { fetchQuota } = await import("../../src/providers/cursor.js");
+          const result = await fetchQuota({
+            allowKeychainPrompt: false,
+            refreshCredentials: false,
+          });
+
+          expect(result.state.status).toBe("stale");
+          expect(readCachedProvider("cursor")).toBeDefined();
+          expect(result.attempts).toContainEqual({
+            source: "state-vscdb",
+            status: "skipped",
+            error: "sqlite3_unavailable",
+            credentialPresent: true,
+          });
+        });
+      } finally {
+        chmodSync(lockedDir, 0o700);
+      }
+    },
+  );
+
+  it("keeps the cache when the Linux auth-file probe fails transiently", async () => {
+    writeCliAuthFile();
+    mockProcess({});
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("{}", { status: 503 })),
+    );
+
+    await onLinux(async () => {
+      await seedCache();
+      const { readCachedProvider } = await import("../../src/cache.js");
+      const { fetchQuota } = await import("../../src/providers/cursor.js");
+      const result = await fetchQuota({
+        allowKeychainPrompt: false,
+        refreshCredentials: false,
+      });
+
+      expect(result.state.status).toBe("stale");
+      expect(result.windows.length).toBeGreaterThan(0);
+      expect(readCachedProvider("cursor")).toBeDefined();
     });
   });
 
@@ -346,6 +489,30 @@ describe("Cursor CLI-only quota refresh", () => {
         "quota-axi --allow-keychain-prompt",
       );
       expect(JSON.stringify(annotated)).not.toContain(CLI_TOKEN);
+    });
+  });
+
+  it("keeps the cache when the editor token is rejected but the CLI Keychain token is untested", async () => {
+    writeCliConfig();
+    mockProcess({ editorToken: EDITOR_TOKEN, keychainToken: CLI_TOKEN });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("{}", { status: 401 })),
+    );
+
+    await onDarwin(async () => {
+      await seedCache();
+      const { readCachedProvider } = await import("../../src/cache.js");
+      const { fetchQuota } = await import("../../src/providers/cursor.js");
+      const result = await fetchQuota({
+        allowKeychainPrompt: false,
+        refreshCredentials: false,
+      });
+
+      expect(result.state.status).toBe("stale");
+      expect(result.state.error).toBe("keychain_prompt_required");
+      expect(result.windows.length).toBeGreaterThan(0);
+      expect(readCachedProvider("cursor")).toBeDefined();
     });
   });
 

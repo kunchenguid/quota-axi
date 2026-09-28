@@ -122,9 +122,9 @@ describe("provider presence classification", () => {
     error: "mimo_credential_unavailable",
   };
 
-  it("counts any reading, fresh or stale, as live", () => {
+  it("counts a fresh reading as live and a cached one as stale", () => {
     expect(providerPresence(reading("fresh", [absent]))).toBe("live");
-    expect(providerPresence(reading("stale", [absent]))).toBe("live");
+    expect(providerPresence(reading("stale", [absent]))).toBe("stale");
   });
 
   it("reads a provider as not set up when every source was skipped as absent, whatever the adapter calls it", () => {

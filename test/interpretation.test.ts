@@ -836,6 +836,39 @@ describe("quota semantics", () => {
     ]);
   });
 
+  it("ranks the Z.AI all-models scope when an idle five-hour window has not been triggered yet", () => {
+    const result = withQuotaSemantics(
+      provider("zai", [
+        window("five_hour", "session", 100, {
+          percentUsed: 0,
+          windowSeconds: 18_000,
+          // No resetsAt: the vendor omits nextResetTime while the session
+          // window is idle, so the 5h clock has not started. This must not
+          // block spendPriority.
+        }),
+        window("weekly", "weekly", 51, {
+          windowSeconds: WEEK_SECONDS,
+          resetsAt: weeklyResetsAt(0.6),
+        }),
+      ]),
+      GENERATED_AT,
+    );
+
+    const allModels = result.quotaSemantics?.effectiveAvailability.find(
+      (item) => item.scope === "all_models",
+    );
+    expect(allModels?.status).toBe("known");
+    expect(allModels?.selection?.status).toBe("known");
+    expect(allModels?.selection?.unmeasurableWindowIds).toBeUndefined();
+    expect(typeof allModels?.selection?.[SELECTION_SCALAR_KEY]).toBe("number");
+
+    const fiveHour = result.windows.find((item) => item.id === "five_hour");
+    expect(fiveHour?.pace).toEqual({
+      status: "unknown",
+      reason: "missing_cycle",
+    });
+  });
+
   it("keeps the Z.AI tool window out of the all-models bound when limits are unresolved", () => {
     const zai = provider("zai", [
       zaiSessionWindow(),

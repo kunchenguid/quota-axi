@@ -2,6 +2,7 @@ import {
   providerPresence,
   type ProviderPresence,
 } from "./lib/source-attempts.js";
+import { isUsageFetchFailure } from "./providers/usage-fetch-failure.js";
 import type {
   EffectiveAvailability,
   ProviderId,
@@ -110,6 +111,7 @@ const ACCENTS: Record<ProviderId, StyleSpec> = {
   openrouter: { rgb: [183, 148, 232], ansi16: "95", bold: true },
   elevenlabs: { rgb: [214, 170, 255], ansi16: "95", bold: true },
   devin: { rgb: [126, 196, 224], ansi16: "96", bold: true },
+  muse: { rgb: [0, 132, 255], ansi16: "94", bold: true },
 };
 
 const STYLES: Record<Exclude<StyleName, `accent:${ProviderId}`>, StyleSpec> = {
@@ -126,7 +128,7 @@ const STYLES: Record<Exclude<StyleName, `accent:${ProviderId}`>, StyleSpec> = {
   marker: { rgb: [137, 220, 235], ansi16: "96" },
   track: { rgb: [69, 71, 90], ansi16: "90" },
   border: { rgb: [88, 91, 112], ansi16: "90" },
-  borderDim: { rgb: [49, 50, 68], ansi16: "90" },
+  borderDim: { rgb: [49, 50, 68], ansi16: "2;90" },
 };
 
 /**
@@ -164,6 +166,7 @@ export function renderQuotaTui(
 
   const tiers: Record<ProviderPresence, ProviderQuota[]> = {
     live: [],
+    stale: [],
     attention: [],
     absent: [],
   };
@@ -172,8 +175,8 @@ export function renderQuotaTui(
       provider,
     );
   });
-  const { live, attention, absent } = tiers;
-  const carded = [...live, ...attention];
+  const { live, stale, attention, absent } = tiers;
+  const carded = [...live, ...stale, ...attention];
   const card = (provider: ProviderQuota): Card =>
     buildCard(provider, generatedAtMs, show);
 
@@ -291,9 +294,11 @@ function resolveColumns(columns: number | undefined): number {
   );
 }
 
-function isLive(provider: ProviderQuota): boolean {
+function hasReading(provider: ProviderQuota): boolean {
   return provider.state.status === "fresh" || provider.state.status === "stale";
 }
+
+type CardBorder = "border" | "borderDim";
 
 /**
  * The fleet summary, never wider than the report. Every tier count is
@@ -309,6 +314,7 @@ function headerText(
   const attention = tiers.attention.length;
   const counts = [
     `${tiers.live.length} live`,
+    `${tiers.stale.length} stale`,
     `${attention} ${attention === 1 ? "needs" : "need"} attention`,
     `${tiers.absent.length} not set up`,
   ];
@@ -328,9 +334,23 @@ function buildCard(
   generatedAtMs: number,
   show: TuiShow,
 ): Card {
-  return isLive(provider)
+  return hasReading(provider)
     ? buildLiveCard(provider, generatedAtMs, show)
     : buildFailedCard(provider);
+}
+
+/** How old a reused reading is, as the card title's `reused 42s` marker. */
+function reusedAge(
+  refreshedAt: string | undefined,
+  generatedAtMs: number,
+): string {
+  const seconds = Math.floor(
+    (generatedAtMs - Date.parse(refreshedAt ?? "")) / 1_000,
+  );
+  if (!Number.isFinite(seconds) || seconds < 0) return "reused";
+  return seconds < 120
+    ? `reused ${seconds}s`
+    : `reused ${Math.floor(seconds / 60)}m`;
 }
 
 function buildLiveCard(
@@ -338,60 +358,66 @@ function buildLiveCard(
   generatedAtMs: number,
   show: TuiShow,
 ): Card {
-  const stale = provider.state.stale;
+  const stale = provider.state.status === "stale";
+  const border: CardBorder = stale ? "borderDim" : "border";
   const rightTitle = [
     provider.plan,
     provider.source,
     stale ? "stale" : undefined,
+    provider.state.reused
+      ? reusedAge(provider.state.refreshedAt, generatedAtMs)
+      : undefined,
   ]
     .filter((part): part is string => part !== undefined)
     .join(" · ");
   const lines: Line[] = [
     titleLine(
-      {
-        text: ` ● ${provider.provider} `,
-        style: `accent:${provider.provider}`,
-      },
+      stale
+        ? { text: ` ◐ ${provider.provider} `, style: "warnBold" }
+        : {
+            text: ` ● ${provider.provider} `,
+            style: `accent:${provider.provider}`,
+          },
       rightTitle,
-      "border",
+      border,
     ),
-    ...accountCardLines(provider, "border"),
-    interior([], "border"),
+    ...accountCardLines(provider, border),
+    interior([], border),
   ];
 
   const headline = pickHeadlineAvailability(provider);
-  const creditsLine = creditsOnlyHeadline(provider, stale);
+  const creditsLine = creditsOnlyHeadline(provider, stale, border);
   if (creditsLine) {
     lines.push(...creditsLine);
   } else if (hasWhollyUnknownWindowRelationships(provider)) {
-    lines.push(...windowsOnlyHeadline(stale));
+    lines.push(...windowsOnlyHeadline(stale, border));
   } else {
-    lines.push(...effectiveHeadline(provider, headline, stale, show));
+    lines.push(...effectiveHeadline(provider, headline, stale, show, border));
   }
 
   if (provider.windows.length > 0) {
-    lines.push(interior([], "border"));
+    lines.push(interior([], border));
     for (const window of provider.windows) {
       lines.push(
         interior(
           windowRow(window, generatedAtMs, provider.windows, show),
-          "border",
+          border,
         ),
       );
     }
   }
 
-  for (const note of cardNotes(provider)) {
+  for (const note of cardNotes(provider, generatedAtMs)) {
     lines.push(
       interior(
         [{ text: `   ${truncate(note, CARD_INTERIOR - 4)}`, style: "dimmer" }],
-        "border",
+        border,
       ),
     );
   }
 
-  lines.push(interior([], "border"));
-  lines.push(bottomLine("border"));
+  lines.push(interior([], border));
+  lines.push(bottomLine(border));
   return lines;
 }
 
@@ -403,8 +429,9 @@ function buildLiveCard(
 function effectiveHeadline(
   provider: ProviderQuota,
   headline: EffectiveAvailability | undefined,
-  stale: boolean | undefined,
+  stale: boolean,
   show: TuiShow,
+  border: CardBorder,
 ): Line[] {
   const lines: Line[] = [];
   const effectivePct = headline?.effectivePercentRemaining;
@@ -450,7 +477,7 @@ function effectiveHeadline(
         ...padBetween(left, verdict, EFFECTIVE_BAR_WIDTH),
         { text: "   " },
       ],
-      "border",
+      border,
     ),
   );
   lines.push(
@@ -460,7 +487,7 @@ function effectiveHeadline(
         ...thinBar(effectivePct, markerPct, EFFECTIVE_BAR_WIDTH, show),
         { text: "   " },
       ],
-      "border",
+      border,
     ),
   );
   return lines;
@@ -474,7 +501,8 @@ function effectiveHeadline(
  */
 function creditsOnlyHeadline(
   provider: ProviderQuota,
-  stale: boolean | undefined,
+  stale: boolean,
+  border: CardBorder,
 ): Line[] | undefined {
   if (provider.windows.length > 0) return undefined;
   const credits = provider.credits;
@@ -495,7 +523,7 @@ function creditsOnlyHeadline(
           style: "dimBold",
         },
       ],
-      "border",
+      border,
     ),
   ];
 }
@@ -521,7 +549,7 @@ function hasWhollyUnknownWindowRelationships(provider: ProviderQuota): boolean {
   return provider.windows.every(({ id }) => unresolved.has(id));
 }
 
-function windowsOnlyHeadline(stale: boolean | undefined): Line[] {
+function windowsOnlyHeadline(stale: boolean, border: CardBorder): Line[] {
   const left: Line = [
     {
       text: stale ? "stale · per-window usage" : "per-window usage",
@@ -538,7 +566,7 @@ function windowsOnlyHeadline(stale: boolean | undefined): Line[] {
         ...padBetween(left, right, CARD_INTERIOR - 4),
         { text: " " },
       ],
-      "border",
+      border,
     ),
   ];
 }
@@ -802,8 +830,32 @@ function runwayVerdict(headline: EffectiveAvailability | undefined): Line {
   return [{ text, style: "warnBold" }];
 }
 
-function cardNotes(provider: ProviderQuota): string[] {
+function staleAge(
+  refreshedAt: string | undefined,
+  generatedAtMs: number,
+): string {
+  const seconds = Math.floor(
+    (generatedAtMs - Date.parse(refreshedAt ?? "")) / 1_000,
+  );
+  if (!Number.isFinite(seconds) || seconds < 0) return "unknown";
+  if (seconds < 60) return `${seconds}s ago`;
+  return `${formatCountdown(seconds)} ago`;
+}
+
+function cardNotes(provider: ProviderQuota, generatedAtMs: number): string[] {
   const notes: string[] = [];
+  if (provider.state.status === "stale") {
+    notes.push(
+      `last refreshed ${staleAge(provider.state.refreshedAt, generatedAtMs)}`,
+    );
+    if (provider.state.error) {
+      const prefix = isUsageFetchFailure(provider) ? "fetch failed " : "";
+      notes.push(`${prefix}${humanize(provider.state.error)}`);
+    }
+    if (provider.state.reason) {
+      notes.push(`reason ${humanize(provider.state.reason)}`);
+    }
+  }
   if (provider.state.retryAfter) {
     notes.push(`retry after ${provider.state.retryAfter}`);
   }

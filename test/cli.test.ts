@@ -39,6 +39,7 @@ const originalDeepSeekProvider = PROVIDERS.deepseek;
 const originalOpenRouterProvider = PROVIDERS.openrouter;
 const originalElevenLabsProvider = PROVIDERS.elevenlabs;
 const originalDevinProvider = PROVIDERS.devin;
+const originalMuseProvider = PROVIDERS.muse;
 const originalXdgCacheHome = process.env.XDG_CACHE_HOME;
 const originalClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
 const originalCodexHome = process.env.CODEX_HOME;
@@ -68,6 +69,7 @@ afterEach(() => {
   PROVIDERS.openrouter = originalOpenRouterProvider;
   PROVIDERS.elevenlabs = originalElevenLabsProvider;
   PROVIDERS.devin = originalDevinProvider;
+  PROVIDERS.muse = originalMuseProvider;
   vi.unstubAllGlobals();
   if (originalXdgCacheHome === undefined) delete process.env.XDG_CACHE_HOME;
   else process.env.XDG_CACHE_HOME = originalXdgCacheHome;
@@ -105,6 +107,7 @@ describe("CLI flag parsing", () => {
       "openrouter",
       "elevenlabs",
       "devin",
+      "muse",
     ]);
   });
 
@@ -179,6 +182,7 @@ describe("CLI flag parsing", () => {
           "openrouter",
           "elevenlabs",
           "devin",
+          "muse",
         ],
         json: true,
         full: true,
@@ -215,6 +219,22 @@ describe("CLI flag parsing", () => {
         "--refresh must be between 30s and 24h",
       );
     }
+  });
+
+  it("parses a fresh-reuse bound, including 0 to always read the vendor", () => {
+    expect(parseFlags([]).maxAgeSeconds).toBeUndefined();
+    expect(parseFlags(["--max-age", "0"]).maxAgeSeconds).toBe(0);
+    expect(parseFlags(["--max-age", "45"]).maxAgeSeconds).toBe(45);
+    expect(parseFlags(["--max-age=2m"]).maxAgeSeconds).toBe(120);
+    expect(parseFlags(["--tui", "--max-age", "1h"]).maxAgeSeconds).toBe(3600);
+    for (const value of ["", "soon", "-1", "1.5m"]) {
+      expect(() => parseFlags(["--max-age", value])).toThrow(
+        "--max-age requires a duration such as 0, 90s, or 2m",
+      );
+    }
+    expect(() => parseFlags(["--max-age", "61m"])).toThrow(
+      "--max-age must be at most 60m",
+    );
   });
 
   it("parses --all for the human report and notes an explicit provider scope", () => {
@@ -262,6 +282,14 @@ describe("CLI flag parsing", () => {
     await expect(
       authCommand(["--tui"], { binPath: "quota-axi" }),
     ).rejects.toThrow("--tui is only supported by the quota command");
+  });
+
+  it("rejects --max-age for auth, which never reads quota", async () => {
+    await expect(
+      authCommand(["--max-age", "0"], { binPath: "quota-axi" }),
+    ).rejects.toThrow(
+      "--max-age is only supported by the quota and models commands",
+    );
   });
 
   it("rejects unsupported providers", () => {
@@ -575,7 +603,7 @@ describe("CLI quota rendering", () => {
     // The remedy rides the stale provider's `attention[]` row, and the stale
     // scope gets no `quota[]` row at all.
     expect(output).toContain(
-      "attention[3]{provider,scope,kind,detail,remedy}:",
+      "attention[2]{provider,scope,kind,detail,remedy}:",
     );
     expect(output).toContain(
       'claude,all,stale,"last refreshed 2026-07-06T18:10:00Z · keychain_prompt_required · reason keychain_access_required",quota-axi --allow-keychain-prompt',
@@ -587,9 +615,11 @@ describe("CLI quota rendering", () => {
     expect(output).toContain(
       'Tell your user: run `quota-axi --allow-keychain-prompt` once and approve Keychain access ("Always Allow") so quota-axi can read claude\'s live quota.',
     );
-    // Codex still reports headroom; only its selection scalar is blocked.
+    // Codex still reports headroom; its only bound is an idle, not-yet-
+    // triggered session window, so the scope stays rankable-but-unmeasured
+    // (literal `unknown` spendPriority) instead of a blocked attention row.
     expect(output).toContain(
-      "codex,all_models,unmeasurable,five_hour blocks spendPriority,none",
+      "codex,all_models,100,unknown,through_reset,established,five_hour,unknown",
     );
     expect(output).not.toContain("codex,all,");
   });
@@ -1425,12 +1455,14 @@ describe("human report folding for providers that are not set up", () => {
 
     expect(output.trimEnd().split("\n").slice(-3)).toEqual([
       "  ○ not set up  cursor · copilot · grok · kimi · zai · agy · alibaba · opencode-go · commandcode",
-      "                minimax · mimo · deepseek · openrouter · elevenlabs · devin",
+      "                minimax · mimo · deepseek · openrouter · elevenlabs · devin · muse",
       "                quota-axi auth shows where each is read",
     ]);
     expect(output).not.toMatch(/╭─ ○ (agy|alibaba|commandcode) /);
 
-    expect(output).toMatch(/· 1 live · 1 needs attention · 15 not set up\n/);
+    expect(output).toMatch(
+      /· 1 live · 0 stale · 1 needs attention · 16 not set up\n/,
+    );
     expect(output).toContain("╭─ ● codex ");
     expect(output).toContain("╭─ ○ claude ");
     expect(output).toContain("  ○ not set up  cursor · copilot · grok · kimi");
@@ -1442,7 +1474,7 @@ describe("human report folding for providers that are not set up", () => {
     stubFoldFleet();
     const output = await capture(["--tui", "--once", "--all"]);
 
-    expect(output).toContain("  ○ not set up · 15\n");
+    expect(output).toContain("  ○ not set up · 16\n");
     expect(output).toContain("╭─ ○ copilot ");
     expect(output).toContain("╭─ ○ elevenlabs ");
     expect(output).not.toContain("quota-axi auth shows where each is read");
@@ -1457,7 +1489,9 @@ describe("human report folding for providers that are not set up", () => {
       "zai,codex",
     ]);
 
-    expect(output).toMatch(/· 1 live · 0 need attention · 1 not set up\n/);
+    expect(output).toMatch(
+      /· 1 live · 0 stale · 0 need attention · 1 not set up\n/,
+    );
     expect(output).toContain("╭─ ○ zai ");
     expect(output).not.toContain("quota-axi auth shows where each is read");
   });
@@ -1505,7 +1539,7 @@ describe("human report folding for providers that are not set up", () => {
 
       process.stdin.emit("data", Buffer.from("a"));
       await settle("a hide not set up");
-      expect(lastFrame()).toContain("  ○ not set up · 15");
+      expect(lastFrame()).toContain("  ○ not set up · 16");
       expect(lastFrame()).toContain("╭─ ○ zai ");
 
       process.stdin.emit("data", Buffer.from("q"));
@@ -1902,6 +1936,7 @@ describe("default TOON decision blocks", () => {
     );
     PROVIDERS.elevenlabs = providerWithQuota(freshElevenLabsQuota());
     PROVIDERS.devin = providerWithQuota(freshDevinQuota());
+    PROVIDERS.muse = providerWithQuota(emptyFreshQuota("muse", "Muse"));
 
     const output = await capture([]);
     const named = new Set([
@@ -1924,6 +1959,7 @@ describe("default TOON decision blocks", () => {
       "kimi",
       "mimo",
       "minimax",
+      "muse",
       "opencode-go",
       "openrouter",
       "zai",

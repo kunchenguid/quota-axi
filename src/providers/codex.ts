@@ -2,7 +2,8 @@ import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { spawn } from "node:child_process";
 import {
-  deleteCachedProvider,
+  retireCodexAccount,
+  retireCachedSlot,
   readCachedCodexProvider,
   readCachedProvider,
   stampCodexStoredAccountId,
@@ -30,7 +31,7 @@ import type {
 import {
   failedProvider,
   sourceNames,
-  staleFromCache,
+  staleUnlessSignOut,
   statusFromError,
   successProvider,
   withRemaining,
@@ -59,6 +60,8 @@ const CLI_TIMEOUT_MS = 15_000;
 const RPC_TIMEOUT_MS = 8_000;
 const CODEX_BINARY_ENV = "QUOTA_AXI_CODEX_BINARY";
 const PI_CODEX_CREDENTIAL_SOURCE = piCodexSource(PI_CODEX_BUILTIN_ID);
+const CODEX_SIGN_IN_REQUIRED = "Codex sign-in required";
+const CODEX_ACCESS_TOKEN_EXPIRED = "Codex access token expired";
 
 type CodexBinaryState =
   | { status: "available"; path: string }
@@ -82,6 +85,7 @@ type AvailableCredentialState = {
 type AdvisoryExpiredCredentialState = {
   status: "expired";
   credentials: CodexCredentials;
+  refreshable: boolean;
   source: AuthSourceReport;
 };
 type UnavailableCredentialState = {
@@ -358,12 +362,6 @@ async function discoverCodexAccounts(
             continue;
           }
           lane.nativeAccountKeys = accountKeys;
-          if (
-            reading.state.status === "fresh" ||
-            piReading.state.status === "fresh"
-          ) {
-            retireCodexHomeSnapshot();
-          }
           return undefined;
         }
         return { ...reading, accountKeys };
@@ -402,14 +400,6 @@ function laneIdentity(
     : storedAccountId;
 }
 
-function retireCodexHomeSnapshot(): void {
-  try {
-    deleteCachedProvider("codex", CODEX_HOME_ACCOUNT_KEY);
-  } catch {
-    return;
-  }
-}
-
 async function fetchCliAccountQuota(): Promise<ProviderQuota | undefined> {
   try {
     return codexSuccessReport(await probeCodexCli(), "cli-rpc", [
@@ -417,7 +407,11 @@ async function fetchCliAccountQuota(): Promise<ProviderQuota | undefined> {
     ]);
   } catch (error) {
     if (error instanceof CodexCliSignedOutError) {
-      retireCodexHomeSnapshot();
+      try {
+        retireCachedSlot("codex", CODEX_HOME_ACCOUNT_KEY);
+      } catch {
+        // Preserve the confirmed sign-out result if cache retirement fails.
+      }
       return undefined;
     }
     if (
@@ -549,14 +543,16 @@ async function fetchPiAccountQuota(
     piSelection.outcome === "transient"
       ? (piSelection.transientError ?? "Codex quota unavailable")
       : piSelection.outcome === "all_rejected"
-        ? "Codex sign-in required"
+        ? piSelection.refreshable
+          ? CODEX_ACCESS_TOKEN_EXPIRED
+          : CODEX_SIGN_IN_REQUIRED
         : piResolution?.status === "error"
           ? "Codex Pi credential resolution failed"
           : piResolution?.status === "expired"
             ? "Pi Codex access token expired"
             : piResolution?.status === "missing"
               ? "Codex quota unavailable"
-              : "Codex sign-in required";
+              : CODEX_SIGN_IN_REQUIRED;
   return codexFailureReport(
     finalError,
     piSelection.outcome === "transient" ? piSelection.retryAfter : undefined,
@@ -564,6 +560,7 @@ async function fetchPiAccountQuota(
     source,
     account.cacheKey,
     [...storedAccountIds.values()],
+    codexCredentialKey(source) ?? CODEX_HOME_ACCOUNT_KEY,
   );
 }
 
@@ -608,6 +605,9 @@ async function fetchQuotaWithDependencies(
     oauthCandidates.push({
       source: "oauth",
       localState: credentialState.status === "available" ? "valid" : "expired",
+      ...(credentialState.status === "expired"
+        ? { refreshable: credentialState.refreshable }
+        : {}),
       credential: { source: "oauth", credentials: credentialState.credentials },
     });
   } else {
@@ -621,7 +621,7 @@ async function fetchQuotaWithDependencies(
         ? {}
         : { credentialPresent: true }),
     });
-    finalError = "Codex sign-in required";
+    finalError = CODEX_SIGN_IN_REQUIRED;
     errorIsDefault = false;
   }
 
@@ -649,8 +649,11 @@ async function fetchQuotaWithDependencies(
       accountIds,
     );
   }
+  const nativeCredentialRejected = oauthSelection.outcome === "all_rejected";
   if (oauthSelection.outcome === "all_rejected") {
-    finalError = "Codex sign-in required";
+    finalError = oauthSelection.refreshable
+      ? CODEX_ACCESS_TOKEN_EXPIRED
+      : CODEX_SIGN_IN_REQUIRED;
     errorIsDefault = false;
   }
 
@@ -705,7 +708,7 @@ async function fetchQuotaWithDependencies(
           finalError = "Pi Codex access token expired";
           errorIsDefault = false;
         } else if (piResolution.status !== "missing") {
-          finalError = "Codex sign-in required";
+          finalError = CODEX_SIGN_IN_REQUIRED;
           errorIsDefault = false;
         }
       }
@@ -737,7 +740,10 @@ async function fetchQuotaWithDependencies(
     }
     if (piSelection.outcome === "all_rejected") {
       if (errorIsDefault || statusFromError(finalError) === "auth_required") {
-        finalError = "Codex sign-in required";
+        finalError =
+          piSelection.refreshable || finalError === CODEX_ACCESS_TOKEN_EXPIRED
+            ? CODEX_ACCESS_TOKEN_EXPIRED
+            : CODEX_SIGN_IN_REQUIRED;
         errorIsDefault = false;
       }
     }
@@ -755,7 +761,15 @@ async function fetchQuotaWithDependencies(
       status: "failed",
       error: message,
     };
-    if (errorIsDefault || !(error instanceof CodexCliUnavailableError)) {
+    const confirmsSignOut =
+      finalError === CODEX_SIGN_IN_REQUIRED &&
+      (error instanceof CodexCliSignedOutError ||
+        (nativeCredentialRejected &&
+          error instanceof CodexCliAccountReadingError));
+    if (
+      !confirmsSignOut &&
+      (errorIsDefault || !(error instanceof CodexCliUnavailableError))
+    ) {
       finalError = message;
     }
   }
@@ -851,7 +865,10 @@ function codexSuccessReport(
     sourcesTried: sourceNames(attempts),
     attempts,
   });
-  stampCodexStoredAccountId(report, storedAccountId);
+  stampCodexStoredAccountId(
+    report,
+    storedAccountId ?? quota.account?.accountId,
+  );
   const credentialKey = codexCredentialKey(source);
   if (credentialKey) report.accountKeys = [credentialKey];
   return report;
@@ -859,7 +876,7 @@ function codexSuccessReport(
 
 /**
  * `accountIds` names the ChatGPT accounts the credentials this reading tried
- * still store, so a snapshot stamped for another stored identity is not served
+ * still store, so a snapshot without a matching stored identity is not served
  * back as this account's stale windows. `credentialKey` is the key of the
  * credential this failed reading speaks for; a stale reading instead names the
  * key of the credential that produced its cached snapshot.
@@ -873,27 +890,69 @@ function codexFailureReport(
   accountIds: readonly string[] = [],
   credentialKey = codexCredentialKey(source) ?? CODEX_HOME_ACCOUNT_KEY,
 ): ProviderQuota {
+  const softExpiry = error === CODEX_ACCESS_TOKEN_EXPIRED;
+  if (error === CODEX_SIGN_IN_REQUIRED && accountIds.length > 0) {
+    try {
+      retireCodexAccount(accountIds);
+    } catch {
+      // Cache retirement is best effort; preserve the provider failure below.
+    }
+  }
   const cached = readCachedCodexProvider(accountKey, accountIds);
-  const stale = cached
-    ? staleFromCache(cached, error, sourceNames(attempts), attempts)
-    : undefined;
+  const stale = staleUnlessSignOut(
+    cached,
+    error,
+    sourceNames(attempts),
+    attempts,
+    {
+      definitive: error === CODEX_SIGN_IN_REQUIRED,
+      retire: () => retireCodexAccount(accountIds),
+    },
+  );
   if (stale) {
     return {
       ...stale,
+      state: {
+        ...stale.state,
+        ...(softExpiry ? { authStatus: "expired_refreshable" as const } : {}),
+      },
       accountKeys: [codexCredentialKey(cached?.source) ?? credentialKey],
     };
   }
+  const failureStatus = retryAfter
+    ? "rate_limited"
+    : softExpiry
+      ? "unavailable"
+      : statusFromError(error);
+  // A failed CLI read after only absent local stores names no ChatGPT seat.
+  // Keep credential failures and transient OAuth failures at their own status.
+  const noLocalLogin =
+    source === undefined &&
+    accountIds.length === 0 &&
+    attempts.every(
+      (attempt) =>
+        attempt.source === "cli-rpc" ||
+        (attempt.status === "skipped" &&
+          attempt.error === "credentials_missing"),
+    );
   const report = failedProvider({
     provider: "codex",
     label: "Codex",
     ...(source ? { source } : {}),
-    status: retryAfter ? "rate_limited" : statusFromError(error),
+    status:
+      noLocalLogin && failureStatus === "error" ? "unavailable" : failureStatus,
     error,
     retryAfter,
     sourcesTried: sourceNames(attempts),
     attempts,
   });
-  return { ...report, accountKeys: [credentialKey] };
+  return {
+    ...report,
+    ...(softExpiry
+      ? { state: { ...report.state, authStatus: "expired_refreshable" } }
+      : {}),
+    accountKeys: [credentialKey],
+  };
 }
 
 export async function inspectAuth(
@@ -1423,6 +1482,9 @@ function extractCredentialState(
     return {
       status: "expired",
       credentials,
+      refreshable:
+        Object.hasOwn(tokens, "refresh_token") ||
+        Object.hasOwn(tokens, "refreshToken"),
       source: { source: "auth-json", path, status: "expired" },
     };
   }
@@ -1479,7 +1541,7 @@ async function fetchOauthUsage(credentials: CodexCredentials): Promise<{
     }
   }
   if (lastError) throw lastError;
-  if (rejected) throw new CodexAuthRejectedError("Codex sign-in required");
+  if (rejected) throw new CodexAuthRejectedError(CODEX_SIGN_IN_REQUIRED);
   throw new Error("Codex quota unavailable");
 }
 

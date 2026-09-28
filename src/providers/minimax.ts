@@ -28,6 +28,7 @@ import {
   staleFromCache,
   successProvider,
 } from "./common.js";
+import { traceInput } from "../lib/input-trace.js";
 
 export const MINIMAX_QUOTA_PATH = "/v1/token_plan/remains";
 export const MINIMAX_BALANCE_PATH = "/account/query_balance";
@@ -809,6 +810,7 @@ function safeBaseUrl(value: string | undefined): string | undefined {
 
 function readBoundedJsonFile(path: string): JsonFileReadResult {
   let text: string;
+  traceInput(path);
   try {
     const size = statSync(path).size;
     if (size > CONFIG_FILE_LIMIT_BYTES)
