@@ -1,11 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   createKiroAdapter,
+  createKiroCliCredentialSource,
+  createKiroIdeCredentialSource,
+  createPiKiroCredentialSource,
   extractKiroIdeCredential,
   extractKiroSqliteCredential,
   extractPiKiroCredential,
   normalizeKiroUsage,
 } from "../../src/providers/kiro.js";
+import { withInputTrace } from "../../src/lib/input-trace.js";
 import { renderQuotaTui } from "../../src/tui.js";
 import { withQuotaSemantics } from "../../src/interpretation.js";
 import type { ProviderQuota } from "../../src/types.js";
@@ -366,6 +370,42 @@ describe("Kiro provider", () => {
     expect(deleteCachedProvider).not.toHaveBeenCalled();
   });
 
+  it("keeps its cached snapshot when a live credential only lacks quota after an invalid sibling", async () => {
+    const deleteCachedProvider = vi.fn();
+    const report = await createKiroAdapter({
+      credentialSources: [
+        {
+          name: "invalid",
+          source: {
+            resolve: async () => ({
+              status: "invalid" as const,
+              path: "/invalid/auth.json",
+              error: "invalid_credential",
+            }),
+            inspect: async () => ({
+              status: "invalid" as const,
+              path: "/invalid/auth.json",
+              error: "invalid_credential",
+            }),
+          },
+        },
+        { name: "live", source: availableSource() },
+      ],
+      // The live credential authenticates but returns no windows (quota_missing).
+      fetch: vi.fn(
+        async () => new Response(JSON.stringify({}), { status: 200 }),
+      ),
+      deleteCachedProvider,
+      now: () => NOW,
+    }).fetchQuota(OPTIONS);
+
+    expect(report.state).toMatchObject({ error: "invalid_credential" });
+    // A live credential proves the account is signed in; the earlier invalid
+    // sibling still owns the reported verdict, but it must not turn this into a
+    // cache-retiring sign-out.
+    expect(deleteCachedProvider).not.toHaveBeenCalled();
+  });
+
   it("rejects an empty successful response instead of clearing quota evidence", async () => {
     const report = await createKiroAdapter({
       credentialSources: [{ name: "test", source: availableSource() }],
@@ -528,5 +568,29 @@ describe("Kiro provider", () => {
     expect(output).toContain("no combined bound");
     expect(output).toContain("used 2.5 / 10 credits");
     expect(output).toContain("25% used · 75% remaining");
+  });
+
+  it("traces each credential store so fresh reuse detects a login that rewrites it", async () => {
+    const cli = createKiroCliCredentialSource(
+      () => "/kiro/cli.db",
+      async () => "[]",
+    );
+    const pi = createPiKiroCredentialSource(() => "/kiro/pi-auth.json");
+    const ide = createKiroIdeCredentialSource(() => "/kiro/ide-token.json");
+
+    const { inputs } = await withInputTrace(async () => {
+      await cli.resolve();
+      await pi.resolve();
+      await ide.resolve();
+    });
+
+    // Each source's store must be an input so a login rewriting it (same path,
+    // new account) invalidates a reused quota rather than reporting the old
+    // account as fresh.
+    expect(inputs.paths).toEqual([
+      "/kiro/cli.db",
+      "/kiro/ide-token.json",
+      "/kiro/pi-auth.json",
+    ]);
   });
 });

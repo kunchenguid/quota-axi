@@ -5,6 +5,7 @@ import { deleteCachedProvider as deleteCachedProviderFromDisk } from "../cache.j
 import { readJsonFileResult } from "../lib/fs.js";
 import { providerFetch } from "../lib/http.js";
 import { execFileText } from "../lib/process.js";
+import { traceInput } from "../lib/input-trace.js";
 import { resolvePiAuthFilePath } from "../lib/pi-agent-dir.js";
 import { classifyPiAuthEntry } from "../lib/pi-auth-store.js";
 import { usableLiteralSecret } from "../lib/secret.js";
@@ -137,6 +138,7 @@ export function createPiKiroCredentialSource(
   return {
     async resolve() {
       const path = filePath();
+      traceInput(path);
       return extractPiKiroCredential(readJsonFileResult(path), path);
     },
     async inspect() {
@@ -186,6 +188,10 @@ export function createKiroCliCredentialSource(
   return {
     async resolve() {
       const path = dbPath();
+      // Record the credential store as an input so fresh reuse detects a login
+      // that rewrites it: a later read reusing a cached quota must not report
+      // the previous account after the DB changed under the same path (#61).
+      traceInput(path);
       if (!existsSync(path)) return { status: "missing", path };
       try {
         return extractKiroSqliteCredential(
@@ -232,6 +238,7 @@ export function createKiroIdeCredentialSource(
   return {
     async resolve() {
       const path = filePath();
+      traceInput(path);
       return extractKiroIdeCredential(readJsonFileResult(path), path);
     },
     async inspect() {
@@ -316,6 +323,11 @@ async function fetchQuota(dependencies: Dependencies): Promise<ProviderQuota> {
     staleEligible: false,
     definitiveAuth: true,
   };
+  // A credential that authenticated far enough to get a provider response
+  // (success, quota_missing, rate limit, or transport error) proves the
+  // account is still signed in, even if an earlier source was invalid. Only a
+  // run where no credential ever authenticated is a true sign-out.
+  let sawUsableCredential = false;
   for (const { name, source } of dependencies.credentialSources) {
     const resolution = await source.resolve();
     if (resolution.status === "missing") {
@@ -384,6 +396,10 @@ async function fetchQuota(dependencies: Dependencies): Promise<ProviderQuota> {
       return report;
     } catch (error) {
       const failure = classifyKiroFailure(error);
+      // Reaching a provider response without an auth rejection means this
+      // credential is live; a later invalid sibling must not turn that into a
+      // cache-retiring sign-out.
+      if (!failure.definitiveAuth) sawUsableCredential = true;
       attempts[attempts.length - 1] = {
         source: name,
         status: "failed",
@@ -402,7 +418,10 @@ async function fetchQuota(dependencies: Dependencies): Promise<ProviderQuota> {
   // A definitive sign-out must not leave a stale fresh snapshot the generic
   // fresh-reuse cache could serve later. Mirror the Z.AI/Grok adapter pattern
   // and retire Kiro's own slot here rather than broadening the shared writer.
-  if (lastFailure.definitiveAuth) {
+  // Only retire when no credential authenticated this run: a live credential
+  // that merely lacked quota (quota_missing) still proves the account is
+  // signed in, so its prior snapshot must survive an earlier invalid sibling.
+  if (lastFailure.definitiveAuth && !sawUsableCredential) {
     try {
       dependencies.deleteCachedProvider("kiro");
     } catch {
