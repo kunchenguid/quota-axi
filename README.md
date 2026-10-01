@@ -246,7 +246,10 @@ npx skills add zaphodis42/quota-axi --skill quota-axi -g
 ```
 
 The minimal skill points your agent to quota-axi's live CLI guidance through `npx -y @zaphodis42/quota-axi`, so nothing needs to be installed ahead of time and installed skill copies do not duplicate changing CLI instructions.
-`-g` installs the skill for all projects (e.g. `~/.claude/skills/`); drop it to install for the current project only (`.claude/skills/`).
+The `skills` CLI's `-g` option is intended to install for all projects (e.g. `~/.claude/skills/`).
+It may report `PromptScript does not support global skill installation` even when the skill was installed for other agents.
+Check the relevant agent's skills directory for `quota-axi/SKILL.md` to confirm.
+Drop `-g` for a per-project install (`.claude/skills/`), or use `npm install -g @zaphodis42/quota-axi` or `npx -y @zaphodis42/quota-axi` for the CLI.
 
 **Direct use**
 
