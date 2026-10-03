@@ -1703,6 +1703,37 @@ describe("Kimi responses carrying both shapes", () => {
     ]);
   });
 
+  it("keeps the other shape's reset when the more-used figure has none", () => {
+    const principalWithoutReset = normalizeKimiPayload({
+      ...CAPTURED,
+      usage: { limit: "100", used: "92", resetTime: "not a time" },
+    });
+    expect(
+      principalWithoutReset.kind === "windows" &&
+        principalWithoutReset.windows.find(({ id }) => id === "weekly"),
+    ).toEqual({
+      id: "weekly",
+      label: "week",
+      kind: "weekly",
+      percentUsed: 92,
+      percentRemaining: 8,
+      windowSeconds: 604_800,
+      resetsAt: "2026-10-04T06:49:37.000Z",
+    });
+
+    const mapWithoutReset = normalizeKimiPayload({
+      ...CAPTURED,
+      usages: { ...CAPTURED.usages, limit_7d: { used_ratio: 0.97 } },
+    });
+    expect(
+      mapWithoutReset.kind === "windows" &&
+        mapWithoutReset.windows.find(({ id }) => id === "weekly"),
+    ).toMatchObject({
+      percentUsed: 97,
+      resetsAt: "2026-10-04T06:49:38.261Z",
+    });
+  });
+
   it("keeps a map-only monthly window and an unfamiliar legacy limit alongside the merged windows", () => {
     const normalized = normalizeKimiPayload({
       ...CAPTURED,

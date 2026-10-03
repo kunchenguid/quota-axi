@@ -1264,7 +1264,10 @@ export function normalizeKimiPayload(payload: unknown): NormalizedKimiPayload {
  * documented, so a window both shapes report takes the more-used figure. That
  * never overstates headroom, and it keeps the principal figure whenever it is
  * the one that binds. The map's window wins a tie, and windows only one shape
- * reports are kept in map order, then wire order.
+ * reports are kept in map order, then wire order. Both shapes describe the
+ * same window, so when the more-used side carries no parseable reset the
+ * other side's reset is kept: without one, a stale reading of that window
+ * would outlive the deadline the vendor did report.
  */
 function mergeKimiShapes(
   usagesWindows: QuotaWindow[],
@@ -1277,9 +1280,13 @@ function mergeKimiShapes(
     const legacy = legacyById.get(window.id);
     if (!legacy) return window;
     legacyById.delete(window.id);
-    return (legacy.percentUsed ?? 0) > (window.percentUsed ?? 0)
-      ? legacy
-      : window;
+    const [bound, other] =
+      (legacy.percentUsed ?? 0) > (window.percentUsed ?? 0)
+        ? [legacy, window]
+        : [window, legacy];
+    return bound.resetsAt || !other.resetsAt
+      ? bound
+      : { ...bound, resetsAt: other.resetsAt };
   });
   return [...merged, ...legacyById.values()];
 }
