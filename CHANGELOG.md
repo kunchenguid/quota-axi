@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.1.56](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.55...quota-axi-v0.1.56) (2026-10-03)
+
+
+### Features
+
+* **providers:** read Xiaomi MiMo keys from Pi's auth.json ([#298](https://github.com/kunchenguid/quota-axi/issues/298)) ([b996ae2](https://github.com/kunchenguid/quota-axi/commit/b996ae27a000062f76a9e090f2aa5c303649c970))
+
+
+### Bug Fixes
+
+* **providers:** report each verified subscription once across credential routes ([#223](https://github.com/kunchenguid/quota-axi/issues/223)) ([4a5276a](https://github.com/kunchenguid/quota-axi/commit/4a5276add26b00c295918a0c8787aff2c9a68629))
+
 ## [0.1.55](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.54...quota-axi-v0.1.55) (2026-09-25)
 
 
