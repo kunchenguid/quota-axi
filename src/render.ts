@@ -161,6 +161,7 @@ function quotaBlocks(response: QuotaAxiResponse): ProviderBlocks {
       ...providerAttention(provider, measured, scopeAttention.length),
     );
     blocks.attention.push(...shareRows(provider));
+    blocks.attention.push(...costRows(provider));
     blocks.attention.push(...scopeAttention);
   }
   return blocks;
@@ -239,6 +240,26 @@ function shareDetail(window: QuotaWindow): string {
   return window.percentUsed === undefined
     ? relationship
     : `${relationship}${DETAIL_SEPARATOR}${window.percentUsed}`;
+}
+
+/**
+ * A published peak-hour cost schedule prices this scope's quota differently
+ * right now. Off-peak (multiplier 1) is the nominal fact and stays silent, so
+ * the row appears only at peak; the provider's `cost` field always carries the
+ * figure for consumers that want it.
+ */
+function costRows(provider: ProviderQuota): AttentionRow[] {
+  const cost = provider.cost;
+  if (!cost || cost.multiplier === 1) return [];
+  return [
+    {
+      ...providerColumns(provider),
+      scope: "all_models",
+      kind: "cost",
+      detail: `peak ${cost.multiplier}x until ${cost.until}`,
+      remedy: NONE,
+    },
+  ];
 }
 
 /**
