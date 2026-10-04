@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.57](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.56...quota-axi-v0.1.57) (2026-10-04)
+
+
+### Bug Fixes
+
+* **providers:** bound Kimi weekly by the more-used of both /usages shapes ([#304](https://github.com/kunchenguid/quota-axi/issues/304)) ([2b4bbaa](https://github.com/kunchenguid/quota-axi/commit/2b4bbaaa7c550062a8cb0e38a65e0cee11f773e1))
+* **providers:** rank present-but-unusable credentials above plain absence ([#306](https://github.com/kunchenguid/quota-axi/issues/306)) ([17555d9](https://github.com/kunchenguid/quota-axi/commit/17555d96f2efbb40d912860b6fef46ff038f4d4c))
+
 ## [0.1.56](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.55...quota-axi-v0.1.56) (2026-10-03)
 
 
