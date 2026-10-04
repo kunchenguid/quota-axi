@@ -10,6 +10,7 @@ import type {
   QuotaAxiResponse,
   QuotaWindow,
 } from "./types.js";
+import { creditWindowMatchesBalance } from "./render.js";
 
 /**
  * Human terminal report ("Direction D'"): a two-up card grid with thin
@@ -386,14 +387,16 @@ function buildLiveCard(
   ];
 
   const headline = pickHeadlineAvailability(provider);
-  const creditsLine = creditsOnlyHeadline(provider, stale, border);
-  if (creditsLine) {
-    lines.push(...creditsLine);
+  const creditsOnlyLine = creditsOnlyHeadline(provider, stale, border);
+  if (creditsOnlyLine) {
+    lines.push(...creditsOnlyLine);
   } else if (hasWhollyUnknownWindowRelationships(provider)) {
     lines.push(...windowsOnlyHeadline(stale, border));
   } else {
     lines.push(...effectiveHeadline(provider, headline, stale, show, border));
   }
+  const creditsLine = creditsHeadline(provider);
+  if (creditsLine) lines.push(...creditsLine);
 
   if (provider.windows.length > 0) {
     lines.push(interior([], border));
@@ -526,6 +529,43 @@ function creditsOnlyHeadline(
       border,
     ),
   ];
+}
+
+function creditsHeadline(provider: ProviderQuota): Line[] | undefined {
+  if (provider.windows.length === 0) return undefined;
+  if (provider.state.stale || provider.state.status !== "fresh")
+    return undefined;
+  if (!hasDisplayableCredits(provider)) return undefined;
+  if (creditWindowMatchesBalance(provider)) return undefined;
+  const credits = provider.credits;
+  if (!credits) return undefined;
+  const amount =
+    credits.unlimited === true
+      ? "unlimited"
+      : credits.remaining === undefined
+        ? undefined
+        : `${credits.remaining} ${credits.unit ?? "credits"} remaining`;
+  if (amount === undefined) return undefined;
+  return [
+    interior(
+      [
+        { text: "   " },
+        {
+          text: `balance · ${amount}`,
+          style: "dim",
+        },
+      ],
+      "border",
+    ),
+  ];
+}
+
+function hasDisplayableCredits(provider: ProviderQuota): boolean {
+  return (
+    provider.credits?.unlimited === true ||
+    (provider.credits?.remaining !== undefined &&
+      provider.credits.remaining > 0)
+  );
 }
 
 /**
