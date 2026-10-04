@@ -294,6 +294,15 @@ function providerStateRows(
       remedy: NONE,
     });
   }
+  if (provider.provider === "codex" && provider.resetsAvailable !== undefined) {
+    rows.push({
+      ...providerColumns(provider),
+      scope: "all",
+      kind: "resets_available",
+      detail: `${provider.resetsAvailable} banked reset${provider.resetsAvailable === 1 ? "" : "s"}`,
+      remedy: NONE,
+    });
+  }
   if (measured) return rows;
 
   const authStatus = provider.state.authStatus;
