@@ -419,32 +419,35 @@ describe("Claude macOS Keychain discovery", () => {
       ).toBe(true);
     });
 
-    it("reports keychain_prompt_required when the attribute probe times out", async () => {
-      await writeGrantMarker(`granted ${FINGERPRINT_AT_GRANT}\n`);
-      execFileText.mockImplementation(
-        async (_command: string, args: string[]) => {
-          if (args[0] === "list-keychains") return `    "${keychain}"\n`;
-          if (args[0] === "dump-keychain") return item();
-          throw Object.assign(new Error("killed"), {
-            killed: true,
-            signal: "SIGTERM",
-          });
-        },
-      );
-      const { inspectAuth } = await import("../../src/providers/claude.js");
+    it.each([
+      ["times out", { killed: true, signal: "SIGTERM" }],
+      ["exits 44", { code: 44 }],
+    ])(
+      "reports keychain_prompt_required when the attribute probe %s",
+      async (_label, failure) => {
+        await writeGrantMarker(`granted ${FINGERPRINT_AT_GRANT}\n`);
+        execFileText.mockImplementation(
+          async (_command: string, args: string[]) => {
+            if (args[0] === "list-keychains") return `    "${keychain}"\n`;
+            if (args[0] === "dump-keychain") return item();
+            throw Object.assign(new Error("probe failed"), failure);
+          },
+        );
+        const { inspectAuth } = await import("../../src/providers/claude.js");
 
-      const auth = await inspectAuth(plainOptions);
+        const auth = await inspectAuth(plainOptions);
 
-      expect(auth.sources).toContainEqual({
-        source: "keychain",
-        status: "skipped",
-        error: "keychain_prompt_required",
-        credentialPresent: true,
-      });
-      expect(
-        execFileText.mock.calls.every(([, args]) => !args.includes("-w")),
-      ).toBe(true);
-    });
+        expect(auth.sources).toContainEqual({
+          source: "keychain",
+          status: "skipped",
+          error: "keychain_prompt_required",
+          credentialPresent: true,
+        });
+        expect(
+          execFileText.mock.calls.every(([, args]) => !args.includes("-w")),
+        ).toBe(true);
+      },
+    );
   });
 
   it("never lets a newer explicit-profile item replace the default profile", async () => {
@@ -825,12 +828,7 @@ describe("Claude macOS Keychain discovery", () => {
       if (!args.includes(selectedService) || args.at(-1) !== activeKeychain)
         throw unreachable();
       if (!args.includes("-w"))
-        return item(
-          selectedService,
-          undefined,
-          undefined,
-          activeKeychain,
-        );
+        return item(selectedService, undefined, undefined, activeKeychain);
       return JSON.stringify({
         claudeAiOauth: { accessToken: "synthetic-token" },
       });

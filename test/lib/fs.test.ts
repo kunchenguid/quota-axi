@@ -130,6 +130,11 @@ describe("keychain access grants", () => {
       ),
     ).toBe("20261004222412Z");
     expect(
+      parseKeychainItemFingerprint(
+        'attributes:\n    "mdat"<timedate>="20260701000000Z"\n',
+      ),
+    ).toBe("20260701000000Z");
+    expect(
       parseKeychainItemFingerprint("keychain item metadata\n"),
     ).toBeUndefined();
     for (const value of ["<NULL>", "", "unexpected", "20261004222412Z"]) {

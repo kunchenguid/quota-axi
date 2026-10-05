@@ -175,10 +175,10 @@ export function parseKeychainItemFingerprint(
   );
   if (!match) return undefined;
   const raw = match[1]!;
-  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [+-]\d{4}$/.test(raw))
-    return raw;
-  const hex =
-    /^0x((?:[0-9a-fA-F]{2})+)\s+"(\d{14}Z)\\000"$/.exec(raw);
+  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [+-]\d{4}$/.test(raw)) return raw;
+  const quoted = /^"(\d{14}Z)"$/.exec(raw)?.[1];
+  if (quoted !== undefined) return quoted;
+  const hex = /^0x((?:[0-9a-fA-F]{2})+)\s+"(\d{14}Z)\\000"$/.exec(raw);
   if (!hex) return undefined;
   const decoded = Buffer.from(hex[1]!, "hex").toString("utf8");
   return decoded === `${hex[2]}\0` ? hex[2] : undefined;

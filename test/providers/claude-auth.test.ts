@@ -106,6 +106,12 @@ attributes:
     "mdat"<timedate>="20260701000000Z"
 `;
     }
+    if (
+      command === "security" &&
+      args[0] === "find-generic-password" &&
+      !args.includes("-w")
+    )
+      return 'attributes:\n    "mdat"<timedate>="20260701000000Z"\n';
     return read(command, args);
   });
 }
@@ -904,7 +910,7 @@ describe("Claude credential-state reporting", () => {
       "Claude Code-credentials",
     );
     mkdirSync(dirname(marker), { recursive: true, mode: 0o700 });
-    writeFileSync(marker, "granted\n", { mode: 0o600 });
+    writeFileSync(marker, "granted 20260701000000Z\n", { mode: 0o600 });
     const execFileText = mockKeychainRead(async () =>
       JSON.stringify({
         claudeAiOauth: {
@@ -974,7 +980,7 @@ describe("Claude credential-state reporting", () => {
       `Claude Code-credentials-${suffix}`,
     );
     mkdirSync(dirname(marker), { recursive: true, mode: 0o700 });
-    writeFileSync(marker, "granted\n", { mode: 0o600 });
+    writeFileSync(marker, "granted 20260701000000Z\n", { mode: 0o600 });
     const execFileText = mockKeychainRead(
       async () =>
         JSON.stringify({
@@ -3406,7 +3412,7 @@ async function writeKeychainAccessMarker(): Promise<string> {
     "Claude Code-credentials",
   );
   mkdirSync(dirname(marker), { recursive: true, mode: 0o700 });
-  writeFileSync(marker, "granted\n", { mode: 0o600 });
+  writeFileSync(marker, "granted 20260701000000Z\n", { mode: 0o600 });
   return marker;
 }
 

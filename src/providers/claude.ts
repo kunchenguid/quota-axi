@@ -1195,7 +1195,7 @@ async function readCredentialStates(
         await readKeychainCredentialState(locations, itemFingerprint),
       );
     } else if (attributePresence !== "present") {
-      states.push(keychainPresenceState(attributePresence));
+      states.push(keychainPresenceState("unknown"));
     } else {
       states.push(await readSkippedKeychainCredentialState(locations));
     }
@@ -1262,10 +1262,7 @@ function keychainPresenceState(
  */
 async function readKeychainItemAttributes(
   locations: ClaudeProfileLocations,
-): Promise<
-  | { status: "present"; output: string }
-  | { status: "unknown" | "unreachable" }
-> {
+): Promise<{ status: "present"; output: string } | { status: "unknown" }> {
   try {
     return {
       status: "present",
@@ -1282,10 +1279,8 @@ async function readKeychainItemAttributes(
         KEYCHAIN_PRESENCE_TIMEOUT_MS,
       ),
     };
-  } catch (error) {
-    return {
-      status: isKeychainItemUnreachable(error) ? "unreachable" : "unknown",
-    };
+  } catch {
+    return { status: "unknown" };
   }
 }
 

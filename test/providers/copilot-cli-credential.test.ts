@@ -474,5 +474,30 @@ describe("Copilot CLI selected Keychain item", () => {
       ).toBe(true);
       expect(deps.recordGrant).not.toHaveBeenCalled();
     });
+
+    it("reports keychain_prompt_required when a granted attribute probe exits 44", async () => {
+      const deps = probingDeps(FINGERPRINT_AT_GRANT);
+      deps.readGrant = vi.fn(
+        (): KeychainAccessGrant => ({
+          status: "bound",
+          itemFingerprint: FINGERPRINT_AT_GRANT,
+        }),
+      );
+      deps.run = vi.fn(async () => {
+        throw Object.assign(new Error("missing"), { code: 44 });
+      });
+
+      const result = await resolveCopilotCliCredential(
+        plainOptions,
+        false,
+        deps,
+      );
+
+      expect(result.report.error).toBe("keychain_prompt_required");
+      expect(
+        deps.run.mock.calls.every(([, args]) => !args.includes("-w")),
+      ).toBe(true);
+      expect(deps.recordGrant).not.toHaveBeenCalled();
+    });
   });
 });

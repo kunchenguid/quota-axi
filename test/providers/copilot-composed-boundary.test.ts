@@ -50,6 +50,7 @@ const tokenA = "gho_synthetic_account_a";
 const tokenB = "gho_synthetic_account_b";
 const appsToken = "gho_synthetic_apps";
 const ghToken = "gho_synthetic_gh";
+const keychainFingerprint = "20260701000000Z";
 const optIn = { allowKeychainPrompt: true, refreshCredentials: false };
 const ordinary = { allowKeychainPrompt: false, refreshCredentials: false };
 const oneShot = [
@@ -125,7 +126,7 @@ beforeEach(() => {
       ? fixture.login === "account-a"
         ? tokenA
         : tokenB
-      : "synthetic metadata";
+      : `attributes:\n    "mdat"<timedate>="${keychainFingerprint}"\n`;
   });
   vi.mocked(providerFetch).mockImplementation(async () => response());
   vi.stubGlobal("fetch", () => {
@@ -290,7 +291,7 @@ describe("Copilot composed credential boundaries", () => {
     const grants = storedFiles(join(fixture.home, "cache"));
     expect(grants).toHaveLength(2);
     for (const grant of grants) {
-      expect(grant.text).toBe("granted\n");
+      expect(grant.text).toBe(`granted ${keychainFingerprint}\n`);
       expect(grant.path).not.toMatch(/account-[ab]|gho_/);
     }
   });

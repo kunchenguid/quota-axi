@@ -261,7 +261,11 @@ export async function resolveCopilotCliCredential(
       : keychainAccessGrantPermitsRead(grant, itemFingerprint));
   if (presenceOnly === "silence") {
     if (consented) return state("unsupported", "value_read_deferred");
-    if (probeError !== undefined && code(probeError) === 44)
+    if (
+      probeError !== undefined &&
+      code(probeError) === 44 &&
+      grant.status === "missing"
+    )
       return state("read_error", "keychain_item_unavailable");
     return state("unsupported", COPILOT_CLI_KEYCHAIN_PROMPT_REQUIRED);
   }
@@ -286,7 +290,11 @@ export async function resolveCopilotCliCredential(
     value = result.value;
   } else {
     if (!valueAllowed) {
-      if (probeError !== undefined && code(probeError) === 44)
+      if (
+        probeError !== undefined &&
+        code(probeError) === 44 &&
+        grant.status === "missing"
+      )
         return state("read_error", "keychain_item_unavailable");
       return state("unsupported", COPILOT_CLI_KEYCHAIN_PROMPT_REQUIRED);
     }
