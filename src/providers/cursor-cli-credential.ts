@@ -254,10 +254,7 @@ function skippedKeychainState(
       source: CURSOR_CLI_SOURCE,
       path,
       status: "skipped",
-      error:
-        presence === "present"
-          ? "keychain_prompt_required"
-          : "keychain_presence_check_failed",
+      error: "keychain_prompt_required",
       credentialPresent: true,
     },
   };
@@ -311,6 +308,7 @@ function writeKeychainAccessGrantBestEffort(
   identity: CursorCliIdentity,
   itemFingerprint: string | undefined,
 ): void {
+  if (itemFingerprint === undefined) return;
   writeKeychainAccessGrant(
     cursorCliKeychainAccessMarkerPath(markerKey(identity)),
     itemFingerprint,

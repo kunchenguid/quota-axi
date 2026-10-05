@@ -466,6 +466,27 @@ describe("Cursor CLI keychain credential source", () => {
       ).toBe(true);
     });
 
+    it("reports keychain_prompt_required when the attribute probe times out", async () => {
+      writeCliConfig();
+      writeGrantMarker(`granted ${FINGERPRINT_AT_GRANT}\n`);
+      const { calls } = mockProcess({
+        keychainError: Object.assign(new Error("killed"), { killed: true }),
+      });
+      stubCursorUsage();
+
+      const result = await fetchPlain();
+
+      expect(result.attempts).toContainEqual({
+        source: "cli-keychain",
+        status: "skipped",
+        error: "keychain_prompt_required",
+        credentialPresent: true,
+      });
+      expect(
+        securityCalls(calls).every((call) => !call.args.includes("-w")),
+      ).toBe(true);
+    });
+
     it("keeps reading while the item never changes, exactly as a source without rewrites behaves today", async () => {
       writeCliConfig();
       writeGrantMarker(`granted ${FINGERPRINT_AT_GRANT}\n`);

@@ -1178,12 +1178,14 @@ async function readCredentialStates(
     // could authorize the read keeps an ungranted plain call to metadata
     // discovery alone.
     let itemFingerprint: string | undefined;
+    let attributePresence: KeychainItemPresence = "present";
     if (options.allowKeychainPrompt || grant.status !== "missing") {
-      const probeOutput = await readKeychainItemAttributes(locations);
+      const probe = await readKeychainItemAttributes(locations);
+      attributePresence = probe.status;
       itemFingerprint =
-        probeOutput === undefined
-          ? undefined
-          : parseKeychainItemFingerprint(probeOutput);
+        probe.status === "present"
+          ? parseKeychainItemFingerprint(probe.output)
+          : undefined;
     }
     if (
       options.allowKeychainPrompt ||
@@ -1192,6 +1194,8 @@ async function readCredentialStates(
       states.push(
         await readKeychainCredentialState(locations, itemFingerprint),
       );
+    } else if (attributePresence !== "present") {
+      states.push(keychainPresenceState(attributePresence));
     } else {
       states.push(await readSkippedKeychainCredentialState(locations));
     }
@@ -1229,18 +1233,24 @@ function keychainPresenceState(
       source: { source: "keychain", status: "missing" },
     };
   }
-  // A store that could not be checked still stays visible behind a sibling
-  // that answered, without claiming the item is there.
+  if (presence === "unknown") {
+    return {
+      status: "skipped",
+      source: {
+        source: "keychain",
+        status: "skipped",
+        error: "keychain_prompt_required",
+        credentialPresent: true,
+      },
+    };
+  }
   return {
     status: "skipped",
     degraded: true,
     source: {
       source: "keychain",
       status: "skipped",
-      error:
-        presence === "unreachable"
-          ? KEYCHAIN_UNREACHABLE_ERROR
-          : "keychain_presence_check_failed",
+      error: KEYCHAIN_UNREACHABLE_ERROR,
     },
   };
 }
@@ -1248,27 +1258,34 @@ function keychainPresenceState(
 /**
  * The attribute-only item read: `find-generic-password` without `-w` never
  * prompts and never reads a value. Its output carries the item's `mdat`
- * fingerprint, and a failure only withholds the fingerprint, turning the
- * grant check into its historical presence-only form.
+ * fingerprint, and a failure withholds plain-call value access.
  */
 async function readKeychainItemAttributes(
   locations: ClaudeProfileLocations,
-): Promise<string | undefined> {
+): Promise<
+  | { status: "present"; output: string }
+  | { status: "unknown" | "unreachable" }
+> {
   try {
-    return await execFileText(
-      "security",
-      [
-        "find-generic-password",
-        "-a",
-        locations.keychainAccount,
-        "-s",
-        locations.keychainService,
-        ...(locations.keychainPath ? [locations.keychainPath] : []),
-      ],
-      KEYCHAIN_PRESENCE_TIMEOUT_MS,
-    );
-  } catch {
-    return undefined;
+    return {
+      status: "present",
+      output: await execFileText(
+        "security",
+        [
+          "find-generic-password",
+          "-a",
+          locations.keychainAccount,
+          "-s",
+          locations.keychainService,
+          ...(locations.keychainPath ? [locations.keychainPath] : []),
+        ],
+        KEYCHAIN_PRESENCE_TIMEOUT_MS,
+      ),
+    };
+  } catch (error) {
+    return {
+      status: isKeychainItemUnreachable(error) ? "unreachable" : "unknown",
+    };
   }
 }
 
@@ -1427,7 +1444,8 @@ async function readKeychainCredentialState(
   } catch (error) {
     return keychainFailureState(error);
   }
-  writeKeychainAccessGrant(locations.keychainAccessMarker, itemFingerprint);
+  if (itemFingerprint !== undefined)
+    writeKeychainAccessGrant(locations.keychainAccessMarker, itemFingerprint);
   try {
     return extractCredentialState(
       { status: "success", value: JSON.parse(blob) },

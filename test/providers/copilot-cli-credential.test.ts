@@ -70,11 +70,7 @@ describe("Copilot CLI selected Keychain item", () => {
       60_000,
       16 * 1024,
     );
-    expect(deps.recordGrant).toHaveBeenCalledWith(
-      "/synthetic/home/.copilot/config.json",
-      "https://github.com:selected-user",
-      undefined,
-    );
+    expect(deps.recordGrant).not.toHaveBeenCalled();
     expect(JSON.stringify(result.report)).not.toContain(token);
   });
   it("persists only a private non-secret grant, never the token or raw identity", async () => {
@@ -83,6 +79,11 @@ describe("Copilot CLI selected Keychain item", () => {
     process.env.XDG_CACHE_HOME = root;
     try {
       const deps: Partial<ReturnType<typeof fixture>> = fixture();
+      deps.run = vi.fn(async (_command: string, args: string[]) =>
+        args.includes("-w")
+          ? token + "\n"
+          : 'attributes:\n    "mdat"<timedate>=2026-10-04 20:00:00 +0000\n',
+      );
       delete deps.recordGrant;
       expect(
         (await resolveCopilotCliCredential(options, false, deps)).status,
@@ -90,7 +91,9 @@ describe("Copilot CLI selected Keychain item", () => {
       const files = readdirSync(join(root, "quota-axi"));
       expect(files).toHaveLength(1);
       const file = join(root, "quota-axi", files[0]);
-      expect(readFileSync(file, "utf8")).toBe("granted\n");
+      expect(readFileSync(file, "utf8")).toBe(
+        "granted 2026-10-04 20:00:00 +0000\n",
+      );
       expect(statSync(file).mode & 0o777).toBe(0o600);
       expect(files[0]).not.toContain("selected-user");
       expect(files[0]).not.toContain(token);
@@ -440,6 +443,31 @@ describe("Copilot CLI selected Keychain item", () => {
         false,
         deps,
       );
+      expect(result.report.error).toBe("keychain_prompt_required");
+      expect(
+        deps.run.mock.calls.every(([, args]) => !args.includes("-w")),
+      ).toBe(true);
+      expect(deps.recordGrant).not.toHaveBeenCalled();
+    });
+
+    it("reports keychain_prompt_required when the attribute probe times out", async () => {
+      const deps = probingDeps(FINGERPRINT_AT_GRANT);
+      deps.readGrant = vi.fn(
+        (): KeychainAccessGrant => ({
+          status: "bound",
+          itemFingerprint: FINGERPRINT_AT_GRANT,
+        }),
+      );
+      deps.run = vi.fn(async () => {
+        throw Object.assign(new Error("killed"), { killed: true });
+      });
+
+      const result = await resolveCopilotCliCredential(
+        plainOptions,
+        false,
+        deps,
+      );
+
       expect(result.report.error).toBe("keychain_prompt_required");
       expect(
         deps.run.mock.calls.every(([, args]) => !args.includes("-w")),

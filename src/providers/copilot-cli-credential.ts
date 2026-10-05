@@ -261,20 +261,8 @@ export async function resolveCopilotCliCredential(
       : keychainAccessGrantPermitsRead(grant, itemFingerprint));
   if (presenceOnly === "silence") {
     if (consented) return state("unsupported", "value_read_deferred");
-    if (probeError !== undefined) {
-      const failure = probeError as {
-        killed?: boolean;
-        signal?: unknown;
-        code?: unknown;
-      } | null;
-      if (failure?.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER")
-        return state("structurally_invalid", "credential_format_unsupported");
-      if (failure?.killed || failure?.signal)
-        return state("read_error", "keychain_prompt_timeout");
-      if (code(probeError) === 44)
-        return state("read_error", "keychain_item_unavailable");
-      return state("read_error", "keychain_presence_check_failed");
-    }
+    if (probeError !== undefined && code(probeError) === 44)
+      return state("read_error", "keychain_item_unavailable");
     return state("unsupported", COPILOT_CLI_KEYCHAIN_PROMPT_REQUIRED);
   }
   const valueAllowed = presenceOnly === false && consented;
@@ -298,20 +286,8 @@ export async function resolveCopilotCliCredential(
     value = result.value;
   } else {
     if (!valueAllowed) {
-      if (probeError !== undefined) {
-        const failure = probeError as {
-          killed?: boolean;
-          signal?: unknown;
-          code?: unknown;
-        } | null;
-        if (failure?.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER")
-          return state("structurally_invalid", "credential_format_unsupported");
-        if (failure?.killed || failure?.signal)
-          return state("read_error", "keychain_prompt_timeout");
-        if (code(probeError) === 44)
-          return state("read_error", "keychain_item_unavailable");
-        return state("read_error", "keychain_presence_check_failed");
-      }
+      if (probeError !== undefined && code(probeError) === 44)
+        return state("read_error", "keychain_item_unavailable");
       return state("unsupported", COPILOT_CLI_KEYCHAIN_PROMPT_REQUIRED);
     }
     try {
@@ -355,7 +331,8 @@ export async function resolveCopilotCliCredential(
   } catch {
     return state("read_error", COPILOT_CLI_UNCONFIRMED_ACCOUNT);
   }
-  deps.recordGrant(path, identity.account, itemFingerprint);
+  if (deps.platform === "win32" || itemFingerprint !== undefined)
+    deps.recordGrant(path, identity.account, itemFingerprint);
   return {
     status: "resolved",
     token,

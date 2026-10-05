@@ -175,14 +175,13 @@ export function parseKeychainItemFingerprint(
   );
   if (!match) return undefined;
   const raw = match[1]!;
-  const hex = /^0x((?:[0-9a-fA-F]{2})+)/.exec(raw)?.[1];
-  if (hex !== undefined) {
-    const decoded = Buffer.from(hex, "hex")
-      .toString("utf8")
-      .replace(/\0+$/g, "");
-    return decoded.length > 0 ? decoded : undefined;
-  }
-  return raw;
+  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [+-]\d{4}$/.test(raw))
+    return raw;
+  const hex =
+    /^0x((?:[0-9a-fA-F]{2})+)\s+"(\d{14}Z)\\000"$/.exec(raw);
+  if (!hex) return undefined;
+  const decoded = Buffer.from(hex[1]!, "hex").toString("utf8");
+  return decoded === `${hex[2]}\0` ? hex[2] : undefined;
 }
 
 /** Reads the recorded grant, if any; an unreadable marker grants nothing. */

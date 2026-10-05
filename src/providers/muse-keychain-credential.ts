@@ -125,10 +125,7 @@ export async function readMuseKeychainCredential(
   if (presenceOnly || !granted) {
     return {
       status: "skipped",
-      error:
-        probe.status === "present"
-          ? "keychain_prompt_required"
-          : "keychain_presence_check_failed",
+      error: "keychain_prompt_required",
     };
   }
 
@@ -157,10 +154,14 @@ export async function readMuseKeychainCredential(
           : "keychain_access_denied",
     };
   }
-  writeKeychainAccessGrant(
-    museKeychainAccessMarkerPath(MUSE_KEYCHAIN_SERVICE, MUSE_KEYCHAIN_ACCOUNT),
-    itemFingerprint,
-  );
+  if (itemFingerprint !== undefined)
+    writeKeychainAccessGrant(
+      museKeychainAccessMarkerPath(
+        MUSE_KEYCHAIN_SERVICE,
+        MUSE_KEYCHAIN_ACCOUNT,
+      ),
+      itemFingerprint,
+    );
 
   let bundle: unknown;
   try {

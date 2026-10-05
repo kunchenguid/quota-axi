@@ -360,6 +360,55 @@ describe("Muse Keychain credential source", () => {
       expect(fetchMock).not.toHaveBeenCalled();
       expect(calls.every((call) => !call.args.includes("-w"))).toBe(true);
     });
+
+    it("rejects a previously recorded unrecognized fingerprint without a value read", async () => {
+      await writeGrantMarker("granted <NULL>\n");
+      const fetchMock = sequentialFetch([jsonResponse(KEY_RESPONSE)]);
+      const { adapter, calls } = await keychainAdapterWith(
+        {
+          bundle: bundle(),
+          probeOutput: 'attributes:\n    "mdat"<timedate>=<NULL>\n',
+        },
+        fetchMock,
+      );
+
+      const report = await adapter.fetchQuota(OPTIONS);
+
+      expect(report.state.error).toBe("keychain_prompt_required");
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(calls.every((call) => !call.args.includes("-w"))).toBe(true);
+    });
+
+    it("reports keychain_prompt_required when the attribute probe times out", async () => {
+      await writeGrantMarker(`granted ${FINGERPRINT_AT_GRANT}\n`);
+      const { adapter, calls } = await keychainAdapterWith({
+        bundle: bundle(),
+        error: Object.assign(new Error("killed"), { killed: true }),
+      });
+
+      const report = await adapter.fetchQuota(OPTIONS);
+
+      expect(report.state.error).toBe("keychain_prompt_required");
+      expect(calls.every((call) => !call.args.includes("-w"))).toBe(true);
+    });
+
+    it("records no marker when an allowed read has no recognized fingerprint", async () => {
+      const { adapter } = await keychainAdapterWith({
+        bundle: bundle(),
+        probeOutput: 'attributes:\n    "mdat"<timedate>=<NULL>\n',
+      });
+
+      expect((await adapter.fetchQuota(PROMPT_OPTIONS)).state.status).toBe(
+        "fresh",
+      );
+      const { museKeychainAccessMarkerPath } =
+        await import("../../src/lib/fs.js");
+      const marker = museKeychainAccessMarkerPath(
+        "ai.meta.dev.credentials",
+        "meta",
+      );
+      expect(() => readFileSync(marker, "utf8")).toThrow();
+    });
   });
 
   it("a missing item resolves absent, so a pointer-only auth.json still ends at sign-in required", async () => {

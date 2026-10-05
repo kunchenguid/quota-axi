@@ -132,6 +132,18 @@ describe("keychain access grants", () => {
     expect(
       parseKeychainItemFingerprint("keychain item metadata\n"),
     ).toBeUndefined();
+    for (const value of ["<NULL>", "", "unexpected", "20261004222412Z"]) {
+      expect(
+        parseKeychainItemFingerprint(
+          `attributes:\n    "mdat"<timedate>=${value}\n`,
+        ),
+      ).toBeUndefined();
+    }
+    expect(
+      parseKeychainItemFingerprint(
+        'attributes:\n    "mdat"<timedate>=0x32303236313030343232323431325A00  "20261004222413Z\\000"\n',
+      ),
+    ).toBeUndefined();
   });
 
   it("round-trips a bound grant and reads a legacy marker as legacy", async () => {

@@ -418,6 +418,33 @@ describe("Claude macOS Keychain discovery", () => {
         execFileText.mock.calls.every(([, args]) => !args.includes("-w")),
       ).toBe(true);
     });
+
+    it("reports keychain_prompt_required when the attribute probe times out", async () => {
+      await writeGrantMarker(`granted ${FINGERPRINT_AT_GRANT}\n`);
+      execFileText.mockImplementation(
+        async (_command: string, args: string[]) => {
+          if (args[0] === "list-keychains") return `    "${keychain}"\n`;
+          if (args[0] === "dump-keychain") return item();
+          throw Object.assign(new Error("killed"), {
+            killed: true,
+            signal: "SIGTERM",
+          });
+        },
+      );
+      const { inspectAuth } = await import("../../src/providers/claude.js");
+
+      const auth = await inspectAuth(plainOptions);
+
+      expect(auth.sources).toContainEqual({
+        source: "keychain",
+        status: "skipped",
+        error: "keychain_prompt_required",
+        credentialPresent: true,
+      });
+      expect(
+        execFileText.mock.calls.every(([, args]) => !args.includes("-w")),
+      ).toBe(true);
+    });
   });
 
   it("never lets a newer explicit-profile item replace the default profile", async () => {
@@ -1052,7 +1079,7 @@ describe("Claude macOS Keychain discovery", () => {
     });
 
     expect(chunks.join("")).toContain(
-      "claude,all,degraded_source,keychain · keychain_presence_check_failed,none",
+      "claude,all,degraded_source,keychain · keychain_prompt_required,none",
     );
   });
 
