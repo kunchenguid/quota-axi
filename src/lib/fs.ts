@@ -245,19 +245,20 @@ export function writeKeychainAccessGrant(
 }
 
 /**
- * Whether a recorded grant permits a plain-call value read. When the current
- * probe supplies no item fingerprint (the probe failed, or the store exposes
- * none, as on Windows), any recorded grant keeps its historical presence-only
- * meaning; when a fingerprint is available, only a grant bound to that exact
- * fingerprint authorizes, so an item rewritten since the grant is never read.
+ * Whether a recorded grant permits a plain-call macOS Keychain value read.
+ * Only a grant bound to the current item fingerprint authorizes, so a failed
+ * probe, a legacy marker, or an item rewritten since the grant is never read.
+ * Stores without item fingerprints apply their own presence-only policy.
  */
 export function keychainAccessGrantPermitsRead(
   grant: KeychainAccessGrant,
   itemFingerprint: string | undefined,
 ): boolean {
-  if (grant.status === "missing") return false;
-  if (itemFingerprint === undefined) return true;
-  return grant.status === "bound" && grant.itemFingerprint === itemFingerprint;
+  return (
+    itemFingerprint !== undefined &&
+    grant.status === "bound" &&
+    grant.itemFingerprint === itemFingerprint
+  );
 }
 
 function cacheDirPath(): string {

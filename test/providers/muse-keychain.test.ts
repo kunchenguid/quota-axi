@@ -216,7 +216,11 @@ describe("Muse Keychain credential source", () => {
   });
 
   it("a recorded grant marker lets a plain call read the value", async () => {
-    mockSecurity({ bundle: bundle() });
+    const fingerprint = "2026-10-04 20:00:00 +0000";
+    mockSecurity({
+      bundle: bundle(),
+      probeOutput: `attributes:\n    "mdat"<timedate>=${fingerprint}\n`,
+    });
     const muse = await museModule();
     const { museKeychainAccessMarkerPath } =
       await import("../../src/lib/fs.js");
@@ -225,7 +229,7 @@ describe("Muse Keychain credential source", () => {
       "meta",
     );
     mkdirSync(dirname(marker), { recursive: true });
-    writeFileSync(marker, "granted\n", { mode: 0o600 });
+    writeFileSync(marker, `granted ${fingerprint}\n`, { mode: 0o600 });
 
     const adapter = muse.createMuseAdapter({
       sources: [muse.createMuseKeychainSource()],

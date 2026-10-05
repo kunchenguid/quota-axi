@@ -191,17 +191,15 @@ describe("keychain access grants", () => {
         "fingerprint",
       ),
     ).toBe(true);
-    // No fingerprint obtainable (probe failed, or a store like Windows
-    // Credential Manager): any recorded grant keeps its historical meaning.
     expect(
       keychainAccessGrantPermitsRead({ status: "legacy" }, undefined),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       keychainAccessGrantPermitsRead(
         { status: "bound", itemFingerprint: "fingerprint" },
         undefined,
       ),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       keychainAccessGrantPermitsRead({ status: "missing" }, undefined),
     ).toBe(false);

@@ -110,6 +110,7 @@ function mockItems(
   metadata: string,
   readableService = service,
   keychains = [keychain],
+  probeOutput = "",
 ): void {
   execFileText.mockImplementation(async (command: string, args: string[]) => {
     expect(command).toBe("security");
@@ -131,7 +132,7 @@ function mockItems(
         ? JSON.stringify({
             claudeAiOauth: { accessToken: "synthetic-token" },
           })
-        : "";
+        : probeOutput;
     }
     throw unreachable();
   });
@@ -273,7 +274,9 @@ describe("Claude macOS Keychain discovery", () => {
       await import("../../src/lib/fs.js");
     const marker = claudeKeychainAccessMarkerPath("fixture-user", service);
     mkdirSync(dirname(marker), { recursive: true });
-    writeFileSync(marker, "granted\n", { mode: 0o600 });
+    const fingerprint = "20260913010000Z";
+    writeFileSync(marker, `granted ${fingerprint}\n`, { mode: 0o600 });
+    mockItems(item(), service, [keychain], item());
     const granted = await inspectAuth({
       ...options,
       allowKeychainPrompt: false,
@@ -285,12 +288,13 @@ describe("Claude macOS Keychain discovery", () => {
   });
 
   it("reuses a granted Keychain reading across back-to-back reads with --max-age", async () => {
-    mockItems(item());
+    const fingerprint = "20260913010000Z";
+    mockItems(item(), service, [keychain], item());
     const { claudeKeychainAccessMarkerPath } =
       await import("../../src/lib/fs.js");
     const marker = claudeKeychainAccessMarkerPath("fixture-user", service);
     mkdirSync(dirname(marker), { recursive: true });
-    writeFileSync(marker, "granted\n", { mode: 0o600 });
+    writeFileSync(marker, `granted ${fingerprint}\n`, { mode: 0o600 });
     const { quotaCommand } = await import("../../src/commands.js");
 
     for (let read = 0; read < 3; read++) {
@@ -793,6 +797,13 @@ describe("Claude macOS Keychain discovery", () => {
       ]);
       if (!args.includes(selectedService) || args.at(-1) !== activeKeychain)
         throw unreachable();
+      if (!args.includes("-w"))
+        return item(
+          selectedService,
+          undefined,
+          undefined,
+          activeKeychain,
+        );
       return JSON.stringify({
         claudeAiOauth: { accessToken: "synthetic-token" },
       });

@@ -315,8 +315,10 @@ describe("Cursor CLI keychain credential source", () => {
   );
 
   it("reuses a recorded grant on a later plain call", async () => {
+    const keychainMetadata =
+      'attributes:\n    "mdat"<timedate>=2026-10-04 20:00:00 +0000\n';
     writeCliConfig();
-    mockProcess({});
+    mockProcess({ keychainMetadata });
     stubCursorUsage();
 
     const granted = await withPlatform("darwin", async () => {
@@ -329,7 +331,7 @@ describe("Cursor CLI keychain credential source", () => {
     expect(granted.state.status).toBe("fresh");
 
     vi.resetModules();
-    const { calls } = mockProcess({});
+    const { calls } = mockProcess({ keychainMetadata });
     stubCursorUsage();
     const plain = await withPlatform("darwin", async () => {
       const { fetchQuota } = await import("../../src/providers/cursor.js");
