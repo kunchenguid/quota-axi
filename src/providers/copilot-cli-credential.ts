@@ -1,15 +1,17 @@
-import { chmodSync, existsSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import {
   copilotCliKeychainAccessMarkerPath,
-  ensurePrivateParent,
+  keychainAccessGrantPermitsRead,
+  parseKeychainItemFingerprint,
   readBoundedFile,
+  readKeychainAccessGrant,
+  writeKeychainAccessGrant,
+  type KeychainAccessGrant,
 } from "../lib/fs.js";
 import { execFileText } from "../lib/process.js";
 import { readWindowsGenericPassword } from "../lib/windows-credential.js";
 import type { AuthSourceReport, ProviderOptions } from "../types.js";
-import { traceInput } from "../lib/input-trace.js";
 
 export const COPILOT_CLI_SOURCE = "copilot-cli:keychain";
 /**
@@ -54,8 +56,12 @@ type Dependencies = {
   readFile: typeof readBoundedFile;
   run: typeof execFileText;
   readWindows: typeof readWindowsGenericPassword;
-  hasGrant: (path: string, account: string) => boolean;
-  recordGrant: (path: string, account: string) => void;
+  readGrant: (path: string, account: string) => KeychainAccessGrant;
+  recordGrant: (
+    path: string,
+    account: string,
+    itemFingerprint: string | undefined,
+  ) => void;
 };
 
 type CopilotCliSelection =
@@ -80,12 +86,15 @@ function dependencies(overrides: Partial<Dependencies>): Dependencies {
     readFile: readBoundedFile,
     run: execFileText,
     readWindows: readWindowsGenericPassword,
-    hasGrant: (path, account) => {
-      const marker = copilotCliKeychainAccessMarkerPath(path, SERVICE, account);
-      traceInput(marker);
-      return existsSync(marker);
-    },
-    recordGrant,
+    readGrant: (path, account) =>
+      readKeychainAccessGrant(
+        copilotCliKeychainAccessMarkerPath(path, SERVICE, account),
+      ),
+    recordGrant: (path, account, itemFingerprint) =>
+      writeKeychainAccessGrant(
+        copilotCliKeychainAccessMarkerPath(path, SERVICE, account),
+        itemFingerprint,
+      ),
     ...overrides,
   };
 }
@@ -209,12 +218,65 @@ export async function resolveCopilotCliCredential(
   }
   if (identity.host !== "https://github.com")
     return state("unsupported", "selected_host_unsupported");
-  const consented =
-    options.allowKeychainPrompt || deps.hasGrant(path, identity.account);
+  // The flag alone establishes consent; the recorded grant is consulted only
+  // when the flag is absent.
+  const grant: KeychainAccessGrant = options.allowKeychainPrompt
+    ? { status: "missing" }
+    : deps.readGrant(path, identity.account);
   // Only whether this source could have answered is wanted: a consented read
-  // would, so the secret is not fetched just to be discarded.
-  if (presenceOnly === "silence" && consented)
+  // would, so the secret is not fetched just to be discarded. The flag alone
+  // decides that without touching the vault.
+  if (presenceOnly === "silence" && options.allowKeychainPrompt)
     return state("unsupported", "value_read_deferred");
+  // The attribute-only probe supplies both the presence verdict and the
+  // non-secret `mdat` fingerprint the recorded grant binds to; without `-w`
+  // it never prompts and never reads a value. Windows CredRead returns the
+  // secret together with its metadata, so there is no separate probe.
+  let probeError: unknown;
+  let itemFingerprint: string | undefined;
+  const macosArgs = [
+    "find-generic-password",
+    "-s",
+    SERVICE,
+    "-a",
+    identity.account,
+  ];
+  if (deps.platform !== "win32") {
+    try {
+      const probeOutput = await deps.run(
+        "/usr/bin/security",
+        macosArgs,
+        5_000,
+        TOKEN_LIMIT,
+      );
+      itemFingerprint = parseKeychainItemFingerprint(probeOutput);
+    } catch (error) {
+      probeError = error;
+    }
+  }
+  const consented =
+    options.allowKeychainPrompt ||
+    (deps.platform === "win32"
+      ? grant.status !== "missing"
+      : keychainAccessGrantPermitsRead(grant, itemFingerprint));
+  if (presenceOnly === "silence") {
+    if (consented) return state("unsupported", "value_read_deferred");
+    if (probeError !== undefined) {
+      const failure = probeError as {
+        killed?: boolean;
+        signal?: unknown;
+        code?: unknown;
+      } | null;
+      if (failure?.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER")
+        return state("structurally_invalid", "credential_format_unsupported");
+      if (failure?.killed || failure?.signal)
+        return state("read_error", "keychain_prompt_timeout");
+      if (code(probeError) === 44)
+        return state("read_error", "keychain_item_unavailable");
+      return state("read_error", "keychain_presence_check_failed");
+    }
+    return state("unsupported", COPILOT_CLI_KEYCHAIN_PROMPT_REQUIRED);
+  }
   const valueAllowed = presenceOnly === false && consented;
   let value: string;
   if (deps.platform === "win32") {
@@ -235,18 +297,28 @@ export async function resolveCopilotCliCredential(
       );
     value = result.value;
   } else {
-    const args = [
-      "find-generic-password",
-      "-s",
-      SERVICE,
-      "-a",
-      identity.account,
-    ];
+    if (!valueAllowed) {
+      if (probeError !== undefined) {
+        const failure = probeError as {
+          killed?: boolean;
+          signal?: unknown;
+          code?: unknown;
+        } | null;
+        if (failure?.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER")
+          return state("structurally_invalid", "credential_format_unsupported");
+        if (failure?.killed || failure?.signal)
+          return state("read_error", "keychain_prompt_timeout");
+        if (code(probeError) === 44)
+          return state("read_error", "keychain_item_unavailable");
+        return state("read_error", "keychain_presence_check_failed");
+      }
+      return state("unsupported", COPILOT_CLI_KEYCHAIN_PROMPT_REQUIRED);
+    }
     try {
       value = await deps.run(
         "/usr/bin/security",
-        valueAllowed ? [...args, "-w"] : args,
-        valueAllowed ? 60_000 : 5_000,
+        [...macosArgs, "-w"],
+        60_000,
         TOKEN_LIMIT,
       );
     } catch (error) {
@@ -261,16 +333,9 @@ export async function resolveCopilotCliCredential(
         return state("read_error", "keychain_prompt_timeout");
       if (code(error) === 44)
         return state("read_error", "keychain_item_unavailable");
-      return state(
-        "read_error",
-        valueAllowed
-          ? "keychain_access_denied"
-          : "keychain_presence_check_failed",
-      );
+      return state("read_error", "keychain_access_denied");
     }
   }
-  if (!valueAllowed)
-    return state("unsupported", COPILOT_CLI_KEYCHAIN_PROMPT_REQUIRED);
   const token = value.replace(/[\r\n]+$/, "");
   if (
     token.length > TOKEN_LIMIT ||
@@ -290,7 +355,7 @@ export async function resolveCopilotCliCredential(
   } catch {
     return state("read_error", COPILOT_CLI_UNCONFIRMED_ACCOUNT);
   }
-  deps.recordGrant(path, identity.account);
+  deps.recordGrant(path, identity.account, itemFingerprint);
   return {
     status: "resolved",
     token,
@@ -334,19 +399,4 @@ function code(error: unknown): unknown {
   return error && typeof error === "object" && "code" in error
     ? error.code
     : undefined;
-}
-
-function recordGrant(path: string, account: string): void {
-  try {
-    const file = copilotCliKeychainAccessMarkerPath(path, SERVICE, account);
-    if (existsSync(file)) return;
-    ensurePrivateParent(file);
-    const temp = `${file}.${process.pid}.tmp`;
-    writeFileSync(temp, "granted\n", { mode: 0o600 });
-    chmodSync(temp, 0o600);
-    renameSync(temp, file);
-    chmodSync(file, 0o600);
-  } catch {
-    /* A marker failure cannot change the successful credential read. */
-  }
 }

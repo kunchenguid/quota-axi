@@ -1,9 +1,10 @@
-import { chmodSync, existsSync, renameSync, writeFileSync } from "node:fs";
 import {
-  ensurePrivateParent,
+  keychainAccessGrantPermitsRead,
   museKeychainAccessMarkerPath,
+  parseKeychainItemFingerprint,
+  readKeychainAccessGrant,
+  writeKeychainAccessGrant,
 } from "../lib/fs.js";
-import { traceInput } from "../lib/input-trace.js";
 import { execFileText } from "../lib/process.js";
 import { usableLiteralSecret } from "../lib/secret.js";
 import type { ProviderOptions } from "../types.js";
@@ -23,8 +24,9 @@ import type { ProviderOptions } from "../types.js";
  * is checked for presence only. The value read follows the same
  * `--allow-keychain-prompt` gate as the Claude and Cursor CLI Keychain
  * sources: a plain quota call checks item presence only (no `-w`, never
- * prompts), and a successful value read records a non-secret marker so later
- * plain quota calls may reuse the existing grant. `auth` passes
+ * prompts), and a successful value read records a non-secret grant bound to
+ * the item's modification fingerprint, so a later plain quota call reuses the
+ * grant only while the item is unchanged. `auth` passes
  * `presenceOnly` when the flag is off so that leftover marker never triggers
  * a value read: the report only emits status, and the bundle carries the
  * minted API key.
@@ -57,15 +59,29 @@ export type MuseKeychainResolution =
 
 type KeychainItemPresence = "present" | "missing" | "unknown";
 
+type KeychainItemProbe =
+  | { status: "present"; output: string }
+  | { status: "missing" }
+  | { status: "unknown" };
+
 export function isMuseKeychainSourceSupported(): boolean {
   return process.platform === "darwin";
 }
 
 /** Presence only for `auth`: never prompts and never reads the value. */
 export async function museKeychainItemPresence(): Promise<KeychainItemPresence> {
-  if (!isMuseKeychainSourceSupported()) return "missing";
+  return (await probeKeychainItem()).status;
+}
+
+/**
+ * The attribute-only probe behind both the presence check and the grant
+ * binding: `find-generic-password` without `-w` never prompts and never reads
+ * a value, and its attribute output carries the item's `mdat` fingerprint.
+ */
+async function probeKeychainItem(): Promise<KeychainItemProbe> {
+  if (!isMuseKeychainSourceSupported()) return { status: "missing" };
   try {
-    await execFileText(
+    const output = await execFileText(
       "security",
       [
         "find-generic-password",
@@ -76,9 +92,11 @@ export async function museKeychainItemPresence(): Promise<KeychainItemPresence> 
       ],
       KEYCHAIN_PRESENCE_TIMEOUT_MS,
     );
-    return "present";
+    return { status: "present", output };
   } catch (error) {
-    return isKeychainItemNotFound(error) ? "missing" : "unknown";
+    return isKeychainItemNotFound(error)
+      ? { status: "missing" }
+      : { status: "unknown" };
   }
 }
 
@@ -87,13 +105,28 @@ export async function readMuseKeychainCredential(
   presenceOnly = false,
 ): Promise<MuseKeychainResolution> {
   if (!isMuseKeychainSourceSupported()) return { status: "absent" };
-  const presence = await museKeychainItemPresence();
-  if (presence === "missing") return { status: "absent" };
-  if (presenceOnly || !(options.allowKeychainPrompt || hasAccessMarker())) {
+  const probe = await probeKeychainItem();
+  if (probe.status === "missing") return { status: "absent" };
+  const itemFingerprint =
+    probe.status === "present"
+      ? parseKeychainItemFingerprint(probe.output)
+      : undefined;
+  const granted =
+    options.allowKeychainPrompt ||
+    keychainAccessGrantPermitsRead(
+      readKeychainAccessGrant(
+        museKeychainAccessMarkerPath(
+          MUSE_KEYCHAIN_SERVICE,
+          MUSE_KEYCHAIN_ACCOUNT,
+        ),
+      ),
+      itemFingerprint,
+    );
+  if (presenceOnly || !granted) {
     return {
       status: "skipped",
       error:
-        presence === "present"
+        probe.status === "present"
           ? "keychain_prompt_required"
           : "keychain_presence_check_failed",
     };
@@ -124,7 +157,10 @@ export async function readMuseKeychainCredential(
           : "keychain_access_denied",
     };
   }
-  writeAccessMarkerBestEffort();
+  writeKeychainAccessGrant(
+    museKeychainAccessMarkerPath(MUSE_KEYCHAIN_SERVICE, MUSE_KEYCHAIN_ACCOUNT),
+    itemFingerprint,
+  );
 
   let bundle: unknown;
   try {
@@ -148,33 +184,6 @@ export async function readMuseKeychainCredential(
     credential,
     refreshable: record !== undefined && Object.hasOwn(record, "refresh_token"),
   };
-}
-
-function hasAccessMarker(): boolean {
-  const marker = museKeychainAccessMarkerPath(
-    MUSE_KEYCHAIN_SERVICE,
-    MUSE_KEYCHAIN_ACCOUNT,
-  );
-  traceInput(marker);
-  return existsSync(marker);
-}
-
-function writeAccessMarkerBestEffort(): void {
-  try {
-    const file = museKeychainAccessMarkerPath(
-      MUSE_KEYCHAIN_SERVICE,
-      MUSE_KEYCHAIN_ACCOUNT,
-    );
-    if (existsSync(file)) return;
-    ensurePrivateParent(file);
-    const temp = `${file}.${process.pid}.tmp`;
-    writeFileSync(temp, "granted\n", { mode: 0o600 });
-    chmodSync(temp, 0o600);
-    renameSync(temp, file);
-    chmodSync(file, 0o600);
-  } catch {
-    return;
-  }
 }
 
 function isKeychainItemNotFound(error: unknown): boolean {

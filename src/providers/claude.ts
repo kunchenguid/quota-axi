@@ -1,12 +1,14 @@
-import { chmodSync, existsSync, renameSync, writeFileSync } from "node:fs";
 import { userInfo } from "node:os";
 import { join } from "node:path";
 import { deleteCachedProvider, readCachedClaudeProvider } from "../cache.js";
 import {
   claudeCredentialContextId,
   claudeKeychainAccessMarkerPath,
-  ensurePrivateParent,
+  keychainAccessGrantPermitsRead,
+  parseKeychainItemFingerprint,
   readJsonFileResult,
+  readKeychainAccessGrant,
+  writeKeychainAccessGrant,
   type JsonFileReadResult,
 } from "../lib/fs.js";
 import { providerFetch } from "../lib/http.js";
@@ -49,7 +51,6 @@ import {
 } from "./delegated-refresh.js";
 import { withUsageFetchFailure } from "./usage-fetch-failure.js";
 import { fetchClaudeNativeQuota } from "./claude-native-quota.js";
-import { traceInput } from "../lib/input-trace.js";
 
 const API_URL = "https://api.anthropic.com/api/oauth/usage";
 const PROFILE_API_URL = "https://api.anthropic.com/api/oauth/profile";
@@ -1170,8 +1171,27 @@ async function readCredentialStates(
     // service/account lookup still searches the whole Keychain search list.
     if (selection.status === "present")
       locations = withDiscoveredKeychainItem(locations, selection.item);
-    if (options.allowKeychainPrompt || hasKeychainAccessMarker(locations)) {
-      states.push(await readKeychainCredentialState(locations));
+    const grant = readKeychainAccessGrant(locations.keychainAccessMarker);
+    // The attribute-only probe (no `-w`, never prompts) supplies the item's
+    // non-secret `mdat` fingerprint; a recorded grant authorizes a plain-call
+    // value read only while the item is unchanged. No probe when nothing
+    // could authorize the read keeps an ungranted plain call to metadata
+    // discovery alone.
+    let itemFingerprint: string | undefined;
+    if (options.allowKeychainPrompt || grant.status !== "missing") {
+      const probeOutput = await readKeychainItemAttributes(locations);
+      itemFingerprint =
+        probeOutput === undefined
+          ? undefined
+          : parseKeychainItemFingerprint(probeOutput);
+    }
+    if (
+      options.allowKeychainPrompt ||
+      keychainAccessGrantPermitsRead(grant, itemFingerprint)
+    ) {
+      states.push(
+        await readKeychainCredentialState(locations, itemFingerprint),
+      );
     } else {
       states.push(await readSkippedKeychainCredentialState(locations));
     }
@@ -1223,6 +1243,33 @@ function keychainPresenceState(
           : "keychain_presence_check_failed",
     },
   };
+}
+
+/**
+ * The attribute-only item read: `find-generic-password` without `-w` never
+ * prompts and never reads a value. Its output carries the item's `mdat`
+ * fingerprint, and a failure only withholds the fingerprint, turning the
+ * grant check into its historical presence-only form.
+ */
+async function readKeychainItemAttributes(
+  locations: ClaudeProfileLocations,
+): Promise<string | undefined> {
+  try {
+    return await execFileText(
+      "security",
+      [
+        "find-generic-password",
+        "-a",
+        locations.keychainAccount,
+        "-s",
+        locations.keychainService,
+        ...(locations.keychainPath ? [locations.keychainPath] : []),
+      ],
+      KEYCHAIN_PRESENCE_TIMEOUT_MS,
+    );
+  } catch {
+    return undefined;
+  }
 }
 
 async function readKeychainItemPresence(
@@ -1360,6 +1407,7 @@ function keychainMetadataValue(raw?: string): string | undefined {
 
 async function readKeychainCredentialState(
   locations: ClaudeProfileLocations,
+  itemFingerprint: string | undefined,
 ): Promise<CredentialState> {
   let blob: string;
   try {
@@ -1379,7 +1427,7 @@ async function readKeychainCredentialState(
   } catch (error) {
     return keychainFailureState(error);
   }
-  writeKeychainAccessMarkerBestEffort(locations);
+  writeKeychainAccessGrant(locations.keychainAccessMarker, itemFingerprint);
   try {
     return extractCredentialState(
       { status: "success", value: JSON.parse(blob) },
@@ -1410,28 +1458,6 @@ function withDiscoveredKeychainItem(
       item.service,
     ),
   };
-}
-
-function hasKeychainAccessMarker(locations: ClaudeProfileLocations): boolean {
-  traceInput(locations.keychainAccessMarker);
-  return existsSync(locations.keychainAccessMarker);
-}
-
-function writeKeychainAccessMarkerBestEffort(
-  locations: ClaudeProfileLocations,
-): void {
-  try {
-    const file = locations.keychainAccessMarker;
-    if (existsSync(file)) return;
-    ensurePrivateParent(file);
-    const temp = `${file}.${process.pid}.tmp`;
-    writeFileSync(temp, "granted\n", { mode: 0o600 });
-    chmodSync(temp, 0o600);
-    renameSync(temp, file);
-    chmodSync(file, 0o600);
-  } catch {
-    return;
-  }
 }
 
 export function claudeCredentialFile(): string | undefined {

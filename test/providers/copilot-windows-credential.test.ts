@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { resolveCopilotCliCredential } from "../../src/providers/copilot-cli-credential.js";
+import type { KeychainAccessGrant } from "../../src/lib/fs.js";
 import type { WindowsCredentialResult } from "../../src/lib/windows-credential.js";
 
 const token = "gho_windows_synthetic_fixture";
@@ -31,7 +32,7 @@ function fixture() {
         value: token,
       }),
     ),
-    hasGrant: vi.fn(() => false),
+    readGrant: vi.fn((): KeychainAccessGrant => ({ status: "missing" })),
     recordGrant: vi.fn(),
   };
 }
@@ -54,6 +55,7 @@ describe("Copilot Windows selected secure credential", () => {
     expect(deps.recordGrant).toHaveBeenCalledWith(
       "/synthetic/home/.copilot/config.json",
       account,
+      undefined,
     );
     expect(JSON.stringify(result.report)).not.toContain(token);
   });
@@ -76,18 +78,21 @@ describe("Copilot Windows selected secure credential", () => {
 
   it("keeps ordinary auth metadata-only even with an existing grant", async () => {
     const deps = fixture();
-    deps.hasGrant.mockReturnValue(true);
+    deps.readGrant.mockReturnValue({ status: "legacy" });
     expect(
       (await resolveCopilotCliCredential(options, true, deps)).report.error,
     ).toBe("keychain_prompt_required");
     expect(deps.readWindows).not.toHaveBeenCalled();
-    expect(deps.hasGrant).not.toHaveBeenCalled();
+    expect(deps.readGrant).not.toHaveBeenCalled();
   });
 
   it("reuses only the selected account's grant for quota", async () => {
     const deps = fixture();
-    deps.hasGrant.mockImplementation(
-      (_path, selectedAccount) => selectedAccount === account,
+    deps.readGrant.mockImplementation(
+      (_path, selectedAccount): KeychainAccessGrant =>
+        selectedAccount === account
+          ? { status: "legacy" }
+          : { status: "missing" },
     );
     expect(
       (
@@ -98,7 +103,7 @@ describe("Copilot Windows selected secure credential", () => {
         )
       ).status,
     ).toBe("resolved");
-    expect(deps.hasGrant).toHaveBeenCalledWith(
+    expect(deps.readGrant).toHaveBeenCalledWith(
       "/synthetic/home/.copilot/config.json",
       account,
     );

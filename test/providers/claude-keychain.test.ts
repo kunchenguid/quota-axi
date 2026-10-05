@@ -1,5 +1,11 @@
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -197,6 +203,18 @@ describe("Claude macOS Keychain discovery", () => {
           "find-generic-password",
           "-a",
           "fixture-user",
+          "-s",
+          selectedService,
+          keychain,
+        ],
+        5000,
+      ],
+      [
+        "security",
+        [
+          "find-generic-password",
+          "-a",
+          "fixture-user",
           "-w",
           "-s",
           selectedService,
@@ -294,6 +312,108 @@ describe("Claude macOS Keychain discovery", () => {
         .mocked(fetch)
         .mock.calls.filter(([url]) => String(url).endsWith("/api/oauth/usage")),
     ).toHaveLength(1);
+  });
+
+  describe("Claude macOS Keychain grant binding", () => {
+    const FINGERPRINT_AT_GRANT = "2026-09-13 01:00:00 +0000";
+    const FINGERPRINT_AFTER_REWRITE = "2026-09-13 02:00:00 +0000";
+    const plainOptions = { ...options, allowKeychainPrompt: false };
+
+    const attributeProbe = (mdat: string): string =>
+      `keychain: "${keychain}"\nversion: 512\nclass: "genp"\nattributes:\n    "mdat"<timedate>=${mdat}\n`;
+
+    function mockReadableItem(probeMdat: string): void {
+      execFileText.mockImplementation(
+        async (command: string, args: string[]) => {
+          expect(command).toBe("security");
+          if (args[0] === "list-keychains") return `    "${keychain}"\n`;
+          if (args[0] === "dump-keychain") return item();
+          expect(args.slice(0, 3)).toEqual([
+            "find-generic-password",
+            "-a",
+            "fixture-user",
+          ]);
+          if (args.includes("-w"))
+            return JSON.stringify({
+              claudeAiOauth: { accessToken: "synthetic-token" },
+            });
+          return attributeProbe(probeMdat);
+        },
+      );
+    }
+
+    async function writeGrantMarker(content: string): Promise<string> {
+      const { claudeKeychainAccessMarkerPath } =
+        await import("../../src/lib/fs.js");
+      const marker = claudeKeychainAccessMarkerPath("fixture-user", service);
+      mkdirSync(dirname(marker), { recursive: true });
+      writeFileSync(marker, content, { mode: 0o600 });
+      return marker;
+    }
+
+    it("reads on a plain call while the item matches the grant", async () => {
+      const marker = await writeGrantMarker(
+        `granted ${FINGERPRINT_AT_GRANT}\n`,
+      );
+      mockReadableItem(FINGERPRINT_AT_GRANT);
+      const { fetchQuota } = await import("../../src/providers/claude.js");
+      const report = await fetchQuota(plainOptions);
+      expect(report.state.status).toBe("fresh");
+      expect(readFileSync(marker, "utf8")).toBe(
+        `granted ${FINGERPRINT_AT_GRANT}\n`,
+      );
+    });
+
+    it("reports keychain_prompt_required without a value read after the item changes", async () => {
+      await writeGrantMarker(`granted ${FINGERPRINT_AT_GRANT}\n`);
+      mockReadableItem(FINGERPRINT_AFTER_REWRITE);
+      const { inspectAuth } = await import("../../src/providers/claude.js");
+      const auth = await inspectAuth(plainOptions);
+      expect(auth.sources).toContainEqual({
+        source: "keychain",
+        status: "skipped",
+        error: "keychain_prompt_required",
+        credentialPresent: true,
+      });
+      expect(
+        execFileText.mock.calls.every(([, args]) => !args.includes("-w")),
+      ).toBe(true);
+    });
+
+    it("re-binds the grant to a changed item on --allow-keychain-prompt", async () => {
+      const marker = await writeGrantMarker(
+        `granted ${FINGERPRINT_AT_GRANT}\n`,
+      );
+      mockReadableItem(FINGERPRINT_AFTER_REWRITE);
+      const { fetchQuota } = await import("../../src/providers/claude.js");
+      expect((await fetchQuota(options)).state.status).toBe("fresh");
+      expect(readFileSync(marker, "utf8")).toBe(
+        `granted ${FINGERPRINT_AFTER_REWRITE}\n`,
+      );
+
+      execFileText.mockClear();
+      mockReadableItem(FINGERPRINT_AFTER_REWRITE);
+      expect((await fetchQuota(plainOptions)).state.status).toBe("fresh");
+      expect(
+        execFileText.mock.calls.some(([, args]) => args.includes("-w")),
+      ).toBe(true);
+    });
+
+    it("never treats a legacy presence-only marker as consent when the probe yields a fingerprint", async () => {
+      await writeGrantMarker("granted\n");
+      mockReadableItem(FINGERPRINT_AT_GRANT);
+      const { inspectAuth } = await import("../../src/providers/claude.js");
+      const auth = await inspectAuth(plainOptions);
+      expect(auth.sources).toContainEqual({
+        source: "keychain",
+        status: "skipped",
+        error: "keychain_prompt_required",
+        credentialPresent: true,
+      });
+      expect(
+        execFileText.mock.calls.every(([, args]) => !args.includes("-w")),
+      ).toBe(true);
+    });
   });
 
   it("never lets a newer explicit-profile item replace the default profile", async () => {
@@ -625,7 +745,7 @@ describe("Claude macOS Keychain discovery", () => {
       error: "keychain_unreachable",
       credentialPresent: true,
     });
-    expect(execFileText).toHaveBeenCalledTimes(3);
+    expect(execFileText).toHaveBeenCalledTimes(4);
   });
 
   it("detects a sign-in on a later read in the same process", async () => {

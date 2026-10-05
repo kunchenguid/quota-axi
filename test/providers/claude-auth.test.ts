@@ -2715,7 +2715,7 @@ describe("Claude credential-state reporting", () => {
       refreshCredentials: false,
     });
 
-    expect(execFileText).toHaveBeenCalledTimes(3);
+    expect(execFileText).toHaveBeenCalledTimes(4);
     expect(execFileText).toHaveBeenCalledWith(
       "security",
       [
@@ -2796,7 +2796,10 @@ describe("Claude credential-state reporting", () => {
         ([, args]) =>
           args[0] === "dump-keychain" ||
           args[0] === "list-keychains" ||
-          args.includes("-w"),
+          args.includes("-w") ||
+          (args[0] === "find-generic-password" &&
+            args.includes("-a") &&
+            args.includes("fixture-user")),
       ),
     ).toBe(true);
     expect(auth.sources).toContainEqual({
@@ -3020,7 +3023,7 @@ describe("Claude credential-state reporting", () => {
         attempts: Array<{ source: string; status: string }>;
       }>;
     };
-    expect(execFileText).toHaveBeenCalledTimes(3);
+    expect(execFileText).toHaveBeenCalledTimes(4);
     expect(execFileText).toHaveBeenCalledWith(
       "security",
       [

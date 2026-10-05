@@ -296,9 +296,19 @@ describe("Copilot composed credential boundaries", () => {
   });
 
   it("discards an in-flight account A value before HTTP when selection changes to B", async () => {
-    vi.mocked(execFileText).mockImplementationOnce(async () => {
-      select("account-b");
-      return tokenA;
+    let switched = false;
+    vi.mocked(execFileText).mockImplementation(async (_file, args) => {
+      if (args.includes("-w") && !switched) {
+        switched = true;
+        select("account-b");
+        return tokenA;
+      }
+      expect(args).toContain(`https://github.com:${fixture.login}`);
+      return args.includes("-w")
+        ? fixture.login === "account-a"
+          ? tokenA
+          : tokenB
+        : "synthetic metadata";
     });
     const result = await fetchQuota(optIn);
     expect(result.state.error).toBe("selected_account_changed");
@@ -322,7 +332,22 @@ describe("Copilot composed credential boundaries", () => {
         return response(status);
       });
       const output = await quotaCommand(oneShot, undefined);
-      expect(execFileText).toHaveBeenCalledExactlyOnceWith(
+      expect(execFileText).toHaveBeenCalledTimes(2);
+      expect(execFileText).toHaveBeenNthCalledWith(
+        1,
+        "/usr/bin/security",
+        [
+          "find-generic-password",
+          "-s",
+          "copilot-cli",
+          "-a",
+          "https://github.com:account-a",
+        ],
+        5_000,
+        16 * 1024,
+      );
+      expect(execFileText).toHaveBeenNthCalledWith(
+        2,
         "/usr/bin/security",
         [
           "find-generic-password",
@@ -356,7 +381,7 @@ describe("Copilot composed credential boundaries", () => {
         stderr: tokenA,
       });
       const output = await quotaCommand(oneShot, undefined);
-      expect(execFileText).toHaveBeenCalledOnce();
+      expect(execFileText).toHaveBeenCalledTimes(2);
       expect(providerFetch).not.toHaveBeenCalled();
       expect(output).not.toContain(tokenA);
       for (const file of storedFiles(fixture.home))

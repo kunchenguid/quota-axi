@@ -1,5 +1,12 @@
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -99,6 +106,105 @@ describe("cache paths", () => {
     expect(defaultAlice).not.toContain("alice");
     expect(defaultBob).not.toContain("bob");
     expect(suffixedAlice).not.toContain("abcdef12");
+  });
+});
+
+describe("keychain access grants", () => {
+  function grantDir() {
+    tempDir = mkdtempSync(join(tmpdir(), "quota-axi-grants-"));
+    return tempDir;
+  }
+
+  it("parses the mdat fingerprint in both timedate spellings", async () => {
+    const { parseKeychainItemFingerprint } =
+      await importFsWithHome("/Users/kun");
+
+    expect(
+      parseKeychainItemFingerprint(
+        'keychain: "/login.keychain-db"\nattributes:\n    "mdat"<timedate>=2026-10-04 22:24:12 +0000\n',
+      ),
+    ).toBe("2026-10-04 22:24:12 +0000");
+    expect(
+      parseKeychainItemFingerprint(
+        'attributes:\n    "mdat"<timedate>=0x32303236313030343232323431325A00  "20261004222412Z\\000"\n',
+      ),
+    ).toBe("20261004222412Z");
+    expect(
+      parseKeychainItemFingerprint("keychain item metadata\n"),
+    ).toBeUndefined();
+  });
+
+  it("round-trips a bound grant and reads a legacy marker as legacy", async () => {
+    const { readKeychainAccessGrant, writeKeychainAccessGrant } =
+      await importFsWithHome("/Users/kun");
+    const file = join(grantDir(), "marker");
+
+    writeKeychainAccessGrant(file, "20261004222412Z");
+    expect(readKeychainAccessGrant(file)).toEqual({
+      status: "bound",
+      itemFingerprint: "20261004222412Z",
+    });
+
+    writeFileSync(file, "granted\n", { mode: 0o600 });
+    expect(readKeychainAccessGrant(file)).toEqual({ status: "legacy" });
+
+    expect(readKeychainAccessGrant(join(grantDir(), "absent"))).toEqual({
+      status: "missing",
+    });
+  });
+
+  it("overwrites a stale binding but leaves an identical grant untouched", async () => {
+    const { readKeychainAccessGrant, writeKeychainAccessGrant } =
+      await importFsWithHome("/Users/kun");
+    const file = join(grantDir(), "marker");
+
+    writeKeychainAccessGrant(file, "first");
+    const before = statSync(file).mtimeNs;
+    writeKeychainAccessGrant(file, "first");
+    expect(statSync(file).mtimeNs).toBe(before);
+    writeKeychainAccessGrant(file, "second");
+    expect(readKeychainAccessGrant(file)).toEqual({
+      status: "bound",
+      itemFingerprint: "second",
+    });
+  });
+
+  it("permits a plain read only for a bound grant matching the fingerprint", async () => {
+    const { keychainAccessGrantPermitsRead } =
+      await importFsWithHome("/Users/kun");
+
+    expect(
+      keychainAccessGrantPermitsRead({ status: "missing" }, "fingerprint"),
+    ).toBe(false);
+    expect(
+      keychainAccessGrantPermitsRead({ status: "legacy" }, "fingerprint"),
+    ).toBe(false);
+    expect(
+      keychainAccessGrantPermitsRead(
+        { status: "bound", itemFingerprint: "fingerprint" },
+        "other",
+      ),
+    ).toBe(false);
+    expect(
+      keychainAccessGrantPermitsRead(
+        { status: "bound", itemFingerprint: "fingerprint" },
+        "fingerprint",
+      ),
+    ).toBe(true);
+    // No fingerprint obtainable (probe failed, or a store like Windows
+    // Credential Manager): any recorded grant keeps its historical meaning.
+    expect(
+      keychainAccessGrantPermitsRead({ status: "legacy" }, undefined),
+    ).toBe(true);
+    expect(
+      keychainAccessGrantPermitsRead(
+        { status: "bound", itemFingerprint: "fingerprint" },
+        undefined,
+      ),
+    ).toBe(true);
+    expect(
+      keychainAccessGrantPermitsRead({ status: "missing" }, undefined),
+    ).toBe(false);
   });
 });
 

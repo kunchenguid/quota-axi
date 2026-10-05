@@ -9,7 +9,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { resolveCopilotCliCredential } from "../../src/providers/copilot-cli-credential.js";
-import { copilotCliKeychainAccessMarkerPath } from "../../src/lib/fs.js";
+import {
+  copilotCliKeychainAccessMarkerPath,
+  type KeychainAccessGrant,
+} from "../../src/lib/fs.js";
 
 const options = { allowKeychainPrompt: true, refreshCredentials: false };
 const token = "gho_synthetic_fixture";
@@ -21,7 +24,7 @@ function fixture(data: unknown = { lastLoggedInUser: selected }) {
     homeDirectory: () => "/synthetic/home",
     readFile: vi.fn(async () => Buffer.from(JSON.stringify(data))),
     run: vi.fn(async () => token + "\n"),
-    hasGrant: vi.fn(() => false),
+    readGrant: vi.fn((): KeychainAccessGrant => ({ status: "missing" })),
     recordGrant: vi.fn(),
   };
 }
@@ -39,7 +42,22 @@ describe("Copilot CLI selected Keychain item", () => {
     });
     const result = await resolveCopilotCliCredential(options, false, deps);
     expect(result).toMatchObject({ status: "resolved", token });
-    expect(deps.run).toHaveBeenCalledExactlyOnceWith(
+    expect(deps.run).toHaveBeenCalledTimes(2);
+    expect(deps.run).toHaveBeenNthCalledWith(
+      1,
+      "/usr/bin/security",
+      [
+        "find-generic-password",
+        "-s",
+        "copilot-cli",
+        "-a",
+        "https://github.com:selected-user",
+      ],
+      5_000,
+      16 * 1024,
+    );
+    expect(deps.run).toHaveBeenNthCalledWith(
+      2,
       "/usr/bin/security",
       [
         "find-generic-password",
@@ -55,6 +73,7 @@ describe("Copilot CLI selected Keychain item", () => {
     expect(deps.recordGrant).toHaveBeenCalledWith(
       "/synthetic/home/.copilot/config.json",
       "https://github.com:selected-user",
+      undefined,
     );
     expect(JSON.stringify(result.report)).not.toContain(token);
   });
@@ -128,7 +147,7 @@ describe("Copilot CLI selected Keychain item", () => {
     expect(
       (await resolveCopilotCliCredential(options, false, deps)).report.error,
     ).toBe("keychain_item_unavailable");
-    expect(deps.run).toHaveBeenCalledTimes(1);
+    expect(deps.run).toHaveBeenCalledTimes(2);
     expect(deps.recordGrant).not.toHaveBeenCalled();
   });
   it("requires a fresh grant after an account switch and withholds an in-flight old value", async () => {
@@ -236,14 +255,22 @@ describe("Copilot CLI selected Keychain item", () => {
     expect(result.report.error).toBe("keychain_prompt_required");
     expect(deps.run.mock.calls[0][1]).not.toContain("-w");
     expect(deps.recordGrant).not.toHaveBeenCalled();
-    deps.hasGrant.mockReturnValue(true);
+    deps.readGrant.mockReturnValue({ status: "legacy" });
     deps.run.mockClear();
     await resolveCopilotCliCredential(options, true, deps);
     expect(deps.run.mock.calls[0][1]).not.toContain("-w");
   });
   it("reuses a scoped grant for quota only", async () => {
     const deps = fixture();
-    deps.hasGrant.mockReturnValue(true);
+    deps.readGrant.mockReturnValue({
+      status: "bound",
+      itemFingerprint: "2026-10-04 20:00:00 +0000",
+    });
+    deps.run.mockImplementation(async (_command: string, args: string[]) =>
+      args.includes("-w")
+        ? token + "\n"
+        : `attributes:\n    "mdat"<timedate>=2026-10-04 20:00:00 +0000\n`,
+    );
     expect(
       (
         await resolveCopilotCliCredential(
@@ -253,7 +280,7 @@ describe("Copilot CLI selected Keychain item", () => {
         )
       ).status,
     ).toBe("resolved");
-    expect(deps.hasGrant).toHaveBeenCalledWith(
+    expect(deps.readGrant).toHaveBeenCalledWith(
       "/synthetic/home/.copilot/config.json",
       "https://github.com:selected-user",
     );
@@ -314,4 +341,110 @@ describe("Copilot CLI selected Keychain item", () => {
       expect(deps.run).not.toHaveBeenCalled();
     },
   );
+
+  describe("grant binding to the keychain item", () => {
+    const FINGERPRINT_AT_GRANT = "2026-10-04 20:00:00 +0000";
+    const FINGERPRINT_AFTER_REWRITE = "2026-10-04 21:00:00 +0000";
+    const plainOptions = { ...options, allowKeychainPrompt: false };
+
+    const attributeProbe = (mdat: string): string =>
+      `attributes:\n    "mdat"<timedate>=${mdat}\n`;
+
+    function probingDeps(probeMdat: string) {
+      const deps: Partial<ReturnType<typeof fixture>> = fixture();
+      deps.run = vi.fn(async (_command: string, args: string[]) =>
+        args.includes("-w") ? token + "\n" : attributeProbe(probeMdat),
+      );
+      return deps;
+    }
+
+    it("reads on a plain call while the item matches the grant", async () => {
+      const deps = probingDeps(FINGERPRINT_AT_GRANT);
+      deps.readGrant = vi.fn(
+        (): KeychainAccessGrant => ({
+          status: "bound",
+          itemFingerprint: FINGERPRINT_AT_GRANT,
+        }),
+      );
+      const result = await resolveCopilotCliCredential(
+        plainOptions,
+        false,
+        deps,
+      );
+      expect(result.status).toBe("resolved");
+      expect(
+        deps.run.mock.calls.filter(([, args]) => args.includes("-w")),
+      ).toHaveLength(1);
+    });
+
+    it("reports keychain_prompt_required without a value read after the item changes", async () => {
+      const deps = probingDeps(FINGERPRINT_AFTER_REWRITE);
+      deps.readGrant = vi.fn(
+        (): KeychainAccessGrant => ({
+          status: "bound",
+          itemFingerprint: FINGERPRINT_AT_GRANT,
+        }),
+      );
+      const result = await resolveCopilotCliCredential(
+        plainOptions,
+        false,
+        deps,
+      );
+      expect(result.report.error).toBe("keychain_prompt_required");
+      expect(
+        deps.run.mock.calls.every(([, args]) => !args.includes("-w")),
+      ).toBe(true);
+      expect(deps.recordGrant).not.toHaveBeenCalled();
+    });
+
+    it("re-binds the grant to a changed item on --allow-keychain-prompt", async () => {
+      const root = mkdtempSync(join(tmpdir(), "copilot-rebind-synthetic-"));
+      const previous = process.env.XDG_CACHE_HOME;
+      process.env.XDG_CACHE_HOME = root;
+      try {
+        const deps = probingDeps(FINGERPRINT_AFTER_REWRITE);
+        delete deps.recordGrant;
+        expect(
+          (await resolveCopilotCliCredential(options, false, deps)).status,
+        ).toBe("resolved");
+        const files = readdirSync(join(root, "quota-axi"));
+        expect(files).toHaveLength(1);
+        expect(readFileSync(join(root, "quota-axi", files[0]), "utf8")).toBe(
+          `granted ${FINGERPRINT_AFTER_REWRITE}\n`,
+        );
+
+        const plain = probingDeps(FINGERPRINT_AFTER_REWRITE);
+        delete plain.readGrant;
+        delete plain.recordGrant;
+        const result = await resolveCopilotCliCredential(
+          plainOptions,
+          false,
+          plain,
+        );
+        expect(result.status).toBe("resolved");
+        expect(
+          plain.run.mock.calls.some(([, args]) => args.includes("-w")),
+        ).toBe(true);
+      } finally {
+        if (previous === undefined) delete process.env.XDG_CACHE_HOME;
+        else process.env.XDG_CACHE_HOME = previous;
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    it("never treats a legacy presence-only marker as consent when the probe yields a fingerprint", async () => {
+      const deps = probingDeps(FINGERPRINT_AT_GRANT);
+      deps.readGrant = vi.fn((): KeychainAccessGrant => ({ status: "legacy" }));
+      const result = await resolveCopilotCliCredential(
+        plainOptions,
+        false,
+        deps,
+      );
+      expect(result.report.error).toBe("keychain_prompt_required");
+      expect(
+        deps.run.mock.calls.every(([, args]) => !args.includes("-w")),
+      ).toBe(true);
+      expect(deps.recordGrant).not.toHaveBeenCalled();
+    });
+  });
 });

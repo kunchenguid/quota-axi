@@ -1,4 +1,10 @@
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -66,6 +72,8 @@ type KeychainMock = {
   bundle?: unknown;
   /** Raw string returned instead of a JSON bundle. */
   rawSecret?: string;
+  /** Attribute probe output; defaults to metadata without an mdat line. */
+  probeOutput?: string;
   error?: Error & { code?: number; killed?: boolean };
 };
 
@@ -79,7 +87,8 @@ function mockSecurity(mock: KeychainMock): { calls: ExecCall[] } {
       if (mock.error) throw mock.error;
       if (mock.bundle === undefined && mock.rawSecret === undefined)
         throw Object.assign(new Error("not found"), { code: 44 });
-      if (!args.includes("-w")) return "keychain item metadata\n";
+      if (!args.includes("-w"))
+        return mock.probeOutput ?? "keychain item metadata\n";
       return `${mock.rawSecret ?? JSON.stringify(mock.bundle)}\n`;
     }),
   }));
@@ -232,6 +241,121 @@ describe("Muse Keychain credential source", () => {
     });
     const report = await adapter.fetchQuota(OPTIONS);
     expect(report.state.status).toBe("fresh");
+  });
+
+  describe("grant binding to the keychain item", () => {
+    const FINGERPRINT_AT_GRANT = "2026-10-04 20:00:00 +0000";
+    const FINGERPRINT_AFTER_REWRITE = "2026-10-04 21:00:00 +0000";
+
+    const attributeProbe = (mdat: string): string =>
+      `keychain: "/fixture/login.keychain-db"\nversion: 512\nclass: "genp"\nattributes:\n    "mdat"<timedate>=${mdat}\n`;
+
+    async function keychainAdapterWith(
+      mock: KeychainMock,
+      fetchImpl?: unknown,
+    ): Promise<{ adapter: ProviderAdapter; calls: ExecCall[] }> {
+      return keychainAdapter(
+        mock,
+        fetchImpl ?? sequentialFetch([jsonResponse(KEY_RESPONSE)]),
+      );
+    }
+
+    async function writeGrantMarker(content: string): Promise<string> {
+      const { museKeychainAccessMarkerPath } =
+        await import("../../src/lib/fs.js");
+      const marker = museKeychainAccessMarkerPath(
+        "ai.meta.dev.credentials",
+        "meta",
+      );
+      mkdirSync(dirname(marker), { recursive: true });
+      writeFileSync(marker, content, { mode: 0o600 });
+      return marker;
+    }
+
+    it("reads on a plain call while the item matches the grant", async () => {
+      const marker = await writeGrantMarker(
+        `granted ${FINGERPRINT_AT_GRANT}\n`,
+      );
+      const fetchMock = sequentialFetch([jsonResponse(KEY_RESPONSE)]);
+      const { adapter, calls } = await keychainAdapterWith(
+        { bundle: bundle(), probeOutput: attributeProbe(FINGERPRINT_AT_GRANT) },
+        fetchMock,
+      );
+
+      const report = await adapter.fetchQuota(OPTIONS);
+
+      expect(report.state.status).toBe("fresh");
+      expect(calls.some((call) => call.args.includes("-w"))).toBe(true);
+      expect(readFileSync(marker, "utf8")).toBe(
+        `granted ${FINGERPRINT_AT_GRANT}\n`,
+      );
+    });
+
+    it("reports keychain_prompt_required without a value read after the item changes", async () => {
+      await writeGrantMarker(`granted ${FINGERPRINT_AT_GRANT}\n`);
+      const fetchMock = sequentialFetch([jsonResponse(KEY_RESPONSE)]);
+      const { adapter, calls } = await keychainAdapterWith(
+        {
+          bundle: bundle(),
+          probeOutput: attributeProbe(FINGERPRINT_AFTER_REWRITE),
+        },
+        fetchMock,
+      );
+
+      const report = await adapter.fetchQuota(OPTIONS);
+
+      expect(report.state.status).toBe("error");
+      expect(report.state.error).toBe("keychain_prompt_required");
+      expect(report.attempts).toEqual([
+        {
+          source: "cli-keychain",
+          status: "skipped",
+          error: "keychain_prompt_required",
+          credentialPresent: true,
+        },
+      ]);
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(calls.every((call) => !call.args.includes("-w"))).toBe(true);
+    });
+
+    it("re-binds the grant to a changed item on --allow-keychain-prompt", async () => {
+      const marker = await writeGrantMarker(
+        `granted ${FINGERPRINT_AT_GRANT}\n`,
+      );
+      const granted = await keychainAdapterWith({
+        bundle: bundle(),
+        probeOutput: attributeProbe(FINGERPRINT_AFTER_REWRITE),
+      });
+      const grantedReport = await granted.adapter.fetchQuota(PROMPT_OPTIONS);
+      expect(grantedReport.state.status).toBe("fresh");
+      expect(readFileSync(marker, "utf8")).toBe(
+        `granted ${FINGERPRINT_AFTER_REWRITE}\n`,
+      );
+
+      vi.resetModules();
+      const plain = await keychainAdapterWith({
+        bundle: bundle(),
+        probeOutput: attributeProbe(FINGERPRINT_AFTER_REWRITE),
+      });
+      const plainReport = await plain.adapter.fetchQuota(OPTIONS);
+      expect(plainReport.state.status).toBe("fresh");
+      expect(plain.calls.some((call) => call.args.includes("-w"))).toBe(true);
+    });
+
+    it("never treats a legacy presence-only marker as consent when the probe yields a fingerprint", async () => {
+      await writeGrantMarker("granted\n");
+      const fetchMock = sequentialFetch([jsonResponse(KEY_RESPONSE)]);
+      const { adapter, calls } = await keychainAdapterWith(
+        { bundle: bundle(), probeOutput: attributeProbe(FINGERPRINT_AT_GRANT) },
+        fetchMock,
+      );
+
+      const report = await adapter.fetchQuota(OPTIONS);
+
+      expect(report.state.error).toBe("keychain_prompt_required");
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(calls.every((call) => !call.args.includes("-w"))).toBe(true);
+    });
   });
 
   it("a missing item resolves absent, so a pointer-only auth.json still ends at sign-in required", async () => {

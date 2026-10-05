@@ -1,8 +1,15 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { annotateQuotaAdvice } from "../../src/advice.js";
+import { cursorCliKeychainAccessMarkerPath } from "../../src/lib/fs.js";
 import type { ProviderQuota } from "../../src/types.js";
 
 // Never a real credential: the suite must never depend on live Cursor auth.
@@ -83,6 +90,7 @@ function mockProcess(options: {
   sqliteError?: Error;
   keychainSecret?: string;
   keychainError?: Error & { code?: number; killed?: boolean };
+  keychainMetadata?: string;
 }): { calls: ExecCall[] } {
   const calls: ExecCall[] = [];
   vi.doMock("../../src/lib/process.js", () => ({
@@ -103,7 +111,8 @@ function mockProcess(options: {
       }
       if (command === "security") {
         if (options.keychainError) throw options.keychainError;
-        if (!args.includes("-w")) return "keychain item metadata\n";
+        if (!args.includes("-w"))
+          return options.keychainMetadata ?? "keychain item metadata\n";
         return `${options.keychainSecret ?? FAKE_KEYCHAIN_SECRET}\n`;
       }
       throw new Error(`unexpected command ${command}`);
@@ -181,6 +190,16 @@ describe("Cursor CLI keychain credential source", () => {
     expect(result.state.status).toBe("fresh");
     expect(result.account?.email).toBe("person@example.invalid");
     expect(securityCalls(calls)).toEqual([
+      {
+        command: "security",
+        args: [
+          "find-generic-password",
+          "-a",
+          "cursor-user",
+          "-s",
+          "cursor-access-token",
+        ],
+      },
       {
         command: "security",
         args: [
@@ -321,7 +340,157 @@ describe("Cursor CLI keychain credential source", () => {
     });
 
     expect(plain.state.status).toBe("fresh");
-    expect(securityCalls(calls)[0]?.args).toContain("-w");
+    expect(securityCalls(calls).some((call) => call.args.includes("-w"))).toBe(
+      true,
+    );
+  });
+
+  describe("grant binding to the keychain item", () => {
+    const FINGERPRINT_AT_GRANT = "2026-10-04 20:00:00 +0000";
+    const FINGERPRINT_AFTER_REWRITE = "2026-10-04 21:00:00 +0000";
+
+    const attributeProbe = (mdat: string): string =>
+      `keychain: "/fixture/login.keychain-db"\nversion: 512\nclass: "genp"\nattributes:\n    "mdat"<timedate>=${mdat}\n`;
+
+    function writeGrantMarker(content: string): void {
+      const marker = cursorCliKeychainAccessMarkerPath("user_abc123");
+      mkdirSync(dirname(marker), { recursive: true });
+      writeFileSync(marker, content, { mode: 0o600 });
+    }
+
+    function readGrantMarker(): string {
+      return readFileSync(
+        cursorCliKeychainAccessMarkerPath("user_abc123"),
+        "utf8",
+      );
+    }
+
+    async function fetchPlain() {
+      return withPlatform("darwin", async () => {
+        const { fetchQuota } = await import("../../src/providers/cursor.js");
+        return fetchQuota({
+          allowKeychainPrompt: false,
+          refreshCredentials: false,
+        });
+      });
+    }
+
+    it("reads on a plain call while the item matches the grant", async () => {
+      writeCliConfig();
+      writeGrantMarker(`granted ${FINGERPRINT_AT_GRANT}\n`);
+      const { calls } = mockProcess({
+        keychainMetadata: attributeProbe(FINGERPRINT_AT_GRANT),
+      });
+      stubCursorUsage();
+
+      const result = await fetchPlain();
+
+      expect(result.state.status).toBe("fresh");
+      expect(
+        securityCalls(calls).some((call) => call.args.includes("-w")),
+      ).toBe(true);
+    });
+
+    it("reports keychain_prompt_required without a value read after the item changes", async () => {
+      writeCliConfig();
+      writeGrantMarker(`granted ${FINGERPRINT_AT_GRANT}\n`);
+      const { calls } = mockProcess({
+        keychainMetadata: attributeProbe(FINGERPRINT_AFTER_REWRITE),
+      });
+      stubCursorUsage();
+
+      const result = await fetchPlain();
+
+      expect(result.attempts).toContainEqual({
+        source: "cli-keychain",
+        status: "skipped",
+        error: "keychain_prompt_required",
+        credentialPresent: true,
+      });
+      expect(
+        securityCalls(calls).every((call) => !call.args.includes("-w")),
+      ).toBe(true);
+    });
+
+    it("re-binds the grant to a changed item on --allow-keychain-prompt", async () => {
+      writeCliConfig();
+      writeGrantMarker(`granted ${FINGERPRINT_AT_GRANT}\n`);
+      mockProcess({
+        keychainMetadata: attributeProbe(FINGERPRINT_AFTER_REWRITE),
+      });
+      stubCursorUsage();
+
+      const granted = await withPlatform("darwin", async () => {
+        const { fetchQuota } = await import("../../src/providers/cursor.js");
+        return fetchQuota({
+          allowKeychainPrompt: true,
+          refreshCredentials: false,
+        });
+      });
+      expect(granted.state.status).toBe("fresh");
+      expect(readGrantMarker()).toBe(`granted ${FINGERPRINT_AFTER_REWRITE}\n`);
+
+      vi.resetModules();
+      const { calls } = mockProcess({
+        keychainMetadata: attributeProbe(FINGERPRINT_AFTER_REWRITE),
+      });
+      stubCursorUsage();
+      const plain = await fetchPlain();
+
+      expect(plain.state.status).toBe("fresh");
+      expect(
+        securityCalls(calls).some((call) => call.args.includes("-w")),
+      ).toBe(true);
+    });
+
+    it("never treats a legacy presence-only marker as consent when the probe yields a fingerprint", async () => {
+      writeCliConfig();
+      writeGrantMarker("granted\n");
+      const { calls } = mockProcess({
+        keychainMetadata: attributeProbe(FINGERPRINT_AT_GRANT),
+      });
+      stubCursorUsage();
+
+      const result = await fetchPlain();
+
+      expect(result.attempts).toContainEqual({
+        source: "cli-keychain",
+        status: "skipped",
+        error: "keychain_prompt_required",
+        credentialPresent: true,
+      });
+      expect(
+        securityCalls(calls).every((call) => !call.args.includes("-w")),
+      ).toBe(true);
+    });
+
+    it("keeps reading while the item never changes, exactly as a source without rewrites behaves today", async () => {
+      writeCliConfig();
+      writeGrantMarker(`granted ${FINGERPRINT_AT_GRANT}\n`);
+      mockProcess({ keychainMetadata: attributeProbe(FINGERPRINT_AT_GRANT) });
+      stubCursorUsage();
+      await withPlatform("darwin", async () => {
+        const { fetchQuota } = await import("../../src/providers/cursor.js");
+        return fetchQuota({
+          allowKeychainPrompt: true,
+          refreshCredentials: false,
+        });
+      });
+      expect(readGrantMarker()).toBe(`granted ${FINGERPRINT_AT_GRANT}\n`);
+
+      for (let read = 0; read < 2; read++) {
+        vi.resetModules();
+        const { calls } = mockProcess({
+          keychainMetadata: attributeProbe(FINGERPRINT_AT_GRANT),
+        });
+        stubCursorUsage();
+        const plain = await fetchPlain();
+        expect(plain.state.status).toBe("fresh");
+        expect(
+          securityCalls(calls).some((call) => call.args.includes("-w")),
+        ).toBe(true);
+      }
+    });
   });
 
   it("does not touch the keychain when no CLI sign-in is recorded", async () => {
@@ -598,8 +767,10 @@ describe("Cursor editor state.vscdb source (regression)", () => {
       });
       expect(annotated.providers[0]?.state.reason).toBeUndefined();
       expect(annotated.help).toBeUndefined();
-      expect(securityCalls(calls)).toHaveLength(1);
-      expect(securityCalls(calls)[0]?.args).toContain("-w");
+      expect(securityCalls(calls)).toHaveLength(2);
+      expect(
+        securityCalls(calls).some((call) => call.args.includes("-w")),
+      ).toBe(true);
       expect(JSON.stringify(result)).not.toContain(FAKE_KEYCHAIN_SECRET);
     },
   );

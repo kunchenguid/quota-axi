@@ -1,4 +1,10 @@
-import { mkdirSync, readFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  writeFileSync,
+} from "node:fs";
 import { open } from "node:fs/promises";
 import { traceInput } from "./input-trace.js";
 import { createHash } from "node:crypto";
@@ -142,6 +148,116 @@ export function museKeychainAccessMarkerPath(
 /** Path of Muse's key-endpoint attempt ledger, beside the quota cache. */
 export function museKeyReadLedgerPath(): string {
   return join(cacheDirPath(), "muse-key-reads.json");
+}
+
+/**
+ * The recorded grant for a Keychain value read. `bound` ties the grant to the
+ * item's non-secret modification fingerprint, observed when the granted value
+ * read succeeded; `legacy` is the presence-only marker earlier versions wrote,
+ * which names no item state.
+ */
+export type KeychainAccessGrant =
+  | { status: "bound"; itemFingerprint: string }
+  | { status: "legacy" }
+  | { status: "missing" };
+
+/**
+ * Extracts the item's non-secret modification date (`mdat`) from the attribute
+ * output of a `security find-generic-password` probe run without `-w`. Accepts
+ * both timedate spellings security emits: printable text and the
+ * hex-and-annotation form. Returns undefined when no fingerprint is present.
+ */
+export function parseKeychainItemFingerprint(
+  probeOutput: string,
+): string | undefined {
+  const match = /^\s*"mdat"<timedate>=[ \t]*(\S[^\n]*?)[ \t]*$/m.exec(
+    probeOutput,
+  );
+  if (!match) return undefined;
+  const raw = match[1]!;
+  const hex = /^0x((?:[0-9a-fA-F]{2})+)/.exec(raw)?.[1];
+  if (hex !== undefined) {
+    const decoded = Buffer.from(hex, "hex")
+      .toString("utf8")
+      .replace(/\0+$/g, "");
+    return decoded.length > 0 ? decoded : undefined;
+  }
+  return raw;
+}
+
+/** Reads the recorded grant, if any; an unreadable marker grants nothing. */
+export function readKeychainAccessGrant(file: string): KeychainAccessGrant {
+  traceInput(file);
+  return readKeychainAccessGrantUntraced(file);
+}
+
+function readKeychainAccessGrantUntraced(file: string): KeychainAccessGrant {
+  let text: string;
+  try {
+    text = readFileSync(file, "utf8");
+  } catch {
+    return { status: "missing" };
+  }
+  const content = text.trim();
+  if (content === "granted") return { status: "legacy" };
+  const prefix = "granted ";
+  if (content.startsWith(prefix)) {
+    const itemFingerprint = content.slice(prefix.length).trim();
+    if (itemFingerprint.length > 0) return { status: "bound", itemFingerprint };
+  }
+  return { status: "missing" };
+}
+
+/**
+ * Records the grant best-effort at `0600`, skipping the write when the file
+ * already records the same grant. An undefined fingerprint writes the legacy
+ * presence-only form, for stores that expose no item modification metadata.
+ */
+export function writeKeychainAccessGrant(
+  file: string,
+  itemFingerprint: string | undefined,
+): void {
+  try {
+    const existing = readKeychainAccessGrantUntraced(file);
+    if (itemFingerprint === undefined) {
+      if (existing.status === "legacy") return;
+    } else if (
+      existing.status === "bound" &&
+      existing.itemFingerprint === itemFingerprint
+    ) {
+      return;
+    }
+    ensurePrivateParent(file);
+    const temp = `${file}.${process.pid}.tmp`;
+    writeFileSync(
+      temp,
+      itemFingerprint === undefined
+        ? "granted\n"
+        : `granted ${itemFingerprint}\n`,
+      { mode: 0o600 },
+    );
+    chmodSync(temp, 0o600);
+    renameSync(temp, file);
+    chmodSync(file, 0o600);
+  } catch {
+    return;
+  }
+}
+
+/**
+ * Whether a recorded grant permits a plain-call value read. When the current
+ * probe supplies no item fingerprint (the probe failed, or the store exposes
+ * none, as on Windows), any recorded grant keeps its historical presence-only
+ * meaning; when a fingerprint is available, only a grant bound to that exact
+ * fingerprint authorizes, so an item rewritten since the grant is never read.
+ */
+export function keychainAccessGrantPermitsRead(
+  grant: KeychainAccessGrant,
+  itemFingerprint: string | undefined,
+): boolean {
+  if (grant.status === "missing") return false;
+  if (itemFingerprint === undefined) return true;
+  return grant.status === "bound" && grant.itemFingerprint === itemFingerprint;
 }
 
 function cacheDirPath(): string {

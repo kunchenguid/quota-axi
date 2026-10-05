@@ -1,14 +1,15 @@
-import { chmodSync, existsSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import {
   cursorCliKeychainAccessMarkerPath,
-  ensurePrivateParent,
+  keychainAccessGrantPermitsRead,
+  parseKeychainItemFingerprint,
+  readKeychainAccessGrant,
   readJsonFileResult,
+  writeKeychainAccessGrant,
 } from "../lib/fs.js";
 import { execFileText } from "../lib/process.js";
 import type { AuthSourceReport, ProviderOptions } from "../types.js";
-import { traceInput } from "../lib/input-trace.js";
 
 /**
  * The Cursor CLI (`cursor-agent`) keeps sign-in identity in a plain
@@ -98,13 +99,21 @@ export async function readCursorCliCredentialState(
   }
 
   const { identity } = identityResult;
-  if (
-    presenceOnly ||
-    !(options.allowKeychainPrompt || hasKeychainAccessMarker(identity))
-  ) {
-    return skippedKeychainState(path, await readKeychainItemPresence());
-  }
-  return readKeychainAccessToken(path, identity);
+  const probe = await probeKeychainItem();
+  const itemFingerprint =
+    probe.status === "present"
+      ? parseKeychainItemFingerprint(probe.output)
+      : undefined;
+  const granted =
+    options.allowKeychainPrompt ||
+    keychainAccessGrantPermitsRead(
+      readKeychainAccessGrant(
+        cursorCliKeychainAccessMarkerPath(markerKey(identity)),
+      ),
+      itemFingerprint,
+    );
+  if (presenceOnly || !granted) return skippedKeychainState(path, probe.status);
+  return readKeychainAccessToken(path, identity, itemFingerprint);
 }
 
 function readLinuxAuthFileCredentialState(
@@ -158,6 +167,7 @@ export function readCursorCliIdentity(path: string): IdentityResult {
 async function readKeychainAccessToken(
   path: string,
   identity: CursorCliIdentity,
+  itemFingerprint: string | undefined,
 ): Promise<CursorCliCredentialState> {
   let secret: string;
   try {
@@ -176,7 +186,7 @@ async function readKeychainAccessToken(
   } catch (error) {
     return keychainFailureState(path, error);
   }
-  writeKeychainAccessMarkerBestEffort(identity);
+  writeKeychainAccessGrantBestEffort(identity, itemFingerprint);
   const accessToken = secret.trim();
   if (accessToken.length === 0) {
     return {
@@ -203,10 +213,18 @@ async function readKeychainAccessToken(
   };
 }
 
-/** Presence check only: no `-w`, so it never prompts and never reads a value. */
-async function readKeychainItemPresence(): Promise<KeychainItemPresence> {
+/**
+ * The attribute-only probe: `find-generic-password` without `-w` never prompts
+ * and never reads a value, and its attribute output carries the item's `mdat`
+ * fingerprint the grant binds to.
+ */
+async function probeKeychainItem(): Promise<
+  | { status: "present"; output: string }
+  | { status: "missing" }
+  | { status: "unknown" }
+> {
   try {
-    await execFileText(
+    const output = await execFileText(
       "security",
       [
         "find-generic-password",
@@ -217,9 +235,11 @@ async function readKeychainItemPresence(): Promise<KeychainItemPresence> {
       ],
       KEYCHAIN_PRESENCE_TIMEOUT_MS,
     );
-    return "present";
+    return { status: "present", output };
   } catch (error) {
-    return isKeychainItemNotFound(error) ? "missing" : "unknown";
+    return isKeychainItemNotFound(error)
+      ? { status: "missing" }
+      : { status: "unknown" };
   }
 }
 
@@ -287,27 +307,14 @@ function missingState(
   };
 }
 
-function hasKeychainAccessMarker(identity: CursorCliIdentity): boolean {
-  const marker = cursorCliKeychainAccessMarkerPath(markerKey(identity));
-  traceInput(marker);
-  return existsSync(marker);
-}
-
-function writeKeychainAccessMarkerBestEffort(
+function writeKeychainAccessGrantBestEffort(
   identity: CursorCliIdentity,
+  itemFingerprint: string | undefined,
 ): void {
-  try {
-    const file = cursorCliKeychainAccessMarkerPath(markerKey(identity));
-    if (existsSync(file)) return;
-    ensurePrivateParent(file);
-    const temp = `${file}.${process.pid}.tmp`;
-    writeFileSync(temp, "granted\n", { mode: 0o600 });
-    chmodSync(temp, 0o600);
-    renameSync(temp, file);
-    chmodSync(file, 0o600);
-  } catch {
-    return;
-  }
+  writeKeychainAccessGrant(
+    cursorCliKeychainAccessMarkerPath(markerKey(identity)),
+    itemFingerprint,
+  );
 }
 
 /** Scopes the grant to the signed-in CLI account, never storing its raw value. */

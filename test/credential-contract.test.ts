@@ -549,7 +549,7 @@ describe("credential source contract", { timeout: 30_000 }, () => {
                 platform: "win32",
                 environment: {},
                 homeDirectory: () => tempDir,
-                hasGrant: () => true,
+                readGrant: () => ({ status: "legacy" }),
                 readWindows: async () => ({ status: "unavailable", reason }),
               }),
           };
