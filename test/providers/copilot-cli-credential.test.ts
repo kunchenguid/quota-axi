@@ -263,6 +263,22 @@ describe("Copilot CLI selected Keychain item", () => {
     await resolveCopilotCliCredential(options, true, deps);
     expect(deps.run.mock.calls[0][1]).not.toContain("-w");
   });
+  it("preserves a no-grant probe timeout as keychain_prompt_timeout", async () => {
+    const deps = fixture();
+    deps.run.mockRejectedValue(
+      Object.assign(new Error("killed"), { killed: true }),
+    );
+
+    const result = await resolveCopilotCliCredential(
+      { ...options, allowKeychainPrompt: false },
+      false,
+      deps,
+    );
+
+    expect(result.report.error).toBe("keychain_prompt_timeout");
+    expect(deps.run).toHaveBeenCalledTimes(1);
+    expect(deps.run.mock.calls[0][1]).not.toContain("-w");
+  });
   it("reuses a scoped grant for quota only", async () => {
     const deps = fixture();
     deps.readGrant.mockReturnValue({

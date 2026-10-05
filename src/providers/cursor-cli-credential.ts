@@ -104,15 +104,14 @@ export async function readCursorCliCredentialState(
     probe.status === "present"
       ? parseKeychainItemFingerprint(probe.output)
       : undefined;
+  const grant = readKeychainAccessGrant(
+    cursorCliKeychainAccessMarkerPath(markerKey(identity)),
+  );
   const granted =
     options.allowKeychainPrompt ||
-    keychainAccessGrantPermitsRead(
-      readKeychainAccessGrant(
-        cursorCliKeychainAccessMarkerPath(markerKey(identity)),
-      ),
-      itemFingerprint,
-    );
-  if (presenceOnly || !granted) return skippedKeychainState(path, probe.status);
+    keychainAccessGrantPermitsRead(grant, itemFingerprint);
+  if (presenceOnly || !granted)
+    return skippedKeychainState(path, probe.status, grant.status !== "missing");
   return readKeychainAccessToken(path, identity, itemFingerprint);
 }
 
@@ -246,6 +245,7 @@ async function probeKeychainItem(): Promise<
 function skippedKeychainState(
   path: string,
   presence: KeychainItemPresence,
+  hasGrant: boolean,
 ): CursorCliCredentialState {
   if (presence === "missing") return missingState(path);
   return {
@@ -254,7 +254,10 @@ function skippedKeychainState(
       source: CURSOR_CLI_SOURCE,
       path,
       status: "skipped",
-      error: "keychain_prompt_required",
+      error:
+        presence === "present" || hasGrant
+          ? "keychain_prompt_required"
+          : "keychain_presence_check_failed",
       credentialPresent: true,
     },
   };

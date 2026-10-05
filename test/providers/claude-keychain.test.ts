@@ -1077,8 +1077,32 @@ describe("Claude macOS Keychain discovery", () => {
     });
 
     expect(chunks.join("")).toContain(
-      "claude,all,degraded_source,keychain · keychain_prompt_required,none",
+      "claude,all,degraded_source,keychain · keychain_presence_check_failed,none",
     );
+  });
+
+  it("preserves a no-grant attribute timeout as a presence-check failure", async () => {
+    execFileText.mockRejectedValue(
+      Object.assign(new Error("timed out"), {
+        killed: true,
+        signal: "SIGTERM",
+      }),
+    );
+    const { inspectAuth } = await import("../../src/providers/claude.js");
+
+    const auth = await inspectAuth({
+      ...options,
+      allowKeychainPrompt: false,
+    });
+
+    expect(auth.sources).toContainEqual({
+      source: "keychain",
+      status: "skipped",
+      error: "keychain_presence_check_failed",
+    });
+    expect(
+      execFileText.mock.calls.every(([, args]) => !args.includes("-w")),
+    ).toBe(true);
   });
 
   it.each([

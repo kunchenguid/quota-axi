@@ -1195,7 +1195,7 @@ async function readCredentialStates(
         await readKeychainCredentialState(locations, itemFingerprint),
       );
     } else if (attributePresence !== "present") {
-      states.push(keychainPresenceState("unknown"));
+      states.push(keychainPresenceState("present"));
     } else {
       states.push(await readSkippedKeychainCredentialState(locations));
     }
@@ -1233,24 +1233,16 @@ function keychainPresenceState(
       source: { source: "keychain", status: "missing" },
     };
   }
-  if (presence === "unknown") {
-    return {
-      status: "skipped",
-      source: {
-        source: "keychain",
-        status: "skipped",
-        error: "keychain_prompt_required",
-        credentialPresent: true,
-      },
-    };
-  }
   return {
     status: "skipped",
     degraded: true,
     source: {
       source: "keychain",
       status: "skipped",
-      error: KEYCHAIN_UNREACHABLE_ERROR,
+      error:
+        presence === "unreachable"
+          ? KEYCHAIN_UNREACHABLE_ERROR
+          : "keychain_presence_check_failed",
     },
   };
 }

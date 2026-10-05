@@ -189,6 +189,18 @@ describe("Muse Keychain credential source", () => {
     expect(report.state.authStatus).toBeUndefined();
   });
 
+  it("preserves a no-grant probe timeout as a presence-check failure", async () => {
+    const { adapter, calls } = await keychainAdapter({
+      bundle: bundle(),
+      error: Object.assign(new Error("killed"), { killed: true }),
+    });
+
+    const report = await adapter.fetchQuota(OPTIONS);
+
+    expect(report.state.error).toBe("keychain_presence_check_failed");
+    expect(calls.every((call) => !call.args.includes("-w"))).toBe(true);
+  });
+
   it("with --allow-keychain-prompt it resolves the bundle's access token and answers quota", async () => {
     const fetchMock = sequentialFetch([jsonResponse(KEY_RESPONSE)]);
     const { adapter, calls } = await keychainAdapter(

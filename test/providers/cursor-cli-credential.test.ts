@@ -282,6 +282,31 @@ describe("Cursor CLI keychain credential source", () => {
     expect(result.state.status).toBe("auth_required");
   });
 
+  it("preserves a no-grant probe timeout as a presence-check failure", async () => {
+    writeCliConfig();
+    const { calls } = mockProcess({
+      keychainError: Object.assign(new Error("killed"), { killed: true }),
+    });
+
+    const result = await withPlatform("darwin", async () => {
+      const { fetchQuota } = await import("../../src/providers/cursor.js");
+      return fetchQuota({
+        allowKeychainPrompt: false,
+        refreshCredentials: false,
+      });
+    });
+
+    expect(result.attempts).toContainEqual({
+      source: "cli-keychain",
+      status: "skipped",
+      error: "keychain_presence_check_failed",
+      credentialPresent: true,
+    });
+    expect(
+      securityCalls(calls).every((call) => !call.args.includes("-w")),
+    ).toBe(true);
+  });
+
   it.each([
     ["sqlite3 is unavailable", { sqliteAvailable: false }],
     ["the editor database read fails", { sqliteError: new Error("locked") }],

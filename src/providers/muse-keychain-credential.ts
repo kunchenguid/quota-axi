@@ -111,21 +111,19 @@ export async function readMuseKeychainCredential(
     probe.status === "present"
       ? parseKeychainItemFingerprint(probe.output)
       : undefined;
+  const grant = readKeychainAccessGrant(
+    museKeychainAccessMarkerPath(MUSE_KEYCHAIN_SERVICE, MUSE_KEYCHAIN_ACCOUNT),
+  );
   const granted =
     options.allowKeychainPrompt ||
-    keychainAccessGrantPermitsRead(
-      readKeychainAccessGrant(
-        museKeychainAccessMarkerPath(
-          MUSE_KEYCHAIN_SERVICE,
-          MUSE_KEYCHAIN_ACCOUNT,
-        ),
-      ),
-      itemFingerprint,
-    );
+    keychainAccessGrantPermitsRead(grant, itemFingerprint);
   if (presenceOnly || !granted) {
     return {
       status: "skipped",
-      error: "keychain_prompt_required",
+      error:
+        probe.status === "present" || grant.status !== "missing"
+          ? "keychain_prompt_required"
+          : "keychain_presence_check_failed",
     };
   }
 

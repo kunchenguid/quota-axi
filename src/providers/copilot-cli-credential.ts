@@ -201,6 +201,22 @@ export async function resolveCopilotCliCredential(
       error,
       error === COPILOT_CLI_KEYCHAIN_PROMPT_REQUIRED,
     );
+  const probeFailureState = (
+    error: unknown,
+  ): CopilotCliCredentialResolution => {
+    const failure = error as {
+      killed?: boolean;
+      signal?: unknown;
+      code?: unknown;
+    } | null;
+    if (failure?.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER")
+      return state("structurally_invalid", "credential_format_unsupported");
+    if (failure?.killed || failure?.signal)
+      return state("read_error", "keychain_prompt_timeout");
+    if (code(error) === 44)
+      return state("read_error", "keychain_item_unavailable");
+    return state("read_error", "keychain_presence_check_failed");
+  };
   if (resolve(home) !== resolve(defaultHome))
     return state("unsupported", "copilot_home_unsupported");
   // Presence only: never inspect an environment credential's value. A blank
@@ -259,14 +275,15 @@ export async function resolveCopilotCliCredential(
     (deps.platform === "win32"
       ? grant.status !== "missing"
       : keychainAccessGrantPermitsRead(grant, itemFingerprint));
+  const ungrantedProbeFailure =
+    deps.platform !== "win32" &&
+    grant.status === "missing" &&
+    probeError !== undefined
+      ? probeFailureState(probeError)
+      : undefined;
   if (presenceOnly === "silence") {
     if (consented) return state("unsupported", "value_read_deferred");
-    if (
-      probeError !== undefined &&
-      code(probeError) === 44 &&
-      grant.status === "missing"
-    )
-      return state("read_error", "keychain_item_unavailable");
+    if (ungrantedProbeFailure) return ungrantedProbeFailure;
     return state("unsupported", COPILOT_CLI_KEYCHAIN_PROMPT_REQUIRED);
   }
   const valueAllowed = presenceOnly === false && consented;
@@ -290,12 +307,7 @@ export async function resolveCopilotCliCredential(
     value = result.value;
   } else {
     if (!valueAllowed) {
-      if (
-        probeError !== undefined &&
-        code(probeError) === 44 &&
-        grant.status === "missing"
-      )
-        return state("read_error", "keychain_item_unavailable");
+      if (ungrantedProbeFailure) return ungrantedProbeFailure;
       return state("unsupported", COPILOT_CLI_KEYCHAIN_PROMPT_REQUIRED);
     }
     try {
