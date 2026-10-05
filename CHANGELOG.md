@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.1.58](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.57...quota-axi-v0.1.58) (2026-10-05)
+
+
+### Features
+
+* **providers:** add read-only Higgsfield credits and jobs provider ([#302](https://github.com/kunchenguid/quota-axi/issues/302)) ([a642b5d](https://github.com/kunchenguid/quota-axi/commit/a642b5d047633b1bde4178863317bcd81931fa28))
+
+
+### Bug Fixes
+
+* **higgsfield:** expect unknown runway for a resetless full grant ([#312](https://github.com/kunchenguid/quota-axi/issues/312)) ([15ace96](https://github.com/kunchenguid/quota-axi/commit/15ace96f3b0bd14cefbbd3f45cd4946a81553b7c))
+* **pace:** fail closed to unknown runway when no bound reports a reset ([#307](https://github.com/kunchenguid/quota-axi/issues/307)) ([36dd1ef](https://github.com/kunchenguid/quota-axi/commit/36dd1ef17a80200743b0e626e3d29dad8064c766))
+* **providers:** enable Antigravity cycle-average pace signals ([#308](https://github.com/kunchenguid/quota-axi/issues/308)) ([6f27edf](https://github.com/kunchenguid/quota-axi/commit/6f27edfde64d39bd8e58e639869eeb96b2156ab7))
+
 ## [0.1.57](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.56...quota-axi-v0.1.57) (2026-10-04)
 
 
