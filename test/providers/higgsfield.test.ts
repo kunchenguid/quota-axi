@@ -996,7 +996,7 @@ describe("Higgsfield CLI quota provider", () => {
       status: "known",
       effectivePercentRemaining: 100,
       boundedBy: ["credits"],
-      runway: { status: "through_reset" },
+      runway: { status: "unknown", unmeasurableWindowIds: ["credits"] },
     });
 
     expect(
