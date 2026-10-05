@@ -61,6 +61,7 @@ type Dependencies = {
     path: string,
     account: string,
     itemFingerprint: string | undefined,
+    valueReadStartedAt: number,
   ) => void;
 };
 
@@ -90,10 +91,11 @@ function dependencies(overrides: Partial<Dependencies>): Dependencies {
       readKeychainAccessGrant(
         copilotCliKeychainAccessMarkerPath(path, SERVICE, account),
       ),
-    recordGrant: (path, account, itemFingerprint) =>
+    recordGrant: (path, account, itemFingerprint, valueReadStartedAt) =>
       writeKeychainAccessGrant(
         copilotCliKeychainAccessMarkerPath(path, SERVICE, account),
         itemFingerprint,
+        valueReadStartedAt,
       ),
     ...overrides,
   };
@@ -288,6 +290,7 @@ export async function resolveCopilotCliCredential(
   }
   const valueAllowed = presenceOnly === false && consented;
   let value: string;
+  const valueReadStartedAt = Date.now();
   if (deps.platform === "win32") {
     // CredRead returns the secret along with metadata. Until consent is
     // established, inspect only the CLI's selected identity, never the vault.
@@ -352,7 +355,12 @@ export async function resolveCopilotCliCredential(
     return state("read_error", COPILOT_CLI_UNCONFIRMED_ACCOUNT);
   }
   if (deps.platform === "win32" || itemFingerprint !== undefined)
-    deps.recordGrant(path, identity.account, itemFingerprint);
+    deps.recordGrant(
+      path,
+      identity.account,
+      itemFingerprint,
+      valueReadStartedAt,
+    );
   return {
     status: "resolved",
     token,

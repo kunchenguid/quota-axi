@@ -156,7 +156,11 @@ describe("keychain access grants", () => {
       await importFsWithHome("/Users/kun");
     const file = join(grantDir(), "marker");
 
-    writeKeychainAccessGrant(file, "20261004222412Z");
+    writeKeychainAccessGrant(
+      file,
+      "20261004222412Z",
+      Date.parse("2026-10-04T22:24:13Z"),
+    );
     expect(readKeychainAccessGrant(file)).toEqual({
       status: "bound",
       itemFingerprint: "20261004222412Z",
@@ -175,15 +179,28 @@ describe("keychain access grants", () => {
       await importFsWithHome("/Users/kun");
     const file = join(grantDir(), "marker");
 
-    writeKeychainAccessGrant(file, "first");
+    const readTime = Date.parse("2026-10-04T22:24:13Z");
+    writeKeychainAccessGrant(file, "20261004222410Z", readTime);
     const before = statSync(file).mtimeNs;
-    writeKeychainAccessGrant(file, "first");
+    writeKeychainAccessGrant(file, "20261004222410Z", readTime);
     expect(statSync(file).mtimeNs).toBe(before);
-    writeKeychainAccessGrant(file, "second");
+    writeKeychainAccessGrant(file, "20261004222411Z", readTime);
     expect(readKeychainAccessGrant(file)).toEqual({
       status: "bound",
-      itemFingerprint: "second",
+      itemFingerprint: "20261004222411Z",
     });
+  });
+
+  it("records no binding when mdat is from the value read's second", async () => {
+    const { readKeychainAccessGrant, writeKeychainAccessGrant } =
+      await importFsWithHome("/Users/kun");
+    const file = join(grantDir(), "marker");
+    const readTime = Date.parse("2026-10-04T22:24:12.500Z");
+
+    writeKeychainAccessGrant(file, "20261004222411Z", readTime);
+    writeKeychainAccessGrant(file, "20261004222412Z", readTime);
+
+    expect(readKeychainAccessGrant(file)).toEqual({ status: "missing" });
   });
 
   it("permits a plain read only for a bound grant matching the fingerprint", async () => {

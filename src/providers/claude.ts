@@ -1414,6 +1414,7 @@ async function readKeychainCredentialState(
   itemFingerprint: string | undefined,
 ): Promise<CredentialState> {
   let blob: string;
+  const valueReadStartedAt = Date.now();
   try {
     blob = await execFileText(
       "security",
@@ -1432,7 +1433,11 @@ async function readKeychainCredentialState(
     return keychainFailureState(error);
   }
   if (itemFingerprint !== undefined)
-    writeKeychainAccessGrant(locations.keychainAccessMarker, itemFingerprint);
+    writeKeychainAccessGrant(
+      locations.keychainAccessMarker,
+      itemFingerprint,
+      valueReadStartedAt,
+    );
   try {
     return extractCredentialState(
       { status: "success", value: JSON.parse(blob) },

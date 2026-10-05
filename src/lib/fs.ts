@@ -3,6 +3,7 @@ import {
   mkdirSync,
   readFileSync,
   renameSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { open } from "node:fs/promises";
@@ -209,14 +210,25 @@ function readKeychainAccessGrantUntraced(file: string): KeychainAccessGrant {
 
 /**
  * Records the grant best-effort at `0600`, skipping the write when the file
- * already records the same grant. An undefined fingerprint writes the legacy
- * presence-only form, for stores that expose no item modification metadata.
+ * already records the same grant. A whole-second fingerprint from the value
+ * read's second or later is ambiguous, so it removes any prior binding instead.
+ * An undefined fingerprint writes the legacy presence-only form, for stores
+ * that expose no item modification metadata.
  */
 export function writeKeychainAccessGrant(
   file: string,
   itemFingerprint: string | undefined,
+  valueReadStartedAt: number,
 ): void {
   try {
+    if (
+      itemFingerprint !== undefined &&
+      keychainFingerprintEpochSecond(itemFingerprint) >=
+        Math.floor(valueReadStartedAt / 1000)
+    ) {
+      unlinkSync(file);
+      return;
+    }
     const existing = readKeychainAccessGrantUntraced(file);
     if (itemFingerprint === undefined) {
       if (existing.status === "legacy") return;
@@ -241,6 +253,34 @@ export function writeKeychainAccessGrant(
   } catch {
     return;
   }
+}
+
+function keychainFingerprintEpochSecond(itemFingerprint: string): number {
+  const generalized = /^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})Z$/.exec(
+    itemFingerprint,
+  );
+  if (generalized) {
+    return Math.floor(
+      Date.UTC(
+        Number(generalized[1]),
+        Number(generalized[2]) - 1,
+        Number(generalized[3]),
+        Number(generalized[4]),
+        Number(generalized[5]),
+        Number(generalized[6]),
+      ) / 1000,
+    );
+  }
+  const printable =
+    /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}) ([+-])(\d{2})(\d{2})$/.exec(
+      itemFingerprint,
+    );
+  if (!printable) return Number.NaN;
+  return Math.floor(
+    Date.parse(
+      `${printable[1]}T${printable[2]}${printable[3]}${printable[4]}:${printable[5]}`,
+    ) / 1000,
+  );
 }
 
 /**

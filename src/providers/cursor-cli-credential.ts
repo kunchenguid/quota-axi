@@ -169,6 +169,7 @@ async function readKeychainAccessToken(
   itemFingerprint: string | undefined,
 ): Promise<CursorCliCredentialState> {
   let secret: string;
+  const valueReadStartedAt = Date.now();
   try {
     secret = await execFileText(
       "security",
@@ -185,7 +186,11 @@ async function readKeychainAccessToken(
   } catch (error) {
     return keychainFailureState(path, error);
   }
-  writeKeychainAccessGrantBestEffort(identity, itemFingerprint);
+  writeKeychainAccessGrantBestEffort(
+    identity,
+    itemFingerprint,
+    valueReadStartedAt,
+  );
   const accessToken = secret.trim();
   if (accessToken.length === 0) {
     return {
@@ -310,11 +315,13 @@ function missingState(
 function writeKeychainAccessGrantBestEffort(
   identity: CursorCliIdentity,
   itemFingerprint: string | undefined,
+  valueReadStartedAt: number,
 ): void {
   if (itemFingerprint === undefined) return;
   writeKeychainAccessGrant(
     cursorCliKeychainAccessMarkerPath(markerKey(identity)),
     itemFingerprint,
+    valueReadStartedAt,
   );
 }
 

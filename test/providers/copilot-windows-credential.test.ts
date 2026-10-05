@@ -56,6 +56,7 @@ describe("Copilot Windows selected secure credential", () => {
       "/synthetic/home/.copilot/config.json",
       account,
       undefined,
+      expect.any(Number),
     );
     expect(JSON.stringify(result.report)).not.toContain(token);
   });

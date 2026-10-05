@@ -128,6 +128,7 @@ export async function readMuseKeychainCredential(
   }
 
   let secret: string;
+  const valueReadStartedAt = Date.now();
   try {
     secret = await execFileText(
       "security",
@@ -159,6 +160,7 @@ export async function readMuseKeychainCredential(
         MUSE_KEYCHAIN_ACCOUNT,
       ),
       itemFingerprint,
+      valueReadStartedAt,
     );
 
   let bundle: unknown;
