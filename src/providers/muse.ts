@@ -244,7 +244,8 @@ export function createMuseAuthFileSource(
 /**
  * The macOS Keychain item the Muse CLI's `storage: "keychain"` records point
  * to. Presence is free; the value read is gated by `--allow-keychain-prompt`
- * or the recorded grant marker, like the Claude and Cursor CLI sources.
+ * or a recorded grant bound to the item's current fingerprint, like the
+ * Claude and Cursor CLI sources.
  */
 export function createMuseKeychainSource(): MuseCredentialSource {
   return {

@@ -24,9 +24,9 @@ import type { ProviderOptions } from "../types.js";
  * is checked for presence only. The value read follows the same
  * `--allow-keychain-prompt` gate as the Claude and Cursor CLI Keychain
  * sources: a plain quota call checks item presence only (no `-w`, never
- * prompts), and a successful value read records a non-secret grant bound to
- * the item's modification fingerprint, so a later plain quota call reuses the
- * grant only while the item is unchanged. `auth` passes
+ * prompts), and a successful value read with an unambiguous fingerprint
+ * records a non-secret grant bound to that fingerprint, so a later plain quota
+ * call reuses the grant only while the item is unchanged. `auth` passes
  * `presenceOnly` when the flag is off so that leftover marker never triggers
  * a value read: the report only emits status, and the bundle carries the
  * minted API key.
