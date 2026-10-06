@@ -288,6 +288,14 @@ describe("quota cache", () => {
     const codex = quota("codex", 20);
     codex.windows = [
       {
+        id: "spend_control",
+        label: "workspace credit cap",
+        kind: "credits",
+        percentUsed: 0.15191666666666667,
+        percentRemaining: 99.84808333333334,
+        resetsAt: "2026-11-01T00:00:00.000Z",
+      },
+      {
         id: "five_hour",
         label: "session",
         kind: "session",
@@ -315,6 +323,7 @@ describe("quota cache", () => {
     writeCachedProviders([codex]);
 
     expect(readCachedProvider("codex")?.windows.map(({ id }) => id)).toEqual([
+      "spend_control",
       "five_hour",
       "weekly",
       "weekly_2",

@@ -979,6 +979,16 @@ function hasInvalidCodexWindowIdentities(windows: QuotaWindow[]): boolean {
 function codexWindowBaseIdentity(window: QuotaWindow): string | undefined {
   const id = window.id.replace(/_[2-9]\d*$/, "");
   if (window.windowSeconds === undefined) {
+    if (
+      matchesWindowIdentity(
+        window,
+        id,
+        "spend_control",
+        "workspace credit cap",
+        "credits",
+      )
+    )
+      return id;
     if (matchesWindowIdentity(window, id, "five_hour", "session", "session"))
       return id;
     if (matchesWindowIdentity(window, id, "weekly", "week", "weekly"))
