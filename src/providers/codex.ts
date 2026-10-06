@@ -1179,19 +1179,25 @@ function spendControlWindows(raw: unknown): QuotaWindow[] {
         ? Date.now() + resetAfter * 1000
         : undefined;
   const reset = resetMs === undefined ? undefined : new Date(resetMs);
-  return [
-    {
-      id: "spend_control",
-      label: "workspace credit cap",
-      kind: "credits",
-      percentUsed: control?.reached === true ? 100 : percentUsed,
-      percentRemaining: control?.reached === true ? 0 : percentRemaining,
-      resetsAt:
-        reset && Number.isFinite(reset.getTime())
-          ? reset.toISOString()
-          : undefined,
-    },
-  ];
+  const creditUnit = stringValue(cap.unit) ?? undefined;
+  const window: QuotaWindow = {
+    id: "spend_control",
+    label: "workspace credit cap",
+    kind: "credits",
+    percentUsed: control?.reached === true ? 100 : percentUsed,
+    percentRemaining: control?.reached === true ? 0 : percentRemaining,
+    resetsAt:
+      reset && Number.isFinite(reset.getTime())
+        ? reset.toISOString()
+        : undefined,
+  };
+  if (usableTotals) {
+    window.limitCredits = limit;
+    window.usedCredits = used;
+    window.remainingCredits = remaining;
+    if (creditUnit !== undefined) window.creditUnit = creditUnit;
+  }
+  return [window];
 }
 
 function resolveRateLimitContainer(

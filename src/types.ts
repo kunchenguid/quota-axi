@@ -214,6 +214,11 @@ export type QuotaWindow = {
   windowSeconds?: number;
   spentUsd?: number;
   limitUsd?: number;
+  /** Credit-unit amounts for non-USD credit caps (e.g. workspace spend controls). */
+  limitCredits?: number;
+  usedCredits?: number;
+  remainingCredits?: number;
+  creditUnit?: string;
   /** Cycle-average pace relative to generatedAt. Not cached. */
   pace?: QuotaPace;
 };

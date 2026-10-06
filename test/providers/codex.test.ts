@@ -28,6 +28,10 @@ describe("Codex quota parsing", () => {
         percentUsed: (109.38 / 72000) * 100,
         percentRemaining: (71890.62 / 72000) * 100,
         resetsAt: "2026-11-01T00:00:00.000Z",
+        limitCredits: 72000,
+        usedCredits: 109.38,
+        remainingCredits: 71890.62,
+        creditUnit: "credit",
       },
     ]);
   });

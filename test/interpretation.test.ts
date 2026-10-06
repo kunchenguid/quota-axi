@@ -626,6 +626,79 @@ describe("quota semantics", () => {
     expect(model?.boundConflict).toBeUndefined();
   });
 
+  it("reports a Codex Business spend-control cap as a known all_models scope", () => {
+    const result = withQuotaSemantics(
+      provider("codex", [
+        window("spend_control", "credits", 99.85, {
+          resetsAt: "2026-11-01T00:00:00.000Z",
+          limitCredits: 72000,
+          usedCredits: 109.38,
+          remainingCredits: 71890.62,
+          creditUnit: "credit",
+        }),
+      ]),
+      GENERATED_AT,
+    );
+
+    expect(result.quotaSemantics?.status).toBe("known");
+    expect(result.quotaSemantics?.effectiveAvailability).toContainEqual(
+      expect.objectContaining({
+        scope: "all_models",
+        status: "known",
+        effectivePercentRemaining: 99.85,
+        boundedBy: ["spend_control"],
+        limitingWindowIds: ["spend_control"],
+      }),
+    );
+  });
+
+  it("marks a Codex Business spend-control cap exhausted when reached is true", () => {
+    const result = withQuotaSemantics(
+      provider("codex", [
+        window("spend_control", "credits", 0, {
+          resetsAt: "2026-11-01T00:00:00.000Z",
+          limitCredits: 72000,
+          usedCredits: 72000,
+          remainingCredits: 0,
+          creditUnit: "credit",
+        }),
+      ]),
+      GENERATED_AT,
+    );
+
+    expect(result.quotaSemantics?.effectiveAvailability).toContainEqual(
+      expect.objectContaining({
+        scope: "all_models",
+        status: "known",
+        effectivePercentRemaining: 0,
+      }),
+    );
+  });
+
+  it("retains plan windows alongside a Codex spend-control cap", () => {
+    const result = withQuotaSemantics(
+      provider("codex", [
+        window("five_hour", "session", 80, {
+          resetsAt: offsetFromGeneratedAt(9_000),
+        }),
+        window("spend_control", "credits", 99, {
+          resetsAt: "2026-11-01T00:00:00.000Z",
+        }),
+      ]),
+      GENERATED_AT,
+    );
+
+    expect(result.quotaSemantics?.status).toBe("known");
+    const all = result.quotaSemantics?.effectiveAvailability.find(
+      (s) => s.scope === "all_models",
+    );
+    expect(all).toMatchObject({
+      status: "known",
+      effectivePercentRemaining: 80,
+      boundedBy: expect.arrayContaining(["five_hour", "spend_control"]),
+    });
+  });
+
   // The bound conflict is opted into per provider. Claude's account 5h/7d bound
   // is enforced across models, so the same reading shape must still resolve to
   // the account's zero rather than degrading a correct verdict into `unknown`.
