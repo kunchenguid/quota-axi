@@ -649,6 +649,8 @@ Claude credential failures without a usable access token preserve the precise `c
 | Required  | `id`, `label`, `kind`                                                                                      |
 | Optional  | Percentages, `shareOf`, `startsAt`, reset fields, `windowSeconds`, credit-spend fields, and derived `pace` |
 
+Credit-spend fields include `spentUsd` and `limitUsd` for USD spend windows, and `limitCredits`, `usedCredits`, `remainingCredits`, and `creditUnit` for non-USD credit caps. The latter four appear only on the Codex `spend_control` window: `limitCredits` is the workspace-imposed cap in vendor credits, `usedCredits` is the amount consumed, `remainingCredits` is the amount left, and `creditUnit` is the vendor-supplied unit name (e.g. `credit`).
+
 Do not interpret a model window's percentage in isolation. `quotaSemantics.effectiveAvailability` reports the effective percentage for each understood scope, the complete `boundedBy` window set used to compute it, the currently limiting window IDs, an effective `runway` aggregate, and a per-scope [`selection`](#per-scope-selection-signal) signal. `all_models` applies to any model without a more specific scope; whether a matching `model:*` scope also includes account bounds is provider-specific. Grok uses the analogous `all_products` and `product:*` scopes.
 
 A model-specific `scope` names the model window or the shared model prefix when multiple period windows describe one Codex or MiniMax model.
