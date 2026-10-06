@@ -583,7 +583,14 @@ function codexSemantics(
   windows: QuotaWindow[],
   generatedAt: string,
 ): QuotaSemantics {
-  const account = windows.filter(isCodexAccountWindow);
+  const spendControl = windows.filter(({ id }) => id === "spend_control");
+  // Included allowance and credit-funded usage are separate vendor budgets.
+  // The cap is an account bound only for a reading with no other quota evidence;
+  // its relationship to rate-limit windows is not a simultaneous minimum.
+  const account =
+    spendControl.length === windows.length
+      ? spendControl
+      : windows.filter(isCodexAccountWindow);
   const codeReview = windows.filter(
     ({ id }) =>
       id.startsWith("code_review_five_hour") ||
@@ -598,7 +605,12 @@ function codexSemantics(
     scoped.push(window);
     models.set(scope, scoped);
   }
-  const recognized = new Set([...account, ...codeReview, ...modelWindows]);
+  const recognized = new Set([
+    ...account,
+    ...spendControl,
+    ...codeReview,
+    ...modelWindows,
+  ]);
   const unresolved = windows.filter((window) => !recognized.has(window));
   if (unresolved.length > 0) {
     return partialSemantics(
@@ -630,7 +642,7 @@ function codexSemantics(
   }
   return knownSemantics(
     effectiveAvailability,
-    "Codex base account windows are applied as a bound to every model scope, including scopes that have named model windows of their own, so that model's effective remaining percentage is the minimum across the named windows. A named model window is an additional, separately metered budget the vendor reports alongside the base limit, so a base window at zero while that model's own windows all still report allowance is a contradiction between the two readings and is published as a bound conflict rather than as the model's exhaustion. Code-review windows describe a separate workload and are not included in model availability.",
+    "Codex base account windows are applied as a bound to every model scope, including scopes that have named model windows of their own, so that model's effective remaining percentage is the minimum across the named windows. A named model window is an additional, separately metered budget the vendor reports alongside the base limit, so a base window at zero while that model's own windows all still report allowance is a contradiction between the two readings and is published as a bound conflict rather than as the model's exhaustion. Code-review windows describe a separate workload and are not included in model availability. A workspace credit cap bounds all_models only when it is the sole quota evidence. Alongside rate-limit windows it stays published separately and does not enter effective availability; no combined allowance is inferred.",
   );
 }
 
@@ -942,8 +954,7 @@ function availability(
 function isCodexAccountWindow(window: QuotaWindow): boolean {
   return (
     /^(?:five_hour|weekly)(?:_\d+)?$/.test(window.id) ||
-    window.id.startsWith("window:") ||
-    window.id === "spend_control"
+    window.id.startsWith("window:")
   );
 }
 
