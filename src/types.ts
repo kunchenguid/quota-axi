@@ -43,6 +43,7 @@ export const PROVIDER_IDS = [
 
 export type ProviderSource =
   | "oauth"
+  | "cpa"
   | "pi:openai-codex"
   | `pi:openai-codex-${string}`
   | "cli-rpc"

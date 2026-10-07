@@ -54,6 +54,8 @@ export const CREDENTIAL_SELECTION_ENV = [
   "WINDSURF_API_KEY",
   "WINDSURF_API_SERVER_URL",
   "META_API_KEY",
+  "CPA_BASE_URL",
+  "CPA_MANAGEMENT_KEY",
 ] as const;
 
 /**

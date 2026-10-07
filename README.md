@@ -66,6 +66,12 @@ Default TOON is decision-shaped: `quota[]` carries one fully populated row per m
 
 `--json` emits the normalized model instead. Derivation inputs are demoted to `--full`; see [Output tiers](#output-tiers).
 
+### CLIProxyAPI pools
+
+When `CPA_BASE_URL` and `CPA_MANAGEMENT_KEY` are set, Claude and Codex quota is read from a local CLIProxyAPI management endpoint. The same values may be placed in `~/.config/cpa-management.env` (keep that file mode `600`). quota-axi lists `/v0/management/auth-files` and asks `/v0/management/api-call` to read each vendor quota endpoint with the proxy account's credential substituted for `$TOKEN$`; raw tokens never enter quota-axi. CPA owns refresh and quota-axi never downloads auth files or refreshes these credentials.
+
+The normal quota and `--json` surfaces publish one pooled row per configured provider. `--full` adds one account row for every CPA auth file and keeps failed accounts visible, so a disabled or rejected account is reported rather than hidden. If these variables are absent, Claude and Codex keep their existing local credential discovery.
+
 ```sh
 $ quota-axi --provider claude --json
 {

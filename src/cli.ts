@@ -17,6 +17,7 @@ commands[3]:
 output:
   Default TOON reports local quota evidence. Providers that are not set up are omitted and counted in one help line; --full and an explicit --provider list them. --json keeps every provider and sets notSetUp true on the absent ones. models is a deterministic data join; --sort runway is explicit opt-in ordering. --tui renders a live human terminal report instead (r refreshes, q quits); providers that are not set up fold into one line that a or --all expands.
   Repeated --provider flags accumulate in first-seen order: --provider zai --provider codex equals --provider zai,codex.
+  When CPA_BASE_URL and CPA_MANAGEMENT_KEY are configured (or present in ~/.config/cpa-management.env), Claude and Codex are read from CLIProxyAPI's account pool. Default output uses the pooled row; --full includes one row per CPA account.
 notes:
   Every quota read, including each --tui refresh, may delegate an expired session's renewal to the vendor CLI that owns it. --no-credential-refresh disables delegated credential refresh; auth is always read-only.
   {"tui":{"show":"used"}} in ~/.config/quota-axi/config.json (or $XDG_CONFIG_HOME/quota-axi/config.json) makes --tui draw what each window has used instead of what is left; it never changes TOON or JSON.

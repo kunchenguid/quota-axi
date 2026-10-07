@@ -17,6 +17,7 @@ import { museAdapter } from "./muse.js";
 import { deepseekAdapter } from "./deepseek.js";
 import { openrouterAdapter } from "./openrouter.js";
 import { zaiAdapter } from "./zai.js";
+import { createCpaAdapter, readCpaConfig } from "./cpa.js";
 import {
   PROVIDER_IDS,
   type ProviderAdapter,
@@ -24,8 +25,12 @@ import {
 } from "../types.js";
 
 export const PROVIDERS: Record<ProviderId, ProviderAdapter> = {
-  claude: claudeAdapter,
-  codex: codexAdapter,
+  claude: readCpaConfig()
+    ? createCpaAdapter("claude", claudeAdapter)
+    : claudeAdapter,
+  codex: readCpaConfig()
+    ? createCpaAdapter("codex", codexAdapter)
+    : codexAdapter,
   cursor: cursorAdapter,
   copilot: copilotAdapter,
   grok: grokAdapter,
