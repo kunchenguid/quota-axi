@@ -503,13 +503,13 @@ A row covering one credential lists just its own key. A consumer that holds a cr
 A provider without account discovery lists `accountKeys: ["default"]`, the same literal as its schema 6 `accountKey` filler. A discovering provider that stays on one row, such as two Pi keys for one account with no native login, keeps schema 5 and no `accountKey`, and its `accountKeys` starts with that lane's key.
 Membership mirrors quota-axi's own grouping exactly: every key the provider grouped into the row, and no other. That grouping relies on stored account identity when no fresh live reading confirms it, so a fold is published as applied even when a later live reading names a different account.
 `accountKeys` is a quota JSON field. Auth still lists each discovered lane on its own, because a fold that depends on the quota reading has not happened there. TOON does not add a column: its flat blocks already name the published lane by `accountKey`, and the membership list is the JSON account row's join field.
-The shared account collector puts each discovered lane's key first; an adapter adds folded keys to its quota reading's `ProviderQuota.accountKeys`, including keys learned during the read. Codex is the only adapter that discovers accounts today; other providers report `default`. The list itself is not cached; Codex reconstructs a stale row's originating key from the cached credential source.
+The shared account collector puts each discovered lane's key first; an adapter adds folded keys to its quota reading's `ProviderQuota.accountKeys`, including keys learned during the read. Codex and, when [CLIProxyAPI](#cliproxyapi-pools) is configured, Claude are the adapters that discover accounts today; other providers report `default`. The list itself is not cached; Codex reconstructs a stale row's originating key from the cached credential source.
 Every flat TOON block adds `accountKey` immediately after `provider`, and the quota/exhaustion/attention join becomes **`provider` + `accountKey` + `scope`**.
 Models and model sort ties use **`provider` + `accountKey` + `id`**.
 Models `unmatchedWindowIds` entries gain the same key, so an unmapped window reads `provider/accountKey/scope` instead of `provider/scope`; the key keeps two accounts of one provider from reporting the same unmapped window indistinguishably.
 Declaration order remains non-preferential; quotas are never combined across accounts, and never summed across coalesced routes of one subscription.
 
-A Codex Pi lane's key is the auth.json provider id (`openai-codex`, `openai-codex-work`); the native Codex lane's key is `codex-home`.
+A Codex Pi lane's key is the auth.json provider id (`openai-codex`, `openai-codex-work`); the native Codex lane's key is `codex-home`. A CLIProxyAPI account's key is `cpa-` plus its lowercased `auth_index`, and a failed auth-file listing is reported under `cpa`.
 It is stable across refreshes and discovery order and contains no token, email, or path, and it also names the account's cache slot.
 A lone lane keeps the legacy keyless slot, which the single selected account uses too, so the snapshot itself records the stored ChatGPT account id of the credential that produced it (see [Cache](#cache)).
 A key the report cannot publish (malformed or repeated) costs only its own lane: the lanes with usable keys still expand, so one unreadable entry never hides the accounts beside it.
@@ -882,7 +882,7 @@ Auth source entries can include `credentialPresent` when a source is not genuine
 | Muse | The Muse CLI's `${XDG_CONFIG_HOME:-~/.config}/muse/auth.json` `providers.meta.access_token` first, then - on macOS, where the file records `storage: "keychain"` - the login Keychain item `ai.meta.dev.credentials` / `meta`, then `$META_API_KEY`, each only when it holds a usable literal credential. Only the access token is read: an `auth.json` sibling `refresh_token` and the Keychain bundle's minted `api_key` are dropped while parsed, a bundle `refresh_token` is checked for presence only. The Keychain value read follows the `--allow-keychain-prompt` gate (presence checks never prompt). `quota-axi auth` never fetches the bundle unless that flag is on, even when a grant marker exists. Neither store carries a stored expiry quota-axi reads, so each is probed in declared order. |
 | Higgsfield | The local `higgsfield` CLI (`higgsfield account status --json`, plus read-only `account transactions` and `generate list`). quota-axi never reads Higgsfield credential files, never runs `higgsfield auth token`, and never publishes the account email the status payload includes. |
 
-The Claude and Codex rows describe default discovery; [`--profile-only`](#profile-only-quota-reads) narrows each to the one selected credential file.
+The Claude and Codex rows describe default discovery when [CLIProxyAPI](#cliproxyapi-pools) is not configured or lists no auth file for that provider; [`--profile-only`](#profile-only-quota-reads) narrows each to the one selected credential file.
 
 ### Provider notes
 
@@ -1114,7 +1114,7 @@ Providers with no established non-interactive rotation command stay read-only on
 
 ### Safety guarantees
 
-- Quota and auth HTTP requests go only to first-party provider usage, quota, billing, entitlement, or read-only credential-liveness endpoints with the user's local credentials; quota-axi's direct Antigravity requests stay on 127.0.0.1 loopback.
+- Quota and auth HTTP requests go only to first-party provider usage, quota, billing, entitlement, or read-only credential-liveness endpoints with the user's local credentials; quota-axi's direct Antigravity requests stay on 127.0.0.1 loopback. The one exception is a configured [CLIProxyAPI](#cliproxyapi-pools) management endpoint, which receives only `CPA_MANAGEMENT_KEY` and relays the Claude and Codex usage reads with its own account credentials.
 - The user-initiated `update` command is the only outbound non-provider network surface, and it is not part of quota measurement.
 - It sends credential values only to the first-party provider request they authenticate.
 - It never prints, logs, or caches credential values.
