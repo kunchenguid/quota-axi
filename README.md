@@ -66,12 +66,6 @@ Default TOON is decision-shaped: `quota[]` carries one fully populated row per m
 
 `--json` emits the normalized model instead. Derivation inputs are demoted to `--full`; see [Output tiers](#output-tiers).
 
-### CLIProxyAPI pools
-
-When `CPA_BASE_URL` and `CPA_MANAGEMENT_KEY` are set, Claude and Codex quota is read from a local CLIProxyAPI management endpoint. The same values may be placed in `~/.config/cpa-management.env` (or `$XDG_CONFIG_HOME/cpa-management.env`; keep that file mode `600`). quota-axi lists `/v0/management/auth-files` and asks `/v0/management/api-call` to read each vendor quota endpoint with the proxy account's credential substituted for `$TOKEN$`; raw tokens never enter quota-axi. CPA owns refresh and quota-axi never downloads auth files or refreshes these credentials.
-
-Every surface reports one row per CPA `claude` or `codex` auth file, carrying only the windows that account's vendor returned; quota-axi never averages or merges the pool into a synthetic row. Rows that share a verified account identity coalesce as described under [Multiple accounts](#multiple-accounts). A disabled or rejected account stays visible with a fixed error code. An account CPA marks errored or unavailable, as it does during a quota cooldown, is still read from its vendor, and falls back to its own stale snapshot when that read fails. An unreachable management endpoint is reported rather than hidden. If CPA is not configured, or lists no auth file for a provider, Claude and Codex keep their existing local credential discovery. Each CPA account row is cached in its own slot under an opaque SHA-256 of the CPA base URL and that account's `auth_index`, never under the local Claude or Codex credential context, so `--max-age` reuse and a transient failure's stale fallback only ever serve that proxy account's own windows. When the whole-provider reading cannot be reused, for example because one pool account is disabled or failing, `--max-age` still reuses each healthy account's own young snapshot after one auth-file listing, while the failed account stays reported as failed; an account the vendor rejects (Claude 401, Codex 401 or 403) retires its snapshot.
-
 ```sh
 $ quota-axi --provider claude --json
 {
@@ -249,6 +243,12 @@ help[1]:
 ```
 
 This `auth` example's header count and the rows below it come from one capture and are internally consistent (the count equals the rows shown); a live `auth` run varies by the providers and credential stores actually present on the machine.
+
+### CLIProxyAPI pools
+
+When `CPA_BASE_URL` and `CPA_MANAGEMENT_KEY` are set, Claude and Codex quota is read from a local CLIProxyAPI management endpoint. The same values may be placed in `~/.config/cpa-management.env` (or `$XDG_CONFIG_HOME/cpa-management.env`; keep that file mode `600`). quota-axi lists `/v0/management/auth-files` and asks `/v0/management/api-call` to read each vendor quota endpoint with the proxy account's credential substituted for `$TOKEN$`; raw tokens never enter quota-axi. CPA owns refresh and quota-axi never downloads auth files or refreshes these credentials.
+
+Every surface reports one row per CPA `claude` or `codex` auth file, carrying only the windows that account's vendor returned; quota-axi never averages or merges the pool into a synthetic row. Rows that share a verified account identity coalesce as described under [Multiple accounts](#multiple-accounts). A disabled or rejected account stays visible with a fixed error code. An account CPA marks errored or unavailable, as it does during a quota cooldown, is still read from its vendor, and falls back to its own stale snapshot when that read fails. An unreachable management endpoint is reported rather than hidden. If CPA is not configured, or lists no auth file for a provider, Claude and Codex keep their existing local credential discovery. Each CPA account row is cached in its own slot under an opaque SHA-256 of the CPA base URL and that account's `auth_index`, never under the local Claude or Codex credential context, so `--max-age` reuse and a transient failure's stale fallback only ever serve that proxy account's own windows. When the whole-provider reading cannot be reused, for example because one pool account is disabled or failing, `--max-age` still reuses each healthy account's own young snapshot after one auth-file listing, while the failed account stays reported as failed; an account the vendor rejects (Claude 401, Codex 401 or 403) retires its snapshot.
 
 ## Install
 
