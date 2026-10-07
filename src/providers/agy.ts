@@ -92,13 +92,16 @@ export type AgyProbeRuntime = {
 /**
  * The only two outcomes that show Antigravity genuinely absent: no `agy` on
  * PATH, and the process list was checked and contains no Antigravity process.
- * Every other skip - an installed CLI that timed out, a discovered process
- * whose endpoint is not accessible, or an unsupported platform where process
- * discovery is unavailable - leaves presence unknown, so the human report
- * keeps Antigravity in view.
+ * A process-list check that is unavailable still counts as absence for the
+ * provider's established not-set-up presentation, but is never sufficient to
+ * retire a cached reading. Every other skip - an installed CLI that timed out
+ * or a discovered process whose endpoint is not accessible - leaves presence
+ * unknown, so the human report keeps Antigravity in view.
  */
 export const AGY_CLI_NOT_INSTALLED = "agy CLI is not installed";
 export const AGY_NOT_RUNNING = "Antigravity/agy is not running";
+export const AGY_PROCESS_DISCOVERY_UNAVAILABLE =
+  "Antigravity process discovery unavailable";
 /** Process list was checked but no usable endpoint was found; process may be running without an accessible port. */
 export const AGY_NO_ENDPOINT = "Antigravity/agy has no accessible endpoint";
 
@@ -107,7 +110,8 @@ export const agyAdapter: ProviderAdapter = {
   label: "Antigravity",
   isUncertainSkip: (attempt) =>
     attempt.error !== AGY_CLI_NOT_INSTALLED &&
-    attempt.error !== AGY_NOT_RUNNING,
+    attempt.error !== AGY_NOT_RUNNING &&
+    attempt.error !== AGY_PROCESS_DISCOVERY_UNAVAILABLE,
   fetchQuota,
   inspectAuth,
 };
@@ -453,13 +457,15 @@ async function fetchLoopbackQuota(runtime: AgyProbeRuntime): Promise<{
   refreshedAt: string;
 }> {
   const deadline = createProbeDeadline();
-  const { endpoints, confirmedNoProcess } = await discoverAgyEndpoints(
-    runtime,
-    deadline,
-  );
+  const { endpoints, confirmedNoProcess, processDiscoveryUnavailable } =
+    await discoverAgyEndpoints(runtime, deadline);
   if (endpoints.length === 0)
     throw new AgyUnavailableError(
-      confirmedNoProcess ? AGY_NOT_RUNNING : AGY_NO_ENDPOINT,
+      confirmedNoProcess
+        ? AGY_NOT_RUNNING
+        : processDiscoveryUnavailable
+          ? AGY_PROCESS_DISCOVERY_UNAVAILABLE
+          : AGY_NO_ENDPOINT,
     );
 
   let lastError: unknown;
@@ -484,11 +490,13 @@ async function discoverAgyEndpoints(
 ): Promise<{
   endpoints: AgyConnectionEndpoint[];
   confirmedNoProcess: boolean;
+  processDiscoveryUnavailable: boolean;
 }> {
   const processListText = await readProcessList(runtime, deadline);
   const processes =
     processListText !== null ? processInfosFromPs(processListText) : [];
   const confirmedNoProcess = processListText !== null && processes.length === 0;
+  const processDiscoveryUnavailable = processListText === null;
   const endpoints: AgyConnectionEndpoint[] = [];
   let discoveryError: unknown;
   for (const processInfo of processes) {
@@ -558,7 +566,11 @@ async function discoverAgyEndpoints(
     }
   }
   if (endpoints.length === 0 && discoveryError) throw discoveryError;
-  return { endpoints: endpoints.sort(compareEndpoints), confirmedNoProcess };
+  return {
+    endpoints: endpoints.sort(compareEndpoints),
+    confirmedNoProcess,
+    processDiscoveryUnavailable,
+  };
 }
 
 function endpointFor(

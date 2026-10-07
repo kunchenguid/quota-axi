@@ -22,6 +22,7 @@ import {
 } from "../../src/lib/process.js";
 import { readCachedProvider, writeCachedProviders } from "../../src/cache.js";
 import {
+  agyAdapter,
   fetchQuota,
   fetchQuotaWithRuntime,
   inspectAuthWithRuntime,
@@ -34,6 +35,7 @@ import {
   type AgyConnectionEndpoint,
   type AgyProbeRuntime,
 } from "../../src/providers/agy.js";
+import { providerPresence } from "../../src/lib/source-attempts.js";
 import { withQuotaSemantics } from "../../src/interpretation.js";
 import type { ProviderQuota } from "../../src/types.js";
 
@@ -581,6 +583,7 @@ describe("Antigravity provider", () => {
       expect(result.state.status).toBe("unavailable");
       expect(result.state.error).toBe("Antigravity/agy is not running");
       expect(result.source).not.toBe("cache");
+      expect(providerPresence(result, agyAdapter)).toBe("absent");
       expect(readCachedProvider("agy")).toBeUndefined();
     },
   );
@@ -588,26 +591,33 @@ describe("Antigravity provider", () => {
   it.skipIf(process.platform !== "win32")(
     "keeps cached quota when Windows cannot confirm Antigravity absence",
     async () => {
-      writeCachedProviders([cachedAgyQuota()]);
+      const runtime = runtimeWith({ ps: "" });
+      const withoutCache = await fetchQuotaWithRuntime(runtime);
 
-      const result = await fetchQuotaWithRuntime(runtimeWith({ ps: "" }));
+      expect(providerPresence(withoutCache, agyAdapter)).toBe("absent");
+
+      writeCachedProviders([cachedAgyQuota()]);
+      const result = await fetchQuotaWithRuntime(runtime);
 
       expect(result.state.status).toBe("stale");
       expect(result.source).toBe("cache");
+      expect(providerPresence(result, agyAdapter)).toBe("absent");
       expect(readCachedProvider("agy")).toBeDefined();
     },
   );
 
-  it("preserves cache when agy process is running but has no accessible port", async () => {
-    writeCachedProviders([cachedAgyQuota()]);
+  it("reports attention and preserves cache when agy process is running but has no accessible port", async () => {
+    const runtime = runtimeWith({
+      ps: "123 /Users/test/.local/bin/agy\n",
+      lsof: "",
+      cliQuota: Object.assign(new Error("agy missing"), { code: "ENOENT" }),
+    });
+    const withoutCache = await fetchQuotaWithRuntime(runtime);
 
-    const result = await fetchQuotaWithRuntime(
-      runtimeWith({
-        ps: "123 /Users/test/.local/bin/agy\n",
-        lsof: "",
-        cliQuota: Object.assign(new Error("agy missing"), { code: "ENOENT" }),
-      }),
-    );
+    expect(providerPresence(withoutCache, agyAdapter)).toBe("attention");
+
+    writeCachedProviders([cachedAgyQuota()]);
+    const result = await fetchQuotaWithRuntime(runtime);
 
     expect(result.state.status).toBe("stale");
     expect(result.source).toBe("cache");
