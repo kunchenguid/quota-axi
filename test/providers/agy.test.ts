@@ -571,17 +571,15 @@ describe("Antigravity provider", () => {
     expect(result.state.error).toBe("Antigravity quota summary malformed");
   });
 
-  it("uses stale cache when the live loopback source is unavailable", async () => {
+  it("does not serve cached quota when Antigravity is uninstalled", async () => {
     writeCachedProviders([cachedAgyQuota()]);
 
     const result = await fetchQuotaWithRuntime(runtimeWith({ ps: "" }));
 
-    expect(result.state.status).toBe("stale");
-    expect(result.source).toBe("cache");
-    expect(result.windows[0]).toMatchObject({
-      id: "gemini_5h",
-      percentRemaining: 88,
-    });
+    expect(result.state.status).toBe("unavailable");
+    expect(result.state.error).toBe("Antigravity/agy is not running");
+    expect(result.source).not.toBe("cache");
+    expect(readCachedProvider("agy")).toBeUndefined();
   });
 
   it("preserves authentication failures and retires stale cache", async () => {
@@ -982,13 +980,16 @@ exec node "$0-cli.js" "$@"
     ]);
   });
 
-  it("still serves stale cache when both loopback and the CLI are unavailable", async () => {
+  it("keeps stale cache for an installed but stopped Antigravity CLI", async () => {
     writeCachedProviders([cachedAgyQuota()]);
 
     const result = await fetchQuotaWithRuntime(
       runtimeWith({
         ps: "",
-        cliQuota: Object.assign(new Error("agy missing"), { code: "ENOENT" }),
+        agyPath: "/Users/test/.local/bin/agy",
+        cliQuota: Object.assign(new Error("agy timed out"), {
+          code: "ETIMEDOUT",
+        }),
       }),
     );
 
@@ -998,6 +999,7 @@ exec node "$0-cli.js" "$@"
       id: "gemini_5h",
       percentRemaining: 88,
     });
+    expect(readCachedProvider("agy")).toBeDefined();
   });
 
   it("does not treat a missing agy CLI as remaining quota", async () => {

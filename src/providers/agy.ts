@@ -3,7 +3,11 @@ import * as http from "node:http";
 import * as https from "node:https";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
-import { deleteCachedProvider, readCachedProvider } from "../cache.js";
+import {
+  deleteCachedProvider,
+  readCachedProvider,
+  retireCachedSlot,
+} from "../cache.js";
 import {
   currentUserProcessListArgs,
   execFileText,
@@ -176,7 +180,13 @@ export async function fetchQuotaWithRuntime(
   }
 
   const finalError = errorMessage(finalFailure);
-  if (staleEligibleFailure(finalFailure)) {
+  if (isDefinitelyUninstalled(attempts)) {
+    try {
+      retireCachedSlot("agy");
+    } catch {
+      // Uninstall evidence stands when the cache cannot be rewritten.
+    }
+  } else if (staleEligibleFailure(finalFailure)) {
     const cached = readCachedProvider("agy");
     const stale = cached
       ? staleFromCache(cached, finalError, sourceNames(attempts), attempts)
@@ -1177,6 +1187,25 @@ function failureRank(error: unknown): number {
   if (status === "error") return 2;
   if (status === "unavailable") return 1;
   return 0;
+}
+
+/**
+ * `agy` has no credential or configuration state that this provider reads.
+ * Absence is therefore established only when both independent discovery paths
+ * agree: PATH contains no CLI and the current user's process list contains no
+ * Antigravity endpoint. A stopped installation with an installed CLI does not
+ * meet this test and continues to use the stale fallback.
+ */
+function isDefinitelyUninstalled(attempts: readonly SourceAttempt[]): boolean {
+  return (
+    attempts.length === 2 &&
+    attempts[0]?.source === "cli" &&
+    attempts[0]?.status === "skipped" &&
+    attempts[0]?.error === AGY_CLI_NOT_INSTALLED &&
+    attempts[1]?.source === "loopback" &&
+    attempts[1]?.status === "skipped" &&
+    attempts[1]?.error === AGY_NOT_RUNNING
+  );
 }
 
 function staleEligibleFailure(error: unknown): boolean {
