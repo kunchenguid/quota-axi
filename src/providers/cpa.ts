@@ -294,14 +294,14 @@ async function readUpstream(
       };
     }
     let normalized;
-    let lastStatus = 0;
+    let rejectedEverywhere = true;
     for (const url of CODEX_USAGE_URLS) {
       const response = await upstreamCall(config, authIndex, url, {
         authorization: "Bearer $TOKEN$",
         accept: "application/json",
       });
-      lastStatus = response.status;
       if (response.status === 401 || response.status === 403) continue;
+      rejectedEverywhere = false;
       if (response.status === 429)
         return failed(
           provider,
@@ -317,12 +317,8 @@ async function readUpstream(
       return failed(
         provider,
         key,
-        lastStatus === 401 || lastStatus === 403
-          ? "cpa_account_rejected"
-          : "cpa_quota_unavailable",
-        lastStatus === 401 || lastStatus === 403
-          ? "auth_required"
-          : "unavailable",
+        rejectedEverywhere ? "cpa_account_rejected" : "cpa_quota_unavailable",
+        rejectedEverywhere ? "auth_required" : "unavailable",
         account,
       );
     }

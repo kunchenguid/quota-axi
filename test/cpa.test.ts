@@ -449,6 +449,41 @@ describe("CLIProxyAPI provider", () => {
     ).toEqual(["/backend-api/wham/usage", "/backend-api/codex/usage"]);
   });
 
+  it("keeps a Codex account's snapshot when one endpoint fails and the other rejects", async () => {
+    let mode: "healthy" | "mixed" = "healthy";
+    const fake = await fakeServer(
+      [{ auth_index: "codex-1", provider: "codex" }],
+      (call) => {
+        if (mode === "healthy")
+          return {
+            status_code: 200,
+            body: {
+              plan_type: "plus",
+              rate_limit: { primary_window: { used_percent: 20 } },
+            },
+          };
+        return call.url.endsWith("/wham/usage")
+          ? { status_code: 500, body: {} }
+          : { status_code: 403, body: {} };
+      },
+    );
+    const adapter = createCpaAdapter("codex", fallbackAdapter("codex"), () => ({
+      baseUrl: fake.baseUrl,
+      key: randomUUID(),
+    }));
+    writeCachedProviders(await fetchAccountQuotas(adapter, options));
+
+    mode = "mixed";
+    const [row] = await fetchAccountQuotas(adapter, options);
+
+    expect(row).toMatchObject({
+      accountKey: "cpa-codex-1",
+      source: "cache",
+      state: { status: "stale", error: "cpa_quota_unavailable" },
+    });
+    expect(readCachedProvider("codex", "cpa-codex-1")?.source).toBe("cpa");
+  });
+
   it("keeps native discovery when CPA lists no auth file for the provider", async () => {
     const fake = await fakeServer([
       { auth_index: "claude-1", provider: "claude" },
