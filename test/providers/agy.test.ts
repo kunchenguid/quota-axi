@@ -606,7 +606,7 @@ describe("Antigravity provider", () => {
     },
   );
 
-  it("reports attention and preserves cache when agy process is running but has no accessible port", async () => {
+  it.skipIf(process.platform === "win32")("reports attention and preserves cache when agy process is running but has no accessible port", async () => {
     const runtime = runtimeWith({
       ps: "123 /Users/test/.local/bin/agy\n",
       lsof: "",
