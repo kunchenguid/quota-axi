@@ -582,6 +582,39 @@ describe("Antigravity provider", () => {
     expect(readCachedProvider("agy")).toBeUndefined();
   });
 
+  it("preserves cache when agy process is running but has no accessible port", async () => {
+    writeCachedProviders([cachedAgyQuota()]);
+
+    const result = await fetchQuotaWithRuntime(
+      runtimeWith({
+        ps: "123 /Users/test/.local/bin/agy\n",
+        lsof: "",
+        cliQuota: Object.assign(new Error("agy missing"), { code: "ENOENT" }),
+      }),
+    );
+
+    expect(result.state.status).toBe("stale");
+    expect(result.source).toBe("cache");
+    expect(readCachedProvider("agy")).toBeDefined();
+  });
+
+  it("preserves cache when language-server process is running without a CSRF token", async () => {
+    writeCachedProviders([cachedAgyQuota()]);
+    const port = 64440;
+
+    const result = await fetchQuotaWithRuntime(
+      runtimeWith({
+        ps: `123 /Applications/Google Antigravity.app/Contents/Resources/bin/language-server\n`,
+        lsofByPid: { 123: lsofFor(123, port) },
+        cliQuota: Object.assign(new Error("agy missing"), { code: "ENOENT" }),
+      }),
+    );
+
+    expect(result.state.status).toBe("stale");
+    expect(result.source).toBe("cache");
+    expect(readCachedProvider("agy")).toBeDefined();
+  });
+
   it("preserves authentication failures and retires stale cache", async () => {
     writeCachedProviders([cachedAgyQuota()]);
     const port = await startServer((_response) => {

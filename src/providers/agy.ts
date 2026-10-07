@@ -91,12 +91,16 @@ export type AgyProbeRuntime = {
 
 /**
  * The only two outcomes that show Antigravity genuinely absent: no `agy` on
- * PATH, and no Antigravity process listening. Every other skip - an installed
- * CLI that timed out, a discovered endpoint that would not answer - leaves
- * presence unknown, so the human report keeps Antigravity in view.
+ * PATH, and the process list was checked and contains no Antigravity process.
+ * Every other skip - an installed CLI that timed out, a discovered process
+ * whose endpoint is not accessible, or an unsupported platform where process
+ * discovery is unavailable - leaves presence unknown, so the human report
+ * keeps Antigravity in view.
  */
 export const AGY_CLI_NOT_INSTALLED = "agy CLI is not installed";
 export const AGY_NOT_RUNNING = "Antigravity/agy is not running";
+/** Process list was checked but no usable endpoint was found; process may be running without an accessible port. */
+export const AGY_NO_ENDPOINT = "Antigravity/agy has no accessible endpoint";
 
 export const agyAdapter: ProviderAdapter = {
   id: "agy",
@@ -220,7 +224,7 @@ export async function inspectAuthWithRuntime(
   runtime: AgyProbeRuntime,
 ): Promise<AuthProviderReport> {
   try {
-    const endpoints = await discoverAgyEndpoints(
+    const { endpoints } = await discoverAgyEndpoints(
       runtime,
       createProbeDeadline(),
     );
@@ -449,8 +453,14 @@ async function fetchLoopbackQuota(runtime: AgyProbeRuntime): Promise<{
   refreshedAt: string;
 }> {
   const deadline = createProbeDeadline();
-  const endpoints = await discoverAgyEndpoints(runtime, deadline);
-  if (endpoints.length === 0) throw new AgyUnavailableError(AGY_NOT_RUNNING);
+  const { endpoints, confirmedNoProcess } = await discoverAgyEndpoints(
+    runtime,
+    deadline,
+  );
+  if (endpoints.length === 0)
+    throw new AgyUnavailableError(
+      confirmedNoProcess ? AGY_NOT_RUNNING : AGY_NO_ENDPOINT,
+    );
 
   let lastError: unknown;
   for (const endpoint of endpoints) {
@@ -471,10 +481,11 @@ async function fetchLoopbackQuota(runtime: AgyProbeRuntime): Promise<{
 async function discoverAgyEndpoints(
   runtime: AgyProbeRuntime,
   deadline: number,
-): Promise<AgyConnectionEndpoint[]> {
-  const processes = processInfosFromPs(
-    await readProcessList(runtime, deadline),
-  );
+): Promise<{ endpoints: AgyConnectionEndpoint[]; confirmedNoProcess: boolean }> {
+  const processListText = await readProcessList(runtime, deadline);
+  const processes =
+    processListText !== null ? processInfosFromPs(processListText) : [];
+  const confirmedNoProcess = processListText !== null && processes.length === 0;
   const endpoints: AgyConnectionEndpoint[] = [];
   let discoveryError: unknown;
   for (const processInfo of processes) {
@@ -544,7 +555,7 @@ async function discoverAgyEndpoints(
     }
   }
   if (endpoints.length === 0 && discoveryError) throw discoveryError;
-  return endpoints.sort(compareEndpoints);
+  return { endpoints: endpoints.sort(compareEndpoints), confirmedNoProcess };
 }
 
 function endpointFor(
@@ -651,8 +662,8 @@ async function fetchEndpointIdentity(
 async function readProcessList(
   runtime: AgyProbeRuntime,
   deadline: number,
-): Promise<string> {
-  if (process.platform === "win32") return "";
+): Promise<string | null> {
+  if (process.platform === "win32") return null;
   const effectiveUid = process.geteuid?.();
   if (effectiveUid === undefined)
     throw new AgyDiscoveryError("Antigravity process discovery failed");
@@ -1191,10 +1202,11 @@ function failureRank(error: unknown): number {
 
 /**
  * `agy` has no credential or configuration state that this provider reads.
- * Absence is therefore established only when both independent discovery paths
- * agree: PATH contains no CLI and the current user's process list contains no
- * Antigravity endpoint. A stopped installation with an installed CLI does not
- * meet this test and continues to use the stale fallback.
+ * Absence is established only when both independent discovery paths agree:
+ * PATH contains no CLI, and the process list was successfully read and
+ * contains no Antigravity process. A process that is running but has no
+ * accessible endpoint, or a platform where process discovery is unavailable
+ * (Windows), does not meet this test and continues to use the stale fallback.
  */
 function isDefinitelyUninstalled(attempts: readonly SourceAttempt[]): boolean {
   return (
