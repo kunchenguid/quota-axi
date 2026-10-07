@@ -604,15 +604,15 @@ export function writeCachedProviders(
   published: ProviderQuota[],
   readingAt: string = new Date().toISOString(),
 ): void {
-  // A reused reading is already the record it came from: rewriting it would
-  // restamp its age, and a missing context identity must not clear it.
-  const fresh = published.filter((provider) => !provider.state.reused);
   const reuseStamps = reuseStampsFor(published, readingAt);
   // A lane a coalesced report superseded still gets its own slot in this
-  // write, so a later run where that route fails merges it from cache
-  const providers = fresh
+  // write, so a later run where that route fails merges it from cache. A
+  // reused reading, winner or superseded, is already the record it came from:
+  // rewriting it would restamp its age, and a missing context identity must
+  // not clear it.
+  const providers = published
     .flatMap((provider) => [provider, ...supersededReadings(provider)])
-    .filter((provider) => !isCacheExcluded(provider));
+    .filter((provider) => !provider.state.reused && !isCacheExcluded(provider));
   const clearProviders = new Set(
     providers
       .filter(

@@ -699,4 +699,82 @@ describe("CLIProxyAPI provider", () => {
     ]);
     expect(fake.calls).toHaveLength(calls);
   });
+  it("tries the second Codex endpoint when the proxy fails to relay the first", async () => {
+    const usage = {
+      status_code: 200,
+      body: {
+        plan_type: "plus",
+        rate_limit: { primary_window: { used_percent: 20 } },
+      },
+    };
+    const fake = await fakeServer(
+      [
+        { auth_index: "codex-1", provider: "codex" },
+        { auth_index: "codex-2", provider: "codex" },
+      ],
+      (call) =>
+        call.auth_index === "codex-1" && call.url.endsWith("/codex/usage")
+          ? usage
+          : undefined,
+    );
+    const adapter = createCpaAdapter("codex", fallbackAdapter("codex"), () => ({
+      baseUrl: fake.baseUrl,
+      key: randomUUID(),
+    }));
+
+    const rows = await fetchAccountQuotas(adapter, options);
+
+    expect(
+      rows.map((row) => [row.accountKey, row.state.status, row.state.error]),
+    ).toEqual([
+      ["cpa-codex-1", "fresh", undefined],
+      ["cpa-codex-2", "error", "cpa_request_failed"],
+    ]);
+    expect(
+      fake.calls
+        .filter((call) => call.auth_index === "codex-2")
+        .map((call) => new URL(call.url).pathname),
+    ).toEqual(["/backend-api/wham/usage", "/backend-api/codex/usage"]);
+  });
+
+  it.each([
+    ["the reused lane first", ["claude-a", "claude-b"]],
+    ["the fresh lane first", ["claude-b", "claude-a"]],
+  ])(
+    "caches each same-subscription CPA lane once with %s",
+    async (_, order) => {
+      let failing = "claude-b";
+      const fake = await fakeServer(
+        order.map((auth_index) => ({ auth_index, provider: "claude" })),
+        (call) =>
+          call.auth_index === failing
+            ? { status_code: 500, body: {} }
+            : {
+                status_code: 200,
+                body: call.url.includes("/usage")
+                  ? CLAUDE_USAGE
+                  : { account: { uuid: "uuid-shared" } },
+              },
+      );
+      const adapter = createCpaAdapter(
+        "claude",
+        fallbackAdapter("claude"),
+        () => ({ baseUrl: fake.baseUrl, key: randomUUID() }),
+      );
+      const reuse = { ...options, maxAgeSeconds: 90 };
+
+      writeCachedProviders(await fetchAccountQuotas(adapter, reuse));
+      failing = "";
+      const mixed = await fetchAccountQuotas(adapter, reuse);
+      writeCachedProviders(mixed);
+      const calls = fake.calls.length;
+      const reused = await fetchAccountQuotas(adapter, reuse);
+
+      expect(mixed).toHaveLength(1);
+      expect(mixed[0]?.accountKeys).toHaveLength(2);
+      expect(reused).toHaveLength(1);
+      expect(reused[0]?.state.reused).toBe(true);
+      expect(fake.calls).toHaveLength(calls);
+    },
+  );
 });

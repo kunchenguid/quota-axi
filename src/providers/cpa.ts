@@ -304,11 +304,19 @@ async function readUpstream(
     }
     let normalized;
     let rejectedEverywhere = true;
+    let requestError: string | undefined;
     for (const url of CODEX_USAGE_URLS) {
-      const response = await upstreamCall(config, authIndex, url, {
-        authorization: "Bearer $TOKEN$",
-        accept: "application/json",
-      });
+      let response;
+      try {
+        response = await upstreamCall(config, authIndex, url, {
+          authorization: "Bearer $TOKEN$",
+          accept: "application/json",
+        });
+      } catch (error) {
+        rejectedEverywhere = false;
+        requestError = requestErrorCode(error);
+        continue;
+      }
       if (response.status === 401 || response.status === 403) continue;
       rejectedEverywhere = false;
       if (response.status === 429)
@@ -323,6 +331,8 @@ async function readUpstream(
       if (normalized) break;
     }
     if (!normalized) {
+      if (requestError)
+        return failed(provider, key, requestError, "error", account);
       return failed(
         provider,
         key,
@@ -346,12 +356,14 @@ async function readUpstream(
       accountKey: key,
     };
   } catch (error) {
-    const code =
-      error instanceof Error && error.name === "AbortError"
-        ? "cpa_timeout"
-        : "cpa_request_failed";
-    return failed(provider, key, code, "error", account);
+    return failed(provider, key, requestErrorCode(error), "error", account);
   }
+}
+
+function requestErrorCode(error: unknown): string {
+  return error instanceof Error && error.name === "AbortError"
+    ? "cpa_timeout"
+    : "cpa_request_failed";
 }
 
 export function createCpaAdapter(
