@@ -601,7 +601,7 @@ describe("Antigravity provider", () => {
 
       expect(result.state.status).toBe("stale");
       expect(result.source).toBe("cache");
-      expect(providerPresence(result, agyAdapter)).toBe("absent");
+      expect(providerPresence(result, agyAdapter)).toBe("stale");
       expect(readCachedProvider("agy")).toBeDefined();
     },
   );
