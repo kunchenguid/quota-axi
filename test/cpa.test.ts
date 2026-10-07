@@ -279,15 +279,70 @@ describe("CLIProxyAPI provider", () => {
     });
   });
 
-  it("reports a CPA account status with a fixed code in quota and auth", async () => {
+  it("still reads a cooled-down account and falls back to its own stale row", async () => {
     const message = "upstream said: refresh_token=leaked";
+    let reachable = true;
+    const fake = await fakeServer(
+      [
+        {
+          auth_index: "cooling",
+          provider: "claude",
+          status: "error",
+          unavailable: true,
+          status_message: message,
+        },
+      ],
+      (call) =>
+        !reachable
+          ? undefined
+          : {
+              status_code: 200,
+              body: call.url.includes("/usage")
+                ? {
+                    five_hour: {
+                      utilization: 100,
+                      resets_at: "2030-01-01T01:00:00Z",
+                    },
+                  }
+                : {},
+            },
+    );
+    const adapter = createCpaAdapter(
+      "claude",
+      fallbackAdapter("claude"),
+      () => ({
+        baseUrl: fake.baseUrl,
+        key: randomUUID(),
+      }),
+    );
+
+    const quota = await fetchAccountQuotas(adapter, options);
+    const auth = await inspectAccountAuth(adapter, options);
+    writeCachedProviders(quota);
+    reachable = false;
+    const [stale] = await fetchAccountQuotas(adapter, options);
+
+    expect(quota[0]).toMatchObject({
+      accountKey: "cpa-cooling",
+      source: "cpa",
+      state: { status: "fresh" },
+    });
+    expect(
+      quota[0]?.windows.map((window) => [window.id, window.percentRemaining]),
+    ).toEqual([["five_hour", 0]]);
+    expect(auth[0]?.sources).toEqual([{ source: "cpa", status: "available" }]);
+    expect(stale).toMatchObject({
+      accountKey: "cpa-cooling",
+      source: "cache",
+      state: { status: "stale", error: "cpa_request_failed" },
+    });
+    expect(stale?.windows.map((window) => window.id)).toEqual(["five_hour"]);
+    expect(JSON.stringify([quota, auth, stale])).not.toContain(message);
+  });
+
+  it("reports a disabled CPA account with a fixed code in quota and auth", async () => {
     const fake = await fakeServer([
-      {
-        auth_index: "broken",
-        provider: "claude",
-        status: "error",
-        status_message: message,
-      },
+      { auth_index: "off", provider: "claude", disabled: true },
     ]);
     const adapter = createCpaAdapter(
       "claude",
@@ -303,12 +358,11 @@ describe("CLIProxyAPI provider", () => {
 
     expect(quota[0]?.state).toMatchObject({
       status: "error",
-      error: "cpa_account_status_error",
+      error: "cpa_account_disabled",
     });
     expect(auth[0]?.sources).toEqual([
-      { source: "cpa", status: "error", error: "cpa_account_status_error" },
+      { source: "cpa", status: "error", error: "cpa_account_disabled" },
     ]);
-    expect(JSON.stringify([quota, auth])).not.toContain(message);
     expect(fake.calls).toHaveLength(0);
   });
 

@@ -37,9 +37,7 @@ type CpaConfig = { baseUrl: string; key: string };
 type AuthFile = {
   auth_index?: unknown;
   provider?: unknown;
-  status?: unknown;
   disabled?: unknown;
-  unavailable?: unknown;
   email?: unknown;
 };
 type CpaResponse = { status_code?: unknown; body?: unknown };
@@ -99,10 +97,7 @@ function fileIdentity(file: AuthFile): ProviderQuota["account"] {
 }
 
 function fileStatusError(file: AuthFile): string | undefined {
-  if (text(file.status) === "error") return "cpa_account_status_error";
-  if (file.unavailable === true || file.disabled === true)
-    return "cpa_account_unavailable";
-  return undefined;
+  return file.disabled === true ? "cpa_account_disabled" : undefined;
 }
 
 async function cpaRequest(
