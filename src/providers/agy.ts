@@ -481,7 +481,10 @@ async function fetchLoopbackQuota(runtime: AgyProbeRuntime): Promise<{
 async function discoverAgyEndpoints(
   runtime: AgyProbeRuntime,
   deadline: number,
-): Promise<{ endpoints: AgyConnectionEndpoint[]; confirmedNoProcess: boolean }> {
+): Promise<{
+  endpoints: AgyConnectionEndpoint[];
+  confirmedNoProcess: boolean;
+}> {
   const processListText = await readProcessList(runtime, deadline);
   const processes =
     processListText !== null ? processInfosFromPs(processListText) : [];
