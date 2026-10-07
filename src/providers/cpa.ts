@@ -1,24 +1,27 @@
-import { homedir } from "node:os";
-import { join } from "node:path";
 import { readFileSync } from "node:fs";
 import { providerFetch } from "../lib/http.js";
-import { clampPercent, nowIso } from "../lib/time.js";
+import { cpaEnvFilePath } from "../lib/reuse-context.js";
+import { nowIso } from "../lib/time.js";
 import type {
   ProviderAccount,
   ProviderAdapter,
   ProviderId,
   ProviderQuota,
   ProviderStatus,
-  QuotaWindow,
 } from "../types.js";
-import { failedProvider, successProvider, withRemaining } from "./common.js";
-import { normalizeClaudeApiUsage, normalizeClaudeProfile } from "./claude.js";
+import { failedProvider, successProvider } from "./common.js";
+import {
+  API_URL as CLAUDE_USAGE_URL,
+  CLAUDE_CODE_USER_AGENT,
+  OAUTH_BETA,
+  PROFILE_API_URL as CLAUDE_PROFILE_URL,
+  normalizeClaudeApiUsage,
+  normalizeClaudeProfile,
+} from "./claude.js";
 import { normalizeCodexUsage } from "./codex.js";
 
-const ENV_FILE = join(homedir(), ".config", "cpa-management.env");
 const API_TIMEOUT_MS = 15_000;
-const CLAUDE_USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
-const CLAUDE_PROFILE_URL = "https://api.anthropic.com/api/oauth/profile";
+const UNLISTED_LANE = "cpa";
 const CODEX_USAGE_URLS = [
   "https://chatgpt.com/backend-api/wham/usage",
   "https://chatgpt.com/backend-api/codex/usage",
@@ -27,22 +30,18 @@ const CODEX_USAGE_URLS = [
 type CpaConfig = { baseUrl: string; key: string };
 type AuthFile = {
   auth_index?: unknown;
-  id?: unknown;
-  name?: unknown;
   provider?: unknown;
   status?: unknown;
-  status_message?: unknown;
   disabled?: unknown;
   unavailable?: unknown;
   email?: unknown;
-  account?: unknown;
 };
 type CpaResponse = { status_code?: unknown; body?: unknown };
 
-function envFileValues(): Record<string, string> {
+function envFileValues(path: string): Record<string, string> {
   try {
     const values: Record<string, string> = {};
-    for (const line of readFileSync(ENV_FILE, "utf8").split(/\r?\n/)) {
+    for (const line of readFileSync(path, "utf8").split(/\r?\n/)) {
       const match =
         /^\s*(CPA_BASE_URL|CPA_MANAGEMENT_KEY)\s*=\s*(.*?)\s*$/.exec(line);
       if (match) values[match[1]!] = match[2]!.replace(/^['"]|['"]$/g, "");
@@ -53,26 +52,14 @@ function envFileValues(): Record<string, string> {
   }
 }
 
-export function readCpaConfig(): CpaConfig | undefined {
-  const file = envFileValues();
-  const explicitBaseUrl = process.env.CPA_BASE_URL;
-  const explicitKey = process.env.CPA_MANAGEMENT_KEY;
-  const runningTests =
-    process.env.VITEST === "true" || process.env.VITEST_WORKER_ID !== undefined;
-  const allowFile =
-    (!runningTests &&
-      process.env.NODE_ENV !== "test" &&
-      process.env.VITEST !== "true") ||
-    explicitBaseUrl !== undefined ||
-    explicitKey !== undefined;
-  const baseUrl = (
-    explicitBaseUrl ??
-    (allowFile ? file.CPA_BASE_URL : undefined) ??
-    ""
-  ).trim();
+export function readCpaConfig(
+  environment: Record<string, string | undefined> = process.env,
+): CpaConfig | undefined {
+  const file = envFileValues(cpaEnvFilePath(environment));
+  const baseUrl = (environment.CPA_BASE_URL ?? file.CPA_BASE_URL ?? "").trim();
   const key = (
-    explicitKey ??
-    (allowFile ? file.CPA_MANAGEMENT_KEY : undefined) ??
+    environment.CPA_MANAGEMENT_KEY ??
+    file.CPA_MANAGEMENT_KEY ??
     ""
   ).trim();
   if (!baseUrl || !key) return undefined;
@@ -97,19 +84,19 @@ function accountKey(index: string): string {
 }
 
 function providerMatches(file: AuthFile, provider: ProviderId): boolean {
-  const name = (text(file.provider) ?? "").toLowerCase();
-  if (provider === "claude") return name === "claude" || name === "anthropic";
-  return name === "codex" || name === "openai" || name === "chatgpt";
+  return text(file.provider)?.toLowerCase() === provider;
 }
 
 function fileIdentity(file: AuthFile): ProviderQuota["account"] {
-  const email = text(file.email) ?? text(file.id) ?? text(file.name);
-  const account = text(file.account);
-  return {
-    ...(email ? { email } : {}),
-    ...(account ? { organization: account } : {}),
-    identityStatus: email ? "verified" : "unverified",
-  };
+  const email = text(file.email);
+  return { ...(email ? { email } : {}), identityStatus: "unverified" };
+}
+
+function fileStatusError(file: AuthFile): string | undefined {
+  if (text(file.status) === "error") return "cpa_account_status_error";
+  if (file.unavailable === true || file.disabled === true)
+    return "cpa_account_unavailable";
+  return undefined;
 }
 
 async function cpaRequest(
@@ -209,21 +196,8 @@ async function readAccount(
 ): Promise<ProviderQuota> {
   const authIndex = text(file.auth_index);
   const account = fileIdentity(file);
-  if (
-    file.unavailable === true ||
-    file.disabled === true ||
-    text(file.status) === "error"
-  ) {
-    return failed(
-      provider,
-      key,
-      text(file.status_message)
-        ? "cpa_account_status_error"
-        : "cpa_account_unavailable",
-      "error",
-      account,
-    );
-  }
+  const statusError = fileStatusError(file);
+  if (statusError) return failed(provider, key, statusError, "error", account);
   if (!authIndex)
     return failed(
       provider,
@@ -236,11 +210,11 @@ async function readAccount(
     if (provider === "claude") {
       const usage = await upstreamCall(config, authIndex, CLAUDE_USAGE_URL, {
         authorization: "Bearer $TOKEN$",
-        "anthropic-beta": "oauth-2025-04-20",
-        "User-Agent": "claude-code/2.1.202",
+        "anthropic-beta": OAUTH_BETA,
+        "User-Agent": CLAUDE_CODE_USER_AGENT,
         accept: "application/json",
       });
-      if (usage.status === 401 || usage.status === 403)
+      if (usage.status === 401)
         return failed(
           provider,
           key,
@@ -271,7 +245,7 @@ async function readAccount(
         CLAUDE_PROFILE_URL,
         {
           authorization: "Bearer $TOKEN$",
-          "User-Agent": "claude-code/2.1.202",
+          "User-Agent": CLAUDE_CODE_USER_AGENT,
           accept: "application/json",
         },
       );
@@ -346,76 +320,6 @@ async function readAccount(
   }
 }
 
-function poolReport(
-  provider: ProviderId,
-  rows: ProviderQuota[],
-  files: AuthFile[],
-): ProviderQuota {
-  const successful = rows.filter((row) => row.state.status === "fresh");
-  const windows: QuotaWindow[] = [];
-  const ids = [
-    ...new Set(
-      successful.flatMap((row) => row.windows.map((window) => window.id)),
-    ),
-  ];
-  for (const id of ids) {
-    const candidates = successful.flatMap((row) =>
-      row.windows.filter((window) => window.id === id),
-    );
-    const measured = candidates.filter(
-      (window) => window.percentRemaining !== undefined,
-    );
-    if (measured.length === 0) continue;
-    const remaining =
-      measured.reduce((sum, window) => sum + window.percentRemaining!, 0) /
-      measured.length;
-    const first = measured[0]!;
-    windows.push(
-      withRemaining({
-        id,
-        label: `${first.label} pool`,
-        kind: first.kind,
-        percentUsed: clampPercent(100 - remaining),
-        resetsAt: first.resetsAt,
-        resetText: first.resetText,
-        windowSeconds: first.windowSeconds,
-      }),
-    );
-  }
-  const failedRows = rows.filter((row) => row.state.status !== "fresh");
-  const report = successProvider({
-    provider,
-    label: provider === "claude" ? "Claude" : "Codex",
-    source: "cpa",
-    plan: successful.find((row) => row.plan)?.plan,
-    account: { organization: "CLIProxyAPI pool", identityStatus: "verified" },
-    windows,
-    refreshedAt:
-      successful
-        .map((row) => row.state.refreshedAt ?? "")
-        .sort()
-        .at(-1) ?? nowIso(),
-    sourcesTried: ["cpa"],
-  });
-  // Keep native lane identities so existing consumers bind the pooled row.
-  report.accountKey = provider === "codex" ? "codex-home" : "default";
-  report.accountKeys = files
-    .map((file) => text(file.auth_index))
-    .filter((index): index is string => !!index)
-    .map(accountKey);
-  if (successful.length === 0) {
-    report.state.status = "error";
-    report.state.error = "cpa_no_account_quota";
-  }
-  if (failedRows.length > 0) {
-    report.state.degradedSources = failedRows.map((row) => ({
-      source: row.accountKey ?? "cpa-account",
-      error: row.state.error,
-    }));
-  }
-  return report;
-}
-
 export function createCpaAdapter(
   provider: ProviderId,
   fallback: ProviderAdapter,
@@ -425,7 +329,7 @@ export function createCpaAdapter(
     ...fallback,
     discoverAccounts: async (): Promise<ProviderAccount[] | undefined> => {
       const config = configReader();
-      if (!config) return undefined;
+      if (!config) return fallback.discoverAccounts?.();
       let files: AuthFile[];
       try {
         files = (await listAuthFiles(config)).filter((file) =>
@@ -434,12 +338,12 @@ export function createCpaAdapter(
       } catch {
         return [
           {
-            accountKey: provider === "codex" ? "codex-home" : "default",
+            accountKey: UNLISTED_LANE,
             fetchQuota: async () =>
-              failed(provider, "cpa-pool", "cpa_auth_files_unavailable"),
+              failed(provider, UNLISTED_LANE, "cpa_auth_files_unavailable"),
             inspectAuth: async () => ({
               provider,
-              accountKey: provider === "codex" ? "codex-home" : "default",
+              accountKey: UNLISTED_LANE,
               sources: [
                 {
                   source: "cpa",
@@ -451,61 +355,23 @@ export function createCpaAdapter(
           },
         ];
       }
-      const cache = new Map<string, Promise<ProviderQuota>>();
-      const read = (file: AuthFile, key: string) => {
-        const index = text(file.auth_index) ?? key;
-        const existing = cache.get(index);
-        if (existing) return existing;
-        const request = readAccount(config, provider, file, key);
-        cache.set(index, request);
-        return request;
-      };
-      const accounts: ProviderAccount[] = files.map((file, position) => {
+      return files.map((file, position) => {
         const key = accountKey(text(file.auth_index) ?? `${position}`);
+        const statusError = fileStatusError(file);
         return {
           accountKey: key,
-          fetchQuota: async () => read(file, key),
+          fetchQuota: async () => readAccount(config, provider, file, key),
           inspectAuth: async () => ({
             provider,
             accountKey: key,
             sources: [
-              {
-                source: "cpa",
-                status:
-                  file.disabled === true || file.unavailable === true
-                    ? "error"
-                    : "available",
-                ...(text(file.status_message)
-                  ? { error: text(file.status_message) }
-                  : {}),
-              },
+              statusError
+                ? { source: "cpa", status: "error", error: statusError }
+                : { source: "cpa", status: "available" },
             ],
           }),
         };
       });
-      accounts.push({
-        accountKey: provider === "codex" ? "codex-home" : "default",
-        fetchQuota: async () =>
-          poolReport(
-            provider,
-            await Promise.all(
-              files.map((file, position) =>
-                read(file, accountKey(text(file.auth_index) ?? `${position}`)),
-              ),
-            ),
-            files,
-          ),
-        inspectAuth: async () => ({
-          provider,
-          accountKey: provider === "codex" ? "codex-home" : "default",
-          sources: [{ source: "cpa", status: "available" }],
-        }),
-      });
-      return accounts.length > 1 ? accounts : undefined;
     },
   };
-}
-
-export function isCpaAccount(provider: ProviderQuota): boolean {
-  return provider.source === "cpa" && (provider.accountKeys?.length ?? 0) <= 1;
 }

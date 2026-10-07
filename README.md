@@ -68,9 +68,9 @@ Default TOON is decision-shaped: `quota[]` carries one fully populated row per m
 
 ### CLIProxyAPI pools
 
-When `CPA_BASE_URL` and `CPA_MANAGEMENT_KEY` are set, Claude and Codex quota is read from a local CLIProxyAPI management endpoint. The same values may be placed in `~/.config/cpa-management.env` (keep that file mode `600`). quota-axi lists `/v0/management/auth-files` and asks `/v0/management/api-call` to read each vendor quota endpoint with the proxy account's credential substituted for `$TOKEN$`; raw tokens never enter quota-axi. CPA owns refresh and quota-axi never downloads auth files or refreshes these credentials.
+When `CPA_BASE_URL` and `CPA_MANAGEMENT_KEY` are set, Claude and Codex quota is read from a local CLIProxyAPI management endpoint. The same values may be placed in `~/.config/cpa-management.env` (or `$XDG_CONFIG_HOME/cpa-management.env`; keep that file mode `600`). quota-axi lists `/v0/management/auth-files` and asks `/v0/management/api-call` to read each vendor quota endpoint with the proxy account's credential substituted for `$TOKEN$`; raw tokens never enter quota-axi. CPA owns refresh and quota-axi never downloads auth files or refreshes these credentials.
 
-The normal quota and `--json` surfaces publish one pooled row per configured provider. `--full` adds one account row for every CPA auth file and keeps failed accounts visible, so a disabled or rejected account is reported rather than hidden. If these variables are absent, Claude and Codex keep their existing local credential discovery.
+Every surface reports one row per CPA `claude` or `codex` auth file, carrying only the windows that account's vendor returned; quota-axi never averages or merges the pool into a synthetic row. Rows that share a verified account identity coalesce as described under [Multiple accounts](#multiple-accounts). A disabled, errored, or rejected account stays visible with a fixed error code, and an unreachable management endpoint is reported rather than hidden. If CPA is not configured, or lists no auth file for a provider, Claude and Codex keep their existing local credential discovery.
 
 ```sh
 $ quota-axi --provider claude --json

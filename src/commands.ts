@@ -27,7 +27,6 @@ import {
   inspectAccountAuth,
 } from "./providers/accounts.js";
 import { failedProvider } from "./providers/common.js";
-import { isCpaAccount } from "./providers/cpa.js";
 import { PROVIDERS } from "./providers/index.js";
 import {
   quotaJsonReport,
@@ -83,31 +82,23 @@ export async function quotaCommand(
     false,
     maxAgeSeconds,
   );
-  const outputResponse = flags.full
-    ? response
-    : {
-        ...response,
-        providers: response.providers.filter(
-          (provider) => !isCpaAccount(provider),
-        ),
-      };
   // Presence reads source attempts, which redaction removes, so both the JSON
   // marker and the TOON omission are classified on the complete model first.
   // The same rule as the human report: an explicit --provider never folds,
   // and --full adds the omitted rows back instead of counting them.
-  const laneAbsent = outputResponse.providers.map(
+  const laneAbsent = response.providers.map(
     (provider) =>
       providerPresence(provider, PROVIDERS[provider.provider]) === "absent",
   );
   if (flags.json) {
     return JSON.stringify(
-      quotaJsonReport(outputResponse, flags.full, laneAbsent),
+      quotaJsonReport(response, flags.full, laneAbsent),
       null,
       2,
     );
   }
   return renderQuotaToon(
-    redactedResponse(outputResponse, flags.full),
+    redactedResponse(response, flags.full),
     binPath,
     flags.full,
     flags.full || flags.explicitProviders
