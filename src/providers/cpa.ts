@@ -18,14 +18,10 @@ import {
   normalizeClaudeApiUsage,
   normalizeClaudeProfile,
 } from "./claude.js";
-import { normalizeCodexUsage } from "./codex.js";
+import { ENDPOINTS as CODEX_USAGE_URLS, normalizeCodexUsage } from "./codex.js";
 
 const API_TIMEOUT_MS = 15_000;
 const UNLISTED_LANE = "cpa";
-const CODEX_USAGE_URLS = [
-  "https://chatgpt.com/backend-api/wham/usage",
-  "https://chatgpt.com/backend-api/codex/usage",
-];
 
 type CpaConfig = { baseUrl: string; key: string };
 type AuthFile = {
@@ -239,7 +235,7 @@ async function readAccount(
           "unavailable",
           account,
         );
-      const profile = await upstreamCall(
+      const profileAccount = await upstreamCall(
         config,
         authIndex,
         CLAUDE_PROFILE_URL,
@@ -248,8 +244,10 @@ async function readAccount(
           "User-Agent": CLAUDE_CODE_USER_AGENT,
           accept: "application/json",
         },
+      ).then(
+        (profile) => normalizeClaudeProfile(profile.body),
+        () => undefined,
       );
-      const profileAccount = normalizeClaudeProfile(profile.body);
       return {
         ...successProvider({
           provider,
@@ -355,6 +353,7 @@ export function createCpaAdapter(
           },
         ];
       }
+      if (files.length === 0) return fallback.discoverAccounts?.();
       return files.map((file, position) => {
         const key = accountKey(text(file.auth_index) ?? `${position}`);
         const statusError = fileStatusError(file);

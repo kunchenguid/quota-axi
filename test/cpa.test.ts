@@ -14,6 +14,11 @@ import {
   inspectAccountAuth,
 } from "../src/providers/accounts.js";
 import { createCpaAdapter, readCpaConfig } from "../src/providers/cpa.js";
+import {
+  readCachedClaudeProvider,
+  writeCachedProviders,
+} from "../src/cache.js";
+import { claudeCredentialContextId } from "../src/lib/fs.js";
 import type {
   ProviderAdapter,
   ProviderId,
@@ -46,7 +51,9 @@ type UpstreamCall = {
   header: Record<string, string>;
 };
 type ManagementRequest = { path: string; authorization?: string; body: string };
-type Upstream = (call: UpstreamCall) => { status_code: number; body: unknown };
+type Upstream = (
+  call: UpstreamCall,
+) => { status_code: number; body: unknown } | undefined;
 
 const CLAUDE_USAGE = {
   five_hour: { utilization: 25, resets_at: "2030-01-01T01:00:00Z" },
@@ -89,7 +96,13 @@ function fakeServer(
       if (request.url === "/v0/management/api-call") {
         const parsed = JSON.parse(body) as UpstreamCall;
         calls.push(parsed);
-        const { status_code, body: payload } = upstream(parsed);
+        const answer = upstream(parsed);
+        if (!answer) {
+          response.statusCode = 502;
+          response.end();
+          return;
+        }
+        const { status_code, body: payload } = answer;
         response.end(
           JSON.stringify({ status_code, body: JSON.stringify(payload) }),
         );
@@ -324,5 +337,129 @@ describe("CLIProxyAPI provider", () => {
     expect(
       readCpaConfig({ ...environment, CPA_MANAGEMENT_KEY: "env-key" }),
     ).toEqual({ baseUrl: "http://127.0.0.1:9000", key: "env-key" });
+  });
+
+  it("hands a Codex account over to the second usage endpoint after a 401", async () => {
+    const fake = await fakeServer(
+      [
+        { auth_index: "codex-1", provider: "codex", email: "c@example.test" },
+        { auth_index: "codex-2", provider: "codex" },
+      ],
+      (call) =>
+        call.auth_index === "codex-1" && call.url.endsWith("/codex/usage")
+          ? {
+              status_code: 200,
+              body: {
+                plan_type: "plus",
+                account_id: "acct-1",
+                rate_limit: { primary_window: { used_percent: 20 } },
+              },
+            }
+          : { status_code: 401, body: {} },
+    );
+    const adapter = createCpaAdapter("codex", fallbackAdapter("codex"), () => ({
+      baseUrl: fake.baseUrl,
+      key: randomUUID(),
+    }));
+
+    const rows = await fetchAccountQuotas(adapter, options);
+
+    expect(
+      rows.map((row) => [row.accountKey, row.state.status, row.plan]),
+    ).toEqual([
+      ["cpa-codex-1", "fresh", "plus"],
+      ["cpa-codex-2", "auth_required", undefined],
+    ]);
+    expect(rows[0]?.windows[0]).toMatchObject({
+      id: "five_hour",
+      percentRemaining: 80,
+    });
+    expect(
+      fake.calls
+        .filter((call) => call.auth_index === "codex-1")
+        .map((call) => new URL(call.url).pathname),
+    ).toEqual(["/backend-api/wham/usage", "/backend-api/codex/usage"]);
+  });
+
+  it("keeps native discovery when CPA lists no auth file for the provider", async () => {
+    const fake = await fakeServer([
+      { auth_index: "claude-1", provider: "claude" },
+    ]);
+    const native: ProviderAdapter = {
+      ...fallbackAdapter("codex"),
+      discoverAccounts: async () =>
+        ["codex-home", "pi"].map((accountKey) => ({
+          accountKey,
+          fetchQuota: async () => ({
+            provider: "codex",
+            source: "oauth",
+            accountKey,
+            windows: [],
+            state: { status: "unavailable", stale: false },
+          }),
+          inspectAuth: async () => ({ provider: "codex", sources: [] }),
+        })),
+    };
+    const adapter = createCpaAdapter("codex", native, () => ({
+      baseUrl: fake.baseUrl,
+      key: randomUUID(),
+    }));
+
+    const rows = await fetchAccountQuotas(adapter, options);
+
+    expect(rows.map((row) => row.accountKey)).toEqual(["codex-home", "pi"]);
+    expect(fake.calls).toHaveLength(0);
+  });
+
+  it("keeps a measured Claude reading when only the profile request fails", async () => {
+    const fake = await fakeServer(
+      [{ auth_index: "claude-1", provider: "claude", email: "a@example.test" }],
+      (call) =>
+        call.url.includes("/usage")
+          ? { status_code: 200, body: CLAUDE_USAGE }
+          : undefined,
+    );
+    const adapter = createCpaAdapter(
+      "claude",
+      fallbackAdapter("claude"),
+      () => ({
+        baseUrl: fake.baseUrl,
+        key: randomUUID(),
+      }),
+    );
+
+    const [row] = await fetchAccountQuotas(adapter, options);
+
+    expect(row?.state.status).toBe("fresh");
+    expect(row?.windows.map((window) => window.id)).toEqual([
+      "five_hour",
+      "seven_day",
+    ]);
+    expect(row?.account).toEqual({
+      email: "a@example.test",
+      identityStatus: "unverified",
+    });
+  });
+
+  it("never serves a cached CPA Claude row as the local login's stale quota", async () => {
+    const fake = await fakeServer([
+      { auth_index: "claude-1", provider: "claude" },
+    ]);
+    const adapter = createCpaAdapter(
+      "claude",
+      fallbackAdapter("claude"),
+      () => ({
+        baseUrl: fake.baseUrl,
+        key: randomUUID(),
+      }),
+    );
+    const rows = await fetchAccountQuotas(adapter, options);
+    expect(rows[0]?.state.status).toBe("fresh");
+
+    writeCachedProviders(rows);
+
+    expect(
+      readCachedClaudeProvider(claudeCredentialContextId()),
+    ).toBeUndefined();
   });
 });
