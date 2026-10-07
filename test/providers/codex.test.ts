@@ -130,6 +130,36 @@ describe("Codex quota parsing", () => {
     ]);
   });
 
+  it("reads an unlimited Business seat that has no rate-limit windows", () => {
+    const result = normalizeCodexUsage({
+      plan_type: "business",
+      email: "person@example.invalid",
+      account_id: "acct_fixture",
+      rate_limit: null,
+      code_review_rate_limit: null,
+      additional_rate_limits: null,
+      credits: { has_credits: true, unlimited: true, balance: null },
+    });
+
+    expect(result?.plan).toBe("business");
+    expect(result?.windows).toEqual([]);
+    expect(result?.credits).toEqual({
+      remaining: undefined,
+      unlimited: true,
+      unit: "credits",
+    });
+  });
+
+  it("still rejects a body with neither windows nor unlimited credits", () => {
+    expect(
+      normalizeCodexUsage({
+        plan_type: "plus",
+        rate_limit: null,
+        credits: { has_credits: false, unlimited: false, balance: null },
+      }),
+    ).toBeUndefined();
+  });
+
   it("normalizes camel-case OAuth usage responses", () => {
     const raw = JSON.parse(
       readFileSync(join(fixtureDir, "oauth-camel.json"), "utf8"),
