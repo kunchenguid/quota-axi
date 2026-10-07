@@ -125,6 +125,7 @@ This reference details the credential sources, endpoint contracts, quota window 
 - **CSRF Handling**: Loopback 401 with `missing CSRF token` is treated as `unavailable`, preserving disk cache.
 - **Stale Resets**: Readings with `resetsAt` in the past are marked stale.
 - **Safety**: Antigravity is strictly read-only: never reads memory, signs in, mutates config, or contacts unowned ports.
+- **Uninstall Detection**: Cache is retired (not served) when the `agy` CLI is absent and no Antigravity process is running. An installed-but-stopped CLI still uses the stale fallback cache.
 
 ---
 
