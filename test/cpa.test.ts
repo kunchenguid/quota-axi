@@ -4,7 +4,7 @@ import {
   type ServerResponse,
 } from "node:http";
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -377,16 +377,25 @@ describe("CLIProxyAPI provider", () => {
     ]);
   });
 
-  it("reads the env file under XDG_CONFIG_HOME and keys fresh reuse on it", () => {
+  it("reads quota-axi's own cpa.env under XDG_CONFIG_HOME and keys fresh reuse on it", () => {
     const root = mkdtempSync(join(tmpdir(), "quota-axi-cpa-"));
     roots.push(root);
     const environment = { XDG_CONFIG_HOME: root };
     const file = cpaEnvFilePath(environment);
-    expect(file).toBe(join(root, "cpa-management.env"));
+    expect(file).toBe(join(root, "quota-axi", "cpa.env"));
 
     const absentContext = reuseContextId(environment);
     expect(readCpaConfig(environment)).toBeUndefined();
 
+    // A file another tool owns is never read.
+    writeFileSync(
+      join(root, "cpa-management.env"),
+      "CPA_BASE_URL=http://127.0.0.1:8317\nCPA_MANAGEMENT_KEY=other-key\n",
+      { mode: 0o600 },
+    );
+    expect(readCpaConfig(environment)).toBeUndefined();
+
+    mkdirSync(join(root, "quota-axi"));
     writeFileSync(
       file,
       "CPA_BASE_URL='http://127.0.0.1:8317/'\nCPA_MANAGEMENT_KEY=file-key\n",
@@ -442,6 +451,111 @@ describe("CLIProxyAPI provider", () => {
       id: "five_hour",
       percentRemaining: 80,
     });
+    expect(
+      fake.calls
+        .filter((call) => call.auth_index === "codex-1")
+        .map((call) => new URL(call.url).pathname),
+    ).toEqual(["/backend-api/wham/usage", "/backend-api/codex/usage"]);
+  });
+
+  it("folds CPA Codex accounts that the vendor reports as one subscription", async () => {
+    const fake = await fakeServer(
+      [
+        { auth_index: "codex-1", provider: "codex", email: "c@example.test" },
+        { auth_index: "codex-2", provider: "codex", email: "d@example.test" },
+        { auth_index: "codex-3", provider: "codex", email: "e@example.test" },
+      ],
+      (call) => ({
+        status_code: 200,
+        body: {
+          plan_type: "plus",
+          ...(call.auth_index === "codex-3"
+            ? {}
+            : { account_id: "acct-shared" }),
+          rate_limit: { primary_window: { used_percent: 20 } },
+        },
+      }),
+    );
+    const adapter = createCpaAdapter("codex", fallbackAdapter("codex"), () => ({
+      baseUrl: fake.baseUrl,
+      key: randomUUID(),
+    }));
+
+    const rows = await fetchAccountQuotas(adapter, options);
+
+    expect(rows.map((row) => [row.accountKeys, row.account])).toEqual([
+      [
+        ["cpa-codex-1", "cpa-codex-2"],
+        {
+          email: "c@example.test",
+          accountId: "acct-shared",
+          identityStatus: "verified",
+        },
+      ],
+      [
+        ["cpa-codex-3"],
+        { email: "e@example.test", identityStatus: "unverified" },
+      ],
+    ]);
+  });
+
+  it("never accepts quota-shaped upstream error bodies as a reading", async () => {
+    const fake = await fakeServer(
+      [
+        { auth_index: "claude-1", provider: "claude", email: "a@example.test" },
+        { auth_index: "claude-2", provider: "claude", email: "b@example.test" },
+        { auth_index: "codex-1", provider: "codex" },
+      ],
+      (call) => {
+        if (call.auth_index === "codex-1")
+          return {
+            status_code: 500,
+            body: {
+              account_id: "acct-1",
+              rate_limit: { primary_window: { used_percent: 20 } },
+            },
+          };
+        if (call.url.includes("/usage"))
+          return {
+            status_code: call.auth_index === "claude-1" ? 500 : 200,
+            body: CLAUDE_USAGE,
+          };
+        return { status_code: 500, body: { account: { uuid: "uuid-1" } } };
+      },
+    );
+    const config = () => ({ baseUrl: fake.baseUrl, key: randomUUID() });
+
+    const claude = await fetchAccountQuotas(
+      createCpaAdapter("claude", fallbackAdapter("claude"), config),
+      options,
+    );
+    const codex = await fetchAccountQuotas(
+      createCpaAdapter("codex", fallbackAdapter("codex"), config),
+      options,
+    );
+
+    expect(
+      [...claude, ...codex].map((row) => [
+        row.accountKey,
+        row.state.status,
+        row.windows.length,
+        row.account,
+      ]),
+    ).toEqual([
+      [
+        "cpa-claude-1",
+        "unavailable",
+        0,
+        { email: "a@example.test", identityStatus: "unverified" },
+      ],
+      [
+        "cpa-claude-2",
+        "fresh",
+        2,
+        { email: "b@example.test", identityStatus: "unverified" },
+      ],
+      ["cpa-codex-1", "unavailable", 0, { identityStatus: "unverified" }],
+    ]);
     expect(
       fake.calls
         .filter((call) => call.auth_index === "codex-1")

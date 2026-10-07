@@ -266,7 +266,9 @@ async function readUpstream(
           "rate_limited",
           account,
         );
-      const normalized = normalizeClaudeApiUsage(usage.body);
+      const normalized = succeeded(usage.status)
+        ? normalizeClaudeApiUsage(usage.body)
+        : undefined;
       if (!normalized)
         return failed(
           provider,
@@ -285,7 +287,10 @@ async function readUpstream(
           accept: "application/json",
         },
       ).then(
-        (profile) => normalizeClaudeProfile(profile.body),
+        (profile) =>
+          succeeded(profile.status)
+            ? normalizeClaudeProfile(profile.body)
+            : undefined,
         () => undefined,
       );
       return {
@@ -327,6 +332,7 @@ async function readUpstream(
           "rate_limited",
           account,
         );
+      if (!succeeded(response.status)) continue;
       normalized = normalizeCodexUsage(response.body);
       if (normalized) break;
     }
@@ -341,13 +347,23 @@ async function readUpstream(
         account,
       );
     }
+    const vendorEmail = normalized.account?.email;
+    const vendorId = normalized.account?.accountId;
     return {
       ...successProvider({
         provider,
         label: "Codex",
         source: "cpa",
         plan: normalized.plan,
-        account: { ...account, ...(normalized.account ?? {}) },
+        // An account_id from a successful vendor read verifies the identity;
+        // the auth file's own email never does.
+        account: {
+          ...account,
+          ...(vendorEmail ? { email: vendorEmail } : {}),
+          ...(vendorId
+            ? { accountId: vendorId, identityStatus: "verified" as const }
+            : {}),
+        },
         windows: normalized.windows,
         credits: normalized.credits,
         refreshedAt: normalized.refreshedAt,
@@ -358,6 +374,10 @@ async function readUpstream(
   } catch (error) {
     return failed(provider, key, requestErrorCode(error), "error", account);
   }
+}
+
+function succeeded(status: number): boolean {
+  return status >= 200 && status < 300;
 }
 
 function requestErrorCode(error: unknown): string {

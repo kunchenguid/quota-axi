@@ -61,15 +61,15 @@ export const CREDENTIAL_SELECTION_ENV = [
 ] as const;
 
 /**
- * CLIProxyAPI's management settings file, which switches Claude and Codex to
- * its account pool: `$XDG_CONFIG_HOME/cpa-management.env`, or
- * `~/.config/cpa-management.env` when `XDG_CONFIG_HOME` is unset.
+ * quota-axi's CLIProxyAPI settings file, which switches Claude and Codex to
+ * its account pool: `$XDG_CONFIG_HOME/quota-axi/cpa.env`, or
+ * `~/.config/quota-axi/cpa.env` when `XDG_CONFIG_HOME` is unset.
  */
 export function cpaEnvFilePath(
   environment: Record<string, string | undefined> = process.env,
 ): string {
   const base = environment.XDG_CONFIG_HOME || join(homedir(), ".config");
-  return join(base, "cpa-management.env");
+  return join(base, "quota-axi", "cpa.env");
 }
 
 /**
