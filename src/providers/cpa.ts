@@ -9,7 +9,17 @@ import type {
   ProviderQuota,
   ProviderStatus,
 } from "../types.js";
-import { failedProvider, successProvider } from "./common.js";
+import {
+  cpaAccountContextId,
+  readCachedCpaProvider,
+  retireCachedSlot,
+  stampCpaAccountContext,
+} from "../cache.js";
+import {
+  failedProvider,
+  staleUnlessSignOut,
+  successProvider,
+} from "./common.js";
 import {
   API_URL as CLAUDE_USAGE_URL,
   CLAUDE_CODE_USER_AGENT,
@@ -202,6 +212,32 @@ async function readAccount(
       "unavailable",
       account,
     );
+  const report = await readUpstream(config, provider, authIndex, account, key);
+  const contextId = cpaAccountContextId(config.baseUrl, authIndex);
+  if (report.state.status === "fresh") {
+    stampCpaAccountContext(report, contextId);
+    return report;
+  }
+  const stale = staleUnlessSignOut(
+    readCachedCpaProvider(provider, contextId),
+    report.state.error ?? report.state.status,
+    ["cpa"],
+    [],
+    {
+      definitive: report.state.status === "auth_required",
+      retire: () => retireCachedSlot(provider, key),
+    },
+  );
+  return stale ? { ...stale, accountKey: key, account } : report;
+}
+
+async function readUpstream(
+  config: CpaConfig,
+  provider: ProviderId,
+  authIndex: string,
+  account: ProviderQuota["account"],
+  key: string,
+): Promise<ProviderQuota> {
   try {
     if (provider === "claude") {
       const usage = await upstreamCall(config, authIndex, CLAUDE_USAGE_URL, {

@@ -30,6 +30,7 @@ import { PROVIDER_IDS } from "./types.js";
 
 const PROVIDER_SOURCES = [
   "oauth",
+  "cpa",
   "pi:openai-codex",
   "cli-rpc",
   "cli",
@@ -103,12 +104,12 @@ const CREDENTIAL_CONTEXT_ID = /^[a-f0-9]{64}$/;
 const CONTEXT_SCOPED_PROVIDERS: Partial<
   Record<ProviderId, (provider: ProviderQuota) => string | undefined>
 > = {
-  claude: claudeCredentialContextId,
+  claude: cpaScoped(claudeCredentialContextId),
   kimi: kimiReadingContextId,
   commandcode: commandCodeReadingContextId,
   elevenlabs: elevenLabsReadingContextId,
   devin: devinReadingContextId,
-  codex: codexStampContextId,
+  codex: cpaScoped(codexStampContextId),
   minimax: miniMaxReadingContextId,
   muse: museReadingContextId,
 };
@@ -145,6 +146,40 @@ function codexAccountContextId(accountId?: string): string | undefined {
         .update(JSON.stringify(["codex-account-v1", accountId]))
         .digest("hex")
     : undefined;
+}
+
+/**
+ * The CLIProxyAPI account a `cpa` reading came from. A CPA row is one proxy
+ * account, never the local Claude or Codex login, so it is stamped only with
+ * its own account context and never falls through to the native scope.
+ */
+const CPA_ACCOUNT_CONTEXT = Symbol("cpaAccountContext");
+
+type CpaStampedQuota = ProviderQuota & { [CPA_ACCOUNT_CONTEXT]?: string };
+
+export function cpaAccountContextId(
+  baseUrl: string,
+  authIndex: string,
+): string {
+  return createHash("sha256")
+    .update(JSON.stringify(["cpa-account-v1", baseUrl, authIndex]))
+    .digest("hex");
+}
+
+export function stampCpaAccountContext(
+  provider: ProviderQuota,
+  contextId: string,
+): void {
+  (provider as CpaStampedQuota)[CPA_ACCOUNT_CONTEXT] = contextId;
+}
+
+function cpaScoped(
+  scope: (provider: ProviderQuota) => string | undefined,
+): (provider: ProviderQuota) => string | undefined {
+  return (provider) =>
+    provider.source === "cpa"
+      ? (provider as CpaStampedQuota)[CPA_ACCOUNT_CONTEXT]
+      : scope(provider);
 }
 
 /**
@@ -443,6 +478,18 @@ export function readCachedClaudeProvider(
   contextId: string,
 ): ProviderQuota | undefined {
   return readCachedProviderInContext("claude", contextId);
+}
+
+/**
+ * CLIProxyAPI stale quota may only be reused for the same proxy and account
+ * that produced it, so one pool account or the local login never stands in for
+ * another.
+ */
+export function readCachedCpaProvider(
+  provider: ProviderId,
+  contextId: string,
+): ProviderQuota | undefined {
+  return readCachedProviderInContext(provider, contextId);
 }
 
 /**

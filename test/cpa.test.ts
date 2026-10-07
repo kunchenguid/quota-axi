@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { cpaEnvFilePath, reuseContextId } from "../src/lib/reuse-context.js";
 import {
   fetchAccountQuotas,
@@ -16,13 +16,17 @@ import {
 import { createCpaAdapter, readCpaConfig } from "../src/providers/cpa.js";
 import {
   readCachedClaudeProvider,
+  readCachedProvider,
   writeCachedProviders,
 } from "../src/cache.js";
+import { quotaCommand } from "../src/commands.js";
 import { claudeCredentialContextId } from "../src/lib/fs.js";
+import { PROVIDERS } from "../src/providers/index.js";
 import type {
   ProviderAdapter,
   ProviderId,
   ProviderOptions,
+  QuotaAxiResponse,
 } from "../src/types.js";
 
 const options: ProviderOptions = {
@@ -31,8 +35,18 @@ const options: ProviderOptions = {
 };
 const servers: ReturnType<typeof createServer>[] = [];
 const roots: string[] = [];
+const originalClaude = PROVIDERS.claude;
+const originalCacheHome = process.env.XDG_CACHE_HOME;
+
+beforeEach(() => {
+  const cacheHome = mkdtempSync(join(tmpdir(), "quota-axi-cpa-cache-"));
+  roots.push(cacheHome);
+  process.env.XDG_CACHE_HOME = cacheHome;
+});
 
 afterEach(async () => {
+  PROVIDERS.claude = originalClaude;
+  process.env.XDG_CACHE_HOME = originalCacheHome;
   for (const root of roots.splice(0))
     rmSync(root, { recursive: true, force: true });
   await Promise.all(
@@ -441,7 +455,7 @@ describe("CLIProxyAPI provider", () => {
     });
   });
 
-  it("never serves a cached CPA Claude row as the local login's stale quota", async () => {
+  it("caches a CPA Claude row under its own account context, never the local login's", async () => {
     const fake = await fakeServer([
       { auth_index: "claude-1", provider: "claude" },
     ]);
@@ -458,8 +472,94 @@ describe("CLIProxyAPI provider", () => {
 
     writeCachedProviders(rows);
 
+    expect(readCachedProvider("claude", "cpa-claude-1")?.source).toBe("cpa");
     expect(
       readCachedClaudeProvider(claudeCredentialContextId()),
     ).toBeUndefined();
+  });
+
+  it("serves a CPA account's own stale snapshot only for that proxy account", async () => {
+    let status = 200;
+    const upstream: Upstream = (call) =>
+      status === 200 ? healthyClaude(call) : { status_code: status, body: {} };
+    const files = [{ auth_index: "claude-1", provider: "claude" }];
+    const fake = await fakeServer(files, upstream);
+    const other = await fakeServer(files, () => ({
+      status_code: 429,
+      body: {},
+    }));
+    const adapterFor = (baseUrl: string) =>
+      createCpaAdapter("claude", fallbackAdapter("claude"), () => ({
+        baseUrl,
+        key: randomUUID(),
+      }));
+    writeCachedProviders(
+      await fetchAccountQuotas(adapterFor(fake.baseUrl), options),
+    );
+
+    status = 429;
+    const [stale] = await fetchAccountQuotas(adapterFor(fake.baseUrl), options);
+    const [elsewhere] = await fetchAccountQuotas(
+      adapterFor(other.baseUrl),
+      options,
+    );
+
+    expect(stale).toMatchObject({
+      accountKey: "cpa-claude-1",
+      source: "cache",
+      state: { status: "stale", error: "cpa_rate_limited" },
+    });
+    expect(stale?.windows.map((window) => window.id)).toEqual([
+      "five_hour",
+      "seven_day",
+    ]);
+    expect(elsewhere).toMatchObject({
+      source: "cpa",
+      windows: [],
+      state: { status: "rate_limited" },
+    });
+
+    status = 401;
+    const [rejected] = await fetchAccountQuotas(
+      adapterFor(fake.baseUrl),
+      options,
+    );
+    expect(rejected?.state.status).toBe("auth_required");
+    expect(readCachedProvider("claude", "cpa-claude-1")).toBeUndefined();
+  });
+
+  it("reuses a CPA reading within --max-age without asking the proxy again", async () => {
+    const fake = await fakeServer([
+      { auth_index: "claude-1", provider: "claude" },
+      { auth_index: "claude-2", provider: "claude" },
+    ]);
+    PROVIDERS.claude = createCpaAdapter(
+      "claude",
+      fallbackAdapter("claude"),
+      () => ({ baseUrl: fake.baseUrl, key: randomUUID() }),
+    );
+    const read = async () =>
+      (
+        JSON.parse(
+          await quotaCommand(
+            ["--provider", "claude", "--json", "--max-age", "90s"],
+            undefined,
+          ),
+        ) as QuotaAxiResponse
+      ).providers;
+
+    const first = await read();
+    const calls = fake.calls.length;
+    const second = await read();
+
+    expect(first.map((row) => row.state.reused)).toEqual([
+      undefined,
+      undefined,
+    ]);
+    expect(second.map((row) => [row.accountKey, row.state.reused])).toEqual([
+      ["cpa-claude-1", true],
+      ["cpa-claude-2", true],
+    ]);
+    expect(fake.calls).toHaveLength(calls);
   });
 });
