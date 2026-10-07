@@ -6,12 +6,14 @@ import type {
   ProviderAccount,
   ProviderAdapter,
   ProviderId,
+  ProviderOptions,
   ProviderQuota,
   ProviderStatus,
 } from "../types.js";
 import {
   cpaAccountContextId,
   readCachedCpaProvider,
+  readReusableCpaProvider,
   retireCachedSlot,
   stampCpaAccountContext,
 } from "../cache.js";
@@ -194,6 +196,7 @@ async function readAccount(
   provider: ProviderId,
   file: AuthFile,
   key: string,
+  options: ProviderOptions,
 ): Promise<ProviderQuota> {
   const authIndex = text(file.auth_index);
   const account = fileIdentity(file);
@@ -207,8 +210,14 @@ async function readAccount(
       "unavailable",
       account,
     );
-  const report = await readUpstream(config, provider, authIndex, account, key);
   const contextId = cpaAccountContextId(config.baseUrl, authIndex);
+  const reused = readReusableCpaProvider(
+    provider,
+    contextId,
+    options.maxAgeSeconds ?? 0,
+  );
+  if (reused) return { ...reused, accountKey: key, account };
+  const report = await readUpstream(config, provider, authIndex, account, key);
   if (report.state.status === "fresh") {
     stampCpaAccountContext(report, contextId);
     return report;
@@ -386,7 +395,8 @@ export function createCpaAdapter(
         const statusError = fileStatusError(file);
         return {
           accountKey: key,
-          fetchQuota: async () => readAccount(config, provider, file, key),
+          fetchQuota: async (options) =>
+            readAccount(config, provider, file, key, options),
           inspectAuth: async () => ({
             provider,
             accountKey: key,

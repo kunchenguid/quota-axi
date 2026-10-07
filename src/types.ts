@@ -396,6 +396,12 @@ export type ProviderOptions = {
    * disk.
    */
   refreshCredentials: boolean;
+  /**
+   * How old a cached reading may be and still answer for a lane that keeps its
+   * own per-account cache slot, such as a CLIProxyAPI account. Set only when
+   * fresh reuse is in effect for this read.
+   */
+  maxAgeSeconds?: number;
 };
 
 export type ProviderAdapter = {

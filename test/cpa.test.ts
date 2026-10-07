@@ -651,4 +651,52 @@ describe("CLIProxyAPI provider", () => {
     ]);
     expect(fake.calls).toHaveLength(calls);
   });
+  it("reuses each healthy CPA account within --max-age while a failed one stays failed", async () => {
+    const fake = await fakeServer([
+      { auth_index: "claude-1", provider: "claude" },
+      { auth_index: "claude-off", provider: "claude", disabled: true },
+    ]);
+    PROVIDERS.claude = createCpaAdapter(
+      "claude",
+      fallbackAdapter("claude"),
+      () => ({ baseUrl: fake.baseUrl, key: randomUUID() }),
+    );
+    const read = async () =>
+      (
+        JSON.parse(
+          await quotaCommand(
+            ["--provider", "claude", "--json", "--max-age", "90s"],
+            undefined,
+          ),
+        ) as QuotaAxiResponse
+      ).providers;
+
+    const first = await read();
+    const calls = fake.calls.length;
+    const second = await read();
+
+    expect(
+      first.map((row) => [row.accountKey, row.state.status, row.state.reused]),
+    ).toEqual([
+      ["cpa-claude-1", "fresh", undefined],
+      ["cpa-claude-off", "error", undefined],
+    ]);
+    expect(calls).toBeGreaterThan(0);
+    expect(
+      second.map((row) => [
+        row.accountKey,
+        row.state.status,
+        row.state.reused,
+        row.state.error,
+      ]),
+    ).toEqual([
+      ["cpa-claude-1", "fresh", true, undefined],
+      ["cpa-claude-off", "error", undefined, "cpa_account_disabled"],
+    ]);
+    expect(second[0]?.windows.map((window) => window.id)).toEqual([
+      "five_hour",
+      "seven_day",
+    ]);
+    expect(fake.calls).toHaveLength(calls);
+  });
 });

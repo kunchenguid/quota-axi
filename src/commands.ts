@@ -459,13 +459,14 @@ async function readProvider(
   if (!(maxAgeSeconds > 0)) return tracedReadings(provider, options);
   const reused = reusableReadings(provider, maxAgeSeconds);
   if (reused) return reused;
+  const reading = { ...options, maxAgeSeconds };
   const turn = await takeFetchTurn(fetchLockPathFor(provider), () =>
     reusableReadings(provider, maxAgeSeconds),
   );
   if (turn.kind === "answered") return turn.value;
-  if (turn.kind === "unlocked") return tracedReadings(provider, options);
+  if (turn.kind === "unlocked") return tracedReadings(provider, reading);
   try {
-    const readings = await tracedReadings(provider, options);
+    const readings = await tracedReadings(provider, reading);
     const readingAt = nowIso();
     writeCachedProvidersBestEffort(
       readings.map((reading) => withQuotaSemantics(reading, readingAt)),

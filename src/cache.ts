@@ -322,15 +322,7 @@ export function readReusableProviders(
   );
   if (group.length === 0 || group.length !== group[0].reuse?.lanes)
     return undefined;
-  const young = group.every((record) => {
-    const refreshedAt = Date.parse(record.snapshot.state.refreshedAt ?? "");
-    return (
-      Number.isFinite(refreshedAt) &&
-      refreshedAt <= now &&
-      now - refreshedAt < maxAgeSeconds * 1_000
-    );
-  });
-  if (!young || !group.every((record) => stillCurrent(record, now)))
+  if (!group.every((record) => reusableAt(record, maxAgeSeconds, now)))
     return undefined;
   const stamp = group[0].reuse as ReuseStamp;
   if (inputsDigest(stamp.inputs) !== stamp.inputsDigest) return undefined;
@@ -388,6 +380,20 @@ export function readSnapshotProviders(
 }
 
 /** Whether no window of this reading has reached its own reported reset. */
+function reusableAt(
+  record: CachedProvider,
+  maxAgeSeconds: number,
+  now: number,
+): boolean {
+  const refreshedAt = Date.parse(record.snapshot.state.refreshedAt ?? "");
+  return (
+    Number.isFinite(refreshedAt) &&
+    refreshedAt <= now &&
+    now - refreshedAt < maxAgeSeconds * 1_000 &&
+    stillCurrent(record, now)
+  );
+}
+
 function stillCurrent(record: CachedProvider, now: number): boolean {
   return record.snapshot.windows.every(
     (window) =>
@@ -493,6 +499,30 @@ export function readCachedCpaProvider(
 }
 
 /**
+ * The CLIProxyAPI account's own cached reading when it is younger than
+ * `maxAgeSeconds` and none of its windows has reset, so each pool account is
+ * reused on its own and a failed sibling never forces a healthy one to ask
+ * its vendor again.
+ */
+export function readReusableCpaProvider(
+  provider: ProviderId,
+  contextId: string,
+  maxAgeSeconds: number,
+  now: number = Date.now(),
+): ProviderQuota | undefined {
+  if (!(maxAgeSeconds > 0) || !CREDENTIAL_CONTEXT_ID.test(contextId))
+    return undefined;
+  const record = readCacheProviders().find(
+    (item) =>
+      item.snapshot.provider === provider &&
+      item.credentialContextId === contextId,
+  );
+  return record && reusableAt(record, maxAgeSeconds, now)
+    ? reusedReading(record)
+    : undefined;
+}
+
+/**
  * Kimi stale quota may only be reused when the cache record proves it was
  * captured from the same source and endpoint the caller is asking about, so one
  * deployment's numbers can never stand in for the other's and a Pi reading of
@@ -577,7 +607,7 @@ export function writeCachedProviders(
   // A reused reading is already the record it came from: rewriting it would
   // restamp its age, and a missing context identity must not clear it.
   const fresh = published.filter((provider) => !provider.state.reused);
-  const reuseStamps = reuseStampsFor(fresh, readingAt);
+  const reuseStamps = reuseStampsFor(published, readingAt);
   // A lane a coalesced report superseded still gets its own slot in this
   // write, so a later run where that route fails merges it from cache
   const providers = fresh
@@ -642,8 +672,9 @@ function withCacheWriteLock(fn: () => void): void {
 
 /**
  * Fresh-reuse stamps for the providers whose every lane in this report is
- * cacheable. A provider with one failed, uncacheable, or empty lane gets none,
- * so the next read asks the vendor again instead of serving part of a report.
+ * cacheable. A provider with one failed, uncacheable, empty, or reused lane
+ * gets none, so the next read asks the vendor again instead of serving part of
+ * a report.
  */
 function reuseStampsFor(
   providers: ProviderQuota[],
@@ -660,6 +691,7 @@ function reuseStampsFor(
       !lanes.every(
         (provider) =>
           (provider as TracedQuota)[READING_INPUTS] === inputs &&
+          !provider.state.reused &&
           !isCacheExcluded(provider) &&
           toCacheProvider(provider),
       )
