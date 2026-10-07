@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.59](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.58...quota-axi-v0.1.59) (2026-10-07)
+
+
+### Bug Fixes
+
+* **codex:** report spend_control cap for Business seats ([#316](https://github.com/kunchenguid/quota-axi/issues/316)) ([0f524bd](https://github.com/kunchenguid/quota-axi/commit/0f524bd7190a4c74a2245f737c0fd85a29be3f84))
+
 ## [0.1.58](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.57...quota-axi-v0.1.58) (2026-10-05)
 
 
