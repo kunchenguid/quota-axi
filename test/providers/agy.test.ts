@@ -571,16 +571,32 @@ describe("Antigravity provider", () => {
     expect(result.state.error).toBe("Antigravity quota summary malformed");
   });
 
-  it("does not serve cached quota when Antigravity is uninstalled", async () => {
-    writeCachedProviders([cachedAgyQuota()]);
+  it.skipIf(process.platform === "win32")(
+    "does not serve cached quota when Antigravity is uninstalled",
+    async () => {
+      writeCachedProviders([cachedAgyQuota()]);
 
-    const result = await fetchQuotaWithRuntime(runtimeWith({ ps: "" }));
+      const result = await fetchQuotaWithRuntime(runtimeWith({ ps: "" }));
 
-    expect(result.state.status).toBe("unavailable");
-    expect(result.state.error).toBe("Antigravity/agy is not running");
-    expect(result.source).not.toBe("cache");
-    expect(readCachedProvider("agy")).toBeUndefined();
-  });
+      expect(result.state.status).toBe("unavailable");
+      expect(result.state.error).toBe("Antigravity/agy is not running");
+      expect(result.source).not.toBe("cache");
+      expect(readCachedProvider("agy")).toBeUndefined();
+    },
+  );
+
+  it.skipIf(process.platform !== "win32")(
+    "keeps cached quota when Windows cannot confirm Antigravity absence",
+    async () => {
+      writeCachedProviders([cachedAgyQuota()]);
+
+      const result = await fetchQuotaWithRuntime(runtimeWith({ ps: "" }));
+
+      expect(result.state.status).toBe("stale");
+      expect(result.source).toBe("cache");
+      expect(readCachedProvider("agy")).toBeDefined();
+    },
+  );
 
   it("preserves cache when agy process is running but has no accessible port", async () => {
     writeCachedProviders([cachedAgyQuota()]);
