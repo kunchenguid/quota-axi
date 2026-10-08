@@ -85,7 +85,7 @@ Shared machinery lives in `src/providers/delegated-refresh.ts`. It is the **sing
   - Grok: `grok models`
   - Codex: `app-server` JSON-RPC probe
 
-  All other providers (Cursor, Copilot, Kimi, Z.AI, Alibaba, OpenCode Go, Antigravity, Command Code, MiniMax, MiMo, DeepSeek, OpenRouter, ElevenLabs, Devin, Muse, Higgsfield) remain strictly read-only.
+  All other providers (Cursor, Copilot, Kimi, Kiro, Z.AI, Alibaba, OpenCode Go, Antigravity, Command Code, MiniMax, MiMo, DeepSeek, OpenRouter, ElevenLabs, Devin, Muse, Higgsfield) remain strictly read-only.
 
 - **Option gating**: Delegated refresh is gated by `ProviderOptions.refreshCredentials`. `--no-credential-refresh` disables it; the `auth` command always passes `false`. Tests must specify it explicitly to prevent accidental CLI spawning.
 
