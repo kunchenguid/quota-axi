@@ -39,6 +39,7 @@ const originalOpenRouterProvider = PROVIDERS.openrouter;
 const originalElevenLabsProvider = PROVIDERS.elevenlabs;
 const originalDevinProvider = PROVIDERS.devin;
 const originalMuseProvider = PROVIDERS.muse;
+const originalKiroProvider = PROVIDERS.kiro;
 const originalHiggsfieldProvider = PROVIDERS.higgsfield;
 const originalXdgCacheHome = process.env.XDG_CACHE_HOME;
 const originalClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
@@ -70,6 +71,7 @@ afterEach(() => {
   PROVIDERS.elevenlabs = originalElevenLabsProvider;
   PROVIDERS.devin = originalDevinProvider;
   PROVIDERS.muse = originalMuseProvider;
+  PROVIDERS.kiro = originalKiroProvider;
   PROVIDERS.higgsfield = originalHiggsfieldProvider;
   vi.unstubAllGlobals();
   if (originalXdgCacheHome === undefined) delete process.env.XDG_CACHE_HOME;
@@ -109,6 +111,7 @@ describe("CLI flag parsing", () => {
       "elevenlabs",
       "devin",
       "muse",
+      "kiro",
       "higgsfield",
     ]);
   });
@@ -185,6 +188,7 @@ describe("CLI flag parsing", () => {
           "elevenlabs",
           "devin",
           "muse",
+          "kiro",
           "higgsfield",
         ],
         json: true,
@@ -1462,13 +1466,13 @@ describe("human report folding for providers that are not set up", () => {
 
     expect(output.trimEnd().split("\n").slice(-3)).toEqual([
       "  ○ not set up  cursor · copilot · grok · kimi · zai · agy · alibaba · opencode-go · commandcode",
-      "                minimax · mimo · deepseek · openrouter · elevenlabs · devin · muse · higgsfield",
-      "                quota-axi auth shows where each is read",
+      "                minimax · mimo · deepseek · openrouter · elevenlabs · devin · muse · kiro",
+      "                higgsfield   quota-axi auth shows where each is read",
     ]);
     expect(output).not.toMatch(/╭─ ○ (agy|alibaba|commandcode) /);
 
     expect(output).toMatch(
-      /· 1 live · 0 stale · 1 needs attention · 17 not set up\n/,
+      /· 1 live · 0 stale · 1 needs attention · 18 not set up\n/,
     );
     expect(output).toContain("╭─ ● codex ");
     expect(output).toContain("╭─ ○ claude ");
@@ -1481,7 +1485,7 @@ describe("human report folding for providers that are not set up", () => {
     stubFoldFleet();
     const output = await capture(["--tui", "--once", "--all"]);
 
-    expect(output).toContain("  ○ not set up · 17\n");
+    expect(output).toContain("  ○ not set up · 18\n");
     expect(output).toContain("╭─ ○ copilot ");
     expect(output).toContain("╭─ ○ elevenlabs ");
     expect(output).toContain("╭─ ○ higgsfield ");
@@ -1547,7 +1551,7 @@ describe("human report folding for providers that are not set up", () => {
 
       process.stdin.emit("data", Buffer.from("a"));
       await settle("a hide not set up");
-      expect(lastFrame()).toContain("  ○ not set up · 17");
+      expect(lastFrame()).toContain("  ○ not set up · 18");
       expect(lastFrame()).toContain("╭─ ○ zai ");
 
       process.stdin.emit("data", Buffer.from("q"));
@@ -1951,6 +1955,7 @@ describe("default TOON decision blocks", () => {
     PROVIDERS.elevenlabs = providerWithQuota(freshElevenLabsQuota());
     PROVIDERS.devin = providerWithQuota(freshDevinQuota());
     PROVIDERS.muse = providerWithQuota(emptyFreshQuota("muse", "Muse"));
+    PROVIDERS.kiro = providerWithQuota(freshKiroQuota());
     PROVIDERS.higgsfield = providerWithQuota(freshHiggsfieldQuota());
 
     const output = await capture([]);
@@ -1973,6 +1978,7 @@ describe("default TOON decision blocks", () => {
       "grok",
       "higgsfield",
       "kimi",
+      "kiro",
       "mimo",
       "minimax",
       "muse",
@@ -2320,6 +2326,50 @@ describe("default TOON decision blocks", () => {
       ]);
     },
   );
+
+  it("keeps account keys on credit rows in expanded reports", async () => {
+    useTempCache();
+    const creditQuota = (accountKey: string): ProviderQuota => ({
+      provider: "commandcode",
+      label: "Command Code",
+      source: "api",
+      accountKey,
+      windows: [],
+      credits: { remaining: 12.5, unit: "credits" },
+      state: {
+        status: "fresh",
+        stale: false,
+        refreshedAt: "2026-07-06T18:10:00Z",
+        authStatus: "usable",
+        sourcesTried: ["pi:commandcode"],
+      },
+    });
+    PROVIDERS.commandcode = providerWithAccounts([
+      ["work", creditQuota("work")],
+      ["personal", creditQuota("personal")],
+    ]);
+
+    const output = await capture(["--provider", "commandcode"]);
+
+    expect(toonRows(output, "attention")).toEqual([
+      [
+        "commandcode",
+        "work",
+        "all",
+        "credits",
+        "remaining 12.5 credits (auth usable)",
+        "none",
+      ],
+      [
+        "commandcode",
+        "personal",
+        "all",
+        "credits",
+        "remaining 12.5 credits (auth usable)",
+        "none",
+      ],
+    ]);
+  });
 
   it("renders an unmeasurable spendPriority as `unknown`, never as 0", async () => {
     useTempCache();
@@ -2838,7 +2888,7 @@ describe("response redaction", () => {
   it("hides account identity and attempts unless --full is set", () => {
     const response: QuotaAxiResponse = {
       generatedAt: "2026-07-06T18:10:00Z",
-      schemaVersion: 5,
+      schemaVersion: 6,
       providers: [
         {
           provider: "claude",
@@ -3676,6 +3726,29 @@ function freshDevinQuota(): ProviderQuota {
       authStatus: "usable",
       refreshedAt: "2026-09-22T12:00:00.000Z",
       sourcesTried: ["env:WINDSURF_API_KEY"],
+    },
+  };
+}
+
+function freshKiroQuota(): ProviderQuota {
+  return {
+    provider: "kiro",
+    label: "Kiro",
+    source: "api",
+    windows: [
+      {
+        id: "credits",
+        label: "credits",
+        kind: "credits",
+        percentUsed: 15,
+        percentRemaining: 85,
+      },
+    ],
+    state: {
+      status: "fresh",
+      stale: false,
+      refreshedAt: "2026-07-06T18:10:00Z",
+      sourcesTried: ["kiro-cli"],
     },
   };
 }

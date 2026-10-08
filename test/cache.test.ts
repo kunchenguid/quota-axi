@@ -900,6 +900,62 @@ oauth_host = "https://auth.kimi.ai"
     expect(statSync(cacheFilePath()).mode & 0o777).toBe(0o600);
   });
 
+  it("does not clear another Claude context after an auth failure", () => {
+    useTempCache();
+    writeCachedProviders([quota("claude", 10)]);
+    process.env.CLAUDE_CONFIG_DIR = join(tempDir!, "other-claude-context");
+
+    writeCachedProviders([
+      {
+        ...quota("claude", 10),
+        windows: [],
+        state: {
+          status: "auth_required",
+          stale: false,
+          error: "credentials_invalid",
+          sourcesTried: ["oauth-file"],
+        },
+      },
+    ]);
+
+    expect(readCachedProvider("claude")?.windows[0].percentUsed).toBe(10);
+  });
+
+  it("preserves Kiro provider-native window fields across a cache round-trip", () => {
+    useTempCache();
+    const kiro: ProviderQuota = {
+      ...quota("kiro", 0),
+      windows: [
+        {
+          id: "credits",
+          label: "credits",
+          kind: "credits",
+          usage: 137,
+          limit: 500,
+          unit: "credits",
+          overage: 12,
+          overageCharges: 3.5,
+          currency: "usd",
+          overageRate: 0.29,
+          overageCap: 50,
+        },
+      ],
+    };
+    writeCachedProviders([kiro]);
+
+    const window = readCachedProvider("kiro")?.windows[0];
+    expect(window).toMatchObject({
+      usage: 137,
+      limit: 500,
+      unit: "credits",
+      overage: 12,
+      overageCharges: 3.5,
+      currency: "usd",
+      overageRate: 0.29,
+      overageCap: 50,
+    });
+  });
+
   it("clears a stale snapshot after a fresh no-window report", () => {
     useTempCache();
     writeCachedProviders([quota("claude", 10), quota("copilot", 20)]);

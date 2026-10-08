@@ -709,7 +709,7 @@ describe("Kimi request transport", () => {
     const rendered = renderQuotaToon(
       {
         generatedAt,
-        schemaVersion: 5,
+        schemaVersion: 6,
         providers: [withQuotaSemantics(report, generatedAt)],
       },
       "quota-axi",
@@ -1140,7 +1140,7 @@ describe("Kimi payload normalization", () => {
     const generatedAt = new Date(NOW).toISOString();
     const response = {
       generatedAt,
-      schemaVersion: 5 as const,
+      schemaVersion: 6 as const,
       providers: [withQuotaSemantics(report, generatedAt)],
     };
     const json = JSON.stringify(quotaJsonReport(response, false));
@@ -2210,7 +2210,7 @@ describe("Kimi credential outcomes and cache policy", () => {
     const rendered = renderQuotaToon(
       {
         generatedAt: new Date(NOW).toISOString(),
-        schemaVersion: 5,
+        schemaVersion: 6,
         providers: [withQuotaSemantics(report, new Date(NOW).toISOString())],
       },
       "quota-axi",
@@ -2447,7 +2447,7 @@ describe("Kimi credential outcomes and cache policy", () => {
     const rendered = renderQuotaToon(
       {
         generatedAt: new Date(NOW).toISOString(),
-        schemaVersion: 5,
+        schemaVersion: 6,
         providers: [withQuotaSemantics(report, new Date(NOW).toISOString())],
       },
       "quota-axi",

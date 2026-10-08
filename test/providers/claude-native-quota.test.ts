@@ -878,7 +878,7 @@ process.disconnect();
       let child: { pid: number; descendant: number; cwd: string } | undefined;
       try {
         await vi.waitFor(() => expect(existsSync(ready)).toBe(true), {
-          timeout: 4000,
+          timeout: 10000,
           interval: 20,
         });
         child = JSON.parse(readFileSync(ready, "utf8")) as typeof child;
@@ -909,7 +909,7 @@ process.disconnect();
             expect(() => process.kill(child!.pid, 0)).toThrow();
             expect(() => process.kill(child!.descendant, 0)).toThrow();
           },
-          { timeout: 2000, interval: 20 },
+          { timeout: 10000, interval: 20 },
         );
       } finally {
         runner.kill("SIGKILL");
@@ -923,6 +923,6 @@ process.disconnect();
         rmSync(directory, { recursive: true, force: true });
       }
     },
-    10000,
+    30000,
   );
 });

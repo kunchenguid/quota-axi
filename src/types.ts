@@ -17,6 +17,7 @@ export type ProviderId =
   | "elevenlabs"
   | "devin"
   | "muse"
+  | "kiro"
   | "higgsfield";
 
 export const PROVIDER_IDS = [
@@ -38,6 +39,7 @@ export const PROVIDER_IDS = [
   "elevenlabs",
   "devin",
   "muse",
+  "kiro",
   "higgsfield",
 ] as const satisfies readonly ProviderId[];
 
@@ -214,6 +216,15 @@ export type QuotaWindow = {
   windowSeconds?: number;
   spentUsd?: number;
   limitUsd?: number;
+  /** Provider-native usage values whose unit is not necessarily currency. */
+  usage?: number;
+  limit?: number;
+  unit?: string;
+  overage?: number;
+  overageCharges?: number;
+  currency?: string;
+  overageRate?: number;
+  overageCap?: number;
   /** Credit-unit amounts for non-USD credit caps (e.g. workspace spend controls). */
   limitCredits?: number;
   usedCredits?: number;
@@ -320,6 +331,7 @@ export type ProviderQuota = {
     unlimited?: boolean;
     unit?: "usd" | "cny" | "credits";
   };
+  overageStatus?: string;
   /**
    * PHI-safe job-outcome sample from a vendor list command. Counts only;
    * never prompts, URLs, ids, or account identity. Restored on cache reuse

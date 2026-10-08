@@ -1123,6 +1123,14 @@ function normalizeCachedWindow(raw: unknown): QuotaWindow | undefined {
   assignNumber(result, "windowSeconds", data.windowSeconds);
   assignNumber(result, "spentUsd", data.spentUsd);
   assignNumber(result, "limitUsd", data.limitUsd);
+  assignNumber(result, "usage", data.usage);
+  assignNumber(result, "limit", data.limit);
+  assignString(result, "unit", data.unit);
+  assignNumber(result, "overage", data.overage);
+  assignNumber(result, "overageCharges", data.overageCharges);
+  assignString(result, "currency", data.currency);
+  assignNumber(result, "overageRate", data.overageRate);
+  assignNumber(result, "overageCap", data.overageCap);
   assignNumber(result, "limitCredits", data.limitCredits);
   assignNumber(result, "usedCredits", data.usedCredits);
   assignNumber(result, "remainingCredits", data.remainingCredits);

@@ -112,6 +112,7 @@ const ACCENTS: Record<ProviderId, StyleSpec> = {
   elevenlabs: { rgb: [214, 170, 255], ansi16: "95", bold: true },
   devin: { rgb: [126, 196, 224], ansi16: "96", bold: true },
   muse: { rgb: [0, 132, 255], ansi16: "94", bold: true },
+  kiro: { rgb: [180, 220, 180], ansi16: "92", bold: true },
   higgsfield: { rgb: [255, 176, 122], ansi16: "93", bold: true },
 };
 
@@ -405,6 +406,19 @@ function buildLiveCard(
           border,
         ),
       );
+      for (const usage of windowUsageLines(window)) {
+        lines.push(
+          interior(
+            [
+              {
+                text: ` ${truncate(usage, CARD_INTERIOR - 4)}`,
+                style: "dimmer",
+              },
+            ],
+            border,
+          ),
+        );
+      }
     }
   }
 
@@ -874,6 +888,9 @@ function cardNotes(provider: ProviderQuota, generatedAtMs: number): string[] {
   if (provider.state.remedyCommand) {
     notes.push(`run: ${provider.state.remedyCommand}`);
   }
+  if (provider.overageStatus) {
+    notes.push(`overage ${provider.overageStatus}`);
+  }
   return notes;
 }
 
@@ -947,6 +964,43 @@ function compactHeadlineWindowName(label: string, width: number): string {
  * period/unit token ("Fable week" -> "fable", "730h window" -> "730h"),
  * then fall back to the last hyphen segment and an ellipsis.
  */
+function windowUsageLines(window: QuotaWindow): string[] {
+  if (
+    window.usage === undefined &&
+    window.limit === undefined &&
+    window.overage === undefined &&
+    window.overageCharges === undefined
+  ) {
+    return [];
+  }
+  const unit = window.unit ? ` ${window.unit}` : "";
+  const used = window.usage === undefined ? "?" : String(window.usage);
+  const limit = window.limit === undefined ? "?" : String(window.limit);
+  const lines = [`used ${used} / ${limit}${unit}`];
+  if (
+    window.percentUsed !== undefined ||
+    window.percentRemaining !== undefined
+  ) {
+    lines.push(
+      `${formatUsagePercent(window.percentUsed)} used · ${formatUsagePercent(window.percentRemaining)} remaining`,
+    );
+  }
+  if (window.overage !== undefined)
+    lines.push(`overage ${window.overage}${unit}`);
+  if (window.overageCharges !== undefined) {
+    lines.push(
+      `charges ${window.overageCharges}${window.currency ? ` ${window.currency}` : ""}`,
+    );
+  }
+  return lines;
+}
+
+function formatUsagePercent(percent: number | undefined): string {
+  return percent === undefined || !Number.isFinite(percent)
+    ? "?%"
+    : `${Math.round(percent * 10) / 10}%`;
+}
+
 export function shortWindowLabel(window: QuotaWindow): string {
   const tokens = window.label.split(/[\s_]+/).filter(Boolean);
   if (

@@ -1,12 +1,12 @@
 ---
 name: provider-adapters
-description: "Provider-specific auth sources, quota windows, endpoint shapes, error recovery, and quirks for the quota-axi providers with dedicated sections below; Muse is covered in the README provider notes."
+description: "Provider-specific auth sources, quota windows, endpoint shapes, error recovery, and quirks for the quota-axi providers with dedicated sections below; Kiro and Muse are covered in the README provider notes."
 user-invocable: false
 ---
 
 # Provider Adapters & Quirks
 
-This reference details the credential sources, endpoint contracts, quota window structures, error handling, and vendor-specific quirks for the providers with dedicated sections below. Muse has no section here; its specification lives in the README provider notes.
+This reference details the credential sources, endpoint contracts, quota window structures, error handling, and vendor-specific quirks for the providers with dedicated sections below. Kiro and Muse have no section here; their specifications live in the README provider notes.
 
 ---
 
