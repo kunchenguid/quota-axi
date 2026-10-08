@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
 import { homedir, userInfo } from "node:os";
+import { join } from "node:path";
+import { inputsDigest } from "./input-trace.js";
 
 /**
  * Every environment variable a provider consults to choose which profile,
@@ -54,12 +56,27 @@ export const CREDENTIAL_SELECTION_ENV = [
   "WINDSURF_API_KEY",
   "WINDSURF_API_SERVER_URL",
   "META_API_KEY",
+  "CPA_BASE_URL",
+  "CPA_MANAGEMENT_KEY",
 ] as const;
+
+/**
+ * quota-axi's CLIProxyAPI settings file, which switches Claude and Codex to
+ * its account pool: `$XDG_CONFIG_HOME/quota-axi/cpa.env`, or
+ * `~/.config/quota-axi/cpa.env` when `XDG_CONFIG_HOME` is unset.
+ */
+export function cpaEnvFilePath(
+  environment: Record<string, string | undefined> = process.env,
+): string {
+  const base = environment.XDG_CONFIG_HOME || join(homedir(), ".config");
+  return join(base, "quota-axi", "cpa.env");
+}
 
 /**
  * An opaque identifier for the credential selection this process would make.
  * Values are hashed together, never stored: several of these variables are
- * credentials themselves.
+ * credentials themselves. The CLIProxyAPI settings file selects too, so the
+ * state of that file, never its contents, is part of the identifier.
  */
 export function reuseContextId(
   environment: NodeJS.ProcessEnv = process.env,
@@ -71,6 +88,7 @@ export function reuseContextId(
         homedir(),
         currentUsername(),
         CREDENTIAL_SELECTION_ENV.map((name) => environment[name] ?? null),
+        inputsDigest([cpaEnvFilePath(environment)]),
       ]),
     )
     .digest("hex");

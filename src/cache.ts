@@ -30,6 +30,7 @@ import { PROVIDER_IDS } from "./types.js";
 
 const PROVIDER_SOURCES = [
   "oauth",
+  "cpa",
   "pi:openai-codex",
   "cli-rpc",
   "cli",
@@ -103,12 +104,12 @@ const CREDENTIAL_CONTEXT_ID = /^[a-f0-9]{64}$/;
 const CONTEXT_SCOPED_PROVIDERS: Partial<
   Record<ProviderId, (provider: ProviderQuota) => string | undefined>
 > = {
-  claude: claudeCredentialContextId,
+  claude: cpaScoped(claudeCredentialContextId),
   kimi: kimiReadingContextId,
   commandcode: commandCodeReadingContextId,
   elevenlabs: elevenLabsReadingContextId,
   devin: devinReadingContextId,
-  codex: codexStampContextId,
+  codex: cpaScoped(codexStampContextId),
   minimax: miniMaxReadingContextId,
   muse: museReadingContextId,
 };
@@ -145,6 +146,40 @@ function codexAccountContextId(accountId?: string): string | undefined {
         .update(JSON.stringify(["codex-account-v1", accountId]))
         .digest("hex")
     : undefined;
+}
+
+/**
+ * The CLIProxyAPI account a `cpa` reading came from. A CPA row is one proxy
+ * account, never the local Claude or Codex login, so it is stamped only with
+ * its own account context and never falls through to the native scope.
+ */
+const CPA_ACCOUNT_CONTEXT = Symbol("cpaAccountContext");
+
+type CpaStampedQuota = ProviderQuota & { [CPA_ACCOUNT_CONTEXT]?: string };
+
+export function cpaAccountContextId(
+  baseUrl: string,
+  authIndex: string,
+): string {
+  return createHash("sha256")
+    .update(JSON.stringify(["cpa-account-v1", baseUrl, authIndex]))
+    .digest("hex");
+}
+
+export function stampCpaAccountContext(
+  provider: ProviderQuota,
+  contextId: string,
+): void {
+  (provider as CpaStampedQuota)[CPA_ACCOUNT_CONTEXT] = contextId;
+}
+
+function cpaScoped(
+  scope: (provider: ProviderQuota) => string | undefined,
+): (provider: ProviderQuota) => string | undefined {
+  return (provider) =>
+    provider.source === "cpa"
+      ? (provider as CpaStampedQuota)[CPA_ACCOUNT_CONTEXT]
+      : scope(provider);
 }
 
 /**
@@ -287,15 +322,7 @@ export function readReusableProviders(
   );
   if (group.length === 0 || group.length !== group[0].reuse?.lanes)
     return undefined;
-  const young = group.every((record) => {
-    const refreshedAt = Date.parse(record.snapshot.state.refreshedAt ?? "");
-    return (
-      Number.isFinite(refreshedAt) &&
-      refreshedAt <= now &&
-      now - refreshedAt < maxAgeSeconds * 1_000
-    );
-  });
-  if (!young || !group.every((record) => stillCurrent(record, now)))
+  if (!group.every((record) => reusableAt(record, maxAgeSeconds, now)))
     return undefined;
   const stamp = group[0].reuse as ReuseStamp;
   if (inputsDigest(stamp.inputs) !== stamp.inputsDigest) return undefined;
@@ -353,6 +380,20 @@ export function readSnapshotProviders(
 }
 
 /** Whether no window of this reading has reached its own reported reset. */
+function reusableAt(
+  record: CachedProvider,
+  maxAgeSeconds: number,
+  now: number,
+): boolean {
+  const refreshedAt = Date.parse(record.snapshot.state.refreshedAt ?? "");
+  return (
+    Number.isFinite(refreshedAt) &&
+    refreshedAt <= now &&
+    now - refreshedAt < maxAgeSeconds * 1_000 &&
+    stillCurrent(record, now)
+  );
+}
+
 function stillCurrent(record: CachedProvider, now: number): boolean {
   return record.snapshot.windows.every(
     (window) =>
@@ -446,6 +487,42 @@ export function readCachedClaudeProvider(
 }
 
 /**
+ * CLIProxyAPI stale quota may only be reused for the same proxy and account
+ * that produced it, so one pool account or the local login never stands in for
+ * another.
+ */
+export function readCachedCpaProvider(
+  provider: ProviderId,
+  contextId: string,
+): ProviderQuota | undefined {
+  return readCachedProviderInContext(provider, contextId);
+}
+
+/**
+ * The CLIProxyAPI account's own cached reading when it is younger than
+ * `maxAgeSeconds` and none of its windows has reset, so each pool account is
+ * reused on its own and a failed sibling never forces a healthy one to ask
+ * its vendor again.
+ */
+export function readReusableCpaProvider(
+  provider: ProviderId,
+  contextId: string,
+  maxAgeSeconds: number,
+  now: number = Date.now(),
+): ProviderQuota | undefined {
+  if (!(maxAgeSeconds > 0) || !CREDENTIAL_CONTEXT_ID.test(contextId))
+    return undefined;
+  const record = readCacheProviders().find(
+    (item) =>
+      item.snapshot.provider === provider &&
+      item.credentialContextId === contextId,
+  );
+  return record && reusableAt(record, maxAgeSeconds, now)
+    ? reusedReading(record)
+    : undefined;
+}
+
+/**
  * Kimi stale quota may only be reused when the cache record proves it was
  * captured from the same source and endpoint the caller is asking about, so one
  * deployment's numbers can never stand in for the other's and a Pi reading of
@@ -527,15 +604,15 @@ export function writeCachedProviders(
   published: ProviderQuota[],
   readingAt: string = new Date().toISOString(),
 ): void {
-  // A reused reading is already the record it came from: rewriting it would
-  // restamp its age, and a missing context identity must not clear it.
-  const fresh = published.filter((provider) => !provider.state.reused);
-  const reuseStamps = reuseStampsFor(fresh, readingAt);
+  const reuseStamps = reuseStampsFor(published, readingAt);
   // A lane a coalesced report superseded still gets its own slot in this
-  // write, so a later run where that route fails merges it from cache
-  const providers = fresh
+  // write, so a later run where that route fails merges it from cache. A
+  // reused reading, winner or superseded, is already the record it came from:
+  // rewriting it would restamp its age, and a missing context identity must
+  // not clear it.
+  const providers = published
     .flatMap((provider) => [provider, ...supersededReadings(provider)])
-    .filter((provider) => !isCacheExcluded(provider));
+    .filter((provider) => !provider.state.reused && !isCacheExcluded(provider));
   const clearProviders = new Set(
     providers
       .filter(
@@ -595,8 +672,9 @@ function withCacheWriteLock(fn: () => void): void {
 
 /**
  * Fresh-reuse stamps for the providers whose every lane in this report is
- * cacheable. A provider with one failed, uncacheable, or empty lane gets none,
- * so the next read asks the vendor again instead of serving part of a report.
+ * cacheable. A provider with one failed, uncacheable, empty, or reused lane
+ * gets none, so the next read asks the vendor again instead of serving part of
+ * a report.
  */
 function reuseStampsFor(
   providers: ProviderQuota[],
@@ -613,6 +691,7 @@ function reuseStampsFor(
       !lanes.every(
         (provider) =>
           (provider as TracedQuota)[READING_INPUTS] === inputs &&
+          !provider.state.reused &&
           !isCacheExcluded(provider) &&
           toCacheProvider(provider),
       )

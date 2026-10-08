@@ -51,10 +51,10 @@ import { withUsageFetchFailure } from "./usage-fetch-failure.js";
 import { fetchClaudeNativeQuota } from "./claude-native-quota.js";
 import { traceInput } from "../lib/input-trace.js";
 
-const API_URL = "https://api.anthropic.com/api/oauth/usage";
-const PROFILE_API_URL = "https://api.anthropic.com/api/oauth/profile";
-const OAUTH_BETA = "oauth-2025-04-20";
-const CLAUDE_CODE_USER_AGENT = "claude-code/2.1.202";
+export const API_URL = "https://api.anthropic.com/api/oauth/usage";
+export const PROFILE_API_URL = "https://api.anthropic.com/api/oauth/profile";
+export const OAUTH_BETA = "oauth-2025-04-20";
+export const CLAUDE_CODE_USER_AGENT = "claude-code/2.1.202";
 const API_TIMEOUT_MS = 15_000;
 const KEYCHAIN_PROMPT_TIMEOUT_MS = 60_000;
 const KEYCHAIN_PRESENCE_TIMEOUT_MS = 5_000;

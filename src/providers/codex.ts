@@ -51,7 +51,7 @@ import {
   type PiCodexCredentialResolution,
 } from "./pi-codex-credential.js";
 
-const ENDPOINTS = [
+export const ENDPOINTS = [
   "https://chatgpt.com/backend-api/wham/usage",
   "https://chatgpt.com/backend-api/codex/usage",
 ];

@@ -67,3 +67,8 @@ delete process.env.QUOTA_AXI_SNAPSHOT;
 // CLI login store is already unreachable because XDG_CONFIG_HOME is sandboxed
 // above. Tests that exercise Muse set their own credential environment.
 delete process.env.META_API_KEY;
+
+// CLIProxyAPI configuration must never point a suite run at a real proxy. The
+// env file is already unreachable because XDG_CONFIG_HOME is sandboxed above.
+delete process.env.CPA_BASE_URL;
+delete process.env.CPA_MANAGEMENT_KEY;
