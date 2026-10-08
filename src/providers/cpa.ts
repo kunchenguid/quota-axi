@@ -41,6 +41,7 @@ type AuthFile = {
   provider?: unknown;
   disabled?: unknown;
   email?: unknown;
+  id_token?: unknown;
 };
 type CpaResponse = { status_code?: unknown; body?: unknown };
 
@@ -96,6 +97,14 @@ function providerMatches(file: AuthFile, provider: ProviderId): boolean {
 function fileIdentity(file: AuthFile): ProviderQuota["account"] {
   const email = text(file.email);
   return { ...(email ? { email } : {}), identityStatus: "unverified" };
+}
+
+function pinnedCodexAccountId(file: AuthFile): string | undefined {
+  return file.id_token && typeof file.id_token === "object"
+    ? text(
+        (file.id_token as { chatgpt_account_id?: unknown }).chatgpt_account_id,
+      )
+    : undefined;
 }
 
 function fileStatusError(file: AuthFile): string | undefined {
@@ -217,7 +226,14 @@ async function readAccount(
     options.maxAgeSeconds ?? 0,
   );
   if (reused) return { ...reused, accountKey: key, account };
-  const report = await readUpstream(config, provider, authIndex, account, key);
+  const report = await readUpstream(
+    config,
+    provider,
+    authIndex,
+    account,
+    key,
+    pinnedCodexAccountId(file),
+  );
   if (report.state.status === "fresh") {
     stampCpaAccountContext(report, contextId);
     return report;
@@ -241,6 +257,7 @@ async function readUpstream(
   authIndex: string,
   account: ProviderQuota["account"],
   key: string,
+  pinnedAccountId: string | undefined,
 ): Promise<ProviderQuota> {
   try {
     if (provider === "claude") {
@@ -316,6 +333,7 @@ async function readUpstream(
         response = await upstreamCall(config, authIndex, url, {
           authorization: "Bearer $TOKEN$",
           accept: "application/json",
+          ...(pinnedAccountId ? { "ChatGPT-Account-Id": pinnedAccountId } : {}),
         });
       } catch (error) {
         rejectedEverywhere = false;
@@ -348,20 +366,23 @@ async function readUpstream(
       );
     }
     const vendorEmail = normalized.account?.email;
-    const vendorId = normalized.account?.accountId;
+    const verifiedId =
+      pinnedAccountId && normalized.account?.accountId === pinnedAccountId
+        ? pinnedAccountId
+        : undefined;
     return {
       ...successProvider({
         provider,
         label: "Codex",
         source: "cpa",
         plan: normalized.plan,
-        // An account_id from a successful vendor read verifies the identity;
-        // the auth file's own email never does.
+        // Only a vendor account_id that matches the workspace this read
+        // pinned verifies the identity; the auth file's own email never does.
         account: {
           ...account,
           ...(vendorEmail ? { email: vendorEmail } : {}),
-          ...(vendorId
-            ? { accountId: vendorId, identityStatus: "verified" as const }
+          ...(verifiedId
+            ? { accountId: verifiedId, identityStatus: "verified" as const }
             : {}),
         },
         windows: normalized.windows,

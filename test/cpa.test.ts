@@ -458,23 +458,48 @@ describe("CLIProxyAPI provider", () => {
     ).toEqual(["/backend-api/wham/usage", "/backend-api/codex/usage"]);
   });
 
-  it("folds CPA Codex accounts that the vendor reports as one subscription", async () => {
+  it("folds only CPA Codex accounts the vendor confirms for their pinned workspace", async () => {
+    const pinned = (accountId: string) => ({
+      chatgpt_account_id: accountId,
+      plan_type: "plus",
+    });
     const fake = await fakeServer(
       [
-        { auth_index: "codex-1", provider: "codex", email: "c@example.test" },
-        { auth_index: "codex-2", provider: "codex", email: "d@example.test" },
-        { auth_index: "codex-3", provider: "codex", email: "e@example.test" },
-      ],
-      (call) => ({
-        status_code: 200,
-        body: {
-          plan_type: "plus",
-          ...(call.auth_index === "codex-3"
-            ? {}
-            : { account_id: "acct-shared" }),
-          rate_limit: { primary_window: { used_percent: 20 } },
+        {
+          auth_index: "codex-1",
+          provider: "codex",
+          email: "c@example.test",
+          id_token: pinned("acct-shared"),
         },
-      }),
+        {
+          auth_index: "codex-2",
+          provider: "codex",
+          email: "d@example.test",
+          id_token: pinned("acct-shared"),
+        },
+        {
+          auth_index: "codex-3",
+          provider: "codex",
+          email: "c@example.test",
+          id_token: pinned("acct-team"),
+        },
+        { auth_index: "codex-4", provider: "codex", email: "e@example.test" },
+      ],
+      (call) => {
+        const workspace = call.header["ChatGPT-Account-Id"];
+        return {
+          status_code: 200,
+          body: {
+            plan_type: workspace === "acct-team" ? "team" : "plus",
+            account_id: workspace ?? "acct-shared",
+            rate_limit: {
+              primary_window: {
+                used_percent: workspace === "acct-team" ? 60 : 20,
+              },
+            },
+          },
+        };
+      },
     );
     const adapter = createCpaAdapter("codex", fallbackAdapter("codex"), () => ({
       baseUrl: fake.baseUrl,
@@ -483,9 +508,18 @@ describe("CLIProxyAPI provider", () => {
 
     const rows = await fetchAccountQuotas(adapter, options);
 
-    expect(rows.map((row) => [row.accountKeys, row.account])).toEqual([
+    expect(
+      rows.map((row) => [
+        row.accountKeys,
+        row.plan,
+        row.windows[0]?.percentRemaining,
+        row.account,
+      ]),
+    ).toEqual([
       [
         ["cpa-codex-1", "cpa-codex-2"],
+        "plus",
+        80,
         {
           email: "c@example.test",
           accountId: "acct-shared",
@@ -494,6 +528,18 @@ describe("CLIProxyAPI provider", () => {
       ],
       [
         ["cpa-codex-3"],
+        "team",
+        40,
+        {
+          email: "c@example.test",
+          accountId: "acct-team",
+          identityStatus: "verified",
+        },
+      ],
+      [
+        ["cpa-codex-4"],
+        "plus",
+        80,
         { email: "e@example.test", identityStatus: "unverified" },
       ],
     ]);
