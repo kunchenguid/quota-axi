@@ -157,24 +157,57 @@ function fallbackAdapter(provider: ProviderId): ProviderAdapter {
 
 describe("CLIProxyAPI provider", () => {
   it("accepts loopback HTTP and requires HTTPS elsewhere", () => {
-    expect(
-      readCpaConfig({
-        CPA_BASE_URL: "http://127.0.0.1:8317",
-        CPA_MANAGEMENT_KEY: "k",
-      }),
-    ).toBeDefined();
-    expect(
-      readCpaConfig({
-        CPA_BASE_URL: "http://example.test",
-        CPA_MANAGEMENT_KEY: "k",
-      }),
-    ).toBeUndefined();
-    expect(
-      readCpaConfig({
-        CPA_BASE_URL: "https://example.test",
-        CPA_MANAGEMENT_KEY: "k",
-      }),
-    ).toBeDefined();
+    const read = (url: string) =>
+      readCpaConfig({ CPA_BASE_URL: url, CPA_MANAGEMENT_KEY: "k" });
+    for (const url of [
+      "http://127.0.0.1:8317",
+      "http://127.0.0.2:8317",
+      "http://127.255.1.9",
+      "http://localhost:8317",
+      "http://[::1]:8317",
+      "https://example.test",
+    ])
+      expect(read(url)).toMatchObject({ key: "k" });
+    for (const url of [
+      "http://example.test",
+      "http://192.168.1.5:8317",
+      "http://host.docker.internal:8317",
+      "http://127.0.0.1.example.test",
+      "ftp://127.0.0.1",
+    ])
+      expect(read(url)).toEqual({ error: "cpa_base_url_requires_https" });
+    expect(read("not a url")).toEqual({ error: "cpa_base_url_invalid" });
+  });
+
+  it("reports a rejected CPA endpoint instead of falling back to the local login", async () => {
+    for (const [url, error] of [
+      ["http://192.168.1.5:8317", "cpa_base_url_requires_https"],
+      ["not a url", "cpa_base_url_invalid"],
+    ] as const) {
+      const adapter = createCpaAdapter(
+        "claude",
+        fallbackAdapter("claude"),
+        () => readCpaConfig({ CPA_BASE_URL: url, CPA_MANAGEMENT_KEY: "k" }),
+      );
+
+      const rows = await fetchAccountQuotas(adapter, options);
+      const auth = await inspectAccountAuth(adapter, options);
+
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        provider: "claude",
+        source: "cpa",
+        accountKey: "cpa",
+        windows: [],
+        state: { status: "error", error },
+      });
+      expect(auth).toMatchObject([
+        {
+          accountKey: "cpa",
+          sources: [{ source: "cpa", status: "error", error }],
+        },
+      ]);
+    }
   });
   it("reports each pooled account as its own row with only vendor figures", async () => {
     const fake = await fakeServer([

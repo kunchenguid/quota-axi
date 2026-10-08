@@ -36,6 +36,7 @@ const API_TIMEOUT_MS = 15_000;
 const UNLISTED_LANE = "cpa";
 
 type CpaConfig = { baseUrl: string; key: string };
+type CpaConfigError = { error: string };
 type AuthFile = {
   auth_index?: unknown;
   provider?: unknown;
@@ -61,7 +62,7 @@ function envFileValues(path: string): Record<string, string> {
 
 export function readCpaConfig(
   environment: Record<string, string | undefined> = process.env,
-): CpaConfig | undefined {
+): CpaConfig | CpaConfigError | undefined {
   const file = envFileValues(cpaEnvFilePath(environment));
   const baseUrl = (environment.CPA_BASE_URL ?? file.CPA_BASE_URL ?? "").trim();
   const key = (
@@ -70,19 +71,19 @@ export function readCpaConfig(
     ""
   ).trim();
   if (!baseUrl || !key) return undefined;
+  let url: URL;
   try {
-    const url = new URL(baseUrl);
-    const loopback =
-      url.hostname === "localhost" ||
-      url.hostname === "127.0.0.1" ||
-      url.hostname === "[::1]" ||
-      url.hostname === "::1";
-    if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback))
-      return undefined;
-    return { baseUrl: url.toString().replace(/\/$/, ""), key };
+    url = new URL(baseUrl);
   } catch {
-    return undefined;
+    return { error: "cpa_base_url_invalid" };
   }
+  const loopback =
+    url.hostname === "localhost" ||
+    url.hostname === "[::1]" ||
+    /^127\.\d+\.\d+\.\d+$/.test(url.hostname);
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback))
+    return { error: "cpa_base_url_requires_https" };
+  return { baseUrl: url.toString().replace(/\/$/, ""), key };
 }
 
 function text(value: unknown): string | undefined {
@@ -423,37 +424,32 @@ function requestErrorCode(error: unknown): string {
 export function createCpaAdapter(
   provider: ProviderId,
   fallback: ProviderAdapter,
-  configReader: () => CpaConfig | undefined = readCpaConfig,
+  configReader: () => CpaConfig | CpaConfigError | undefined = readCpaConfig,
 ): ProviderAdapter {
+  const unlisted = (error: string): ProviderAccount[] => [
+    {
+      accountKey: UNLISTED_LANE,
+      fetchQuota: async () => failed(provider, UNLISTED_LANE, error),
+      inspectAuth: async () => ({
+        provider,
+        accountKey: UNLISTED_LANE,
+        sources: [{ source: "cpa", status: "error", error }],
+      }),
+    },
+  ];
   return {
     ...fallback,
     discoverAccounts: async (): Promise<ProviderAccount[] | undefined> => {
       const config = configReader();
       if (!config) return fallback.discoverAccounts?.();
+      if ("error" in config) return unlisted(config.error);
       let files: AuthFile[];
       try {
         files = (await listAuthFiles(config)).filter((file) =>
           providerMatches(file, provider),
         );
       } catch {
-        return [
-          {
-            accountKey: UNLISTED_LANE,
-            fetchQuota: async () =>
-              failed(provider, UNLISTED_LANE, "cpa_auth_files_unavailable"),
-            inspectAuth: async () => ({
-              provider,
-              accountKey: UNLISTED_LANE,
-              sources: [
-                {
-                  source: "cpa",
-                  status: "error",
-                  error: "cpa_auth_files_unavailable",
-                },
-              ],
-            }),
-          },
-        ];
+        return unlisted("cpa_auth_files_unavailable");
       }
       if (files.length === 0) return fallback.discoverAccounts?.();
       return files.map((file, position) => {
