@@ -156,6 +156,26 @@ function fallbackAdapter(provider: ProviderId): ProviderAdapter {
 }
 
 describe("CLIProxyAPI provider", () => {
+  it("accepts loopback HTTP and requires HTTPS elsewhere", () => {
+    expect(
+      readCpaConfig({
+        CPA_BASE_URL: "http://127.0.0.1:8317",
+        CPA_MANAGEMENT_KEY: "k",
+      }),
+    ).toBeDefined();
+    expect(
+      readCpaConfig({
+        CPA_BASE_URL: "http://example.test",
+        CPA_MANAGEMENT_KEY: "k",
+      }),
+    ).toBeUndefined();
+    expect(
+      readCpaConfig({
+        CPA_BASE_URL: "https://example.test",
+        CPA_MANAGEMENT_KEY: "k",
+      }),
+    ).toBeDefined();
+  });
   it("reports each pooled account as its own row with only vendor figures", async () => {
     const fake = await fakeServer([
       { auth_index: "claude-1", provider: "claude", email: "a@example.test" },
@@ -895,6 +915,35 @@ describe("CLIProxyAPI provider", () => {
         .filter((call) => call.auth_index === "codex-2")
         .map((call) => new URL(call.url).pathname),
     ).toEqual(["/backend-api/wham/usage", "/backend-api/codex/usage"]);
+  });
+
+  it("does not retain a disabled sibling in reused accountKeys", async () => {
+    const files = [
+      { auth_index: "claude-a", provider: "claude", disabled: false },
+      { auth_index: "claude-b", provider: "claude", disabled: false },
+    ];
+    const fake = await fakeServer(files, (call) => ({
+      status_code: 200,
+      body: call.url.includes("/usage")
+        ? CLAUDE_USAGE
+        : { account: { uuid: "uuid-shared" } },
+    }));
+    const adapter = createCpaAdapter(
+      "claude",
+      fallbackAdapter("claude"),
+      () => ({
+        baseUrl: fake.baseUrl,
+        key: randomUUID(),
+      }),
+    );
+    const reuse = { ...options, maxAgeSeconds: 90 };
+    writeCachedProviders(await fetchAccountQuotas(adapter, reuse));
+    files[1]!.disabled = true;
+    const rows = await fetchAccountQuotas(adapter, reuse);
+    expect(rows).toHaveLength(2);
+    expect(rows[0]?.accountKeys).toEqual(["cpa-claude-a"]);
+    expect(rows[0]?.state.reused).toBe(true);
+    expect(rows[1]?.state.error).toBe("cpa_account_disabled");
   });
 
   it.each([

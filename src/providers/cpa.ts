@@ -72,6 +72,13 @@ export function readCpaConfig(
   if (!baseUrl || !key) return undefined;
   try {
     const url = new URL(baseUrl);
+    const loopback =
+      url.hostname === "localhost" ||
+      url.hostname === "127.0.0.1" ||
+      url.hostname === "[::1]" ||
+      url.hostname === "::1";
+    if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback))
+      return undefined;
     return { baseUrl: url.toString().replace(/\/$/, ""), key };
   } catch {
     return undefined;
@@ -225,7 +232,13 @@ async function readAccount(
     contextId,
     options.maxAgeSeconds ?? 0,
   );
-  if (reused) return { ...reused, accountKey: key, account };
+  if (reused)
+    return {
+      ...reused,
+      accountKey: key,
+      accountKeys: [key],
+      account,
+    };
   const report = await readUpstream(
     config,
     provider,
