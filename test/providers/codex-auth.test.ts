@@ -1,6 +1,12 @@
 import { EventEmitter } from "node:events";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -732,6 +738,34 @@ describe("Codex credential-state reporting", () => {
     );
     expect(JSON.stringify({ auth, result })).not.toContain(
       "pi-fixture-refresh-token",
+    );
+  });
+
+  it("accepts a Business spend cap at the first endpoint without a fallback", async () => {
+    writePiAuth(piOauthEntry());
+    const body = readFileSync(
+      join(
+        import.meta.dirname,
+        "..",
+        "fixtures",
+        "codex",
+        "oauth-business-spend-control.json",
+      ),
+      "utf8",
+    );
+    const fetchMock = vi.fn(async () => new Response(body, { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { fetchQuota } = await import("../../src/providers/codex.js");
+    const result = await fetchQuota({
+      allowKeychainPrompt: false,
+      refreshCredentials: false,
+    });
+    expect(result.state.status).toBe("fresh");
+    expect(result.windows).toHaveLength(1);
+    expect(result.windows[0]?.id).toBe("spend_control");
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
+      "https://chatgpt.com/backend-api/wham/usage",
     );
   });
 

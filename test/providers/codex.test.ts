@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   mergeAccountAndLimits,
   normalizeCodexUsage,
@@ -9,6 +9,99 @@ import {
 const fixtureDir = join(import.meta.dirname, "..", "fixtures", "codex");
 
 describe("Codex quota parsing", () => {
+  const businessSpendControl = () =>
+    JSON.parse(
+      readFileSync(
+        join(fixtureDir, "oauth-business-spend-control.json"),
+        "utf8",
+      ),
+    );
+
+  it("reports the Business workspace credit cap without rate-limit windows", () => {
+    const result = normalizeCodexUsage(businessSpendControl());
+    expect(result?.plan).toBe("business");
+    expect(result?.windows).toEqual([
+      {
+        id: "spend_control",
+        label: "workspace credit cap",
+        kind: "credits",
+        percentUsed: (109.38 / 72000) * 100,
+        percentRemaining: (71890.62 / 72000) * 100,
+        resetsAt: "2026-11-01T00:00:00.000Z",
+        limitCredits: 72000,
+        usedCredits: 109.38,
+        remainingCredits: 71890.62,
+        creditUnit: "credit",
+      },
+    ]);
+  });
+
+  it("treats a reached spend control as exhausted despite rounded percentages", () => {
+    const raw = businessSpendControl();
+    raw.spend_control.reached = true;
+    expect(normalizeCodexUsage(raw)?.windows[0]).toMatchObject({
+      percentUsed: 100,
+      percentRemaining: 0,
+    });
+  });
+
+  it.each([
+    { limit: "0" },
+    { limit: "-1" },
+    { limit: "invalid" },
+    { limit: "Infinity" },
+    { used: "" },
+    { remaining: "invalid" },
+    { used: null },
+  ])("falls back to reported percentages for unusable totals: %j", (totals) => {
+    const raw = businessSpendControl();
+    Object.assign(raw.spend_control.individual_limit, totals, {
+      used_percent: 25,
+      remaining_percent: 75,
+    });
+    expect(normalizeCodexUsage(raw)?.windows[0]).toMatchObject({
+      percentUsed: 25,
+      percentRemaining: 75,
+    });
+  });
+
+  it("keeps missing spend-control percentages unknown", () => {
+    const result = normalizeCodexUsage({
+      spend_control: { individual_limit: { limit: "bad" } },
+    });
+    expect(result?.windows[0]).toMatchObject({ id: "spend_control" });
+    expect(result?.windows[0]?.percentUsed).toBeUndefined();
+    expect(result?.windows[0]?.percentRemaining).toBeUndefined();
+  });
+
+  it("uses a reported relative reset without assigning a cycle duration", () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1791306060000);
+    try {
+      const raw = businessSpendControl();
+      delete raw.spend_control.individual_limit.reset_at;
+      const window = normalizeCodexUsage(raw)?.windows[0];
+      expect(window?.resetsAt).toBe("2026-11-01T00:00:00.000Z");
+      expect(window?.windowSeconds).toBeUndefined();
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it("retains plan windows alongside a spend cap", () => {
+    const raw = businessSpendControl();
+    raw.rate_limit = { primary_window: { used_percent: 20 } };
+    expect(normalizeCodexUsage(raw)?.windows.map(({ id }) => id)).toEqual([
+      "five_hour",
+      "spend_control",
+    ]);
+  });
+
+  it("rejects a non-unlimited Business reading without quota evidence", () => {
+    const raw = businessSpendControl();
+    delete raw.spend_control;
+    expect(normalizeCodexUsage(raw)).toBeUndefined();
+  });
+
   it("normalizes snake-case OAuth usage responses", () => {
     const raw = JSON.parse(
       readFileSync(join(fixtureDir, "oauth-snake.json"), "utf8"),

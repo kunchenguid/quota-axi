@@ -108,10 +108,11 @@ export function computeEffectiveRunway(
   windows: QuotaWindow[],
   generatedAt: string,
 ): EffectiveRunway {
+  const generatedAtMs = Date.parse(generatedAt);
+
   const exhausted = windows.find(
     (window) => finiteNumber(window.percentRemaining) === 0,
   );
-  const generatedAtMs = Date.parse(generatedAt);
 
   if (exhausted) {
     return {
@@ -124,7 +125,19 @@ export function computeEffectiveRunway(
     };
   }
 
-  if (windows.length === 0 || !isRepresentableDateMs(generatedAtMs)) {
+  // No bound reports a reset, so the scope has no current cycle to derive a
+  // reset-implying verdict from: fail closed to `unknown` naming every bound
+  // rather than publishing `through_reset` or a projection. A vendor-reported
+  // zero above still yields `exhausted_now`, which needs no cycle.
+  if (
+    windows.every(
+      (window) => resolveResetsAtOutcome(window.resetsAt).kind === "missing",
+    )
+  ) {
+    return unknownRunway(windows);
+  }
+
+  if (!isRepresentableDateMs(generatedAtMs)) {
     return unknownRunway(windows);
   }
 
@@ -322,7 +335,9 @@ export function summarizeEffectivePace(
  * an unknown window is never assumed healthy and never defaults to zero. The
  * one exception is a not-yet-triggered window - no `resetsAt` at all plus zero
  * usage - which is fully available rather than unmeasurable, so it is excluded
- * from the aggregate the same way the runway computation excludes it.
+ * from this weighted mean instead of blocking. When every bound is that shape
+ * the scalar is withheld with no blockers named; the runway aggregate withholds
+ * its verdict too but names every bound (README "Effective usable runway").
  */
 export function summarizeEffectiveSelection(
   windows: QuotaWindow[],

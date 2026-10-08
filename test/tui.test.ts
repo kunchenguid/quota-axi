@@ -146,6 +146,27 @@ describe("renderQuotaTui structure", () => {
     expect(findCardLine(lines, 0, "97% session")).toBeDefined();
   });
 
+  it("shows the jobs rollup counts on the card when the provider reports jobs", () => {
+    const response = fixtureResponse();
+    response.providers[0].jobs = {
+      sampled: 4,
+      completed: 2,
+      failed: 1,
+      other: 1,
+    };
+
+    const lines = renderQuotaTui(response, {
+      timeZone: "America/Los_Angeles",
+    }).split("\n");
+    for (const needle of [
+      "jobs sampled 4 · completed 2",
+      "failed 1 · other 1",
+    ]) {
+      expect(findCardLine(lines, 0, needle).endsWith("│")).toBe(true);
+    }
+    expect(render().some((line) => line.includes("jobs"))).toBe(false);
+  });
+
   it("uses the mapped headline window's reset marker instead of another window's runway", () => {
     for (const [mappedId, otherId] of [
       ["five_hour", "seven_day"],

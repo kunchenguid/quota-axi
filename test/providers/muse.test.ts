@@ -159,7 +159,7 @@ describe("Muse request transport", () => {
   });
 });
 
-/** The provider onboarding matrix in AGENTS.md. */
+/** The provider onboarding matrix in skills/provider-onboarding/SKILL.md. */
 describe("Muse credential matrix", () => {
   it("primary healthy: reports the five-hour and weekly windows", async () => {
     const report = await testAdapter().fetchQuota(OPTIONS);

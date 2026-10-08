@@ -40,6 +40,7 @@ const originalElevenLabsProvider = PROVIDERS.elevenlabs;
 const originalDevinProvider = PROVIDERS.devin;
 const originalMuseProvider = PROVIDERS.muse;
 const originalKiroProvider = PROVIDERS.kiro;
+const originalHiggsfieldProvider = PROVIDERS.higgsfield;
 const originalXdgCacheHome = process.env.XDG_CACHE_HOME;
 const originalClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
 const originalCodexHome = process.env.CODEX_HOME;
@@ -71,6 +72,7 @@ afterEach(() => {
   PROVIDERS.devin = originalDevinProvider;
   PROVIDERS.muse = originalMuseProvider;
   PROVIDERS.kiro = originalKiroProvider;
+  PROVIDERS.higgsfield = originalHiggsfieldProvider;
   vi.unstubAllGlobals();
   if (originalXdgCacheHome === undefined) delete process.env.XDG_CACHE_HOME;
   else process.env.XDG_CACHE_HOME = originalXdgCacheHome;
@@ -110,6 +112,7 @@ describe("CLI flag parsing", () => {
       "devin",
       "muse",
       "kiro",
+      "higgsfield",
     ]);
   });
 
@@ -186,6 +189,7 @@ describe("CLI flag parsing", () => {
           "devin",
           "muse",
           "kiro",
+          "higgsfield",
         ],
         json: true,
         full: true,
@@ -606,7 +610,7 @@ describe("CLI quota rendering", () => {
     // The remedy rides the stale provider's `attention[]` row, and the stale
     // scope gets no `quota[]` row at all.
     expect(output).toContain(
-      "attention[2]{provider,scope,kind,detail,remedy}:",
+      "attention[3]{provider,scope,kind,detail,remedy}:",
     );
     expect(output).toContain(
       'claude,all,stale,"last refreshed 2026-07-06T18:10:00Z · keychain_prompt_required · reason keychain_access_required",quota-axi --allow-keychain-prompt',
@@ -618,11 +622,15 @@ describe("CLI quota rendering", () => {
     expect(output).toContain(
       'Tell your user: run `quota-axi --allow-keychain-prompt` once and approve Keychain access ("Always Allow") so quota-axi can read claude\'s live quota.',
     );
-    // Codex still reports headroom; its only bound is an idle, not-yet-
-    // triggered session window, so the scope stays rankable-but-unmeasured
-    // (literal `unknown` spendPriority) instead of a blocked attention row.
+    // Codex still reports remaining; its only bound is an idle session with
+    // no resetsAt, so fail-closed runway is unknown (literal `unknown`
+    // spendPriority) and the bound is named unmeasurable rather than
+    // inventing through_reset.
     expect(output).toContain(
-      "codex,all_models,100,unknown,through_reset,established,five_hour,unknown",
+      "codex,all_models,unmeasurable,five_hour blocks runway,none",
+    );
+    expect(output).toContain(
+      "codex,all_models,100,unknown,unknown,unknown,five_hour,unknown",
     );
     expect(output).not.toContain("codex,all,");
   });
@@ -1459,12 +1467,12 @@ describe("human report folding for providers that are not set up", () => {
     expect(output.trimEnd().split("\n").slice(-3)).toEqual([
       "  ○ not set up  cursor · copilot · grok · kimi · zai · agy · alibaba · opencode-go · commandcode",
       "                minimax · mimo · deepseek · openrouter · elevenlabs · devin · muse · kiro",
-      "                quota-axi auth shows where each is read",
+      "                higgsfield   quota-axi auth shows where each is read",
     ]);
     expect(output).not.toMatch(/╭─ ○ (agy|alibaba|commandcode) /);
 
     expect(output).toMatch(
-      /· 1 live · 0 stale · 1 needs attention · 17 not set up\n/,
+      /· 1 live · 0 stale · 1 needs attention · 18 not set up\n/,
     );
     expect(output).toContain("╭─ ● codex ");
     expect(output).toContain("╭─ ○ claude ");
@@ -1477,9 +1485,10 @@ describe("human report folding for providers that are not set up", () => {
     stubFoldFleet();
     const output = await capture(["--tui", "--once", "--all"]);
 
-    expect(output).toContain("  ○ not set up · 17\n");
+    expect(output).toContain("  ○ not set up · 18\n");
     expect(output).toContain("╭─ ○ copilot ");
     expect(output).toContain("╭─ ○ elevenlabs ");
+    expect(output).toContain("╭─ ○ higgsfield ");
     expect(output).not.toContain("quota-axi auth shows where each is read");
   });
 
@@ -1542,7 +1551,7 @@ describe("human report folding for providers that are not set up", () => {
 
       process.stdin.emit("data", Buffer.from("a"));
       await settle("a hide not set up");
-      expect(lastFrame()).toContain("  ○ not set up · 17");
+      expect(lastFrame()).toContain("  ○ not set up · 18");
       expect(lastFrame()).toContain("╭─ ○ zai ");
 
       process.stdin.emit("data", Buffer.from("q"));
@@ -1633,6 +1642,7 @@ describe("new provider public quota output", () => {
   it("keeps registered MiMo authentication without a fabricated quota scope", async () => {
     useTempCache();
     process.env.MIMO_API_KEY = "synthetic-mimo-cli-key";
+    process.env.PI_CODING_AGENT_DIR = join(tempDir!, "pi-agent-empty");
 
     const json = JSON.parse(
       await capture(["--provider", "mimo", "--json", "--full"]),
@@ -1660,6 +1670,7 @@ describe("new provider public quota output", () => {
   it("reports missing registered MiMo authentication through JSON", async () => {
     useTempCache();
     delete process.env.MIMO_API_KEY;
+    process.env.PI_CODING_AGENT_DIR = join(tempDir!, "pi-agent-empty");
 
     const json = JSON.parse(
       await capture(["--provider", "mimo", "--json", "--full"]),
@@ -1673,7 +1684,13 @@ describe("new provider public quota output", () => {
           status: "auth_required",
           stale: false,
           error: "mimo_credential_unavailable",
-          sourcesTried: ["env:MIMO_API_KEY"],
+          sourcesTried: [
+            "env:MIMO_API_KEY",
+            "pi:xiaomi",
+            "pi:xiaomi-token-plan-sgp",
+            "pi:xiaomi-token-plan-cn",
+            "pi:xiaomi-token-plan-ams",
+          ],
         },
       }),
     ]);
@@ -1939,6 +1956,7 @@ describe("default TOON decision blocks", () => {
     PROVIDERS.devin = providerWithQuota(freshDevinQuota());
     PROVIDERS.muse = providerWithQuota(emptyFreshQuota("muse", "Muse"));
     PROVIDERS.kiro = providerWithQuota(freshKiroQuota());
+    PROVIDERS.higgsfield = providerWithQuota(freshHiggsfieldQuota());
 
     const output = await capture([]);
     const named = new Set([
@@ -1958,6 +1976,7 @@ describe("default TOON decision blocks", () => {
       "devin",
       "elevenlabs",
       "grok",
+      "higgsfield",
       "kimi",
       "kiro",
       "mimo",
@@ -2811,6 +2830,7 @@ describe("CLI plumbing via the axi SDK", () => {
     PROVIDERS.mimo = providerWithAuth("mimo", "MiMo");
     PROVIDERS.deepseek = providerWithAuth("deepseek", "DeepSeek");
     PROVIDERS.openrouter = providerWithAuth("openrouter", "OpenRouter");
+    PROVIDERS.higgsfield = providerWithAuth("higgsfield", "Higgsfield");
 
     const output = await capture(["--allow-keychain-prompt", "auth"]);
     expect(output).toContain(
@@ -3756,6 +3776,33 @@ function freshElevenLabsQuota(): ProviderQuota {
       authStatus: "usable",
       refreshedAt: "2026-07-06T18:10:00Z",
       sourcesTried: ["env:ELEVENLABS_API_KEY"],
+    },
+  };
+}
+
+function freshHiggsfieldQuota(): ProviderQuota {
+  return {
+    provider: "higgsfield",
+    label: "Higgsfield",
+    source: "cli",
+    plan: "ultra",
+    windows: [
+      {
+        id: "credits",
+        label: "credits",
+        kind: "credits",
+        percentUsed: (8 / 6000) * 100,
+        percentRemaining: (5992 / 6000) * 100,
+      },
+    ],
+    credits: { remaining: 5992, unit: "credits" },
+    jobs: { sampled: 20, completed: 20, failed: 0, other: 0 },
+    state: {
+      status: "fresh",
+      stale: false,
+      authStatus: "usable",
+      refreshedAt: "2026-09-21T12:00:00Z",
+      sourcesTried: ["higgsfield-cli"],
     },
   };
 }

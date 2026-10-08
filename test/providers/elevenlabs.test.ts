@@ -74,10 +74,10 @@ describe("ElevenLabs request transport", () => {
 });
 
 /**
- * The provider onboarding matrix in AGENTS.md. Two of its seven cases cannot
- * arise for this provider and are asserted as such rather than skipped: an
- * ElevenLabs API key carries no expiry field, and there is no second source to
- * hand over to.
+ * The provider onboarding matrix in skills/provider-onboarding/SKILL.md. Two
+ * of its seven cases cannot arise for this provider and are asserted as such
+ * rather than skipped: an ElevenLabs API key carries no expiry field, and
+ * there is no second source to hand over to.
  */
 describe("ElevenLabs credential matrix", () => {
   it("primary healthy: reports the included character allowance", async () => {

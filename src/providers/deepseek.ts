@@ -99,6 +99,9 @@ async function fetchQuota(dependencies: Dependencies): Promise<ProviderQuota> {
         source: resolution.source,
         status: resolution.status === "missing" ? "skipped" : "failed",
         error: failure.error,
+        ...(resolution.status === "invalid" || resolution.status === "error"
+          ? { credentialPresent: true }
+          : {}),
       });
       finalFailure = preferCredentialFailure(finalFailure, failure);
       continue;

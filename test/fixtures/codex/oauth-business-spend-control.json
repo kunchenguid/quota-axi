@@ -1,0 +1,21 @@
+{
+  "plan_type": "business",
+  "rate_limit": null,
+  "code_review_rate_limit": null,
+  "additional_rate_limits": null,
+  "credits": { "unlimited": false },
+  "spend_control": {
+    "reached": false,
+    "individual_limit": {
+      "source": "workspace_spend_controls",
+      "unit": "credit",
+      "limit": "72000",
+      "used": "109.38",
+      "remaining": "71890.62",
+      "used_percent": 0,
+      "remaining_percent": 100,
+      "reset_after_seconds": 2185140,
+      "reset_at": 1793491200
+    }
+  }
+}

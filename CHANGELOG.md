@@ -1,5 +1,46 @@
 # Changelog
 
+## [0.1.59](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.58...quota-axi-v0.1.59) (2026-10-07)
+
+
+### Bug Fixes
+
+* **codex:** report spend_control cap for Business seats ([#316](https://github.com/kunchenguid/quota-axi/issues/316)) ([0f524bd](https://github.com/kunchenguid/quota-axi/commit/0f524bd7190a4c74a2245f737c0fd85a29be3f84))
+
+## [0.1.58](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.57...quota-axi-v0.1.58) (2026-10-05)
+
+
+### Features
+
+* **providers:** add read-only Higgsfield credits and jobs provider ([#302](https://github.com/kunchenguid/quota-axi/issues/302)) ([a642b5d](https://github.com/kunchenguid/quota-axi/commit/a642b5d047633b1bde4178863317bcd81931fa28))
+
+
+### Bug Fixes
+
+* **higgsfield:** expect unknown runway for a resetless full grant ([#312](https://github.com/kunchenguid/quota-axi/issues/312)) ([15ace96](https://github.com/kunchenguid/quota-axi/commit/15ace96f3b0bd14cefbbd3f45cd4946a81553b7c))
+* **pace:** fail closed to unknown runway when no bound reports a reset ([#307](https://github.com/kunchenguid/quota-axi/issues/307)) ([36dd1ef](https://github.com/kunchenguid/quota-axi/commit/36dd1ef17a80200743b0e626e3d29dad8064c766))
+* **providers:** enable Antigravity cycle-average pace signals ([#308](https://github.com/kunchenguid/quota-axi/issues/308)) ([6f27edf](https://github.com/kunchenguid/quota-axi/commit/6f27edfde64d39bd8e58e639869eeb96b2156ab7))
+
+## [0.1.57](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.56...quota-axi-v0.1.57) (2026-10-04)
+
+
+### Bug Fixes
+
+* **providers:** bound Kimi weekly by the more-used of both /usages shapes ([#304](https://github.com/kunchenguid/quota-axi/issues/304)) ([2b4bbaa](https://github.com/kunchenguid/quota-axi/commit/2b4bbaaa7c550062a8cb0e38a65e0cee11f773e1))
+* **providers:** rank present-but-unusable credentials above plain absence ([#306](https://github.com/kunchenguid/quota-axi/issues/306)) ([17555d9](https://github.com/kunchenguid/quota-axi/commit/17555d96f2efbb40d912860b6fef46ff038f4d4c))
+
+## [0.1.56](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.55...quota-axi-v0.1.56) (2026-10-03)
+
+
+### Features
+
+* **providers:** read Xiaomi MiMo keys from Pi's auth.json ([#298](https://github.com/kunchenguid/quota-axi/issues/298)) ([b996ae2](https://github.com/kunchenguid/quota-axi/commit/b996ae27a000062f76a9e090f2aa5c303649c970))
+
+
+### Bug Fixes
+
+* **providers:** report each verified subscription once across credential routes ([#223](https://github.com/kunchenguid/quota-axi/issues/223)) ([4a5276a](https://github.com/kunchenguid/quota-axi/commit/4a5276add26b00c295918a0c8787aff2c9a68629))
+
 ## [0.1.55](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.54...quota-axi-v0.1.55) (2026-09-25)
 
 

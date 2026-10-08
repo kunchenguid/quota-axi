@@ -167,7 +167,8 @@ function missingCliCredential(path: string): MiniMaxCredentialResolution {
 
 export function resolveMiniMaxCredentials(): MiniMaxCredentialResolution[] {
   const credentials: MiniMaxCredentialResolution[] = [];
-  const envKey = usableLiteralSecret(process.env.MINIMAX_API_KEY);
+  const raw = process.env.MINIMAX_API_KEY;
+  const envKey = usableLiteralSecret(raw);
   credentials.push(
     envKey
       ? {
@@ -176,7 +177,13 @@ export function resolveMiniMaxCredentials(): MiniMaxCredentialResolution[] {
           source: MINIMAX_ENV_SOURCE,
           baseUrl: configuredBaseUrl(),
         }
-      : { status: "missing", source: MINIMAX_ENV_SOURCE },
+      : raw !== undefined && raw.trim().length > 0
+        ? {
+            status: "invalid",
+            source: MINIMAX_ENV_SOURCE,
+            error: "minimax_credential_invalid",
+          }
+        : { status: "missing", source: MINIMAX_ENV_SOURCE },
   );
 
   const piPath = resolvePiAuthFilePath();
@@ -251,6 +258,9 @@ async function fetchQuotaWithDependencies(
         source: resolution.source,
         status: resolution.status === "missing" ? "skipped" : "failed",
         error: failure.code,
+        ...(resolution.status === "invalid" || resolution.status === "error"
+          ? { credentialPresent: true }
+          : {}),
       });
       if (preferMiniMaxFailure(finalFailure, failure) === failure) {
         finalFailure = failure;
@@ -411,7 +421,7 @@ async function inspectAuthWithDependencies(
       ...(resolution.status !== "available" && resolution.error
         ? { error: resolution.error }
         : {}),
-      ...(resolution.status === "available" ? { credentialPresent: true } : {}),
+      ...(resolution.status !== "missing" ? { credentialPresent: true } : {}),
     }),
   );
   return { provider: "minimax", sources };
@@ -718,7 +728,9 @@ function preferMiniMaxFailure(
   current: MiniMaxFailure | undefined,
   next: MiniMaxFailure,
 ): MiniMaxFailure {
-  if (!current || (current.definitiveAuth && !next.definitiveAuth)) return next;
+  if (!current || current.code === "minimax_credential_unavailable")
+    return next;
+  if (current.definitiveAuth && !next.definitiveAuth) return next;
   return current;
 }
 

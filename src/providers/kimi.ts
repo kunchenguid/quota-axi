@@ -79,6 +79,7 @@ const DURATION_MULTIPLIERS: Record<string, number> = {
 export type KimiDiagnostic =
   | { code: "limits_missing" }
   | { code: "limits_invalid" }
+  | { code: "usage_invalid" }
   | { code: "detail_invalid"; index: number }
   | { code: "usage_detail_invalid"; key: string };
 
@@ -598,6 +599,8 @@ function untrustedWindowId(diagnostic: KimiDiagnostic): string {
       return `limit:${diagnostic.index}`;
     case "usage_detail_invalid":
       return `usages:${diagnostic.key}`;
+    case "usage_invalid":
+      return "usage";
     default:
       return "limits";
   }
@@ -1215,16 +1218,84 @@ export function normalizeKimiPayload(payload: unknown): NormalizedKimiPayload {
   }
 
   const fromUsages = normalizeUsagesMap(root.usages);
-  if (fromUsages && fromUsages.windows.length > 0) {
-    return { kind: "windows", ...fromUsages };
-  }
-
+  const usagesWindows = fromUsages?.windows ?? [];
+  const usagesDiagnostics = fromUsages?.diagnostics ?? [];
   const principal = normalizeDetail(root.usage);
+
   if (!principal) {
-    if (isEstablishedEmptyKimiPayload(root)) return { kind: "no_quota" };
-    throw new KimiFailure("schema_invalid", { staleEligible: true });
+    if (usagesWindows.length === 0) {
+      if (isEstablishedEmptyKimiPayload(root)) return { kind: "no_quota" };
+      throw new KimiFailure("schema_invalid", { staleEligible: true });
+    }
+    // A declared principal this reader cannot parse may be the binding week,
+    // so the map's windows are reported as partial rather than as the whole.
+    const diagnostics: KimiDiagnostic[] =
+      root.usage === undefined || root.usage === null
+        ? usagesDiagnostics
+        : [...usagesDiagnostics, { code: "usage_invalid" }];
+    return { kind: "windows", windows: usagesWindows, diagnostics };
   }
 
+  // The map carries its own five-hour window, so an absent `limits` array is
+  // only a gap when the principal is the sole shape.
+  const legacy = normalizeLegacyShape(
+    principal,
+    root.limits,
+    usagesWindows.length === 0,
+  );
+  const diagnostics = [...usagesDiagnostics, ...legacy.diagnostics];
+  if (usagesWindows.length === 0) {
+    return { kind: "windows", windows: legacy.windows, diagnostics };
+  }
+  return {
+    kind: "windows",
+    windows: mergeKimiShapes(usagesWindows, legacy.windows),
+    diagnostics,
+  };
+}
+
+/**
+ * Kimi Code answers `/usages` with both shapes at once: the principal `usage`
+ * object plus `limits[]`, and the `usages` map. Each reports the same weekly
+ * and five-hour windows (the resets agree), but the figures can disagree: a
+ * captured Vivace response carried `usage` at 92 of 100 used while
+ * `usages.limit_7d` read a `used_ratio` of 0, and Kimi's own account page
+ * showed the 7-day Code usage at 92%. Which counter Kimi enforces is not
+ * documented, so a window both shapes report takes the more-used figure. That
+ * never overstates headroom, and it keeps the principal figure whenever it is
+ * the one that binds. The map's window wins a tie, and windows only one shape
+ * reports are kept in map order, then wire order. Both shapes describe the
+ * same window, so when the more-used side carries no parseable reset the
+ * other side's reset is kept: without one, a stale reading of that window
+ * would outlive the deadline the vendor did report.
+ */
+function mergeKimiShapes(
+  usagesWindows: QuotaWindow[],
+  legacyWindows: QuotaWindow[],
+): QuotaWindow[] {
+  const legacyById = new Map(
+    legacyWindows.map((window) => [window.id, window]),
+  );
+  const merged = usagesWindows.map((window) => {
+    const legacy = legacyById.get(window.id);
+    if (!legacy) return window;
+    legacyById.delete(window.id);
+    const [bound, other] =
+      (legacy.percentUsed ?? 0) > (window.percentUsed ?? 0)
+        ? [legacy, window]
+        : [window, legacy];
+    return bound.resetsAt || !other.resetsAt
+      ? bound
+      : { ...bound, resetsAt: other.resetsAt };
+  });
+  return [...merged, ...legacyById.values()];
+}
+
+function normalizeLegacyShape(
+  principal: NormalizedDetail,
+  limitsValue: unknown,
+  limitsRequired: boolean,
+): { windows: QuotaWindow[]; diagnostics: KimiDiagnostic[] } {
   const windows: QuotaWindow[] = [
     {
       id: "weekly",
@@ -1236,22 +1307,18 @@ export function normalizeKimiPayload(payload: unknown): NormalizedKimiPayload {
       ...(principal.resetsAt ? { resetsAt: principal.resetsAt } : {}),
     },
   ];
-  const diagnostics: KimiDiagnostic[] = [...(fromUsages?.diagnostics ?? [])];
-  const limitsValue = root.limits;
+  const diagnostics: KimiDiagnostic[] = [];
   if (limitsValue === undefined || limitsValue === null) {
-    diagnostics.push({ code: "limits_missing" });
-    return { kind: "windows", windows, diagnostics };
+    if (limitsRequired) diagnostics.push({ code: "limits_missing" });
+    return { windows, diagnostics };
   }
   if (!Array.isArray(limitsValue)) {
     diagnostics.push({ code: "limits_invalid" });
-    return { kind: "windows", windows, diagnostics };
+    return { windows, diagnostics };
   }
 
   let fiveHourSeen = false;
-  for (const [offset, rawEntry] of (Array.isArray(limitsValue)
-    ? limitsValue
-    : []
-  ).entries()) {
+  for (const [offset, rawEntry] of limitsValue.entries()) {
     const index = offset + 1;
     const entry = objectValue(rawEntry);
     const detail = normalizeDetail(entry?.detail);
@@ -1273,7 +1340,7 @@ export function normalizeKimiPayload(payload: unknown): NormalizedKimiPayload {
     });
   }
 
-  return { kind: "windows", windows, diagnostics };
+  return { windows, diagnostics };
 }
 
 /**

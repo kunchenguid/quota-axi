@@ -18,10 +18,13 @@ import {
   readCachedDevinProvider,
   readCachedMiniMaxProvider,
   readCachedProvider,
+  readReusableProviders,
   retireCodexAccount,
+  stampReadingInputs,
   writeCachedProviders,
   stampCodexStoredAccountId,
 } from "../src/cache.js";
+import { inputsDigest } from "../src/lib/input-trace.js";
 import { annotateQuotaAdvice } from "../src/advice.js";
 import { cacheFilePath, claudeCredentialContextId } from "../src/lib/fs.js";
 import {
@@ -285,6 +288,14 @@ describe("quota cache", () => {
     const codex = quota("codex", 20);
     codex.windows = [
       {
+        id: "spend_control",
+        label: "workspace credit cap",
+        kind: "credits",
+        percentUsed: 0.15191666666666667,
+        percentRemaining: 99.84808333333334,
+        resetsAt: "2026-11-01T00:00:00.000Z",
+      },
+      {
         id: "five_hour",
         label: "session",
         kind: "session",
@@ -312,6 +323,7 @@ describe("quota cache", () => {
     writeCachedProviders([codex]);
 
     expect(readCachedProvider("codex")?.windows.map(({ id }) => id)).toEqual([
+      "spend_control",
       "five_hour",
       "weekly",
       "weekly_2",
@@ -357,6 +369,133 @@ describe("quota cache", () => {
       source: "cli",
       windows: [{ percentUsed: 18 }],
     });
+  });
+
+  it("does not serve Higgsfield through --max-age, including after a login switch", () => {
+    useTempCache();
+    const jobs = { sampled: 4, completed: 2, failed: 1, other: 1 };
+    const snapshot = higgsfieldQuota(jobs);
+    stampReadingInputs(snapshot, tracedInputs());
+    writeCachedProviders([snapshot], snapshot.state.refreshedAt);
+
+    expect(
+      readReusableProviders(
+        "higgsfield",
+        90,
+        Date.parse("2026-07-06T18:10:30Z"),
+      ),
+    ).toBeUndefined();
+    expect(readCachedProvider("higgsfield")?.jobs).toEqual(jobs);
+    expect(readCachedProvider("higgsfield")?.credits).toEqual({
+      remaining: 5999.8,
+      unit: "credits",
+    });
+  });
+
+  it("still reuses a non-Higgsfield CLI snapshot through --max-age", () => {
+    useTempCache();
+    const alibaba = {
+      ...quota("alibaba", 18),
+      source: "cli" as const,
+    };
+    stampReadingInputs(alibaba, tracedInputs());
+    writeCachedProviders([alibaba], alibaba.state.refreshedAt);
+
+    const reused = readReusableProviders(
+      "alibaba",
+      90,
+      Date.parse("2026-07-06T18:10:30Z"),
+    );
+    expect(reused).toHaveLength(1);
+    expect(reused?.[0]).toMatchObject({
+      provider: "alibaba",
+      source: "cli",
+      windows: [{ percentUsed: 18 }],
+      state: { reused: true },
+    });
+  });
+
+  it("keeps Higgsfield jobs absent on a stale cache read when the snapshot carried none", () => {
+    useTempCache();
+    writeCachedProviders([higgsfieldQuota()]);
+
+    expect(readCachedProvider("higgsfield")?.jobs).toBeUndefined();
+    expect(readCachedProvider("higgsfield")?.credits).toEqual({
+      remaining: 5999.8,
+      unit: "credits",
+    });
+  });
+
+  it("rejects a Higgsfield record whose cached jobs rollup is malformed", () => {
+    useTempCache();
+    writeCachedProviders([
+      {
+        ...higgsfieldQuota(),
+        jobs: { sampled: 4 } as ProviderQuota["jobs"],
+      },
+    ]);
+
+    expect(readCachedProvider("higgsfield")).toBeUndefined();
+
+    writeCachedProviders([higgsfieldQuota()]);
+    const file = cacheFilePath();
+    const cached = JSON.parse(readFileSync(file, "utf8")) as {
+      providers: Array<{ provider: string; jobs?: unknown }>;
+    };
+    cached.providers.find((entry) => entry.provider === "higgsfield")!.jobs = {
+      sampled: 4,
+      completed: 9,
+      failed: 0,
+      other: 0,
+    };
+    writeFileSync(file, JSON.stringify(cached));
+
+    expect(readCachedProvider("higgsfield")).toBeUndefined();
+  });
+
+  it("rejects a Higgsfield record whose cached jobs counts are fractional", () => {
+    useTempCache();
+    writeCachedProviders([
+      {
+        ...higgsfieldQuota(),
+        jobs: { sampled: 1.5, completed: 0.75, failed: 0.5, other: 0.25 },
+      },
+    ]);
+
+    expect(readCachedProvider("higgsfield")).toBeUndefined();
+  });
+
+  it("strips Higgsfield job identity fields before they reach the cache file", () => {
+    useTempCache();
+    writeCachedProviders([
+      {
+        ...higgsfieldQuota({
+          sampled: 4,
+          completed: 2,
+          failed: 1,
+          other: 1,
+        }),
+        jobs: {
+          sampled: 4,
+          completed: 2,
+          failed: 1,
+          other: 1,
+          prompt: "secret prompt",
+          id: "job-1",
+        } as ProviderQuota["jobs"],
+      },
+    ]);
+
+    const cached = readCachedProvider("higgsfield");
+    expect(cached?.jobs).toEqual({
+      sampled: 4,
+      completed: 2,
+      failed: 1,
+      other: 1,
+    });
+    const raw = readFileSync(cacheFilePath(), "utf8");
+    expect(raw).not.toContain("secret prompt");
+    expect(raw).not.toContain("job-1");
   });
 
   it("never writes a Copilot native snapshot over a servable legacy one", () => {
@@ -992,6 +1131,42 @@ function quotaWithoutWindows(provider: ProviderId): ProviderQuota {
     ...quota(provider, 0),
     windows: [],
   };
+}
+
+function higgsfieldQuota(jobs?: ProviderQuota["jobs"]): ProviderQuota {
+  return {
+    provider: "higgsfield",
+    label: "Higgsfield",
+    source: "cli",
+    plan: "ultra",
+    windows: [
+      {
+        id: "credits",
+        label: "credits",
+        kind: "credits",
+        percentUsed: 0.2,
+        percentRemaining: 99.8,
+      },
+    ],
+    credits: { remaining: 5999.8, unit: "credits" },
+    ...(jobs ? { jobs } : {}),
+    state: {
+      status: "fresh",
+      stale: false,
+      refreshedAt: "2026-07-06T18:10:00Z",
+      sourcesTried: [
+        "higgsfield-cli",
+        "higgsfield-transactions",
+        "higgsfield-jobs",
+      ],
+    },
+  };
+}
+
+function tracedInputs() {
+  const path = join(tempDir as string, "traced-input");
+  writeFileSync(path, "");
+  return { paths: [path], digest: inputsDigest([path]) };
 }
 
 function providerLabel(provider: ProviderId): string {

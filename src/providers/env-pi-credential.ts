@@ -1,4 +1,4 @@
-import { readJsonFileResult } from "../lib/fs.js";
+import { readJsonFileResult, type JsonFileReadResult } from "../lib/fs.js";
 import { readBoundedResponseBody } from "../lib/http.js";
 import { resolvePiAuthFilePath } from "../lib/pi-agent-dir.js";
 import { classifyPiAuthEntry } from "../lib/pi-auth-store.js";
@@ -31,37 +31,80 @@ export type EnvPiCredentialSources = {
   piSource: string;
 };
 
+/**
+ * The env half of an env-plus-Pi credential surface: a usable literal value
+ * under `envVar` is an available credential, an unset or blank variable
+ * selects nothing, and a set value that is not a usable literal secret is a
+ * present-but-invalid credential rather than an absence.
+ */
+export function pushEnvCredential(
+  credentials: EnvPiCredentialResolution[],
+  environment: Readonly<Record<string, string | undefined>>,
+  envVar: string,
+  envSource: string,
+): void {
+  const raw = environment[envVar];
+  const key = usableLiteralSecret(raw);
+  credentials.push(
+    key
+      ? { status: "available", key, source: envSource }
+      : raw !== undefined && raw.trim().length > 0
+        ? { status: "invalid", source: envSource }
+        : { status: "missing", source: envSource },
+  );
+}
+
+/**
+ * The auth.json read-status dispatch shared by env-plus-Pi adapters: a missing
+ * store is a missing source, an unreadable store is an error and any other
+ * unparseable store is invalid, and only a parsed store reaches the adapter's
+ * own entry extractor.
+ */
+export function pushPiReadCredential(
+  credentials: EnvPiCredentialResolution[],
+  result: JsonFileReadResult,
+  source: string,
+  path: string,
+  extract: (value: unknown) => EnvPiCredentialResolution,
+): void {
+  if (result.status === "missing") {
+    credentials.push({ status: "missing", source, path });
+  } else if (result.status === "invalid") {
+    credentials.push({
+      status: result.error === "file_read_error" ? "error" : "invalid",
+      source,
+      path,
+    });
+  } else {
+    credentials.push(extract(result.value));
+  }
+}
+
 export function resolveEnvPiCredentials(
   sources: EnvPiCredentialSources,
   environment: Readonly<Record<string, string | undefined>> = process.env,
   path = resolvePiAuthFilePath(),
 ): EnvPiCredentialResolution[] {
   const credentials: EnvPiCredentialResolution[] = [];
-  const envKey = usableLiteralSecret(environment[sources.envVar]);
-  credentials.push(
-    envKey
-      ? { status: "available", key: envKey, source: sources.envSource }
-      : { status: "missing", source: sources.envSource },
+  pushEnvCredential(
+    credentials,
+    environment,
+    sources.envVar,
+    sources.envSource,
   );
-  const result = readJsonFileResult(path);
-  if (result.status === "missing") {
-    credentials.push({ status: "missing", source: sources.piSource, path });
-  } else if (result.status === "invalid") {
-    credentials.push({
-      status: result.error === "file_read_error" ? "error" : "invalid",
-      source: sources.piSource,
-      path,
-    });
-  } else {
-    credentials.push(
+  pushPiReadCredential(
+    credentials,
+    readJsonFileResult(path),
+    sources.piSource,
+    path,
+    (value) =>
       extractPiKeyCredential(
-        result.value,
+        value,
         sources.piProviderId,
         sources.piSource,
         path,
       ),
-    );
-  }
+  );
   return credentials;
 }
 
@@ -99,6 +142,9 @@ export type KeyCredentialFailure = {
   error: string;
 };
 
+/** The suffix `keyCredentialFailure` gives a missing source's diagnostic. */
+const ABSENT_CREDENTIAL_SUFFIX = "_credential_unavailable";
+
 export function keyCredentialFailure(
   provider: ProviderId,
   resolution: Exclude<EnvPiCredentialResolution, { status: "available" }>,
@@ -107,26 +153,30 @@ export function keyCredentialFailure(
     status: resolution.status === "error" ? "error" : "auth_required",
     error:
       resolution.status === "missing"
-        ? `${provider}_credential_unavailable`
+        ? `${provider}${ABSENT_CREDENTIAL_SUFFIX}`
         : resolution.status === "invalid"
           ? `${provider}_credential_invalid`
           : `${provider}_credential_resolution_failed`,
   };
 }
 
+function isAbsentCredentialFailure(failure: KeyCredentialFailure): boolean {
+  return failure.error.endsWith(ABSENT_CREDENTIAL_SUFFIX);
+}
+
 /**
- * A credential-resolution error outranks an earlier absence diagnostic, and an
- * empirical endpoint rejection outranks both: only a real answer or a real
- * rejection should ever name the account's state.
+ * A present-but-unusable credential outranks an earlier plain absence - the
+ * credential surface exists, so naming it `unavailable` describes the wrong
+ * failure - a credential-resolution error outranks both, and an empirical
+ * endpoint rejection outranks them: only a real answer or a real rejection
+ * should ever name the account's state.
  */
 export function preferCredentialFailure(
   current: KeyCredentialFailure | undefined,
   next: KeyCredentialFailure,
 ): KeyCredentialFailure {
-  if (
-    !current ||
-    (current.status === "auth_required" && next.status === "error")
-  )
+  if (!current || isAbsentCredentialFailure(current)) return next;
+  if (current.status === "auth_required" && next.status === "error")
     return next;
   return current;
 }
@@ -155,7 +205,10 @@ export function inspectEnvPiAuth(
             ? "error"
             : "invalid",
     ...(resolution.status === "error" || resolution.status === "invalid"
-      ? { error: keyCredentialFailure(provider, resolution).error }
+      ? {
+          error: keyCredentialFailure(provider, resolution).error,
+          credentialPresent: true,
+        }
       : {}),
   }));
   return { provider, sources };

@@ -8,6 +8,7 @@ import { cursorAdapter } from "./cursor.js";
 import { devinAdapter } from "./devin.js";
 import { elevenLabsAdapter } from "./elevenlabs.js";
 import { grokAdapter } from "./grok.js";
+import { higgsfieldAdapter } from "./higgsfield.js";
 import { kimiAdapter } from "./kimi.js";
 import { kiroAdapter } from "./kiro.js";
 import { opencodeGoAdapter } from "./opencode-go.js";
@@ -43,6 +44,7 @@ export const PROVIDERS: Record<ProviderId, ProviderAdapter> = {
   devin: devinAdapter,
   muse: museAdapter,
   kiro: kiroAdapter,
+  higgsfield: higgsfieldAdapter,
 };
 
 export function parseProviders(value: string | undefined): ProviderId[] {

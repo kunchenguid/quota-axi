@@ -17,7 +17,8 @@ export type ProviderId =
   | "elevenlabs"
   | "devin"
   | "muse"
-  | "kiro";
+  | "kiro"
+  | "higgsfield";
 
 export const PROVIDER_IDS = [
   "claude",
@@ -39,6 +40,7 @@ export const PROVIDER_IDS = [
   "devin",
   "muse",
   "kiro",
+  "higgsfield",
 ] as const satisfies readonly ProviderId[];
 
 export type ProviderSource =
@@ -223,6 +225,11 @@ export type QuotaWindow = {
   currency?: string;
   overageRate?: number;
   overageCap?: number;
+  /** Credit-unit amounts for non-USD credit caps (e.g. workspace spend controls). */
+  limitCredits?: number;
+  usedCredits?: number;
+  remainingCredits?: number;
+  creditUnit?: string;
   /** Cycle-average pace relative to generatedAt. Not cached. */
   pace?: QuotaPace;
 };
@@ -325,6 +332,17 @@ export type ProviderQuota = {
     unit?: "usd" | "cny" | "credits";
   };
   overageStatus?: string;
+  /**
+   * PHI-safe job-outcome sample from a vendor list command. Counts only;
+   * never prompts, URLs, ids, or account identity. Restored on cache reuse
+   * the same way `credits` is; absent when the snapshot carried none.
+   */
+  jobs?: {
+    sampled: number;
+    completed: number;
+    failed: number;
+    other: number;
+  };
   state: {
     status: ProviderStatus;
     stale: boolean;

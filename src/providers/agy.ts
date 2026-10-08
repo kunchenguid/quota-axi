@@ -3,7 +3,11 @@ import * as http from "node:http";
 import * as https from "node:https";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
-import { deleteCachedProvider, readCachedProvider } from "../cache.js";
+import {
+  deleteCachedProvider,
+  readCachedProvider,
+  retireCachedSlot,
+} from "../cache.js";
 import {
   currentUserProcessListArgs,
   execFileText,
@@ -46,6 +50,8 @@ const REQUEST_TIMEOUT_MS = 3_000;
 const CLI_QUOTA_TIMEOUT_MS = 15_000;
 const PROBE_BUDGET_MS = 10_000;
 const MAX_RESPONSE_BYTES = 1024 * 1024;
+const FIVE_HOURS_SECONDS = 18_000;
+const WEEK_SECONDS = 7 * 24 * 60 * 60;
 
 type AgyProcessSource = "agy" | "app";
 
@@ -85,19 +91,27 @@ export type AgyProbeRuntime = {
 
 /**
  * The only two outcomes that show Antigravity genuinely absent: no `agy` on
- * PATH, and no Antigravity process listening. Every other skip - an installed
- * CLI that timed out, a discovered endpoint that would not answer - leaves
- * presence unknown, so the human report keeps Antigravity in view.
+ * PATH, and the process list was checked and contains no Antigravity process.
+ * A process-list check that is unavailable still counts as absence for the
+ * provider's established not-set-up presentation, but is never sufficient to
+ * retire a cached reading. Every other skip - an installed CLI that timed out
+ * or a discovered process whose endpoint is not accessible - leaves presence
+ * unknown, so the human report keeps Antigravity in view.
  */
 export const AGY_CLI_NOT_INSTALLED = "agy CLI is not installed";
 export const AGY_NOT_RUNNING = "Antigravity/agy is not running";
+export const AGY_PROCESS_DISCOVERY_UNAVAILABLE =
+  "Antigravity process discovery unavailable";
+/** Process list was checked but no usable endpoint was found; process may be running without an accessible port. */
+export const AGY_NO_ENDPOINT = "Antigravity/agy has no accessible endpoint";
 
 export const agyAdapter: ProviderAdapter = {
   id: "agy",
   label: "Antigravity",
   isUncertainSkip: (attempt) =>
     attempt.error !== AGY_CLI_NOT_INSTALLED &&
-    attempt.error !== AGY_NOT_RUNNING,
+    attempt.error !== AGY_NOT_RUNNING &&
+    attempt.error !== AGY_PROCESS_DISCOVERY_UNAVAILABLE,
   fetchQuota,
   inspectAuth,
 };
@@ -174,7 +188,13 @@ export async function fetchQuotaWithRuntime(
   }
 
   const finalError = errorMessage(finalFailure);
-  if (staleEligibleFailure(finalFailure)) {
+  if (isDefinitelyUninstalled(attempts)) {
+    try {
+      retireCachedSlot("agy");
+    } catch {
+      // Uninstall evidence stands when the cache cannot be rewritten.
+    }
+  } else if (staleEligibleFailure(finalFailure)) {
     const cached = readCachedProvider("agy");
     const stale = cached
       ? staleFromCache(cached, finalError, sourceNames(attempts), attempts)
@@ -208,7 +228,7 @@ export async function inspectAuthWithRuntime(
   runtime: AgyProbeRuntime,
 ): Promise<AuthProviderReport> {
   try {
-    const endpoints = await discoverAgyEndpoints(
+    const { endpoints } = await discoverAgyEndpoints(
       runtime,
       createProbeDeadline(),
     );
@@ -437,8 +457,16 @@ async function fetchLoopbackQuota(runtime: AgyProbeRuntime): Promise<{
   refreshedAt: string;
 }> {
   const deadline = createProbeDeadline();
-  const endpoints = await discoverAgyEndpoints(runtime, deadline);
-  if (endpoints.length === 0) throw new AgyUnavailableError(AGY_NOT_RUNNING);
+  const { endpoints, confirmedNoProcess, processDiscoveryUnavailable } =
+    await discoverAgyEndpoints(runtime, deadline);
+  if (endpoints.length === 0)
+    throw new AgyUnavailableError(
+      confirmedNoProcess
+        ? AGY_NOT_RUNNING
+        : processDiscoveryUnavailable
+          ? AGY_PROCESS_DISCOVERY_UNAVAILABLE
+          : AGY_NO_ENDPOINT,
+    );
 
   let lastError: unknown;
   for (const endpoint of endpoints) {
@@ -459,10 +487,16 @@ async function fetchLoopbackQuota(runtime: AgyProbeRuntime): Promise<{
 async function discoverAgyEndpoints(
   runtime: AgyProbeRuntime,
   deadline: number,
-): Promise<AgyConnectionEndpoint[]> {
-  const processes = processInfosFromPs(
-    await readProcessList(runtime, deadline),
-  );
+): Promise<{
+  endpoints: AgyConnectionEndpoint[];
+  confirmedNoProcess: boolean;
+  processDiscoveryUnavailable: boolean;
+}> {
+  const processListText = await readProcessList(runtime, deadline);
+  const processes =
+    processListText !== null ? processInfosFromPs(processListText) : [];
+  const confirmedNoProcess = processListText !== null && processes.length === 0;
+  const processDiscoveryUnavailable = processListText === null;
   const endpoints: AgyConnectionEndpoint[] = [];
   let discoveryError: unknown;
   for (const processInfo of processes) {
@@ -532,7 +566,11 @@ async function discoverAgyEndpoints(
     }
   }
   if (endpoints.length === 0 && discoveryError) throw discoveryError;
-  return endpoints.sort(compareEndpoints);
+  return {
+    endpoints: endpoints.sort(compareEndpoints),
+    confirmedNoProcess,
+    processDiscoveryUnavailable,
+  };
 }
 
 function endpointFor(
@@ -639,8 +677,8 @@ async function fetchEndpointIdentity(
 async function readProcessList(
   runtime: AgyProbeRuntime,
   deadline: number,
-): Promise<string> {
-  if (process.platform === "win32") return "";
+): Promise<string | null> {
+  if (process.platform === "win32") return null;
   const effectiveUid = process.geteuid?.();
   if (effectiveUid === undefined)
     throw new AgyDiscoveryError("Antigravity process discovery failed");
@@ -714,6 +752,9 @@ function normalizeQuotaSummaryBucket(
       parseEpochOrIso(bucket.resetTime) ?? parseEpochOrIso(bucket.reset_time),
     resetText: stringValue(bucket.description),
   };
+  if (windowKind.windowSeconds !== undefined) {
+    result.windowSeconds = windowKind.windowSeconds;
+  }
   const remaining = remainingFraction(bucket);
   if (remaining !== undefined) {
     const percentUsed = clampPercent((1 - clampFraction(remaining)) * 100);
@@ -799,6 +840,7 @@ function agyWindowKind(bucket: Record<string, unknown>): {
   label: "5-hour" | "weekly" | "quota";
   kind: QuotaWindow["kind"];
   sortRank: number;
+  windowSeconds?: number;
 } {
   const raw = [
     stringValue(bucket.window),
@@ -808,22 +850,33 @@ function agyWindowKind(bucket: Record<string, unknown>): {
     stringValue(bucket.name),
   ]
     .filter((value): value is string => Boolean(value))
-    .join(" ")
-    .toLowerCase();
-  if (raw.includes("5h") || raw.includes("five")) {
+    .map((value) => value.toLowerCase());
+  if (
+    raw.some((value) =>
+      /^(?:(?:gemini|3p|third-party)[-_])?(?:5h|5-hour|five[ _-]hour)(?: limit)?$/.test(
+        value,
+      ),
+    )
+  ) {
     return {
       id: "5h",
       label: "5-hour",
       kind: "session",
       sortRank: 0,
+      windowSeconds: FIVE_HOURS_SECONDS,
     };
   }
-  if (raw.includes("week")) {
+  if (
+    raw.some((value) =>
+      /^(?:(?:gemini|3p|third-party)[-_])?weekly(?: limit)?$/.test(value),
+    )
+  ) {
     return {
       id: "weekly",
       label: "weekly",
       kind: "weekly",
       sortRank: 1,
+      windowSeconds: WEEK_SECONDS,
     };
   }
   return { id: "unknown", label: "quota", kind: "unknown", sortRank: 2 };
@@ -1160,6 +1213,26 @@ function failureRank(error: unknown): number {
   if (status === "error") return 2;
   if (status === "unavailable") return 1;
   return 0;
+}
+
+/**
+ * `agy` has no credential or configuration state that this provider reads.
+ * Absence is established only when both independent discovery paths agree:
+ * PATH contains no CLI, and the process list was successfully read and
+ * contains no Antigravity process. A process that is running but has no
+ * accessible endpoint, or a platform where process discovery is unavailable
+ * (Windows), does not meet this test and continues to use the stale fallback.
+ */
+function isDefinitelyUninstalled(attempts: readonly SourceAttempt[]): boolean {
+  return (
+    attempts.length === 2 &&
+    attempts[0]?.source === "cli" &&
+    attempts[0]?.status === "skipped" &&
+    attempts[0]?.error === AGY_CLI_NOT_INSTALLED &&
+    attempts[1]?.source === "loopback" &&
+    attempts[1]?.status === "skipped" &&
+    attempts[1]?.error === AGY_NOT_RUNNING
+  );
 }
 
 function staleEligibleFailure(error: unknown): boolean {

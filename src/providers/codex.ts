@@ -1124,6 +1124,7 @@ export function normalizeCodexUsage(raw: unknown):
       "weekly",
     ),
     ...collectNamedRateLimitWindows(data),
+    ...spendControlWindows(data.spend_control),
   ]);
 
   if (windows.length === 0) return undefined;
@@ -1138,6 +1139,65 @@ export function normalizeCodexUsage(raw: unknown):
     credits: normalizeCredits(data.credits ?? rateLimit?.credits),
     refreshedAt: nowIso(),
   };
+}
+
+function spendControlWindows(raw: unknown): QuotaWindow[] {
+  const control = objectValue(raw);
+  const cap = objectValue(control?.individual_limit);
+  if (!cap) return [];
+
+  const limit = numberValue(cap.limit);
+  const used = numberValue(cap.used);
+  const remaining = numberValue(cap.remaining);
+  const usableTotals =
+    limit !== undefined &&
+    limit > 0 &&
+    used !== undefined &&
+    used >= 0 &&
+    remaining !== undefined &&
+    remaining >= 0;
+  // Totals preserve precision lost in the backend's rounded percentages.
+  // Only divide when the entire set is usable; otherwise retain its percentages.
+  const boundedPercent = (value: number | undefined) =>
+    value === undefined || !Number.isFinite(value)
+      ? undefined
+      : Math.min(100, Math.max(0, value));
+  const percentUsed = boundedPercent(
+    usableTotals ? (used / limit) * 100 : numberValue(cap.used_percent),
+  );
+  const percentRemaining = boundedPercent(
+    usableTotals
+      ? (remaining / limit) * 100
+      : numberValue(cap.remaining_percent),
+  );
+  const resetAt = numberValue(cap.reset_at);
+  const resetAfter = numberValue(cap.reset_after_seconds);
+  const resetMs =
+    resetAt !== undefined
+      ? resetAt * 1000
+      : resetAfter !== undefined && resetAfter >= 0
+        ? Date.now() + resetAfter * 1000
+        : undefined;
+  const reset = resetMs === undefined ? undefined : new Date(resetMs);
+  const creditUnit = stringValue(cap.unit) ?? undefined;
+  const window: QuotaWindow = {
+    id: "spend_control",
+    label: "workspace credit cap",
+    kind: "credits",
+    percentUsed: control?.reached === true ? 100 : percentUsed,
+    percentRemaining: control?.reached === true ? 0 : percentRemaining,
+    resetsAt:
+      reset && Number.isFinite(reset.getTime())
+        ? reset.toISOString()
+        : undefined,
+  };
+  if (usableTotals) {
+    window.limitCredits = limit;
+    window.usedCredits = used;
+    window.remainingCredits = remaining;
+    if (creditUnit !== undefined) window.creditUnit = creditUnit;
+  }
+  return [window];
 }
 
 function resolveRateLimitContainer(

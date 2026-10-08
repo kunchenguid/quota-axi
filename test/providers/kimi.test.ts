@@ -1,5 +1,7 @@
+import { readFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo, Socket } from "node:net";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { withQuotaSemantics } from "../../src/interpretation.js";
 import { providerPresence } from "../../src/lib/source-attempts.js";
@@ -1228,7 +1230,7 @@ describe("Kimi payload normalization", () => {
     ).toThrow("schema_invalid");
   });
 
-  it("prefers a valid usages map over a legacy usage object", () => {
+  it("keeps the usages map's window when both shapes report the same figure", () => {
     const normalized = normalizeKimiPayload({
       ...CURRENT_USAGES_PAYLOAD,
       usage: { used: "20", limit: "100", resetTime: "2026-09-17T00:00:00Z" },
@@ -1553,6 +1555,252 @@ describe("Kimi payload normalization", () => {
     ]) {
       expect(serialized).not.toContain(prohibited);
     }
+  });
+});
+
+describe("Kimi responses carrying both shapes", () => {
+  /**
+   * A redacted live `/usages` answer for a Kimi Code Vivace account (issue
+   * #301): the principal `usage` reads 92 of 100 used for the week while
+   * `usages.limit_7d` reads a `used_ratio` of 0, with the same reset.
+   */
+  const CAPTURED = JSON.parse(
+    readFileSync(
+      join(process.cwd(), "test/fixtures/kimi/usages-both-shapes.json"),
+      "utf8",
+    ),
+  ) as {
+    usage: Record<string, unknown>;
+    limits: unknown[];
+    usages: Record<string, unknown>;
+  };
+  const CAPTURED_AT = Date.parse("2026-10-03T16:45:00.000Z");
+
+  it("bounds the week by the more-used principal figure instead of the zero map ratio", () => {
+    const normalized = normalizeKimiPayload(CAPTURED);
+    expect(normalized).toEqual({
+      kind: "windows",
+      windows: [
+        {
+          id: "five_hour",
+          label: "session",
+          kind: "session",
+          percentUsed: 0,
+          percentRemaining: 100,
+          windowSeconds: 18_000,
+          resetsAt: "2026-10-03T20:49:37.000Z",
+        },
+        {
+          id: "weekly",
+          label: "week",
+          kind: "weekly",
+          percentUsed: 92,
+          percentRemaining: 8,
+          windowSeconds: 604_800,
+          resetsAt: "2026-10-04T06:49:38.261Z",
+        },
+      ],
+      diagnostics: [],
+    });
+  });
+
+  it("reports the captured account at 8% all_models headroom, not 100%", async () => {
+    const report = await testAdapter({
+      fetch: vi.fn(async () => jsonResponse(CAPTURED)),
+      now: () => CAPTURED_AT,
+    }).fetchQuota(OPTIONS);
+    expect(report.state).toMatchObject({ status: "fresh", stale: false });
+    expect(report.state.untrustedWindowIds).toBeUndefined();
+
+    const generatedAt = new Date(CAPTURED_AT).toISOString();
+    const interpreted = withQuotaSemantics(report, generatedAt);
+    expect(interpreted.quotaSemantics?.status).toBe("known");
+    expect(interpreted.quotaSemantics?.effectiveAvailability[0]).toMatchObject({
+      scope: "all_models",
+      boundedBy: ["five_hour", "weekly"],
+      effectivePercentRemaining: 8,
+    });
+    const toon = renderQuotaToon(
+      { generatedAt, schemaVersion: 5, providers: [interpreted] },
+      "quota-axi",
+      true,
+    );
+    expect(toon).toContain("kimi,all_models,8,");
+    expect(toon).toContain("kimi,weekly,week,8,");
+  });
+
+  it("reads the captured usages map alone as before", () => {
+    expect(normalizeKimiPayload({ usages: CAPTURED.usages })).toEqual({
+      kind: "windows",
+      windows: [
+        {
+          id: "five_hour",
+          label: "session",
+          kind: "session",
+          percentUsed: 0,
+          percentRemaining: 100,
+          windowSeconds: 18_000,
+          resetsAt: "2026-10-03T20:49:37.000Z",
+        },
+        {
+          id: "weekly",
+          label: "week",
+          kind: "weekly",
+          percentUsed: 0,
+          percentRemaining: 100,
+          windowSeconds: 604_800,
+          resetsAt: "2026-10-04T06:49:37.000Z",
+        },
+      ],
+      diagnostics: [],
+    });
+  });
+
+  it("reads the captured principal and limits alone as before", () => {
+    expect(
+      normalizeKimiPayload({ usage: CAPTURED.usage, limits: CAPTURED.limits }),
+    ).toEqual({
+      kind: "windows",
+      windows: [
+        {
+          id: "weekly",
+          label: "week",
+          kind: "weekly",
+          percentUsed: 92,
+          percentRemaining: 8,
+          windowSeconds: 604_800,
+          resetsAt: "2026-10-04T06:49:38.261Z",
+        },
+        {
+          id: "five_hour",
+          label: "session",
+          kind: "session",
+          percentUsed: 0,
+          percentRemaining: 100,
+          windowSeconds: 18_000,
+          resetsAt: "2026-10-03T20:49:38.261Z",
+        },
+      ],
+      diagnostics: [],
+    });
+  });
+
+  it("lets a more-used map figure bound the window over the principal", () => {
+    const normalized = normalizeKimiPayload({
+      ...CAPTURED,
+      usages: {
+        limit_5h: { used_ratio: 0.4, reset_time: "2026-10-03T20:49:37Z" },
+        limit_7d: { used_ratio: 0.97, reset_time: "2026-10-04T06:49:37Z" },
+      },
+    });
+    expect(
+      normalized.kind === "windows"
+        ? normalized.windows.map(({ id, percentUsed }) => [id, percentUsed])
+        : [],
+    ).toEqual([
+      ["five_hour", 40],
+      ["weekly", 97],
+    ]);
+  });
+
+  it("keeps the other shape's reset when the more-used figure has none", () => {
+    const principalWithoutReset = normalizeKimiPayload({
+      ...CAPTURED,
+      usage: { limit: "100", used: "92", resetTime: "not a time" },
+    });
+    expect(
+      principalWithoutReset.kind === "windows" &&
+        principalWithoutReset.windows.find(({ id }) => id === "weekly"),
+    ).toEqual({
+      id: "weekly",
+      label: "week",
+      kind: "weekly",
+      percentUsed: 92,
+      percentRemaining: 8,
+      windowSeconds: 604_800,
+      resetsAt: "2026-10-04T06:49:37.000Z",
+    });
+
+    const mapWithoutReset = normalizeKimiPayload({
+      ...CAPTURED,
+      usages: { ...CAPTURED.usages, limit_7d: { used_ratio: 0.97 } },
+    });
+    expect(
+      mapWithoutReset.kind === "windows" &&
+        mapWithoutReset.windows.find(({ id }) => id === "weekly"),
+    ).toMatchObject({
+      percentUsed: 97,
+      resetsAt: "2026-10-04T06:49:38.261Z",
+    });
+  });
+
+  it("keeps a map-only monthly window and an unfamiliar legacy limit alongside the merged windows", () => {
+    const normalized = normalizeKimiPayload({
+      ...CAPTURED,
+      limits: [
+        ...CAPTURED.limits,
+        {
+          window: { duration: 1, timeUnit: "TIME_UNIT_DAY" },
+          detail: { limit: "10", used: "3" },
+        },
+      ],
+      usages: {
+        ...CAPTURED.usages,
+        limit_month_total: {
+          used_ratio: 0.009,
+          reset_time: "2026-10-30T00:00:00Z",
+        },
+      },
+    });
+    expect(
+      normalized.kind === "windows"
+        ? normalized.windows.map(({ id }) => id)
+        : [],
+    ).toEqual(["five_hour", "weekly", "month_total", "limit:2"]);
+    expect(normalized.kind === "windows" && normalized.diagnostics).toEqual([]);
+  });
+
+  it("does not flag omitted limits when the usages map supplies the five-hour window", () => {
+    const normalized = normalizeKimiPayload({
+      usage: CAPTURED.usage,
+      usages: CAPTURED.usages,
+    });
+    expect(
+      normalized.kind === "windows"
+        ? normalized.windows.map(({ id, percentUsed }) => [id, percentUsed])
+        : [],
+    ).toEqual([
+      ["five_hour", 0],
+      ["weekly", 92],
+    ]);
+    expect(normalized.kind === "windows" && normalized.diagnostics).toEqual([]);
+  });
+
+  it("reports the map as partial when a declared principal cannot be parsed", async () => {
+    const payload = {
+      ...CAPTURED,
+      usage: { used: "92", resetTime: "2026-10-04T06:49:38Z" },
+    };
+    expect(normalizeKimiPayload(payload)).toMatchObject({
+      kind: "windows",
+      diagnostics: [{ code: "usage_invalid" }],
+    });
+
+    const report = await testAdapter({
+      fetch: vi.fn(async () => jsonResponse(payload)),
+      now: () => CAPTURED_AT,
+    }).fetchQuota(OPTIONS);
+    expect(report.state.untrustedWindowIds).toEqual(["usage"]);
+    const interpreted = withQuotaSemantics(
+      report,
+      new Date(CAPTURED_AT).toISOString(),
+    );
+    expect(interpreted.quotaSemantics?.status).toBe("partial");
+    expect(interpreted.quotaSemantics?.unresolvedWindowIds).toEqual(["usage"]);
+    expect(
+      interpreted.quotaSemantics?.effectiveAvailability[0]
+        ?.effectivePercentRemaining,
+    ).toBeUndefined();
   });
 });
 

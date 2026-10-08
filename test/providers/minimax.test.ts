@@ -618,6 +618,7 @@ describe("MiniMax provider", () => {
         source: "minimax:config.json",
         status: "invalid",
         error: "credential_missing",
+        credentialPresent: true,
       }),
     ]);
     expect(fetch).not.toHaveBeenCalled();
@@ -1023,6 +1024,7 @@ describe("MiniMax provider", () => {
             source: "pi:minimax",
             status: "failed",
             error: "credential_resolution_failed",
+            credentialPresent: true,
           },
           {
             source: "minimax:config.json",
@@ -1042,6 +1044,7 @@ describe("MiniMax provider", () => {
           source: "pi:minimax",
           status: "error",
           error: "file_too_large",
+          credentialPresent: true,
         }),
         expect.objectContaining({
           source: "minimax:config.json",
