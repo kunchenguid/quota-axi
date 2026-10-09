@@ -31,7 +31,12 @@ export type TuiColorDepth = "none" | "16" | "256" | "truecolor";
 export type TuiShow = "remaining" | "used";
 /** A resolved palette: `dark` is Catppuccin Mocha, `light` is Catppuccin Latte. */
 export type TuiTheme = "dark" | "light";
-export const TUI_THEME_SETTINGS: readonly TuiTheme[] = ["light", "dark"];
+export type TuiThemeSetting = TuiTheme | "system";
+export const TUI_THEME_SETTINGS: readonly TuiThemeSetting[] = [
+  "light",
+  "dark",
+  "system",
+];
 
 export type TuiOptions = {
   /** Raw terminal width; clamped to [80, 120], defaults to 100. */

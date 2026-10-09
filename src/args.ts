@@ -1,7 +1,7 @@
 import { AxiError } from "axi-sdk-js";
 import { MODEL_CATALOG_PROVIDER_IDS } from "./models.js";
 import { parseProviders } from "./providers/index.js";
-import { TUI_THEME_SETTINGS, type TuiTheme } from "./tui.js";
+import { TUI_THEME_SETTINGS, type TuiThemeSetting } from "./tui.js";
 import {
   PROVIDER_IDS,
   type IntelligenceBucket,
@@ -42,7 +42,7 @@ export type QuotaFlags = {
    */
   maxAgeSeconds?: number;
   /** `--tui` palette selection; unset defers to `QUOTA_AXI_THEME`, then `dark`. */
-  theme?: TuiTheme;
+  theme?: TuiThemeSetting;
 };
 
 /** Refresh bounds: fast enough to feel live, slow enough to stay polite. */
@@ -131,7 +131,7 @@ function parseCommonFlags(
   let all = false;
   let refreshSeconds: number | undefined;
   let maxAgeSeconds: number | undefined;
-  let theme: TuiTheme | undefined;
+  let theme: TuiThemeSetting | undefined;
   let allowKeychainPrompt = false;
   let allowClaudeInference = false;
   let noCredentialRefresh = false;
@@ -330,12 +330,12 @@ function parseDurationSeconds(value: string | undefined): number | undefined {
 export function parseThemeValue(
   value: string | undefined,
   source: "--theme" | "QUOTA_AXI_THEME",
-): TuiTheme {
+): TuiThemeSetting {
   const trimmed = value?.trim() ?? "";
   const match = TUI_THEME_SETTINGS.find((candidate) => candidate === trimmed);
   if (match !== undefined) return match;
   throw new AxiError(
-    `${source} requires light or dark`,
+    `${source} requires light, dark, or system`,
     "VALIDATION_ERROR",
     source === "--theme"
       ? ["Pass --theme=... if the value begins with --"]

@@ -61,6 +61,9 @@ delete process.env.WINDSURF_API_SERVER_URL;
 // process; tests start from the default and opt in themselves.
 delete process.env.QUOTA_AXI_MAX_AGE;
 delete process.env.QUOTA_AXI_SNAPSHOT;
+// Theme tests inject the OS probe and opt in themselves; never inherit a
+// system-theme request that would read the developer's appearance settings.
+delete process.env.QUOTA_AXI_THEME;
 
 // No test may send this machine's exported Muse key to the key endpoint: every
 // Muse key-endpoint request also issues an API key on the real account. The

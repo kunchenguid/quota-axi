@@ -14,6 +14,7 @@ import { main, normalizeArgv } from "../src/cli.js";
 import { authCommand, quotaCommand } from "../src/commands.js";
 import { PROVIDERS } from "../src/providers/index.js";
 import { redactedResponse } from "../src/render.js";
+import * as systemTheme from "../src/lib/system-theme.js";
 import type {
   ProviderAdapter,
   ProviderOptions,
@@ -269,20 +270,22 @@ describe("CLI flag parsing", () => {
   it("parses --theme for the human report", () => {
     expect(parseFlags(["--tui", "--theme", "light"]).theme).toBe("light");
     expect(parseFlags(["--tui", "--theme=dark"]).theme).toBe("dark");
+    expect(parseFlags(["--tui", "--theme", "system"]).theme).toBe("system");
+    expect(parseFlags(["--tui", "--theme=system"]).theme).toBe("system");
     expect(parseFlags(["--tui"]).theme).toBeUndefined();
     for (const value of ["", "Light", "solarized", "auto"]) {
       expect(() => parseFlags(["--tui", "--theme", value])).toThrow(
-        "--theme requires light or dark",
+        "--theme requires light, dark, or system",
       );
     }
     expect(() => parseFlags(["--theme", "light"])).toThrow(
       "--theme is only supported with --tui",
     );
     expect(() => parseFlags(["--tui", "--theme"])).toThrow(
-      "--theme requires light or dark",
+      "--theme requires light, dark, or system",
     );
     expect(() => parseFlags(["--tui", "--theme="])).toThrow(
-      "--theme requires light or dark",
+      "--theme requires light, dark, or system",
     );
     expect(
       parseFlags(["--tui", "--theme", "light", "--theme=dark"]).theme,
@@ -1962,8 +1965,13 @@ describe("--tui theme selection", () => {
     process.env.FORCE_COLOR = "3";
     delete process.env.QUOTA_AXI_THEME;
     delete process.env.COLORFGBG;
+    vi.spyOn(systemTheme, "resolveSystemTuiTheme").mockResolvedValue("dark");
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2026-09-22T12:00:00.000Z"));
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it("renders Mocha by default with nothing set", async () => {
@@ -1971,6 +1979,7 @@ describe("--tui theme selection", () => {
     expect(output).toContain(MOCHA_CODEX);
     expect(output).not.toContain(LATTE_CODEX);
     expect(output).toBe(await capture([...tuiOnce, "--theme", "dark"]));
+    expect(systemTheme.resolveSystemTuiTheme).not.toHaveBeenCalled();
   });
 
   it("renders Latte for --theme light and Mocha for --theme dark", async () => {
@@ -1987,6 +1996,107 @@ describe("--tui theme selection", () => {
     expect(await capture(tuiOnce)).toContain(LATTE_CODEX);
   });
 
+  it("resolves --theme system once for --once", async () => {
+    vi.mocked(systemTheme.resolveSystemTuiTheme).mockResolvedValue("light");
+    expect(await capture([...tuiOnce, "--theme", "system"])).toContain(
+      LATTE_CODEX,
+    );
+    expect(systemTheme.resolveSystemTuiTheme).toHaveBeenCalledOnce();
+  });
+
+  it("honors QUOTA_AXI_THEME=system and lets the flag override it", async () => {
+    vi.mocked(systemTheme.resolveSystemTuiTheme).mockResolvedValue("light");
+    process.env.QUOTA_AXI_THEME = "system";
+    expect(await capture(tuiOnce)).toContain(LATTE_CODEX);
+    expect(await capture([...tuiOnce, "--theme", "dark"])).toContain(
+      MOCHA_CODEX,
+    );
+    expect(systemTheme.resolveSystemTuiTheme).toHaveBeenCalledOnce();
+    process.env.QUOTA_AXI_THEME = "dark";
+    expect(await capture([...tuiOnce, "--theme", "system"])).toContain(
+      LATTE_CODEX,
+    );
+    expect(systemTheme.resolveSystemTuiTheme).toHaveBeenCalledTimes(2);
+  });
+
+  it("resolves system only on initial load, manual refresh, and scheduled refresh", async () => {
+    vi.useRealTimers();
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    vi.setSystemTime(new Date("2026-09-22T12:00:00.000Z"));
+    vi.mocked(systemTheme.resolveSystemTuiTheme)
+      .mockResolvedValueOnce("dark")
+      .mockResolvedValueOnce("light")
+      .mockResolvedValueOnce("dark");
+    const stdout = process.stdout as unknown as Record<string, unknown>;
+    const stdin = process.stdin as unknown as Record<string, unknown>;
+    const saved = {
+      stdoutTty: stdout.isTTY,
+      stdinTty: stdin.isTTY,
+      setRawMode: stdin.setRawMode,
+      rows: stdout.rows,
+      columns: stdout.columns,
+    };
+    const painted: string[] = [];
+    vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+      painted.push(String(chunk));
+      return true;
+    });
+    vi.spyOn(process.stdin, "resume").mockImplementation(() => process.stdin);
+    vi.spyOn(process.stdin, "pause").mockImplementation(() => process.stdin);
+    stdout.isTTY = true;
+    stdin.isTTY = true;
+    stdin.setRawMode = () => process.stdin;
+    stdout.rows = 80;
+    stdout.columns = 100;
+    const settle = async (ready: () => boolean): Promise<void> => {
+      for (let tries = 0; tries < 200; tries++) {
+        if (ready()) return;
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+      throw new Error("live theme frame did not settle");
+    };
+    let run: Promise<string> | undefined;
+    try {
+      run = capture([
+        "--tui",
+        "--provider",
+        "codex",
+        "--theme",
+        "system",
+        "--refresh",
+        "30s",
+      ]);
+      await settle(() => (painted.at(-1) ?? "").includes(MOCHA_CODEX));
+      const frames = painted.length;
+      process.stdin.emit("data", Buffer.from("j"));
+      await settle(() => painted.length > frames);
+      process.stdout.emit("resize");
+      await settle(() => painted.length > frames + 1);
+      expect(systemTheme.resolveSystemTuiTheme).toHaveBeenCalledOnce();
+
+      // The selected setting is fixed; only the OS appearance is re-read.
+      process.env.QUOTA_AXI_THEME = "invalid";
+      process.stdin.emit("data", Buffer.from("r"));
+      await settle(() => (painted.at(-1) ?? "").includes(LATTE_CODEX));
+      expect(systemTheme.resolveSystemTuiTheme).toHaveBeenCalledTimes(2);
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      await settle(() => (painted.at(-1) ?? "").includes(MOCHA_CODEX));
+      expect(systemTheme.resolveSystemTuiTheme).toHaveBeenCalledTimes(3);
+      process.stdin.emit("data", Buffer.from("q"));
+      expect(await run).toContain(MOCHA_CODEX);
+      expect(systemTheme.resolveSystemTuiTheme).toHaveBeenCalledTimes(3);
+    } finally {
+      process.stdin.emit("data", Buffer.from("q"));
+      await run;
+      stdout.isTTY = saved.stdoutTty;
+      stdin.isTTY = saved.stdinTty;
+      stdin.setRawMode = saved.setRawMode;
+      stdout.rows = saved.rows;
+      stdout.columns = saved.columns;
+    }
+  });
+
   it("lets --theme win over QUOTA_AXI_THEME", async () => {
     process.env.QUOTA_AXI_THEME = "light";
     expect(await capture([...tuiOnce, "--theme", "dark"])).toContain(
@@ -2000,7 +2110,7 @@ describe("--tui theme selection", () => {
 
   it("rejects --theme auto as a usage error", async () => {
     const output = await capture([...tuiOnce, "--theme", "auto"]);
-    expect(output).toContain("--theme requires light or dark");
+    expect(output).toContain("--theme requires light, dark, or system");
     expect(process.exitCode).toBe(2);
   });
 
@@ -2032,11 +2142,12 @@ describe("--tui theme selection", () => {
         ...(format === "JSON" ? ["--json"] : []),
       ];
       const output = await capture(args);
-      for (const theme of ["light", "auto", "invalid"]) {
+      for (const theme of ["light", "system", "auto", "invalid"]) {
         process.env.QUOTA_AXI_THEME = theme;
         expect(await capture(args)).toBe(output);
         expect(process.exitCode).toBeUndefined();
       }
+      expect(systemTheme.resolveSystemTuiTheme).not.toHaveBeenCalled();
     },
   );
 
@@ -2053,7 +2164,9 @@ describe("--tui theme selection", () => {
     async (value) => {
       process.env.QUOTA_AXI_THEME = value;
       const output = await capture(tuiOnce);
-      expect(output).toContain("QUOTA_AXI_THEME requires light or dark");
+      expect(output).toContain(
+        "QUOTA_AXI_THEME requires light, dark, or system",
+      );
       expect(output).toContain("code: VALIDATION_ERROR");
       expect(output).not.toContain("╭─");
       expect(process.exitCode).toBe(2);

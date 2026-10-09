@@ -21,6 +21,7 @@ import { withQuotaSemantics } from "./interpretation.js";
 import { createModelsResponse, MODEL_CATALOG_PROVIDER_IDS } from "./models.js";
 import { providerPresence } from "./lib/source-attempts.js";
 import { readTuiShowPreference } from "./lib/user-config.js";
+import { resolveSystemTuiTheme } from "./lib/system-theme.js";
 import { nowIso } from "./lib/time.js";
 import {
   coalesceVerifiedSubscriptions,
@@ -146,14 +147,19 @@ async function quotaTuiReport(
   const show = readTuiShowPreference();
   // Precedence: --theme, then QUOTA_AXI_THEME, then dark.
   // A blank variable selects nothing, matching the project's env conventions.
-  // Resolved once here so a variable edited mid-session can never throw inside
+  // Validated once here so a variable edited mid-session can never throw inside
   // the live loop.
   const envTheme = process.env.QUOTA_AXI_THEME?.trim();
-  const theme =
+  const themeSetting =
     flags.theme ??
     (envTheme === undefined || envTheme === ""
       ? "dark"
       : parseThemeValue(envTheme, "QUOTA_AXI_THEME"));
+  let theme: TuiTheme = "dark";
+  const resolveTheme = async (): Promise<void> => {
+    theme =
+      themeSetting === "system" ? await resolveSystemTuiTheme() : themeSetting;
+  };
   const terminal = (): {
     columns?: number;
     colorDepth: TuiColorDepth;
@@ -186,6 +192,7 @@ async function quotaTuiReport(
   };
 
   if (flags.once || !isInteractiveTerminal()) {
+    await resolveTheme();
     return frame(
       await loadQuota(flags.providers, options, false, maxAgeSeconds),
     );
@@ -206,8 +213,9 @@ async function quotaTuiReport(
       : maxAgeSeconds;
   const last = await runLiveTui<QuotaAxiResponse>({
     // `r` is an operator asking for a new reading now, so it never reuses
-    load: (trigger) =>
-      loadQuota(
+    load: async (trigger) => {
+      await resolveTheme();
+      return loadQuota(
         flags.providers,
         options,
         true,
@@ -216,7 +224,8 @@ async function quotaTuiReport(
           : trigger === "tick"
             ? tickMaxAgeSeconds
             : maxAgeSeconds,
-      ),
+      );
+    },
     render: frame,
     status: (scroll) =>
       renderTuiHintLine(
