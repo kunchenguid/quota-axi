@@ -86,7 +86,7 @@ describe("models command", () => {
     );
     expect(sorted.sort).toMatchObject({ key: "runway" });
     expect(sorted.sort.tieGroups).toContainEqual([
-      { provider: "claude", id: "claude-haiku-4-5" },
+      { provider: "claude", id: "claude-haiku-5-5" },
       { provider: "claude", id: "claude-opus-4-5" },
       { provider: "claude", id: "claude-sonnet-4-5" },
     ]);

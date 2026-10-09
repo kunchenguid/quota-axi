@@ -9,7 +9,7 @@ import type { ModelCatalog } from "./types.js";
  * or redistributing any third-party scores.
  */
 export const MODEL_CATALOG: ModelCatalog = {
-  version: "2026-09-15",
+  version: "2026-10-08",
   provenance:
     "Curated editorial intelligence buckets informed by public provider materials and leaderboards, including Artificial Analysis (https://artificialanalysis.ai/). No third-party scores are reproduced.",
   entries: [
@@ -68,10 +68,10 @@ export const MODEL_CATALOG: ModelCatalog = {
     },
     {
       provider: "claude",
-      id: "claude-haiku-4-5",
-      label: "Claude Haiku 4.5",
+      id: "claude-haiku-5-5",
+      label: "Claude Haiku 5.5",
       intelligence: "medium",
-      aliases: ["claude-haiku-4.5"],
+      aliases: ["claude-haiku-5.5"],
     },
     {
       provider: "codex",

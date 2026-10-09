@@ -606,23 +606,26 @@ describe("Antigravity provider", () => {
     },
   );
 
-  it.skipIf(process.platform === "win32")("reports attention and preserves cache when agy process is running but has no accessible port", async () => {
-    const runtime = runtimeWith({
-      ps: "123 /Users/test/.local/bin/agy\n",
-      lsof: "",
-      cliQuota: Object.assign(new Error("agy missing"), { code: "ENOENT" }),
-    });
-    const withoutCache = await fetchQuotaWithRuntime(runtime);
+  it.skipIf(process.platform === "win32")(
+    "reports attention and preserves cache when agy process is running but has no accessible port",
+    async () => {
+      const runtime = runtimeWith({
+        ps: "123 /Users/test/.local/bin/agy\n",
+        lsof: "",
+        cliQuota: Object.assign(new Error("agy missing"), { code: "ENOENT" }),
+      });
+      const withoutCache = await fetchQuotaWithRuntime(runtime);
 
-    expect(providerPresence(withoutCache, agyAdapter)).toBe("attention");
+      expect(providerPresence(withoutCache, agyAdapter)).toBe("attention");
 
-    writeCachedProviders([cachedAgyQuota()]);
-    const result = await fetchQuotaWithRuntime(runtime);
+      writeCachedProviders([cachedAgyQuota()]);
+      const result = await fetchQuotaWithRuntime(runtime);
 
-    expect(result.state.status).toBe("stale");
-    expect(result.source).toBe("cache");
-    expect(readCachedProvider("agy")).toBeDefined();
-  });
+      expect(result.state.status).toBe("stale");
+      expect(result.source).toBe("cache");
+      expect(readCachedProvider("agy")).toBeDefined();
+    },
+  );
 
   it("preserves cache when language-server process is running without a CSRF token", async () => {
     writeCachedProviders([cachedAgyQuota()]);
