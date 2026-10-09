@@ -58,7 +58,7 @@
     "node": ">=22.19"
   },
   "dependencies": {
-    "@toon-format/toon": "2.1.0",
+    "@toon-format/toon": "2.3.1",
     "axi-sdk-js": "^0.1.10",
     "proxy-from-env": "2.1.0",
     "undici": "6.28.0"

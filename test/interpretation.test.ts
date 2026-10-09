@@ -725,7 +725,7 @@ describe("quota semantics", () => {
         false,
       );
       expect(report).toContain("codex,all_models,80,");
-      expect(report).toContain("exhaustion[0]:");
+      expect(report).toContain("exhaustion: []");
     },
   );
 
