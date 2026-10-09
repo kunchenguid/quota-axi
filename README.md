@@ -575,7 +575,7 @@ The omission help line sits after any situational advice and before the tier hin
 10 providers not set up are omitted; run `quota-axi --full` to list them
 ```
 
-One omitted provider uses the singular (`1 provider`, `is`, `it`). A machine with nothing set up still prints `quota[0]`, `exhaustion[0]`, and `attention[0]` plus that line, and still exits 1. `--full` prints the omitted rows and no omission line. Exit codes are otherwise unchanged.
+One omitted provider uses the singular (`1 provider`, `is`, `it`). A machine with nothing set up still prints `quota: []`, `exhaustion: []`, and `attention: []` plus that line, and still exits 1. `--full` prints the omitted rows and no omission line. Exit codes are otherwise unchanged.
 
 An unknown or stale scope deliberately gets **no** `quota[]` row: the absence of a number is the correct encoding of "no number", and the scope is named in `attention[]` instead.
 
