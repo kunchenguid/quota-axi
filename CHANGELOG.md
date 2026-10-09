@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.1.60](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.59...quota-axi-v0.1.60) (2026-10-09)
+
+
+### Features
+
+* **model-kb:** replace Claude Haiku 4.5 with Haiku 5.5 ([#324](https://github.com/kunchenguid/quota-axi/issues/324)) ([da6925e](https://github.com/kunchenguid/quota-axi/commit/da6925efeb7b934114aa620a55551bdecfff1c78))
+* **tui:** add opt-in light terminal theme ([#216](https://github.com/kunchenguid/quota-axi/issues/216)) ([a037ba2](https://github.com/kunchenguid/quota-axi/commit/a037ba2151737122682b279f8014a002920ed0c7))
+* **tui:** add opt-in system appearance theme ([#325](https://github.com/kunchenguid/quota-axi/issues/325)) ([8ba593c](https://github.com/kunchenguid/quota-axi/commit/8ba593cc5bfadf365a8b433b9bf5fc7cc01b040c))
+
+
+### Bug Fixes
+
+* **agy:** retire stale cache when Antigravity is definitively uninstalled ([#319](https://github.com/kunchenguid/quota-axi/issues/319)) ([f3ce0fc](https://github.com/kunchenguid/quota-axi/commit/f3ce0fc83e62fc520051523a9c19c61c9b0a620f))
+
 ## [0.1.59](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.58...quota-axi-v0.1.59) (2026-10-07)
 
 
