@@ -288,7 +288,6 @@ export type AccountLocator = {
   /** Which kind of selector `path` is, such as `config-dir`. */
   kind: string;
   path: string;
-  entry?: string;
   /** The exact secure-store service the lane reads, where one applies. */
   keychainService?: string;
   /**

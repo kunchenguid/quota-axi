@@ -984,10 +984,8 @@ function normalizeAccountLocator(raw: unknown): AccountLocator | undefined {
   const path = stringValue(data?.path);
   if (!data || !kind || !path) return undefined;
   const locator: AccountLocator = { kind, path };
-  const entry = stringValue(data.entry);
   const keychainService = stringValue(data.keychainService);
   const delegateEligible = booleanValue(data.delegateEligible);
-  if (entry) locator.entry = entry;
   if (keychainService) locator.keychainService = keychainService;
   if (delegateEligible !== undefined)
     locator.delegateEligible = delegateEligible;
