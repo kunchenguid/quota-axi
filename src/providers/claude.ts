@@ -3,7 +3,6 @@ import { userInfo } from "node:os";
 import { join } from "node:path";
 import {
   carrySubscriptionStamp,
-  deleteCachedProvider,
   readCachedClaudeProvider,
   retireCachedContext,
   stampClaudeReadingContext,
@@ -365,7 +364,7 @@ export async function fetchQuota(
     resolveClaudeProfileLocations(),
     SELECTED_LANE,
     claudeCredentialContextId(),
-    () => deleteCachedProvider("claude"),
+    () => retireCachedContext("claude", claudeStoredProfileContextId()),
   );
 }
 

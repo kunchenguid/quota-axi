@@ -593,11 +593,21 @@ function readCachedProviderInContext(
   contextId: string,
 ): ProviderQuota | undefined {
   if (!CREDENTIAL_CONTEXT_ID.test(contextId)) return undefined;
-  return readCacheProviders().find(
-    (item) =>
-      item.snapshot.provider === provider &&
-      item.credentialContextId === contextId,
-  )?.snapshot;
+  const refreshedAt = (item: CachedProvider) => {
+    const time = Date.parse(item.snapshot.state.refreshedAt ?? "");
+    return Number.isFinite(time) ? time : -Infinity;
+  };
+  return readCacheProviders()
+    .filter(
+      (item) =>
+        item.snapshot.provider === provider &&
+        item.credentialContextId === contextId,
+    )
+    .reduce<CachedProvider | undefined>(
+      (newest, item) =>
+        newest && refreshedAt(newest) >= refreshedAt(item) ? newest : item,
+      undefined,
+    )?.snapshot;
 }
 
 export function writeCachedProviders(

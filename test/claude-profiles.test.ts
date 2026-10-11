@@ -691,6 +691,66 @@ describe("Claude profile lane cache isolation", () => {
     );
   });
 
+  it("serves the newest stale snapshot a profile has in either mode", async () => {
+    credential(".claude", "synthetic-older");
+    await command(["--json"]);
+    credential(".claude", "synthetic-personal");
+    optIn(credential(".claude-work", "synthetic-work"));
+    vi.setSystemTime("2026-09-15T10:10:00.000Z");
+    await command(["--json"]);
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("fixture transport failed");
+      }),
+    );
+    vi.setSystemTime("2026-09-15T10:20:00.000Z");
+    const optedIn = response(await command(["--json"]));
+    expect(optedIn.providers[0].state.status).toBe("stale");
+    expect(optedIn.providers[0].windows[0].percentRemaining).toBe(
+      100 - usedPercent("synthetic-personal"),
+    );
+
+    vi.stubEnv("QUOTA_AXI_CLAUDE_PROFILES", undefined);
+    expect(remaining(await command(["--json"]))).toEqual([
+      100 - usedPercent("synthetic-personal"),
+    ]);
+  });
+
+  it("keeps listed lanes' snapshots when an unconfigured run signs out", async () => {
+    credential(".claude", "synthetic-personal");
+    const work = credential(".claude-work", "synthetic-work");
+    optIn(work);
+    const fresh = response(await command(["--json"]));
+
+    vi.stubEnv("QUOTA_AXI_CLAUDE_PROFILES", undefined);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init: RequestInit) => {
+        if (
+          new Headers(init.headers).get("authorization")!.endsWith("personal")
+        )
+          return new Response("", { status: 401 });
+        throw new Error("fixture transport failed");
+      }),
+    );
+    expect(response(await command(["--json"])).providers[0].state.status).toBe(
+      "auth_required",
+    );
+    const cached = JSON.parse(readFileSync(cacheFile(), "utf8"));
+    expect(cached.providers.map((p: ProviderQuota) => p.accountKey)).toEqual([
+      fresh.providers[1].accountKey,
+    ]);
+
+    optIn(work);
+    const failed = response(await command(["--json"]));
+    expect(failed.providers.map((p) => p.state.status)).toEqual([
+      "auth_required",
+      "stale",
+    ]);
+  });
+
   it("keeps a reused --full reading's accountLocator", async () => {
     const personal = credential(".claude", "synthetic-personal");
     const work = credential(".claude-work", "synthetic-work");
