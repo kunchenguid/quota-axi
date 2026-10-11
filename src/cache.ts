@@ -623,15 +623,19 @@ export function writeCachedProviders(
   const providers = fresh
     .flatMap((provider) => [provider, ...supersededReadings(provider)])
     .filter((provider) => !isCacheExcluded(provider));
-  const clearProviders = new Set(
-    providers
-      .filter(
-        (provider) =>
-          provider.state.status === "fresh" &&
-          provider.windows.length === 0 &&
-          !missingRequiredContext(provider.provider),
-      )
-      .map(cacheIdentity),
+  const emptyReadings = providers.filter(
+    (provider) =>
+      provider.state.status === "fresh" &&
+      provider.windows.length === 0 &&
+      !missingRequiredContext(provider.provider),
+  );
+  const clearProviders = new Set(emptyReadings.map(cacheIdentity));
+  // One Claude profile can hold a plain slot and an opted-in lane slot, so a
+  // confirmed-empty reading clears every slot its profile context wrote
+  const clearClaudeContexts = new Set(
+    emptyReadings
+      .filter((provider) => provider.provider === "claude")
+      .map(claudeReadingContextId),
   );
   const cacheable = providers
     .map((provider) => {
@@ -648,7 +652,11 @@ export function writeCachedProviders(
     const byProvider = new Map<string, CachedProvider>();
     let clearedExisting = false;
     for (const provider of readCacheProviders()) {
-      if (clearProviders.has(cacheIdentity(provider.snapshot))) {
+      if (
+        clearProviders.has(cacheIdentity(provider.snapshot)) ||
+        (provider.snapshot.provider === "claude" &&
+          clearClaudeContexts.has(provider.credentialContextId ?? ""))
+      ) {
         clearedExisting = true;
         continue;
       }

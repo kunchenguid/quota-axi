@@ -418,6 +418,24 @@ describe("opt-in Claude profile lanes", () => {
     ]);
   });
 
+  it("keeps a listed default profile without a credential when another profile is selected", async () => {
+    const work = credential(".claude-work", "synthetic-work");
+    const personal = join(home, ".claude");
+    mkdirSync(personal);
+    vi.stubEnv("CLAUDE_CONFIG_DIR", work);
+    optIn(personal);
+
+    const full = response(await command(["--full", "--json"]));
+    expect(full.providers.map((p) => p.accountLocator?.path)).toEqual([
+      work,
+      personal,
+    ]);
+    expect(full.providers.map((p) => p.state.error)).toEqual([
+      undefined,
+      "credentials_missing",
+    ]);
+  });
+
   it("reports one lane per credential store", async () => {
     const personal = credential(".claude", "synthetic-personal");
     const work = credential(".claude-work", "synthetic-work");

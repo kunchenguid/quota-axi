@@ -20,6 +20,7 @@ import {
   readCachedProvider,
   readReusableProviders,
   retireCodexAccount,
+  stampClaudeReadingContext,
   stampReadingInputs,
   writeCachedProviders,
   stampCodexStoredAccountId,
@@ -931,6 +932,28 @@ oauth_host = "https://auth.kimi.ai"
     ]);
 
     expect(readCachedProvider("alibaba")).toBeUndefined();
+  });
+
+  it("clears every Claude slot of one profile context after a fresh empty reading", () => {
+    useTempCache();
+    const contextId = claudeCredentialContextId();
+    const sibling = "f".repeat(64);
+    const siblingLane = { ...quota("claude", 30), accountKey: "profile:other" };
+    stampClaudeReadingContext(siblingLane, sibling);
+    writeCachedProviders([
+      quota("claude", 10),
+      { ...quota("claude", 20), accountKey: "profile:lane" },
+      siblingLane,
+    ]);
+
+    writeCachedProviders([
+      { ...quotaWithoutWindows("claude"), accountKey: "profile:lane" },
+    ]);
+
+    expect(readCachedClaudeProvider(contextId)).toBeUndefined();
+    expect(readCachedClaudeProvider(sibling)).toMatchObject({
+      windows: [{ percentUsed: 30 }],
+    });
   });
 
   it("does not replace a context-scoped snapshot when the current reading has no identity", () => {

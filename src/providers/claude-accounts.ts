@@ -45,13 +45,15 @@ export async function discoverClaudeProfiles(
       implicit: false,
     })),
   ];
-  const seen = new Set<string>();
-  const unique = candidates.filter(({ profile }) => {
-    const identity = profileStoreIdentity(profile);
-    if (seen.has(identity)) return false;
-    seen.add(identity);
-    return true;
-  });
+  // A store keeps its first position, but naming it anywhere makes it explicit
+  const byStore = new Map<string, (typeof candidates)[number]>();
+  for (const candidate of candidates) {
+    const identity = profileStoreIdentity(candidate.profile);
+    const first = byStore.get(identity);
+    if (!first) byStore.set(identity, { ...candidate });
+    else first.implicit &&= candidate.implicit;
+  }
+  const unique = [...byStore.values()];
   const lanes: ClaudeProfileLane[] = [];
   for (const candidate of unique) {
     if (candidate.implicit) {
