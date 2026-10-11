@@ -15,6 +15,11 @@ import {
   stampReadingInputs,
   writeCachedProviders,
 } from "./cache.js";
+import { delimiter } from "node:path";
+import {
+  CLAUDE_PROFILES_ENV,
+  claudeListedProfiles,
+} from "./lib/claude-profile.js";
 import { takeFetchTurn } from "./lib/fetch-lock.js";
 import { withInputTrace } from "./lib/input-trace.js";
 import { withQuotaSemantics } from "./interpretation.js";
@@ -431,6 +436,7 @@ export async function fetchQuota(
       [`Point ${SNAPSHOT_ENV} at a quota-axi cache file, or unset it`],
     );
   }
+  if (!snapshot) validateClaudeProfiles(providers, options);
   const writesCache = options.credentialMode !== "profile-only" && !snapshot;
   // Providers a lock holder already cached, so the report-wide write below
   // does not stamp them a second time
@@ -583,6 +589,7 @@ async function inspectAuth(
   providers: ProviderId[],
   options: ProviderOptions,
 ): Promise<AuthProviderReport[]> {
+  validateClaudeProfiles(providers, options);
   const reports = (
     await Promise.all(
       providers.map((provider) =>
@@ -596,6 +603,32 @@ async function inspectAuth(
         accountKey: report.accountKey ?? "default",
       }))
     : reports;
+}
+
+/**
+ * A relative `QUOTA_AXI_CLAUDE_PROFILES` entry fails the read, like a
+ * malformed `QUOTA_AXI_MAX_AGE`, instead of being skipped: Claude Code hashes
+ * the raw path to name its Keychain item, so quota-axi cannot guess which
+ * directory was meant. `--profile-only` ignores the variable entirely.
+ */
+function validateClaudeProfiles(
+  providers: ProviderId[],
+  options: ProviderOptions,
+): void {
+  if (
+    !providers.includes("claude") ||
+    options.credentialMode === "profile-only"
+  )
+    return;
+  const [invalid] = claudeListedProfiles()?.invalid ?? [];
+  if (invalid === undefined) return;
+  throw new AxiError(
+    `${CLAUDE_PROFILES_ENV} entry ${JSON.stringify(invalid)} is not an absolute path`,
+    "VALIDATION_ERROR",
+    [
+      `List each Claude config directory as an absolute path, exactly as CLAUDE_CONFIG_DIR would name it, separated by "${delimiter}"`,
+    ],
+  );
 }
 
 function isFailed(provider: ProviderQuota): boolean {

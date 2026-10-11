@@ -5,6 +5,10 @@ import {
   REFRESH_SPAWN_FAILED,
 } from "./providers/delegated-refresh.js";
 import { grokCliRefreshNeeded } from "./providers/grok.js";
+import {
+  CLAUDE_KEYCHAIN_SERVICE,
+  CLAUDE_PROFILES_ENV,
+} from "./lib/claude-profile.js";
 import type {
   ProviderQuota,
   QuotaAxiResponse,
@@ -99,7 +103,7 @@ function annotateProviderAdvice(provider: ProviderQuota): ProviderQuota {
       state: {
         ...provider.state,
         reason: KEYCHAIN_ACCESS_REASON,
-        remedyCommand: KEYCHAIN_ACCESS_REMEDY_COMMAND,
+        remedyCommand: keychainAccessRemedy(provider),
       },
     };
   }
@@ -120,6 +124,16 @@ function annotateProviderAdvice(provider: ProviderQuota): ProviderQuota {
         ...provider.state,
         reason: CREDENTIALS_EXPIRED_REASON,
         remedyCommand: CLAUDE_TOKEN_REFRESH_REMEDY_COMMAND,
+      },
+    };
+  }
+  if (needsClaudeSiblingRefreshAdvice(provider)) {
+    return {
+      ...provider,
+      state: {
+        ...provider.state,
+        reason: CREDENTIALS_EXPIRED_REASON,
+        remedyCommand: claudeSiblingRefreshRemedy(provider),
       },
     };
   }
@@ -159,6 +173,80 @@ function needsClaudeTokenRefreshAdvice(provider: ProviderQuota): boolean {
           attempt.error === REFRESH_COMMAND_NOT_FOUND),
     )
   );
+}
+
+/**
+ * The config-dir locator of a Claude profile lane that is not the
+ * process-selected one. Such a sibling lane never runs the delegated refresh
+ * and reads no environment token, so advice for it must name its own profile
+ * selector rather than the bare command that would act on the selected one.
+ */
+function claudeSiblingLocator(
+  provider: ProviderQuota,
+): NonNullable<ProviderQuota["accountLocator"]> | undefined {
+  const locator = provider.accountLocator;
+  return provider.provider === "claude" &&
+    locator?.kind === "config-dir" &&
+    locator.delegateEligible !== true
+    ? locator
+    : undefined;
+}
+
+/**
+ * The environment prefix that selects exactly one sibling profile, the way
+ * Claude Code selects it: the default profile is the one with no
+ * `CLAUDE_CONFIG_DIR` (its unsuffixed Keychain service), every other one is
+ * its raw directory. A set secure-storage selector would override either, so
+ * it is unset when this process has one.
+ */
+function claudeProfileSelector(
+  locator: NonNullable<ProviderQuota["accountLocator"]>,
+  unset: readonly string[] = [],
+): string {
+  const names = [...unset];
+  if (process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR)
+    names.push("CLAUDE_SECURESTORAGE_CONFIG_DIR");
+  const isDefault = locator.keychainService === CLAUDE_KEYCHAIN_SERVICE;
+  if (isDefault) names.push("CLAUDE_CONFIG_DIR");
+  const parts = names.length
+    ? ["env", ...names.flatMap((name) => ["-u", name])]
+    : [];
+  if (!isDefault) parts.push(`CLAUDE_CONFIG_DIR=${shellQuote(locator.path)}`);
+  return parts.join(" ");
+}
+
+/** POSIX single-quote a value so a path with spaces or metacharacters survives a copy-paste. */
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+/**
+ * A sibling lane's stored session expired with a refresh token present.
+ * quota-axi never runs `claude doctor` for it, so the user runs it once for
+ * that profile. A sign-out (`auth_required`) is not this case: `claude
+ * doctor` cannot restore a session the vendor ended.
+ */
+function needsClaudeSiblingRefreshAdvice(provider: ProviderQuota): boolean {
+  return (
+    claudeSiblingLocator(provider) !== undefined &&
+    provider.state.status !== "fresh" &&
+    provider.state.authStatus === "expired_refreshable"
+  );
+}
+
+function claudeSiblingRefreshRemedy(provider: ProviderQuota): string {
+  return `${claudeProfileSelector(claudeSiblingLocator(provider)!)} claude doctor`;
+}
+
+/**
+ * The grant command for this provider. A Claude sibling lane's Keychain item
+ * is granted per item, so its command selects exactly that profile and leaves
+ * `QUOTA_AXI_CLAUDE_PROFILES` out, prompting for that one item only.
+ */
+function keychainAccessRemedy(provider: ProviderQuota): string {
+  const locator = claudeSiblingLocator(provider);
+  if (!locator) return KEYCHAIN_ACCESS_REMEDY_COMMAND;
+  return `${claudeProfileSelector(locator, [CLAUDE_PROFILES_ENV])} quota-axi --provider claude --allow-keychain-prompt`;
 }
 
 /**
@@ -299,6 +387,8 @@ function providerHelpLines(provider: ProviderQuota): string[] {
   if (hasGrokTokenRefreshAdvice(provider)) return [grokTokenRefreshHelpLine()];
   if (hasClaudeTokenRefreshAdvice(provider))
     return [claudeTokenRefreshHelpLine(provider)];
+  if (hasClaudeSiblingRefreshAdvice(provider))
+    return [claudeSiblingRefreshHelpLine(provider)];
   if (hasClaudeInferenceAdvice(provider)) return [claudeInferenceHelpLine()];
   if (hasKimiTokenRefreshAdvice(provider))
     return [kimiTokenRefreshHelpLine(provider.state.remedyCommand)];
@@ -320,10 +410,18 @@ function hasClaudeTokenRefreshAdvice(provider: ProviderQuota): boolean {
   );
 }
 
+function hasClaudeSiblingRefreshAdvice(provider: ProviderQuota): boolean {
+  return (
+    claudeSiblingLocator(provider) !== undefined &&
+    provider.state.reason === CREDENTIALS_EXPIRED_REASON &&
+    provider.state.remedyCommand === claudeSiblingRefreshRemedy(provider)
+  );
+}
+
 function hasKeychainAccessAdvice(provider: ProviderQuota): boolean {
   return (
     provider.state.reason === KEYCHAIN_ACCESS_REASON &&
-    provider.state.remedyCommand === KEYCHAIN_ACCESS_REMEDY_COMMAND
+    provider.state.remedyCommand === keychainAccessRemedy(provider)
   );
 }
 
@@ -344,7 +442,10 @@ function hasGrokTokenRefreshAdvice(provider: ProviderQuota): boolean {
 }
 
 function keychainAccessHelpLine(provider: ProviderQuota): string {
-  return `Tell your user: run \`${KEYCHAIN_ACCESS_REMEDY_COMMAND}\` once and approve Keychain access ("Always Allow") so quota-axi can read ${provider.provider}'s live quota.`;
+  const subject = claudeSiblingLocator(provider)
+    ? `live quota for the Claude account ${provider.accountKey ?? "default"}`
+    : `${provider.provider}'s live quota`;
+  return `Tell your user: run \`${keychainAccessRemedy(provider)}\` once and approve Keychain access ("Always Allow") so quota-axi can read ${subject}.`;
 }
 
 function claudeInferenceHelpLine(): string {
@@ -362,6 +463,10 @@ function claudeTokenRefreshHelpLine(provider: ProviderQuota): string {
     return "Tell your user: quota-axi could not run the Claude CLI; run `claude` once where it is installed.";
   }
   return `Tell your user: run \`${CLAUDE_TOKEN_REFRESH_REMEDY_COMMAND}\` once so Claude Code can refresh its own session token; \`claude doctor\` did not recover it. quota-axi delegates that refresh to the Claude CLI and never rotates credentials itself.`;
+}
+
+function claudeSiblingRefreshHelpLine(provider: ProviderQuota): string {
+  return `Tell your user: run \`${claudeSiblingRefreshRemedy(provider)}\` once so Claude Code refreshes the session of the Claude account ${provider.accountKey ?? "default"}. quota-axi refreshes only the process-selected Claude profile and never rotates credentials itself.`;
 }
 
 function kimiTokenRefreshHelpLine(remedy: string | undefined): string {

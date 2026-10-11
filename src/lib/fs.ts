@@ -56,10 +56,33 @@ export function cacheFilePath(): string {
 
 /**
  * An opaque, deterministic cache-provenance identifier for the Claude profile
- * selected by the current process. The selected path never leaves this helper.
+ * selected by the current process, or for `profile` when one is given. The
+ * selected path never leaves this helper.
  */
-export function claudeCredentialContextId(): string {
-  const { configDir, keychainService } = claudeProfileLocations();
+export function claudeCredentialContextId(
+  profile: ReturnType<typeof claudeProfileLocations> = claudeProfileLocations(),
+): string {
+  return claudeProfileContextId(profile, claudeEnvOauthToken() !== undefined);
+}
+
+/**
+ * The identity a profile's own stored credential (file or Keychain item) is
+ * cached under, whether or not `CLAUDE_CODE_OAUTH_TOKEN` happens to be set on
+ * this invocation. A lane that never consults that token, and a stored
+ * credential's own rejection, belong to this identity rather than the
+ * env-marked one {@link claudeCredentialContextId} returns.
+ */
+export function claudeStoredProfileContextId(
+  profile: ReturnType<typeof claudeProfileLocations> = claudeProfileLocations(),
+): string {
+  return claudeProfileContextId(profile, false);
+}
+
+function claudeProfileContextId(
+  profile: ReturnType<typeof claudeProfileLocations>,
+  envSelected: boolean,
+): string {
+  const { configDir, keychainService } = profile;
   // Include the exact service: it already encodes the secure-storage selector,
   // including a relative raw path hash.
   // Version the identity to withhold snapshots an earlier release wrote for
@@ -72,7 +95,6 @@ export function claudeCredentialContextId(): string {
   // appended only when such a token is supplied, so every existing profile
   // keeps the identity it already cached under. It is a presence marker, never
   // any part of the token.
-  const envSelected = claudeEnvOauthToken() !== undefined;
   return createHash("sha256")
     .update(
       JSON.stringify([

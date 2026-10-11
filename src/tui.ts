@@ -2,6 +2,7 @@ import {
   providerPresence,
   type ProviderPresence,
 } from "./lib/source-attempts.js";
+import { collapseHome } from "./lib/fs.js";
 import { isUsageFetchFailure } from "./providers/usage-fetch-failure.js";
 import type {
   EffectiveAvailability,
@@ -1103,6 +1104,8 @@ function fullFooterLines(provider: ProviderQuota, width: number): string[] {
     ...(accountKey ? [accountKey] : []),
   ];
   const protectedAccountParts = new Set([0]);
+  if (provider.accountLocator)
+    accountParts.push(collapseHome(provider.accountLocator.path));
   if (provider.account?.email) accountParts.push(provider.account.email);
   if (provider.account?.organization) {
     accountParts.push(provider.account.organization);

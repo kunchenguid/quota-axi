@@ -39,6 +39,16 @@ const NOT_SELECTING = new Set([
 /** A value no real environment holds, so the cache can be searched for it */
 const SELECTION_VALUE = "synthetic-selection-value";
 
+/**
+ * The synthetic value for one variable. The Claude profile list accepts only
+ * absolute directories, so it gets one named after the same marker.
+ */
+function selectionValue(name: string): string {
+  return name === "QUOTA_AXI_CLAUDE_PROFILES"
+    ? join(tmpdir(), SELECTION_VALUE)
+    : SELECTION_VALUE;
+}
+
 const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
 const environment = process.env;
 
@@ -203,7 +213,7 @@ describe("fresh-reuse credential selection", () => {
       const reusedAcross: string[] = [];
       for (const name of selecting) {
         const { reused, cache } = await reusedAfter(
-          (environment) => (environment[name] = SELECTION_VALUE),
+          (environment) => (environment[name] = selectionValue(name)),
         );
         if (reused) reusedAcross.push(name);
         expect(cache, name).not.toContain(SELECTION_VALUE);

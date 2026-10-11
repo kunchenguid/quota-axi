@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { delimiter, isAbsolute, join } from "node:path";
 import { usableLiteralSecret } from "./secret.js";
 
 export const CLAUDE_KEYCHAIN_SERVICE = "Claude Code-credentials";
@@ -29,14 +29,14 @@ export function claudeEnvOauthToken(): string | undefined {
  * credential directory is `CLAUDE_CONFIG_DIR` or `~/.claude`; a nonempty
  * secure-storage selector names the Keychain service instead.
  */
-export function claudeProfileLocations(): {
+export function claudeProfileLocations(env: NodeJS.ProcessEnv = process.env): {
   configDir: string;
   secureStorageSelected: boolean;
   keychainService: string;
   acceptsOpaqueDefaultItem: boolean;
 } {
-  const configured = process.env.CLAUDE_CONFIG_DIR;
-  const storage = process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR;
+  const configured = env.CLAUDE_CONFIG_DIR;
+  const storage = env.CLAUDE_SECURESTORAGE_CONFIG_DIR;
   const defaultDir = join(homedir(), ".claude").normalize("NFC");
   const configDir = (configured ?? defaultDir).normalize("NFC");
   // Hash the raw NFC path, just as the vendor does: resolving a relative path
@@ -54,6 +54,38 @@ export function claudeProfileLocations(): {
     // selector names one exact item and must never fall through to another.
     acceptsOpaqueDefaultItem: selector === undefined,
   };
+}
+
+/**
+ * The opt-in list of additional Claude profiles to report as their own lanes.
+ * Each entry is a config directory exactly as the user would set
+ * `CLAUDE_CONFIG_DIR`, separated by the platform path delimiter.
+ */
+export const CLAUDE_PROFILES_ENV = "QUOTA_AXI_CLAUDE_PROFILES";
+
+/**
+ * The directories `QUOTA_AXI_CLAUDE_PROFILES` lists, in order, or `undefined`
+ * when the variable is unset, blank, or lists no entry: then Claude reports
+ * only the process-selected profile, exactly as it does without the variable.
+ *
+ * Entries are kept raw, never trimmed, `~`-expanded, or resolved, because
+ * Claude Code hashes the raw NFC path to name the Keychain item. Empty entries
+ * are ignored. A relative entry is returned in `invalid` so the command can
+ * fail loudly instead of reading a directory the user did not mean.
+ */
+export function claudeListedProfiles(
+  env: NodeJS.ProcessEnv = process.env,
+): { dirs: string[]; invalid: string[] } | undefined {
+  const value = env[CLAUDE_PROFILES_ENV];
+  if (value === undefined || value.trim() === "") return undefined;
+  const dirs: string[] = [];
+  const invalid: string[] = [];
+  for (const entry of value.split(delimiter)) {
+    if (entry === "") continue;
+    (isAbsolute(entry) ? dirs : invalid).push(entry);
+  }
+  // Delimiters alone name nothing to opt in to.
+  return dirs.length || invalid.length ? { dirs, invalid } : undefined;
 }
 
 /** The `Claude Code-credentials-<8 lowercase hex>` shape the vendor writes. */
