@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.61](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.60...quota-axi-v0.1.61) (2026-10-12)
+
+
+### Features
+
+* **providers:** report opt-in Claude profile lanes from QUOTA_AXI_CLAUDE_PROFILES ([#327](https://github.com/kunchenguid/quota-axi/issues/327)) ([9b66e34](https://github.com/kunchenguid/quota-axi/commit/9b66e34d0ee26c7ba3067d8a40cad655457f1323))
+
 ## [0.1.60](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.59...quota-axi-v0.1.60) (2026-10-09)
 
 
