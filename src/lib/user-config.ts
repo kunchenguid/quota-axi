@@ -37,7 +37,7 @@ export type TuiAccountLabels = (locatorPath: string) => string | undefined;
 
 /**
  * The `--tui` lane names, `tui.accountLabels` in the user config file: an
- * object from a lane's locator path (absolute, or `~`-relative) to the name
+ * object from a lane's locator path (absolute, or `~/`-relative) to the name
  * its card shows. Paths are compared after `~` expansion and symlink
  * resolution, so a trailing slash or a linked directory names the same lane.
  * An absent, unreadable, or malformed file or setting names nothing; a
