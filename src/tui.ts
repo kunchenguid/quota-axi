@@ -63,6 +63,12 @@ export type TuiOptions = {
   showNotSetUp?: boolean;
   /** Draw percentages and bars as what is left (default) or what is used. */
   show?: TuiShow;
+  /**
+   * Each provider's human lane name from `tui.accountLabels`, aligned with
+   * `response.providers`. The caller resolves it from the unredacted
+   * `accountLocator`, which a redacted response no longer carries.
+   */
+  accountLabels?: readonly (string | undefined)[];
 };
 
 const CARD_WIDTH = 49;
@@ -70,6 +76,8 @@ const CARD_INTERIOR = CARD_WIDTH - 2;
 const CARD_GUTTER = 2;
 const TWO_COLUMN_MIN = CARD_WIDTH * 2 + CARD_GUTTER;
 const EFFECTIVE_BAR_WIDTH = 41;
+/** Keeps the longest provider id, a label, and the title's right side on one card row. */
+const ACCOUNT_LABEL_WIDTH = 20;
 /** 3 gutter + 8 label + bar + 1 + 4 percent + 2 + 6 reset + 1 = CARD_INTERIOR. */
 const WINDOW_BAR_WIDTH = CARD_INTERIOR - 25;
 const MIN_COLUMNS = 80;
@@ -240,15 +248,20 @@ export function renderQuotaTui(
     attention: [],
     absent: [],
   };
+  const labels = new Map<ProviderQuota, string>();
   response.providers.forEach((provider, index) => {
     tiers[options.presence?.[index] ?? providerPresence(provider)].push(
       provider,
     );
+    const label = fittedAccountLabel(options.accountLabels?.[index]);
+    if (label) labels.set(provider, label);
   });
   const { live, stale, attention, absent } = tiers;
   const carded = [...live, ...stale, ...attention];
+  const labelOf = (provider: ProviderQuota): string | undefined =>
+    labels.get(provider);
   const card = (provider: ProviderQuota): Card =>
-    buildCard(provider, generatedAtMs, show);
+    buildCard(provider, labelOf(provider), generatedAtMs, show);
 
   const lines: Line[] = [];
   lines.push([
@@ -271,7 +284,7 @@ export function renderQuotaTui(
       lines.push([]);
       lines.push(...layoutCards(absent.map(card), twoColumn));
     } else {
-      lines.push(...notSetUpFooter(absent, columns));
+      lines.push(...notSetUpFooter(absent, labelOf, columns));
     }
   }
   if (options.full) {
@@ -295,7 +308,11 @@ export function renderQuotaTui(
  * truncated rather than allowed to run past the terminal, and a line is only
  * wrapped once it carries a name, so the label never stands alone.
  */
-function notSetUpFooter(absent: ProviderQuota[], columns: number): Line[] {
+function notSetUpFooter(
+  absent: ProviderQuota[],
+  labelOf: (provider: ProviderQuota) => string | undefined,
+  columns: number,
+): Line[] {
   const label = "○ not set up  ";
   const indent = 2 + displayWidth(label);
   const width = columns - 2;
@@ -314,10 +331,8 @@ function notSetUpFooter(absent: ProviderQuota[], columns: number): Line[] {
     used += displayWidth(fitted);
   };
   absent.forEach((provider, index) => {
-    const accountKey = configuredAccountKey(provider);
-    const name = accountKey
-      ? `${provider.provider}/${accountKey}`
-      : provider.provider;
+    const lane = labelOf(provider) ?? configuredAccountKey(provider);
+    const name = lane ? `${provider.provider}/${lane}` : provider.provider;
     const separator = index === 0 ? "" : " · ";
     if (
       used > indent &&
@@ -410,12 +425,23 @@ type Card = Line[];
 
 function buildCard(
   provider: ProviderQuota,
+  label: string | undefined,
   generatedAtMs: number,
   show: TuiShow,
 ): Card {
+  const name = label ? `${provider.provider} · ${label}` : provider.provider;
   return hasReading(provider)
-    ? buildLiveCard(provider, generatedAtMs, show)
-    : buildFailedCard(provider);
+    ? buildLiveCard(provider, name, generatedAtMs, show)
+    : buildFailedCard(provider, name);
+}
+
+/**
+ * A lane label as the report draws it: terminal-safe, trimmed, and short
+ * enough that a card title still fits. A blank label names nothing.
+ */
+function fittedAccountLabel(label: string | undefined): string | undefined {
+  if (label === undefined) return undefined;
+  return truncate(label.trim(), ACCOUNT_LABEL_WIDTH).trim() || undefined;
 }
 
 /** How old a reused reading is, as the card title's `reused 42s` marker. */
@@ -434,6 +460,7 @@ function reusedAge(
 
 function buildLiveCard(
   provider: ProviderQuota,
+  name: string,
   generatedAtMs: number,
   show: TuiShow,
 ): Card {
@@ -452,9 +479,9 @@ function buildLiveCard(
   const lines: Line[] = [
     titleLine(
       stale
-        ? { text: ` ◐ ${provider.provider} `, style: "warnBold" }
+        ? { text: ` ◐ ${name} `, style: "warnBold" }
         : {
-            text: ` ● ${provider.provider} `,
+            text: ` ● ${name} `,
             style: `accent:${provider.provider}`,
           },
       rightTitle,
@@ -661,13 +688,13 @@ function windowsOnlyHeadline(stale: boolean, border: CardBorder): Line[] {
   ];
 }
 
-function buildFailedCard(provider: ProviderQuota): Card {
+function buildFailedCard(provider: ProviderQuota, name: string): Card {
   const status = provider.state.status;
   const rightTitle =
     status === "auth_required" ? "signed out" : humanize(status);
   const lines: Line[] = [
     titleLine(
-      { text: ` ○ ${provider.provider} `, style: "dimBold" },
+      { text: ` ○ ${name} `, style: "dimBold" },
       rightTitle,
       "borderDim",
     ),

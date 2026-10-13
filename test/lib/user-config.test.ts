@@ -1,8 +1,15 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  readTuiAccountLabels,
   readTuiShowPreference,
   userConfigFilePath,
 } from "../../src/lib/user-config.js";
@@ -86,5 +93,73 @@ describe("readTuiShowPreference", () => {
     const file = configFile();
     mkdirSync(file, { recursive: true });
     expect(readTuiShowPreference(file)).toBe("remaining");
+  });
+});
+
+describe("readTuiAccountLabels", () => {
+  function labels(entries: unknown): ReturnType<typeof readTuiAccountLabels> {
+    return readTuiAccountLabels(
+      configFile(JSON.stringify({ tui: { accountLabels: entries } })),
+    );
+  }
+
+  it("names a lane by its home-relative or absolute locator path", () => {
+    const label = labels({
+      "~/.claude-work": " posam ",
+      "/srv/claude/": "shared",
+      "~": "home",
+    });
+
+    expect(label(join(homedir(), ".claude-work"))).toBe("posam");
+    expect(label(join(homedir(), ".claude-work", ""))).toBe("posam");
+    expect(label("/srv/claude")).toBe("shared");
+    expect(label("/srv/claude/../claude")).toBe("shared");
+    expect(label(homedir())).toBe("home");
+    expect(label(join(homedir(), ".claude"))).toBeUndefined();
+  });
+
+  it("names a lane reached through a symlinked directory", () => {
+    const root = mkdtempSync(join(tmpdir(), "quota-axi-account-labels-"));
+    temporaryDirectories.push(root);
+    const real = join(root, "real");
+    const link = join(root, "link");
+    mkdirSync(real);
+    symlinkSync(real, link, "dir");
+
+    expect(labels({ [link]: "linked" })(real)).toBe("linked");
+    expect(labels({ [real]: "real" })(link)).toBe("real");
+  });
+
+  it("skips only the entries it cannot use", () => {
+    const label = labels({
+      "relative/dir": "relative",
+      "~other/.claude": "other user",
+      "/numeric": 1,
+      "/blank": "   ",
+      "/kept": "kept",
+    });
+
+    expect(label(join(process.cwd(), "relative", "dir"))).toBeUndefined();
+    expect(label("/numeric")).toBeUndefined();
+    expect(label("/blank")).toBeUndefined();
+    expect(label("/kept")).toBe("kept");
+  });
+
+  it("names nothing without a usable setting", () => {
+    for (const contents of [
+      undefined,
+      "not json",
+      "[]",
+      "{}",
+      '{"tui":{}}',
+      '{"tui":{"accountLabels":["/kept"]}}',
+      '{"tui":{"accountLabels":"/kept"}}',
+      '{"accountLabels":{"/kept":"kept"}}',
+    ]) {
+      expect(
+        readTuiAccountLabels(configFile(contents))("/kept"),
+        contents,
+      ).toBe(undefined);
+    }
   });
 });

@@ -1666,6 +1666,21 @@ describe("providers that are not set up", () => {
     );
   });
 
+  it("names a folded account lane by its label instead of its account key", () => {
+    const work = { ...notSetUp("claude"), accountKey: "profile:1a2b" };
+    const lines = frame(
+      {
+        generatedAt: GENERATED_AT,
+        schemaVersion: 6,
+        providers: [work, notSetUp("zai")],
+      },
+      { accountLabels: ["work", undefined] },
+    );
+
+    expect(findLine(lines, "○ not set up")).toContain("claude/work · zai ");
+    expect(lines.join("\n")).not.toContain("profile:1a2b");
+  });
+
   it("truncates a folded name too long for the footer instead of overflowing", () => {
     const long = {
       ...notSetUp("codex"),
@@ -1699,5 +1714,65 @@ describe("providers that are not set up", () => {
     expect(findLine(lines, "  alibaba · tried")).toContain(
       "bl-cli (skipped: credentials_missing)",
     );
+  });
+});
+
+describe("account labels", () => {
+  function lanes(): QuotaAxiResponse {
+    return {
+      generatedAt: GENERATED_AT,
+      schemaVersion: 6,
+      providers: [
+        { ...claudeProvider(), accountKey: "profile:aaaa" },
+        { ...claudeProvider(), accountKey: "profile:bbbb" },
+        {
+          ...signedOutProvider("kimi", "Claude sign-in required"),
+          provider: "claude",
+          label: "Claude",
+          accountKey: "profile:cccc",
+        },
+      ],
+    };
+  }
+
+  function frame(accountLabels?: readonly (string | undefined)[]): string[] {
+    return renderQuotaTui(lanes(), {
+      columns: 120,
+      timeZone: "America/Los_Angeles",
+      ...(accountLabels ? { accountLabels } : {}),
+    }).split("\n");
+  }
+
+  it("names a labelled lane in its card title and keeps its account line", () => {
+    const lines = frame(["posam", undefined, "personal"]);
+
+    expect(findCardLine(lines, 0, "╭─")).toMatch(
+      /^╭─ ● claude · posam ─+ max · oauth ─╮$/,
+    );
+    expect(findCardLine(lines, 0, "account profile:aaaa")).toBeDefined();
+    expect(findCardLine(lines, 1, "╭─")).toMatch(/^╭─ ● claude ─+ max/);
+    expect(findLine(lines, "○ claude · personal")).toMatch(
+      /╭─ ○ claude · personal ─+ signed out ─╮/,
+    );
+  });
+
+  it("draws exactly the unlabelled report when no lane has a usable label", () => {
+    const baseline = frame();
+
+    expect(frame([undefined, undefined, undefined])).toEqual(baseline);
+    expect(frame(["", "   ", "\u0007"])).toEqual(baseline);
+  });
+
+  it("fits a long label with terminal controls inside the card", () => {
+    const label = `\x1b[31m${"w".repeat(80)}`;
+    const lines = frame([label, label, label]);
+    const title = findCardLine(lines, 0, "╭─");
+
+    expect(title).toMatch(/^╭─ ● claude · \[31mw+… ─ max · oa… ─╮$/);
+    expect(lines.join("\n")).not.toContain("\x1b");
+    for (const line of lines) {
+      expect(displayColumns(line)).toBeLessThanOrEqual(120);
+    }
+    expect(displayColumns(title)).toBe(CARD_COLUMNS);
   });
 });

@@ -25,7 +25,10 @@ import { withInputTrace } from "./lib/input-trace.js";
 import { withQuotaSemantics } from "./interpretation.js";
 import { createModelsResponse, MODEL_CATALOG_PROVIDER_IDS } from "./models.js";
 import { providerPresence } from "./lib/source-attempts.js";
-import { readTuiShowPreference } from "./lib/user-config.js";
+import {
+  readTuiAccountLabels,
+  readTuiShowPreference,
+} from "./lib/user-config.js";
 import { resolveSystemTuiTheme } from "./lib/system-theme.js";
 import { nowIso } from "./lib/time.js";
 import {
@@ -147,9 +150,10 @@ async function quotaTuiReport(
   options: ProviderOptions,
   maxAgeSeconds: number,
 ): Promise<string> {
-  // A human display preference, so it is read only on this path: TOON and
-  // JSON never see it.
+  // Human display preferences, so they are read only on this path: TOON and
+  // JSON never see them.
   const show = readTuiShowPreference();
+  const accountLabel = readTuiAccountLabels();
   // Precedence: --theme, then QUOTA_AXI_THEME, then dark.
   // A blank variable selects nothing, matching the project's env conventions.
   // Validated once here so a variable edited mid-session can never throw inside
@@ -187,12 +191,19 @@ async function quotaTuiReport(
       providerPresence(provider, PROVIDERS[provider.provider]),
     );
     notSetUp = presence.filter((entry) => entry === "absent").length;
+    // Redaction also removes the locator a lane label is keyed by.
+    const accountLabels = response.providers.map((provider) =>
+      provider.accountLocator
+        ? accountLabel(provider.accountLocator.path)
+        : undefined,
+    );
     return renderQuotaTui(redactedResponse(response, flags.full), {
       ...terminal(),
       full: flags.full,
       presence,
       showNotSetUp,
       show,
+      accountLabels,
     });
   };
 
