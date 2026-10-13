@@ -63,7 +63,6 @@ export function readTuiAccountLabels(
 }
 
 function expandHome(path: string): string {
-  if (path === "~") return homedir();
   return path.startsWith("~/") ? join(homedir(), path.slice(2)) : path;
 }
 

@@ -107,14 +107,12 @@ describe("readTuiAccountLabels", () => {
     const label = labels({
       "~/.claude-work": " posam ",
       "/srv/claude/": "shared",
-      "~": "home",
     });
 
     expect(label(join(homedir(), ".claude-work"))).toBe("posam");
     expect(label(join(homedir(), ".claude-work", ""))).toBe("posam");
     expect(label("/srv/claude")).toBe("shared");
     expect(label("/srv/claude/../claude")).toBe("shared");
-    expect(label(homedir())).toBe("home");
     expect(label(join(homedir(), ".claude"))).toBeUndefined();
   });
 
@@ -134,12 +132,15 @@ describe("readTuiAccountLabels", () => {
     const label = labels({
       "relative/dir": "relative",
       "~other/.claude": "other user",
+      "~": "home",
       "/numeric": 1,
       "/blank": "   ",
       "/kept": "kept",
     });
 
     expect(label(join(process.cwd(), "relative", "dir"))).toBeUndefined();
+    expect(label(homedir())).toBeUndefined();
+    expect(label(join(process.cwd(), "~"))).toBeUndefined();
     expect(label("/numeric")).toBeUndefined();
     expect(label("/blank")).toBeUndefined();
     expect(label("/kept")).toBe("kept");
