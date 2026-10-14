@@ -2108,17 +2108,23 @@ describe("OpenCode Go opt-in remedy through the commands", () => {
 
   it("prints the remedy and help on the quota read without a request", async () => {
     sandbox({ "opencode-go": { type: "api_key", key: PI_KEY } });
-    const { quotaCommand } = await import("../../src/commands.js");
-    const toon = await quotaCommand(
-      ["--provider", "opencode-go", "--no-credential-refresh"],
-      undefined,
-    );
+    // The remedy text follows the platform, so the expectation pins it.
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    try {
+      const { quotaCommand } = await import("../../src/commands.js");
+      const toon = await quotaCommand(
+        ["--provider", "opencode-go", "--no-credential-refresh"],
+        undefined,
+      );
 
-    expect(toon).toContain(
-      "auth_required,opencode_go_credential_unavailable · reason opencode_go_pi_opt_in_required,QUOTA_AXI_OPENCODE_GO_PI_AUTH=1 quota-axi --provider opencode-go",
-    );
-    expect(toon).toContain("Tell your user: Pi holds an OpenCode Go key");
-    expect(toon).not.toContain(PI_KEY);
-    expect(fetch).not.toHaveBeenCalled();
+      expect(toon).toContain(
+        "auth_required,opencode_go_credential_unavailable · reason opencode_go_pi_opt_in_required,QUOTA_AXI_OPENCODE_GO_PI_AUTH=1 quota-axi --provider opencode-go",
+      );
+      expect(toon).toContain("Tell your user: Pi holds an OpenCode Go key");
+      expect(toon).not.toContain(PI_KEY);
+      expect(fetch).not.toHaveBeenCalled();
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 });
