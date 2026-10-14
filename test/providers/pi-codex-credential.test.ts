@@ -278,11 +278,7 @@ describe("Pi Codex credential broker", () => {
   });
 
   it.each([
-    ["no accountId and no scopes", { ...chatGptEntry(), scopes: undefined }],
-    [
-      "the direct-use scope beside a stored accountId",
-      { ...chatGptEntry(), accountId: "acct-fixture-codex" },
-    ],
+    ["no scopes", { ...chatGptEntry(), scopes: undefined }],
     ["an expired token", { ...chatGptEntry(), expires: NOW - 1 }],
   ])(
     "classifies a ChatGPT sign-in entry with %s as unmeasured",
@@ -295,6 +291,47 @@ describe("Pi Codex credential broker", () => {
       });
     },
   );
+
+  it("reads an openai entry with a stored accountId whatever its scopes", async () => {
+    const fixture = authFixture({
+      openai: chatGptEntry({ accountId: "acct-fixture-openai" }),
+    });
+
+    await expect(
+      brokerFor(fixture).resolveEntry("openai"),
+    ).resolves.toMatchObject({
+      status: "available",
+      credentials: { accountId: "acct-fixture-openai" },
+    });
+  });
+
+  it("keeps an openai-codex entry without accountId invalid", async () => {
+    const fixture = authFixture({
+      "openai-codex": chatGptEntry(),
+      "openai-codex-work": oauthEntry({ accountId: undefined }),
+    });
+    const broker = brokerFor(fixture);
+
+    for (const id of ["openai-codex", "openai-codex-work"]) {
+      await expect(broker.resolveEntry(id)).resolves.toEqual({
+        status: "invalid",
+      });
+    }
+  });
+
+  it("lists openai and openai-* keys only for oauth entries", async () => {
+    const fixture = authFixture({
+      openai: { type: "api_key", key: "sk-must-not-be-used" },
+      "openai-compat": { type: "api_key", key: "sk-must-not-be-used" },
+      "openai-work": chatGptEntry(),
+      "openai-codex-key": { type: "api_key", key: "sk-must-not-be-used" },
+    });
+
+    await expect(brokerFor(fixture).listProviderIds()).resolves.toEqual([
+      "openai-codex-key",
+      "openai-work",
+    ]);
+  });
 
   it("reads a legacy-shape openai entry exactly like openai-codex", async () => {
     const fixture = authFixture({
@@ -494,7 +531,7 @@ function oauthEntry(overrides: Record<string, unknown> = {}) {
   };
 }
 
-/** Pi's "Sign in with ChatGPT" shape: no accountId, direct-use scope. */
+/** Pi's "Sign in with ChatGPT" shape: no accountId. */
 function chatGptEntry(overrides: Record<string, unknown> = {}) {
   return {
     type: "oauth",

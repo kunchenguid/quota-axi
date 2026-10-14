@@ -7,18 +7,18 @@ import { traceInput } from "../lib/input-trace.js";
 
 export const PI_CODEX_BUILTIN_ID = "openai-codex";
 /**
- * Pi's "Sign in with ChatGPT" flow stores a token scoped for direct use
- * against the Responses API, with no ChatGPT account id. Whether the usage
- * endpoint accepts such a token is not established, so it is never probed.
+ * Pi's "Sign in with ChatGPT" flow stores a token with no ChatGPT account id.
+ * Whether the usage endpoint accepts such a token is not established, so it
+ * is never probed.
  */
 export const PI_OPENAI_CHATGPT_TOKEN_UNMEASURED =
   "pi_openai_chatgpt_token_unmeasured";
-const CHATGPT_DIRECT_TOKEN_SCOPE = "chatgpt.tokens.use.direct";
 const AUTH_FILE_LIMIT_BYTES = 64 * 1024;
 // Pi's built-in `openai-codex` and `openai` ids, plus the `-<suffix>` siblings
 // that tools such as pi-codex-accounts add beside them.
 const PI_CODEX_PROVIDER_ID = /^openai(?:-[a-z0-9]+)*$/;
 const PI_CODEX_SOURCE = /^pi:openai(?:-[a-z0-9]+)*$/;
+const PI_CODEX_FAMILY_ID = /^openai-codex(?:-[a-z0-9]+)*$/;
 const MINIMUM_MILLISECOND_EPOCH = 1_000_000_000_000;
 
 export type PiCodexUnsupportedError =
@@ -181,7 +181,12 @@ async function listProviderIds(
 }
 
 function piCodexProviderIds(parsed: Record<string, unknown>): string[] {
-  const ids = Object.keys(parsed).filter(isPiCodexProviderId);
+  // Pi also stores a plain OpenAI API key under `openai`, which is no sign-in.
+  const ids = Object.keys(parsed).filter(
+    (id) =>
+      PI_CODEX_FAMILY_ID.test(id) ||
+      (isPiCodexProviderId(id) && isOAuthEntry(parsed[id])),
+  );
   ids.sort((left, right) => {
     if (left === PI_CODEX_BUILTIN_ID) return -1;
     if (right === PI_CODEX_BUILTIN_ID) return 1;
@@ -213,7 +218,7 @@ async function resolveCredential(
       ? { status: "invalid" }
       : { status: "unsupported", error: "unsupported_credential_type" };
   }
-  if (isChatGptDirectTokenEntry(entry)) {
+  if (!PI_CODEX_FAMILY_ID.test(providerId) && entry.accountId === undefined) {
     return { status: "unsupported", error: PI_OPENAI_CHATGPT_TOKEN_UNMEASURED };
   }
 
@@ -241,16 +246,12 @@ async function resolveCredential(
   };
 }
 
-/**
- * The legacy Codex flow always stores the ChatGPT `accountId`; the ChatGPT
- * sign-in flow never does and instead records the direct-use scope. Either
- * sign is enough, and a present but unusable `accountId` stays invalid.
- */
-function isChatGptDirectTokenEntry(entry: Record<string, unknown>): boolean {
+function isOAuthEntry(value: unknown): boolean {
   return (
-    entry.accountId === undefined ||
-    (Array.isArray(entry.scopes) &&
-      entry.scopes.includes(CHATGPT_DIRECT_TOKEN_SCOPE))
+    value !== null &&
+    typeof value === "object" &&
+    stringValue((value as Record<string, unknown>).type)?.toLowerCase() ===
+      "oauth"
   );
 }
 

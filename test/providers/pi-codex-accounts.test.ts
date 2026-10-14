@@ -456,6 +456,37 @@ describe("Codex Pi sibling account lanes", () => {
     expect(JSON.stringify(reports)).not.toContain("personal-chatgpt-token");
   });
 
+  it("keeps an OpenAI API key under openai out of Codex discovery", async () => {
+    writePiAuth({ openai: { type: "api_key", key: "sk-must-not-be-used" } });
+    vi.stubGlobal("fetch", vi.fn());
+
+    const alone = await readCodexLanes();
+
+    expect(alone).toHaveLength(1);
+    expect(alone[0]?.accountKey).toBeUndefined();
+    expect(alone[0]?.source).not.toBe("pi:openai");
+    expect(alone[0]?.state.sourcesTried).not.toContain("pi:openai");
+    expect(fetch).not.toHaveBeenCalled();
+
+    writeNativeAuth("native-access-token", "acct-native");
+    stubUsageByAccount({
+      "acct-native": usage(30, "native@example.invalid", "acct-native"),
+    });
+
+    const beside = await readCodexLanes();
+
+    expect(beside).toHaveLength(1);
+    expect(beside[0]).toMatchObject({
+      account: { accountId: "acct-native" },
+      windows: [{ percentUsed: 30 }],
+      state: { status: "fresh" },
+    });
+    expect(beside[0]?.accountKey).toBeUndefined();
+    expect(JSON.stringify([alone, beside])).not.toContain(
+      "sk-must-not-be-used",
+    );
+  });
+
   it("folds a legacy-shape openai entry into the openai-codex lane for the same account", async () => {
     await expectPublishedMembership(
       undefined,
@@ -2396,7 +2427,7 @@ function piOauthEntry(overrides: Record<string, unknown> = {}) {
   };
 }
 
-/** Pi's "Sign in with ChatGPT" shape: no accountId, direct-use scope. */
+/** Pi's "Sign in with ChatGPT" shape: no accountId. */
 function chatGptEntry(overrides: Record<string, unknown> = {}) {
   return {
     type: "oauth",

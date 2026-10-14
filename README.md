@@ -455,8 +455,9 @@ Pi's built-in provider ids are `openai-codex` (the older Codex flow) and `openai
 `pi-codex-accounts` stores additional logins under ids such as `openai-codex-work` or `openai-work` in the same file.
 quota-axi enrolls those already-present keys; it does not read `codex-accounts.json`, copy tokens, launch Pi, or change the active account.
 Discovery order is the built-in `openai-codex` entry, then the other `openai`, `openai-*`, and `openai-codex-*` keys in lexical order.
+An `openai` or `openai-*` key is enrolled only when its entry is `oauth`, because Pi also stores a plain OpenAI API key under `openai`.
 An entry in the older shape, which stores the ChatGPT `accountId`, is measured like `openai-codex` whatever its id.
-An entry in the ChatGPT sign-in shape, which stores no `accountId` and carries the `chatgpt.tokens.use.direct` scope, is published as its own lane with `state.status: unavailable` and `state.error: pi_openai_chatgpt_token_unmeasured`.
+An `openai` or `openai-*` entry in the ChatGPT sign-in shape, which stores no `accountId`, is published as its own lane with `state.status: unavailable` and `state.error: pi_openai_chatgpt_token_unmeasured`.
 Its token is never sent to the usage endpoint, because it is not established that the endpoint accepts it, and such a lane never folds into another account.
 Two keys that carry the same stored `accountId` are the same ChatGPT account and are not reported as extra capacity.
 The later key stays a credential fallback until a probe succeeds or every candidate is rejected.
@@ -937,7 +938,7 @@ The Claude and Codex rows describe default discovery; [`--profile-only`](#profil
   The built-in keys are `openai-codex` and `openai`.
   Sibling keys such as `openai-codex-work` or `openai-work` from `pi-codex-accounts` are enrolled from that same file when they are already present.
   Two or more distinct Pi entries become independent Codex account lanes; one account's failure or exhaustion does not hide or substitute another.
-  An entry in Pi's "Sign in with ChatGPT" shape (no `accountId`, scope `chatgpt.tokens.use.direct`) is reported under its own key as `unavailable` with error `pi_openai_chatgpt_token_unmeasured` and is never sent to the usage endpoint; see [Multiple accounts](#multiple-accounts).
+  An `openai` or `openai-*` entry in Pi's "Sign in with ChatGPT" shape (no `accountId`) is reported under its own key as `unavailable` with error `pi_openai_chatgpt_token_unmeasured` and is never sent to the usage endpoint; see [Multiple accounts](#multiple-accounts).
   A successful Pi-backed probe reports source `pi:<provider-id>` (`pi:openai-codex`, `pi:openai-codex-work`, `pi:openai-work`, …).
   quota-axi never reads `codex-accounts.json`, copies tokens, or changes Pi's active account.
 
@@ -947,7 +948,7 @@ The Claude and Codex rows describe default discovery; [`--profile-only`](#profil
   A stored-expired `access_token` is still probed in native OAuth's first declared source position rather than skipped, so only the usage endpoint's own rejection is an authentication verdict. A missing `access_token` skips OAuth and preserves the Pi and read-only CLI fallbacks.
 - The Pi broker opens `auth.json` read-only with a strict 64 KiB cap and guaranteed descriptor cleanup.
   It probes only Pi's literal Codex subscription OAuth shape: nonempty, control-byte-free `access` and `accountId` strings plus a numeric millisecond `expires` value.
-  An `oauth` entry without `accountId`, or whose `scopes` include `chatgpt.tokens.use.direct`, is Pi's ChatGPT sign-in shape; it is classified `unsupported` with `pi_openai_chatgpt_token_unmeasured` instead of being probed.
+  An `openai` or `openai-*` `oauth` entry without `accountId` is Pi's ChatGPT sign-in shape; it is classified `unsupported` with `pi_openai_chatgpt_token_unmeasured` instead of being probed.
   Strings containing `$` or beginning with `!` are rejected rather than resolved.
   Pi `api_key` entries are unsupported because platform API billing is not ChatGPT subscription quota.
   Malformed, unsupported, expired-refreshable, and expired-non-refreshable states remain distinct diagnostics.
