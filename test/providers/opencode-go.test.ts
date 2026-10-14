@@ -1,21 +1,35 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  annotateQuotaAdvice,
+  OPENCODE_GO_PI_OPT_IN_REMEDY_COMMAND,
+} from "../../src/advice.js";
 import { withQuotaSemantics } from "../../src/interpretation.js";
 import {
   createOpenCodeGoAdapter,
+  createOptedOutPiOpenCodeGoSource,
   createPiOpenCodeGoCredentialSource,
   defaultOpenCodeGoCredentialSources,
+  defaultOptedOutPiOpenCodeGoSource,
   extractOpenCodeGoCredential,
   normalizeOpenCodeGoPayload,
   opencodeGoAuthFilePath,
   OPENCODE_GO_CREDENTIAL_SOURCE,
   PI_OPENCODE_GO_AUTH_ENV,
+  PI_OPENCODE_GO_OPT_IN_REQUIRED,
   PI_OPENCODE_GO_SOURCE,
   type CredentialResolution,
   type NamedOpenCodeGoCredentialSource,
   type OpenCodeGoCredentialSource,
+  type PiEntryPresence,
 } from "../../src/providers/opencode-go.js";
 
 const OPTIONS = { allowKeychainPrompt: false, refreshCredentials: false };
@@ -1323,5 +1337,329 @@ describe("OpenCode Go Pi-auth opt-in", () => {
       else process.env.PI_CODING_AGENT_DIR = originalDir;
       rmSync(directory, { recursive: true, force: true });
     }
+  });
+});
+
+describe("OpenCode Go Pi entry held behind the opt-in", () => {
+  const opencodeOnly = (
+    opencode: CredentialResolution,
+  ): NamedOpenCodeGoCredentialSource[] => [
+    { name: OPENCODE_GO_CREDENTIAL_SOURCE, source: fakeSource(opencode) },
+  ];
+  const probe = (presence: PiEntryPresence) => ({
+    probe: vi.fn(() => presence),
+  });
+  const present: PiEntryPresence = { status: "present", path: PI_AUTH_PATH };
+  const absent: PiEntryPresence = { status: "missing", path: PI_AUTH_PATH };
+  const skippedPiAttempt = {
+    source: PI_OPENCODE_GO_SOURCE,
+    status: "skipped",
+    error: PI_OPENCODE_GO_OPT_IN_REQUIRED,
+    credentialPresent: true,
+  };
+  const now = () => Date.parse("2026-08-28T00:00:00Z");
+
+  it("keeps auth_required for a Pi-only key but names the opt-in as the remedy", async () => {
+    const request = vi.fn(async () => usageResponse());
+    const report = await createOpenCodeGoAdapter({
+      credentialSources: opencodeOnly({
+        status: "missing",
+        path: "/oc/auth.json",
+      }),
+      optedOutPiSource: probe(present),
+      fetch: request,
+      now,
+    }).fetchQuota(OPTIONS);
+
+    expect(request).not.toHaveBeenCalled();
+    expect(report.state).toMatchObject({
+      status: "auth_required",
+      error: "opencode_go_credential_unavailable",
+      sourcesTried: [OPENCODE_GO_CREDENTIAL_SOURCE, PI_OPENCODE_GO_SOURCE],
+    });
+    expect(report.attempts).toEqual([
+      {
+        source: OPENCODE_GO_CREDENTIAL_SOURCE,
+        status: "skipped",
+        error: "opencode_go_credential_unavailable",
+      },
+      skippedPiAttempt,
+    ]);
+
+    const advised = annotateQuotaAdvice({
+      generatedAt: "",
+      providers: [report],
+    });
+    expect(advised.providers[0]?.state).toMatchObject({
+      status: "auth_required",
+      reason: "opencode_go_pi_opt_in_required",
+      remedyCommand:
+        "QUOTA_AXI_OPENCODE_GO_PI_AUTH=1 quota-axi --provider opencode-go",
+    });
+    expect(advised.providers[0]?.state.remedyCommand).toBe(
+      OPENCODE_GO_PI_OPT_IN_REMEDY_COMMAND,
+    );
+    expect(advised.help).toHaveLength(1);
+  });
+
+  it("leaves an opencode-only read byte-identical whether or not the probe exists", async () => {
+    const read = (optedOutPiSource?: { probe(): PiEntryPresence }) =>
+      createOpenCodeGoAdapter({
+        credentialSources: opencodeOnly({
+          status: "available",
+          key: KEY,
+          path: "/oc/auth.json",
+        }),
+        ...(optedOutPiSource ? { optedOutPiSource } : {}),
+        fetch: vi.fn(async () => usageResponse()),
+        now,
+      }).fetchQuota(OPTIONS);
+
+    const withProbe = probe(absent);
+    expect(JSON.stringify(await read(withProbe))).toBe(
+      JSON.stringify(await read()),
+    );
+    expect(withProbe.probe).not.toHaveBeenCalled();
+    expect(JSON.stringify(await read(probe(present)))).toBe(
+      JSON.stringify(await read()),
+    );
+  });
+
+  it("reads the opencode key and never probes Pi when both stores hold one", async () => {
+    const request = vi.fn(async () => usageResponse());
+    const piProbe = probe(present);
+    const report = await createOpenCodeGoAdapter({
+      credentialSources: opencodeOnly({
+        status: "available",
+        key: KEY,
+        path: "/oc/auth.json",
+      }),
+      optedOutPiSource: piProbe,
+      fetch: request,
+      now,
+    }).fetchQuota(OPTIONS);
+
+    expect(
+      new Headers(request.mock.calls[0]?.[1]?.headers).get("authorization"),
+    ).toBe(`Bearer ${KEY}`);
+    expect(piProbe.probe).not.toHaveBeenCalled();
+    expect(report.state.status).toBe("fresh");
+    expect(report.attempts).toEqual([
+      { source: OPENCODE_GO_CREDENTIAL_SOURCE, status: "success" },
+    ]);
+    expect(
+      annotateQuotaAdvice({ generatedAt: "", providers: [report] }).help,
+    ).toBeUndefined();
+  });
+
+  it("stays a bare auth_required when neither store holds an entry", async () => {
+    const report = await createOpenCodeGoAdapter({
+      credentialSources: opencodeOnly({
+        status: "missing",
+        path: "/oc/auth.json",
+      }),
+      optedOutPiSource: probe(absent),
+      fetch: vi.fn(async () => usageResponse()),
+      now,
+    }).fetchQuota(OPTIONS);
+
+    expect(report.state).toMatchObject({
+      status: "auth_required",
+      error: "opencode_go_credential_unavailable",
+      sourcesTried: [OPENCODE_GO_CREDENTIAL_SOURCE],
+    });
+    expect(report.attempts).toHaveLength(1);
+    const advised = annotateQuotaAdvice({
+      generatedAt: "",
+      providers: [report],
+    });
+    expect(advised.providers[0]?.state.reason).toBeUndefined();
+    expect(advised.providers[0]?.state.remedyCommand).toBeUndefined();
+    expect(advised.help).toBeUndefined();
+  });
+
+  it("does not turn an unreadable or malformed Pi file into a remedy", async () => {
+    for (const status of ["invalid", "error"] as const) {
+      const report = await createOpenCodeGoAdapter({
+        credentialSources: opencodeOnly({
+          status: "missing",
+          path: "/oc/auth.json",
+        }),
+        optedOutPiSource: probe({ status, path: PI_AUTH_PATH }),
+        fetch: vi.fn(async () => usageResponse()),
+        now,
+      }).fetchQuota(OPTIONS);
+      expect(report.attempts).toHaveLength(1);
+    }
+    const throwing = await createOpenCodeGoAdapter({
+      credentialSources: opencodeOnly({
+        status: "missing",
+        path: "/oc/auth.json",
+      }),
+      optedOutPiSource: {
+        probe: () => {
+          throw new Error("boom");
+        },
+      },
+      fetch: vi.fn(async () => usageResponse()),
+      now,
+    }).fetchQuota(OPTIONS);
+    expect(throwing.attempts).toHaveLength(1);
+  });
+
+  it("has no probe once the flag opts Pi in as a credential source", () => {
+    expect(defaultOptedOutPiOpenCodeGoSource({})).toBeDefined();
+    expect(
+      defaultOptedOutPiOpenCodeGoSource({ [PI_OPENCODE_GO_AUTH_ENV]: "1" }),
+    ).toBeUndefined();
+    expect(
+      defaultOptedOutPiOpenCodeGoSource({ [PI_OPENCODE_GO_AUTH_ENV]: "true" }),
+    ).toBeUndefined();
+  });
+
+  it("probes the Pi file for presence only and never surfaces the key", () => {
+    const directory = mkdtempSync(
+      join(tmpdir(), "quota-axi-opencode-go-probe-"),
+    );
+    try {
+      const path = join(directory, "auth.json");
+      const source = createOptedOutPiOpenCodeGoSource(() => path);
+      expect(source.probe()).toEqual({ status: "missing", path });
+
+      writeFileSync(
+        path,
+        JSON.stringify({ zai: { type: "api_key", key: "z" } }),
+      );
+      expect(source.probe()).toEqual({ status: "missing", path });
+
+      writeFileSync(
+        path,
+        JSON.stringify({ "opencode-go": { type: "api_key", key: PI_KEY } }),
+      );
+      const presence = source.probe();
+      expect(presence).toEqual({ status: "present", path });
+      expect(JSON.stringify(presence)).not.toContain(PI_KEY);
+
+      writeFileSync(path, JSON.stringify({ "opencode-go": "not-an-entry" }));
+      expect(source.probe()).toEqual({ status: "invalid", path });
+
+      writeFileSync(path, "{not json");
+      expect(source.probe()).toEqual({ status: "invalid", path });
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("lists the skipped Pi row in auth inspection only while the entry exists", async () => {
+    const inspect = (presence: PiEntryPresence) =>
+      createOpenCodeGoAdapter({
+        credentialSources: opencodeOnly({
+          status: "missing",
+          path: "/oc/auth.json",
+        }),
+        optedOutPiSource: probe(presence),
+      }).inspectAuth(OPTIONS);
+
+    const opencodeRow = {
+      source: OPENCODE_GO_CREDENTIAL_SOURCE,
+      path: "/oc/auth.json",
+      status: "missing",
+    };
+    expect((await inspect(present)).sources).toEqual([
+      opencodeRow,
+      {
+        source: PI_OPENCODE_GO_SOURCE,
+        path: PI_AUTH_PATH,
+        status: "skipped",
+        error: PI_OPENCODE_GO_OPT_IN_REQUIRED,
+        credentialPresent: true,
+      },
+    ]);
+    expect((await inspect(absent)).sources).toEqual([opencodeRow]);
+  });
+});
+
+describe("OpenCode Go opt-in remedy through the commands", () => {
+  let directory: string;
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+    vi.resetModules();
+    rmSync(directory, { recursive: true, force: true });
+    process.exitCode = undefined;
+  });
+
+  function sandbox(pi: Record<string, unknown> | undefined): void {
+    directory = mkdtempSync(join(tmpdir(), "quota-axi-opencode-go-commands-"));
+    mkdirSync(join(directory, "pi"));
+    vi.stubEnv("PI_CODING_AGENT_DIR", join(directory, "pi"));
+    vi.stubEnv("XDG_DATA_HOME", join(directory, "data"));
+    vi.stubEnv("XDG_CACHE_HOME", join(directory, "cache"));
+    vi.stubEnv(PI_OPENCODE_GO_AUTH_ENV, "");
+    if (pi)
+      writeFileSync(join(directory, "pi", "auth.json"), JSON.stringify(pi));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("no request may leave the auth or blocked quota read");
+      }),
+    );
+    vi.resetModules();
+  }
+
+  it("shows the skipped Pi row in auth when the entry exists", async () => {
+    sandbox({ "opencode-go": { type: "api_key", key: PI_KEY } });
+    const { authCommand } = await import("../../src/commands.js");
+    const json = JSON.parse(
+      await authCommand(["--provider", "opencode-go", "--json"], undefined),
+    ) as { auth: { sources: Record<string, unknown>[] }[] };
+
+    expect(json.auth[0]?.sources).toEqual([
+      {
+        source: OPENCODE_GO_CREDENTIAL_SOURCE,
+        path: join(directory, "data", "opencode", "auth.json"),
+        status: "missing",
+      },
+      {
+        source: PI_OPENCODE_GO_SOURCE,
+        path: join(directory, "pi", "auth.json"),
+        status: "skipped",
+        error: PI_OPENCODE_GO_OPT_IN_REQUIRED,
+        credentialPresent: true,
+      },
+    ]);
+    const toon = await authCommand(["--provider", "opencode-go"], undefined);
+    expect(toon).toContain(`"pi:opencode-go"`);
+    expect(toon).toContain("skipped,opencode_go_pi_opt_in_required");
+    expect(toon).not.toContain(PI_KEY);
+  });
+
+  it("lists only the opencode store in auth when Pi has no entry", async () => {
+    sandbox({ zai: { type: "api_key", key: "synthetic-zai" } });
+    const { authCommand } = await import("../../src/commands.js");
+    const json = JSON.parse(
+      await authCommand(["--provider", "opencode-go", "--json"], undefined),
+    ) as { auth: { sources: { source: string }[] }[] };
+
+    expect(json.auth[0]?.sources.map((source) => source.source)).toEqual([
+      OPENCODE_GO_CREDENTIAL_SOURCE,
+    ]);
+  });
+
+  it("prints the remedy and help on the quota read without a request", async () => {
+    sandbox({ "opencode-go": { type: "api_key", key: PI_KEY } });
+    const { quotaCommand } = await import("../../src/commands.js");
+    const toon = await quotaCommand(
+      ["--provider", "opencode-go", "--no-credential-refresh"],
+      undefined,
+    );
+
+    expect(toon).toContain(
+      "auth_required,opencode_go_credential_unavailable · reason opencode_go_pi_opt_in_required,QUOTA_AXI_OPENCODE_GO_PI_AUTH=1 quota-axi --provider opencode-go",
+    );
+    expect(toon).toContain("Tell your user: Pi holds an OpenCode Go key");
+    expect(toon).not.toContain(PI_KEY);
+    expect(fetch).not.toHaveBeenCalled();
   });
 });

@@ -6,6 +6,11 @@ import {
 } from "./providers/delegated-refresh.js";
 import { grokCliRefreshNeeded } from "./providers/grok.js";
 import {
+  PI_OPENCODE_GO_AUTH_ENV,
+  PI_OPENCODE_GO_OPT_IN_REQUIRED,
+  PI_OPENCODE_GO_SOURCE,
+} from "./providers/opencode-go.js";
+import {
   CLAUDE_KEYCHAIN_SERVICE,
   CLAUDE_PROFILES_ENV,
 } from "./lib/claude-profile.js";
@@ -29,6 +34,8 @@ export const INFERENCE_OPT_IN_REASON = "inference_opt_in_required";
 export const CLAUDE_INFERENCE_REMEDY_COMMAND =
   "quota-axi --provider claude --allow-claude-inference";
 const CLAUDE_ENV_SCOPE_DENIAL_ERROR = "claude_env_usage_scope_unavailable";
+export const OPENCODE_GO_PI_OPT_IN_REASON = PI_OPENCODE_GO_OPT_IN_REQUIRED;
+export const OPENCODE_GO_PI_OPT_IN_REMEDY_COMMAND = `${PI_OPENCODE_GO_AUTH_ENV}=1 quota-axi --provider opencode-go`;
 
 export function annotateQuotaAdvice(
   response: Omit<QuotaAxiResponse, "schemaVersion">,
@@ -148,7 +155,35 @@ function annotateProviderAdvice(provider: ProviderQuota): ProviderQuota {
       },
     };
   }
+  if (needsOpenCodeGoPiOptInAdvice(provider)) {
+    return {
+      ...provider,
+      state: {
+        ...provider.state,
+        reason: OPENCODE_GO_PI_OPT_IN_REASON,
+        remedyCommand: OPENCODE_GO_PI_OPT_IN_REMEDY_COMMAND,
+      },
+    };
+  }
   return provider;
+}
+
+/**
+ * OpenCode Go found no key in the opencode store but Pi holds an `opencode-go`
+ * entry it may read only under the opt-in flag. The sign-out stands, because
+ * nothing established that Pi's key works, and the remedy names the flag.
+ */
+function needsOpenCodeGoPiOptInAdvice(provider: ProviderQuota): boolean {
+  return (
+    provider.provider === "opencode-go" &&
+    provider.state.status === "auth_required" &&
+    (provider.attempts ?? []).some(
+      (attempt) =>
+        attempt.source === PI_OPENCODE_GO_SOURCE &&
+        attempt.status === "skipped" &&
+        attempt.error === PI_OPENCODE_GO_OPT_IN_REQUIRED,
+    )
+  );
 }
 
 /**
@@ -392,7 +427,17 @@ function providerHelpLines(provider: ProviderQuota): string[] {
   if (hasClaudeInferenceAdvice(provider)) return [claudeInferenceHelpLine()];
   if (hasKimiTokenRefreshAdvice(provider))
     return [kimiTokenRefreshHelpLine(provider.state.remedyCommand)];
+  if (hasOpenCodeGoPiOptInAdvice(provider))
+    return [openCodeGoPiOptInHelpLine()];
   return [];
+}
+
+function hasOpenCodeGoPiOptInAdvice(provider: ProviderQuota): boolean {
+  return (
+    provider.provider === "opencode-go" &&
+    provider.state.reason === OPENCODE_GO_PI_OPT_IN_REASON &&
+    provider.state.remedyCommand === OPENCODE_GO_PI_OPT_IN_REMEDY_COMMAND
+  );
 }
 
 function hasClaudeInferenceAdvice(provider: ProviderQuota): boolean {
@@ -474,6 +519,10 @@ function kimiTokenRefreshHelpLine(remedy: string | undefined): string {
     return "Tell your user: run a Kimi Code session with `kimi` once so Kimi Code refreshes its own session token. quota-axi stays read-only and never rotates Kimi credentials.";
   }
   return "Tell your user: use a Kimi model in `pi` once so Pi refreshes its own Kimi session token; Pi refreshes a provider's token only when that provider is used. quota-axi stays read-only and never rotates Kimi credentials.";
+}
+
+function openCodeGoPiOptInHelpLine(): string {
+  return `Tell your user: Pi holds an OpenCode Go key that quota-axi reads only on opt-in, and the opencode store has none. Run \`${OPENCODE_GO_PI_OPT_IN_REMEDY_COMMAND}\` to read it, or export ${PI_OPENCODE_GO_AUTH_ENV}=1 for every read. quota-axi never launches Pi or opencode and never copies the key.`;
 }
 
 function grokTokenRefreshHelpLine(): string {
