@@ -1,8 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  annotateQuotaAdvice,
-  OPENCODE_GO_PI_OPT_IN_REMEDY_COMMAND,
-} from "../src/advice.js";
+import { annotateQuotaAdvice } from "../src/advice.js";
 import type { ProviderQuota, SourceAttempt } from "../src/types.js";
 
 afterEach(() => {
@@ -137,18 +134,38 @@ describe("OpenCode Go Pi opt-in advice", () => {
     };
   }
 
-  it("names the flag in the reason, the remedy, and one help line", () => {
-    const advised = annotateQuotaAdvice({
-      generatedAt: "",
-      providers: [lane("opencode-go", "auth_required")],
-    });
+  it.each(["linux", "darwin"] as const)(
+    "names the flag in the reason, a POSIX remedy, and one help line on %s",
+    (platform) => {
+      const advised = annotateQuotaAdvice(
+        { generatedAt: "", providers: [lane("opencode-go", "auth_required")] },
+        platform,
+      );
+      expect(advised.providers[0]?.state).toMatchObject({
+        status: "auth_required",
+        reason: "opencode_go_pi_opt_in_required",
+        remedyCommand:
+          "QUOTA_AXI_OPENCODE_GO_PI_AUTH=1 quota-axi --provider opencode-go",
+      });
+      expect(advised.help).toEqual([
+        "Tell your user: Pi holds an OpenCode Go key that quota-axi reads only on opt-in, and the opencode store has none. Run `QUOTA_AXI_OPENCODE_GO_PI_AUTH=1 quota-axi --provider opencode-go` to read it, or export QUOTA_AXI_OPENCODE_GO_PI_AUTH=1 for every read. quota-axi never launches Pi or opencode and never copies the key.",
+      ]);
+    },
+  );
+
+  it("names the PowerShell remedy and the cmd.exe form on win32", () => {
+    const advised = annotateQuotaAdvice(
+      { generatedAt: "", providers: [lane("opencode-go", "auth_required")] },
+      "win32",
+    );
     expect(advised.providers[0]?.state).toMatchObject({
       status: "auth_required",
       reason: "opencode_go_pi_opt_in_required",
-      remedyCommand: OPENCODE_GO_PI_OPT_IN_REMEDY_COMMAND,
+      remedyCommand:
+        "$env:QUOTA_AXI_OPENCODE_GO_PI_AUTH='1'; quota-axi --provider opencode-go",
     });
     expect(advised.help).toEqual([
-      "Tell your user: Pi holds an OpenCode Go key that quota-axi reads only on opt-in, and the opencode store has none. Run `QUOTA_AXI_OPENCODE_GO_PI_AUTH=1 quota-axi --provider opencode-go` to read it, or export QUOTA_AXI_OPENCODE_GO_PI_AUTH=1 for every read. quota-axi never launches Pi or opencode and never copies the key.",
+      "Tell your user: Pi holds an OpenCode Go key that quota-axi reads only on opt-in, and the opencode store has none. Run `$env:QUOTA_AXI_OPENCODE_GO_PI_AUTH='1'; quota-axi --provider opencode-go` to read it, or set it for every read in PowerShell with `$env:QUOTA_AXI_OPENCODE_GO_PI_AUTH='1'` or in cmd.exe with `set QUOTA_AXI_OPENCODE_GO_PI_AUTH=1`. quota-axi never launches Pi or opencode and never copies the key.",
     ]);
   });
 

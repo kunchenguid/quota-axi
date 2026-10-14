@@ -35,26 +35,38 @@ export const CLAUDE_INFERENCE_REMEDY_COMMAND =
   "quota-axi --provider claude --allow-claude-inference";
 const CLAUDE_ENV_SCOPE_DENIAL_ERROR = "claude_env_usage_scope_unavailable";
 export const OPENCODE_GO_PI_OPT_IN_REASON = PI_OPENCODE_GO_OPT_IN_REQUIRED;
-export const OPENCODE_GO_PI_OPT_IN_REMEDY_COMMAND = `${PI_OPENCODE_GO_AUTH_ENV}=1 quota-axi --provider opencode-go`;
+
+/** POSIX shells take the inline prefix; PowerShell and cmd.exe do not. */
+function openCodeGoPiOptInRemedyCommand(platform: NodeJS.Platform): string {
+  return platform === "win32"
+    ? `$env:${PI_OPENCODE_GO_AUTH_ENV}='1'; quota-axi --provider opencode-go`
+    : `${PI_OPENCODE_GO_AUTH_ENV}=1 quota-axi --provider opencode-go`;
+}
 
 export function annotateQuotaAdvice(
   response: Omit<QuotaAxiResponse, "schemaVersion">,
+  platform: NodeJS.Platform = process.platform,
 ): QuotaAxiResponse {
   const expanded = response.providers.some((provider) => provider.accountKey);
   const providers = response.providers.map((provider) => {
     const accountKey = expanded
       ? (provider.accountKey ?? "default")
       : undefined;
-    return annotateProviderAdvice({
-      ...provider,
-      ...(accountKey ? { accountKey } : {}),
-      accountKeys: coveredAccountKeys(
-        accountKey ?? provider.accountKeys?.[0] ?? "default",
-        provider.accountKeys,
-      ),
-    });
+    return annotateProviderAdvice(
+      {
+        ...provider,
+        ...(accountKey ? { accountKey } : {}),
+        accountKeys: coveredAccountKeys(
+          accountKey ?? provider.accountKeys?.[0] ?? "default",
+          provider.accountKeys,
+        ),
+      },
+      platform,
+    );
   });
-  const help = providers.flatMap(providerHelpLines);
+  const help = providers.flatMap((provider) =>
+    providerHelpLines(provider, platform),
+  );
   return {
     generatedAt: response.generatedAt,
     schemaVersion: providers.some((provider) => provider.accountKey) ? 6 : 5,
@@ -93,7 +105,10 @@ function omittedNotSetUpHelpLine(count: number): string {
   return `${subject} not set up ${verb} omitted; run \`quota-axi --full\` to list ${pronoun}`;
 }
 
-function annotateProviderAdvice(provider: ProviderQuota): ProviderQuota {
+function annotateProviderAdvice(
+  provider: ProviderQuota,
+  platform: NodeJS.Platform,
+): ProviderQuota {
   if (needsClaudeInferenceAdvice(provider)) {
     return {
       ...provider,
@@ -161,7 +176,7 @@ function annotateProviderAdvice(provider: ProviderQuota): ProviderQuota {
       state: {
         ...provider.state,
         reason: OPENCODE_GO_PI_OPT_IN_REASON,
-        remedyCommand: OPENCODE_GO_PI_OPT_IN_REMEDY_COMMAND,
+        remedyCommand: openCodeGoPiOptInRemedyCommand(platform),
       },
     };
   }
@@ -416,7 +431,10 @@ function isPromptBlockedKeychainAttempt(attempt: SourceAttempt): boolean {
   );
 }
 
-function providerHelpLines(provider: ProviderQuota): string[] {
+function providerHelpLines(
+  provider: ProviderQuota,
+  platform: NodeJS.Platform,
+): string[] {
   if (hasKeychainAccessAdvice(provider))
     return [keychainAccessHelpLine(provider)];
   if (hasGrokTokenRefreshAdvice(provider)) return [grokTokenRefreshHelpLine()];
@@ -427,16 +445,19 @@ function providerHelpLines(provider: ProviderQuota): string[] {
   if (hasClaudeInferenceAdvice(provider)) return [claudeInferenceHelpLine()];
   if (hasKimiTokenRefreshAdvice(provider))
     return [kimiTokenRefreshHelpLine(provider.state.remedyCommand)];
-  if (hasOpenCodeGoPiOptInAdvice(provider))
-    return [openCodeGoPiOptInHelpLine()];
+  if (hasOpenCodeGoPiOptInAdvice(provider, platform))
+    return [openCodeGoPiOptInHelpLine(platform)];
   return [];
 }
 
-function hasOpenCodeGoPiOptInAdvice(provider: ProviderQuota): boolean {
+function hasOpenCodeGoPiOptInAdvice(
+  provider: ProviderQuota,
+  platform: NodeJS.Platform,
+): boolean {
   return (
     provider.provider === "opencode-go" &&
     provider.state.reason === OPENCODE_GO_PI_OPT_IN_REASON &&
-    provider.state.remedyCommand === OPENCODE_GO_PI_OPT_IN_REMEDY_COMMAND
+    provider.state.remedyCommand === openCodeGoPiOptInRemedyCommand(platform)
   );
 }
 
@@ -521,8 +542,12 @@ function kimiTokenRefreshHelpLine(remedy: string | undefined): string {
   return "Tell your user: use a Kimi model in `pi` once so Pi refreshes its own Kimi session token; Pi refreshes a provider's token only when that provider is used. quota-axi stays read-only and never rotates Kimi credentials.";
 }
 
-function openCodeGoPiOptInHelpLine(): string {
-  return `Tell your user: Pi holds an OpenCode Go key that quota-axi reads only on opt-in, and the opencode store has none. Run \`${OPENCODE_GO_PI_OPT_IN_REMEDY_COMMAND}\` to read it, or export ${PI_OPENCODE_GO_AUTH_ENV}=1 for every read. quota-axi never launches Pi or opencode and never copies the key.`;
+function openCodeGoPiOptInHelpLine(platform: NodeJS.Platform): string {
+  const everyRead =
+    platform === "win32"
+      ? `set it for every read in PowerShell with \`$env:${PI_OPENCODE_GO_AUTH_ENV}='1'\` or in cmd.exe with \`set ${PI_OPENCODE_GO_AUTH_ENV}=1\``
+      : `export ${PI_OPENCODE_GO_AUTH_ENV}=1 for every read`;
+  return `Tell your user: Pi holds an OpenCode Go key that quota-axi reads only on opt-in, and the opencode store has none. Run \`${openCodeGoPiOptInRemedyCommand(platform)}\` to read it, or ${everyRead}. quota-axi never launches Pi or opencode and never copies the key.`;
 }
 
 function grokTokenRefreshHelpLine(): string {
