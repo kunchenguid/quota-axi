@@ -939,7 +939,7 @@ The Claude and Codex rows describe default discovery; [`--profile-only`](#profil
   Sibling keys such as `openai-codex-work` or `openai-work` from `pi-codex-accounts` are enrolled from that same file when they are already present.
   Two or more distinct Pi entries become independent Codex account lanes; one account's failure or exhaustion does not hide or substitute another.
   An `openai` or `openai-*` entry is Pi's "Sign in with ChatGPT" login; it is reported under its own key as `unavailable` with error `pi_openai_chatgpt_token_unmeasured` and is never sent to the usage endpoint, whatever fields it stores; see [Multiple accounts](#multiple-accounts).
-  A successful Pi-backed probe reports source `pi:<provider-id>` (`pi:openai-codex`, `pi:openai-codex-work`, `pi:openai-work`, …).
+  A successful Pi-backed probe reports source `pi:<provider-id>` (`pi:openai-codex`, `pi:openai-codex-work`, …).
   quota-axi never reads `codex-accounts.json`, copies tokens, or changes Pi's active account.
 
 - Native Codex `auth.json` support is OAuth-token only; API key values such as `OPENAI_API_KEY` are treated as invalid for quota usage calls and are not sent to ChatGPT usage endpoints.
