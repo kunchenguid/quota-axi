@@ -17,7 +17,7 @@ const AUTH_FILE_LIMIT_BYTES = 64 * 1024;
 // Pi's built-in `openai-codex` and `openai` ids, plus the `-<suffix>` siblings
 // that tools such as pi-codex-accounts add beside them.
 const PI_CODEX_PROVIDER_ID = /^openai(?:-[a-z0-9]+)*$/;
-const PI_CODEX_SOURCE = /^pi:openai(?:-[a-z0-9]+)*$/;
+const PI_CODEX_SOURCE = /^pi:openai-codex(?:-[a-z0-9]+)*$/;
 const PI_CODEX_FAMILY_ID = /^openai-codex(?:-[a-z0-9]+)*$/;
 const MINIMUM_MILLISECOND_EPOCH = 1_000_000_000_000;
 

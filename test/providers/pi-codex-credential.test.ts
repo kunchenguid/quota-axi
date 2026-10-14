@@ -218,7 +218,12 @@ describe("Pi Codex credential broker", () => {
       "openai-work-2",
     ]) {
       expect(isPiCodexProviderId(id), id).toBe(true);
+    }
+    for (const id of ["openai-codex", "openai-codex-work"]) {
       expect(isPiCodexSource(`pi:${id}`), id).toBe(true);
+    }
+    for (const id of ["openai", "openai-work", "openai-codexx"]) {
+      expect(isPiCodexSource(`pi:${id}`), id).toBe(false);
     }
     for (const id of [
       "openai-",
