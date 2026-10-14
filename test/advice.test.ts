@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { annotateQuotaAdvice } from "../src/advice.js";
-import type { ProviderQuota } from "../src/types.js";
+import {
+  annotateQuotaAdvice,
+  OPENCODE_GO_PI_OPT_IN_REMEDY_COMMAND,
+} from "../src/advice.js";
+import type { ProviderQuota, SourceAttempt } from "../src/types.js";
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -107,5 +110,74 @@ describe("Claude sibling profile lane advice", () => {
       remedy(claudeLane(sibling, { status: "fresh", authStatus: "usable" })),
     ).toBeUndefined();
     expect(remedy(claudeLane(undefined, expiredRefreshable))).toBeUndefined();
+  });
+});
+
+describe("OpenCode Go Pi opt-in advice", () => {
+  const skippedPi: SourceAttempt = {
+    source: "pi:opencode-go",
+    status: "skipped",
+    error: "opencode_go_pi_opt_in_required",
+    credentialPresent: true,
+  };
+  function lane(
+    provider: ProviderQuota["provider"],
+    status: ProviderQuota["state"]["status"],
+    attempts: SourceAttempt[] = [skippedPi],
+  ): ProviderQuota {
+    return {
+      provider,
+      windows: [],
+      state: {
+        status,
+        stale: false,
+        error: "opencode_go_credential_unavailable",
+      },
+      attempts,
+    };
+  }
+
+  it("names the flag in the reason, the remedy, and one help line", () => {
+    const advised = annotateQuotaAdvice({
+      generatedAt: "",
+      providers: [lane("opencode-go", "auth_required")],
+    });
+    expect(advised.providers[0]?.state).toMatchObject({
+      status: "auth_required",
+      reason: "opencode_go_pi_opt_in_required",
+      remedyCommand: OPENCODE_GO_PI_OPT_IN_REMEDY_COMMAND,
+    });
+    expect(advised.help).toEqual([
+      "Tell your user: Pi holds an OpenCode Go key that quota-axi reads only on opt-in, and the opencode store has none. Run `QUOTA_AXI_OPENCODE_GO_PI_AUTH=1 quota-axi --provider opencode-go` to read it, or export QUOTA_AXI_OPENCODE_GO_PI_AUTH=1 for every read. quota-axi never launches Pi or opencode and never copies the key.",
+    ]);
+  });
+
+  it("gives the reason to no other provider, status, or attempt shape", () => {
+    const reasons = (provider: ProviderQuota) => {
+      const advised = annotateQuotaAdvice({
+        generatedAt: "",
+        providers: [provider],
+      });
+      return [advised.providers[0]?.state.reason, advised.help];
+    };
+    expect(reasons(lane("zai", "auth_required"))).toEqual([
+      undefined,
+      undefined,
+    ]);
+    expect(reasons(lane("opencode-go", "error"))).toEqual([
+      undefined,
+      undefined,
+    ]);
+    expect(
+      reasons(
+        lane("opencode-go", "auth_required", [
+          { ...skippedPi, error: "opencode_go_credential_unavailable" },
+        ]),
+      ),
+    ).toEqual([undefined, undefined]);
+    expect(reasons(lane("opencode-go", "auth_required", []))).toEqual([
+      undefined,
+      undefined,
+    ]);
   });
 });
