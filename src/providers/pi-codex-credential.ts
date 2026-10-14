@@ -7,9 +7,9 @@ import { traceInput } from "../lib/input-trace.js";
 
 export const PI_CODEX_BUILTIN_ID = "openai-codex";
 /**
- * Pi's "Sign in with ChatGPT" flow stores a token with no ChatGPT account id.
- * Whether the usage endpoint accepts such a token is not established, so it
- * is never probed.
+ * Pi's `openai` provider stores a "Sign in with ChatGPT" token for the OpenAI
+ * API. Whether the ChatGPT usage endpoint accepts such a token is not
+ * established, so it is never probed, whatever fields the entry carries.
  */
 export const PI_OPENAI_CHATGPT_TOKEN_UNMEASURED =
   "pi_openai_chatgpt_token_unmeasured";
@@ -218,7 +218,7 @@ async function resolveCredential(
       ? { status: "invalid" }
       : { status: "unsupported", error: "unsupported_credential_type" };
   }
-  if (!PI_CODEX_FAMILY_ID.test(providerId) && entry.accountId === undefined) {
+  if (!PI_CODEX_FAMILY_ID.test(providerId)) {
     return { status: "unsupported", error: PI_OPENAI_CHATGPT_TOKEN_UNMEASURED };
   }
 

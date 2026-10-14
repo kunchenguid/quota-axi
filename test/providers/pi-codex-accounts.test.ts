@@ -487,21 +487,49 @@ describe("Codex Pi sibling account lanes", () => {
     );
   });
 
-  it("folds a legacy-shape openai entry into the openai-codex lane for the same account", async () => {
-    await expectPublishedMembership(
-      undefined,
-      {
-        "openai-codex": {
-          token: "personal-access-token",
-          accountId: "acct-a",
-        },
-        openai: {
-          token: "openai-access-token",
-          accountId: "acct-a",
-        },
+  it("never probes an openai entry that carries an accountId, even for a known account", async () => {
+    writePiAuth({
+      "openai-codex": piOauthEntry({
+        access: "personal-access-token",
+        accountId: "acct-a",
+      }),
+      openai: piOauthEntry({
+        access: "openai-access-token",
+        accountId: "acct-a",
+      }),
+    });
+    stubUsageByAccount({
+      "acct-a": usage(20, "personal@example.invalid", "acct-a"),
+    });
+
+    const reports = await readCodexLanes();
+
+    expect(reports.map((report) => report.accountKeys)).toEqual([
+      ["openai-codex"],
+      ["openai"],
+    ]);
+    expect(reports[0]).toMatchObject({
+      source: "pi:openai-codex",
+      account: { accountId: "acct-a" },
+      windows: [{ percentUsed: 20 }],
+      state: { status: "fresh" },
+    });
+    expect(reports[1]).toMatchObject({
+      source: "pi:openai",
+      windows: [],
+      state: {
+        status: "unavailable",
+        error: "pi_openai_chatgpt_token_unmeasured",
       },
-      [{ accountKeys: ["openai-codex", "openai"] }],
+    });
+    expect(reports[1]?.account).toBeUndefined();
+    const fetchMock = vi.mocked(fetch);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const headers = new Headers(
+      (fetchMock.mock.calls[0]?.[1] as RequestInit | undefined)?.headers,
     );
+    expect(headers.get("authorization")).toBe("Bearer personal-access-token");
+    expect(JSON.stringify(reports)).not.toContain("openai-access-token");
   });
 
   it("does not treat one account's exhaustion as the other's remaining capacity", async () => {

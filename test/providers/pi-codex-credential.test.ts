@@ -292,16 +292,14 @@ describe("Pi Codex credential broker", () => {
     },
   );
 
-  it("reads an openai entry with a stored accountId whatever its scopes", async () => {
+  it("keeps an openai entry unmeasured even when it carries an accountId", async () => {
     const fixture = authFixture({
       openai: chatGptEntry({ accountId: "acct-fixture-openai" }),
     });
 
-    await expect(
-      brokerFor(fixture).resolveEntry("openai"),
-    ).resolves.toMatchObject({
-      status: "available",
-      credentials: { accountId: "acct-fixture-openai" },
+    await expect(brokerFor(fixture).resolveEntry("openai")).resolves.toEqual({
+      status: "unsupported",
+      error: "pi_openai_chatgpt_token_unmeasured",
     });
   });
 
@@ -333,7 +331,7 @@ describe("Pi Codex credential broker", () => {
     ]);
   });
 
-  it("reads a legacy-shape openai entry exactly like openai-codex", async () => {
+  it("never reads an openai entry in the openai-codex shape as a Codex credential", async () => {
     const fixture = authFixture({
       openai: oauthEntry({
         access: "fixture-openai-access-token",
@@ -343,17 +341,18 @@ describe("Pi Codex credential broker", () => {
     const broker = brokerFor(fixture);
 
     await expect(broker.resolveEntry("openai")).resolves.toEqual({
-      status: "available",
-      credentials: {
-        accessToken: "fixture-openai-access-token",
-        accountId: "acct-fixture-openai",
-        expiresAtMs: FUTURE,
-      },
+      status: "unsupported",
+      error: "pi_openai_chatgpt_token_unmeasured",
     });
-    await expect(broker.inspectEntry("openai")).resolves.toEqual({
+    const inspection = await broker.inspectEntry("openai");
+    expect(inspection).toEqual({
       path: fixture,
-      status: "available",
+      status: "unsupported",
+      error: "pi_openai_chatgpt_token_unmeasured",
     });
+    expect(JSON.stringify(inspection)).not.toContain(
+      "fixture-openai-access-token",
+    );
     await expect(broker.resolve()).resolves.toEqual({ status: "missing" });
   });
 
