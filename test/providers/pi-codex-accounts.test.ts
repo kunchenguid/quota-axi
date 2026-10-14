@@ -358,6 +358,121 @@ describe("Codex Pi sibling account lanes", () => {
     expect(reports[1]?.state.status).not.toBe("fresh");
   });
 
+  it("reports Pi's openai sign-ins beside the openai-codex entries without probing ChatGPT tokens", async () => {
+    writePiAuth({
+      openai: chatGptEntry({ access: "personal-chatgpt-token" }),
+      "openai-work": chatGptEntry({ access: "work-chatgpt-token" }),
+      "openai-codex": piOauthEntry({
+        access: "personal-access-token",
+        accountId: "acct-personal",
+      }),
+      "openai-codex-work": piOauthEntry({
+        access: "work-access-token",
+        accountId: "acct-work",
+      }),
+    });
+    stubUsageByAccount({
+      "acct-personal": usage(20, "personal@example.invalid", "acct-personal"),
+      "acct-work": usage(80, "work@example.invalid", "acct-work"),
+    });
+
+    const reports = await readCodexLanes();
+
+    expect(reports.map((report) => report.accountKey)).toEqual([
+      "openai-codex",
+      "openai",
+      "openai-codex-work",
+      "openai-work",
+    ]);
+    expect(reports[0]).toMatchObject({
+      source: "pi:openai-codex",
+      account: { accountId: "acct-personal" },
+      windows: [{ percentUsed: 20 }],
+      state: { status: "fresh" },
+    });
+    expect(reports[2]).toMatchObject({
+      source: "pi:openai-codex-work",
+      account: { accountId: "acct-work" },
+      windows: [{ percentUsed: 80 }],
+      state: { status: "fresh" },
+    });
+    for (const [report, key] of [
+      [reports[1], "openai"],
+      [reports[3], "openai-work"],
+    ] as const) {
+      expect(report).toMatchObject({
+        accountKey: key,
+        accountKeys: [key],
+        source: `pi:${key}`,
+        windows: [],
+        state: {
+          status: "unavailable",
+          stale: false,
+          error: "pi_openai_chatgpt_token_unmeasured",
+          sourcesTried: [`pi:${key}`],
+        },
+        attempts: [
+          {
+            source: `pi:${key}`,
+            status: "skipped",
+            error: "pi_openai_chatgpt_token_unmeasured",
+            credentialPresent: true,
+          },
+        ],
+      });
+      expect(report?.state.authStatus).toBeUndefined();
+    }
+    const fetchMock = vi.mocked(fetch);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    for (const [, init] of fetchMock.mock.calls) {
+      const headers = new Headers((init as RequestInit | undefined)?.headers);
+      expect(headers.get("authorization")).toMatch(
+        /^Bearer (personal|work)-access-token$/,
+      );
+    }
+    expect(JSON.stringify(reports)).not.toMatch(
+      /chatgpt-token|access-token|refresh-token/,
+    );
+  });
+
+  it("reports a lone ChatGPT sign-in as its own unmeasured row", async () => {
+    writePiAuth({ openai: chatGptEntry({ access: "personal-chatgpt-token" }) });
+    vi.stubGlobal("fetch", vi.fn());
+
+    const reports = await readCodexLanes();
+
+    expect(reports).toHaveLength(1);
+    expect(reports[0]).toMatchObject({
+      provider: "codex",
+      accountKeys: ["openai"],
+      source: "pi:openai",
+      windows: [],
+      state: {
+        status: "unavailable",
+        error: "pi_openai_chatgpt_token_unmeasured",
+      },
+    });
+    expect(fetch).not.toHaveBeenCalled();
+    expect(JSON.stringify(reports)).not.toContain("personal-chatgpt-token");
+  });
+
+  it("folds a legacy-shape openai entry into the openai-codex lane for the same account", async () => {
+    await expectPublishedMembership(
+      undefined,
+      {
+        "openai-codex": {
+          token: "personal-access-token",
+          accountId: "acct-a",
+        },
+        openai: {
+          token: "openai-access-token",
+          accountId: "acct-a",
+        },
+      },
+      [{ accountKeys: ["openai-codex", "openai"] }],
+    );
+  });
+
   it("does not treat one account's exhaustion as the other's remaining capacity", async () => {
     writePiAuth({
       "openai-codex": piOauthEntry({
@@ -2277,6 +2392,19 @@ function piOauthEntry(overrides: Record<string, unknown> = {}) {
     refresh: "pi-fixture-refresh-token",
     expires: Date.now() + 3_600_000,
     accountId: "acct-pi-fixture",
+    ...overrides,
+  };
+}
+
+/** Pi's "Sign in with ChatGPT" shape: no accountId, direct-use scope. */
+function chatGptEntry(overrides: Record<string, unknown> = {}) {
+  return {
+    type: "oauth",
+    access: "pi-fixture-chatgpt-token",
+    refresh: "pi-fixture-chatgpt-refresh-token",
+    expires: Date.now() + 3_600_000,
+    clientId: "client_fixture",
+    scopes: ["openid", "offline_access", "chatgpt.tokens.use.direct"],
     ...overrides,
   };
 }

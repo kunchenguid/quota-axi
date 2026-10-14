@@ -12,7 +12,11 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createPiCodexCredentialBroker } from "../../src/providers/pi-codex-credential.js";
+import {
+  createPiCodexCredentialBroker,
+  isPiCodexProviderId,
+  isPiCodexSource,
+} from "../../src/providers/pi-codex-credential.js";
 
 const NOW = 1_800_000_000_000;
 const FUTURE = NOW + 3_600_000;
@@ -151,7 +155,6 @@ describe("Pi Codex credential broker", () => {
     });
 
     const invalidEntries = [
-      { ...oauthEntry(), accountId: undefined },
       { ...oauthEntry(), expires: undefined },
       { ...oauthEntry(), expires: Math.floor(FUTURE / 1000) },
       { ...oauthEntry(), access: "$OPENAI_CODEX_TOKEN" },
@@ -195,6 +198,7 @@ describe("Pi Codex credential broker", () => {
 
     await expect(broker.resolve()).resolves.toEqual({
       status: "unsupported",
+      error: "unsupported_credential_type",
     });
     const inspection = await broker.inspect();
     expect(inspection).toMatchObject({
@@ -202,6 +206,118 @@ describe("Pi Codex credential broker", () => {
       error: "unsupported_credential_type",
     });
     expect(JSON.stringify(inspection)).not.toContain("sk-must-not-be-used");
+  });
+
+  it("enrolls Pi's openai ids beside openai-codex without renaming either", () => {
+    for (const id of [
+      "openai",
+      "openai-work",
+      "openai-codex",
+      "openai-codex-work",
+      "openai-codexx",
+      "openai-work-2",
+    ]) {
+      expect(isPiCodexProviderId(id), id).toBe(true);
+      expect(isPiCodexSource(`pi:${id}`), id).toBe(true);
+    }
+    for (const id of [
+      "openai-",
+      "openai-codex-",
+      "openai--work",
+      "openai_work",
+      "openaix",
+      "Openai",
+      "xopenai",
+    ]) {
+      expect(isPiCodexProviderId(id), id).toBe(false);
+      expect(isPiCodexSource(`pi:${id}`), id).toBe(false);
+    }
+    expect(isPiCodexSource("openai")).toBe(false);
+  });
+
+  it("lists openai and openai-* keys after the built-in openai-codex entry", async () => {
+    const fixture = authFixture({
+      "openai-work": chatGptEntry({ access: "fixture-work-chatgpt-token" }),
+      openai: chatGptEntry(),
+      "openai-codex-work": oauthEntry({ accountId: "acct-fixture-work" }),
+      "openai-codex": oauthEntry(),
+      anthropic: { type: "oauth", access: "must-not-be-used" },
+    });
+
+    await expect(brokerFor(fixture).listProviderIds()).resolves.toEqual([
+      "openai-codex",
+      "openai",
+      "openai-codex-work",
+      "openai-work",
+    ]);
+  });
+
+  it("reports a ChatGPT sign-in entry as unmeasured instead of probing or rejecting it", async () => {
+    const fixture = authFixture({
+      openai: chatGptEntry(),
+      "openai-work": chatGptEntry({
+        access: "fixture-work-chatgpt-token",
+        refresh: "fixture-work-chatgpt-refresh",
+      }),
+    });
+    const broker = brokerFor(fixture);
+
+    for (const id of ["openai", "openai-work"]) {
+      await expect(broker.resolveEntry(id)).resolves.toEqual({
+        status: "unsupported",
+        error: "pi_openai_chatgpt_token_unmeasured",
+      });
+      const inspection = await broker.inspectEntry(id);
+      expect(inspection).toEqual({
+        path: fixture,
+        status: "unsupported",
+        error: "pi_openai_chatgpt_token_unmeasured",
+      });
+      expect(JSON.stringify(inspection)).not.toMatch(/fixture-.*-chatgpt/);
+    }
+  });
+
+  it.each([
+    ["no accountId and no scopes", { ...chatGptEntry(), scopes: undefined }],
+    [
+      "the direct-use scope beside a stored accountId",
+      { ...chatGptEntry(), accountId: "acct-fixture-codex" },
+    ],
+    ["an expired token", { ...chatGptEntry(), expires: NOW - 1 }],
+  ])(
+    "classifies a ChatGPT sign-in entry with %s as unmeasured",
+    async (_, entry) => {
+      const fixture = authFixture({ openai: entry });
+
+      await expect(brokerFor(fixture).resolveEntry("openai")).resolves.toEqual({
+        status: "unsupported",
+        error: "pi_openai_chatgpt_token_unmeasured",
+      });
+    },
+  );
+
+  it("reads a legacy-shape openai entry exactly like openai-codex", async () => {
+    const fixture = authFixture({
+      openai: oauthEntry({
+        access: "fixture-openai-access-token",
+        accountId: "acct-fixture-openai",
+      }),
+    });
+    const broker = brokerFor(fixture);
+
+    await expect(broker.resolveEntry("openai")).resolves.toEqual({
+      status: "available",
+      credentials: {
+        accessToken: "fixture-openai-access-token",
+        accountId: "acct-fixture-openai",
+        expiresAtMs: FUTURE,
+      },
+    });
+    await expect(broker.inspectEntry("openai")).resolves.toEqual({
+      path: fixture,
+      status: "available",
+    });
+    await expect(broker.resolve()).resolves.toEqual({ status: "missing" });
   });
 
   it("distinguishes refreshable and non-refreshable expiry without refreshing", async () => {
@@ -374,6 +490,26 @@ function oauthEntry(overrides: Record<string, unknown> = {}) {
     refresh: "fixture-codex-refresh-token",
     expires: FUTURE,
     accountId: "acct-fixture-codex",
+    ...overrides,
+  };
+}
+
+/** Pi's "Sign in with ChatGPT" shape: no accountId, direct-use scope. */
+function chatGptEntry(overrides: Record<string, unknown> = {}) {
+  return {
+    type: "oauth",
+    access: "fixture-chatgpt-access-token",
+    refresh: "fixture-chatgpt-refresh-token",
+    expires: FUTURE,
+    clientId: "client_fixture",
+    scopes: [
+      "openid",
+      "profile",
+      "email",
+      "offline_access",
+      "resource.invoke",
+      "chatgpt.tokens.use.direct",
+    ],
     ...overrides,
   };
 }

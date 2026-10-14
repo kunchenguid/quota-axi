@@ -252,6 +252,31 @@ describe("quota cache", () => {
     expect(payload.schemaVersion).toBe(3);
   });
 
+  it("accepts Pi's openai sign-in keys as Codex source identities", () => {
+    useTempCache();
+    const personal = quota("codex", 20);
+    personal.accountKey = "openai";
+    personal.source = "pi:openai";
+    personal.state.sourcesTried = ["pi:openai"];
+    const work = quota("codex", 80);
+    work.accountKey = "openai-work";
+    work.source = "pi:openai-work";
+    work.state.sourcesTried = ["pi:openai-work"];
+
+    writeCachedProviders([personal, work]);
+
+    expect(readCachedProvider("codex", "openai")).toMatchObject({
+      accountKey: "openai",
+      source: "pi:openai",
+      windows: [{ percentUsed: 20 }],
+    });
+    expect(readCachedProvider("codex", "openai-work")).toMatchObject({
+      accountKey: "openai-work",
+      source: "pi:openai-work",
+      windows: [{ percentUsed: 80 }],
+    });
+  });
+
   it("keeps an expanded report's filler key out of a later unexpanded report", () => {
     useTempCache();
     const work = quota("codex", 20);

@@ -45,6 +45,8 @@ export type ProviderSource =
   | "oauth"
   | "pi:openai-codex"
   | `pi:openai-codex-${string}`
+  | "pi:openai"
+  | `pi:openai-${string}`
   | "cli-rpc"
   | "cli"
   | "api"

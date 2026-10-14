@@ -29,7 +29,7 @@ This reference details the credential sources, endpoint contracts, quota window 
 
 - **Credential Sources** (evaluated in order):
   1. Native `$CODEX_HOME/auth.json` or `~/.codex/auth.json` OAuth.
-  2. Pi `openai-codex` and any sibling `openai-codex-*` entries in the same Pi `auth.json`.
+  2. Pi `openai-codex` and any sibling `openai-codex-*`, `openai`, or `openai-*` entries in the same Pi `auth.json`; an entry in the ChatGPT sign-in shape (no `accountId`) is its own `unavailable` lane with error `pi_openai_chatgpt_token_unmeasured` and is never probed.
   3. CLI fallback via the `app-server` JSON-RPC probe.
 - **Multi-Account Lanes**:
   - `src/providers/accounts.ts` collects distinct Pi entries and the native `codex-home` lane.
