@@ -9,10 +9,7 @@ import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  annotateQuotaAdvice,
-  OPENCODE_GO_PI_OPT_IN_REMEDY_COMMAND,
-} from "../../src/advice.js";
+import { annotateQuotaAdvice } from "../../src/advice.js";
 import { withQuotaSemantics } from "../../src/interpretation.js";
 import {
   createOpenCodeGoAdapter,
@@ -1845,19 +1842,16 @@ describe("OpenCode Go Pi entry held behind the opt-in", () => {
       skippedPiAttempt,
     ]);
 
-    const advised = annotateQuotaAdvice({
-      generatedAt: "",
-      providers: [report],
-    });
+    const advised = annotateQuotaAdvice(
+      { generatedAt: "", providers: [report] },
+      "linux",
+    );
     expect(advised.providers[0]?.state).toMatchObject({
       status: "auth_required",
       reason: "opencode_go_pi_opt_in_required",
       remedyCommand:
         "QUOTA_AXI_OPENCODE_GO_PI_AUTH=1 quota-axi --provider opencode-go",
     });
-    expect(advised.providers[0]?.state.remedyCommand).toBe(
-      OPENCODE_GO_PI_OPT_IN_REMEDY_COMMAND,
-    );
     expect(advised.help).toHaveLength(1);
   });
 
