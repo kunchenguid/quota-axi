@@ -948,7 +948,7 @@ The Claude and Codex rows describe default discovery; [`--profile-only`](#profil
   A stored-expired `access_token` is still probed in native OAuth's first declared source position rather than skipped, so only the usage endpoint's own rejection is an authentication verdict. A missing `access_token` skips OAuth and preserves the Pi and read-only CLI fallbacks.
 - The Pi broker opens `auth.json` read-only with a strict 64 KiB cap and guaranteed descriptor cleanup.
   It probes only Pi's literal Codex subscription OAuth shape under `openai-codex` or `openai-codex-*`: nonempty, control-byte-free `access` and `accountId` strings plus a numeric millisecond `expires` value.
-  An `openai` or `openai-*` `oauth` entry is Pi's ChatGPT sign-in; it is classified `unsupported` with `pi_openai_chatgpt_token_unmeasured` instead of being probed, even when it carries an `accountId`.
+  An `openai` or `openai-*` `oauth` entry is Pi's ChatGPT sign-in; it is classified `unsupported` with `pi_openai_chatgpt_token_unmeasured` instead of being probed, even when it carries an `accountId`, and `quota-axi auth` reports that source as `skipped`.
   Strings containing `$` or beginning with `!` are rejected rather than resolved.
   Pi `api_key` entries are unsupported because platform API billing is not ChatGPT subscription quota.
   Malformed, unsupported, expired-refreshable, and expired-non-refreshable states remain distinct diagnostics.

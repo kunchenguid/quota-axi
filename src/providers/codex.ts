@@ -1084,7 +1084,9 @@ function piInspectionSource(
     inspection.status === "expired" ||
     inspection.status === "error"
       ? inspection.status
-      : "invalid";
+      : inspection.error === PI_OPENAI_CHATGPT_TOKEN_UNMEASURED
+        ? "skipped"
+        : "invalid";
   return {
     source,
     path: inspection.path,

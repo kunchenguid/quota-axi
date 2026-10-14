@@ -456,6 +456,34 @@ describe("Codex Pi sibling account lanes", () => {
     expect(JSON.stringify(reports)).not.toContain("personal-chatgpt-token");
   });
 
+  it("inspects a ChatGPT sign-in as skipped, not invalid", async () => {
+    writePiAuth({
+      "openai-codex": piOauthEntry({
+        access: "personal-access-token",
+        accountId: "acct-personal",
+      }),
+      openai: chatGptEntry({ access: "personal-chatgpt-token" }),
+    });
+
+    const adapter = (
+      await import("../../src/providers/codex.js")
+    ).createCodexAdapter();
+    const reports = await inspectAccountAuth(adapter, OPTIONS);
+
+    expect(reports.map((report) => report.accountKey)).toEqual([
+      "openai-codex",
+      "openai",
+    ]);
+    expect(reports[1]?.sources).toEqual([
+      expect.objectContaining({
+        source: "pi:openai",
+        status: "skipped",
+        error: "pi_openai_chatgpt_token_unmeasured",
+      }),
+    ]);
+    expect(JSON.stringify(reports)).not.toContain("personal-chatgpt-token");
+  });
+
   it("keeps an OpenAI API key under openai out of Codex discovery", async () => {
     writePiAuth({ openai: { type: "api_key", key: "sk-must-not-be-used" } });
     vi.stubGlobal("fetch", vi.fn());
