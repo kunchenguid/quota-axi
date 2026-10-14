@@ -712,11 +712,7 @@ async function fetchQuotaWithDependencies(
           finalError = "Pi Codex access token expired";
           errorIsDefault = false;
         } else if (piResolution.status !== "missing") {
-          finalError =
-            piResolution.status === "unsupported" &&
-            piResolution.error === PI_OPENAI_CHATGPT_TOKEN_UNMEASURED
-              ? PI_OPENAI_CHATGPT_TOKEN_UNMEASURED
-              : CODEX_SIGN_IN_REQUIRED;
+          finalError = CODEX_SIGN_IN_REQUIRED;
           errorIsDefault = false;
         }
       }
