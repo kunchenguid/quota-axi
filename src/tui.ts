@@ -13,7 +13,7 @@ import type {
 } from "./types.js";
 
 /**
- * Human terminal report ("Direction D'"): a two-up card grid with thin
+ * Human terminal report ("Direction D'"): a width-filling card grid with thin
  * headroom bars and a linear-pace marker wherever pace is known. This surface is
  * presentation only - it renders the same redacted response the TOON and JSON
  * surfaces receive, grouped by the caller's presence classification, and

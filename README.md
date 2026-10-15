@@ -416,7 +416,7 @@ QUOTA_AXI_SNAPSHOT=test/fixtures/quota.json quota-axi --json
 
 ### Human terminal report (`--tui`)
 
-`quota-axi --tui` renders the same redacted report as a live human terminal view instead of TOON: a two-up provider card grid with thin quota bars and a `┃` linear-pace marker whenever pace is known. It is presentation only and is not part of the machine-readable contract.
+`quota-axi --tui` renders the same redacted report as a live human terminal view instead of TOON: a provider card grid as wide as the terminal, with thin quota bars and a `┃` linear-pace marker whenever pace is known. It is presentation only and is not part of the machine-readable contract.
 
 - On an interactive terminal the report stays up and refreshes every 5 minutes until you press `q` (or Ctrl+C). Press `r` to refresh immediately; the footer lists both controls. `--refresh` sets the interval (30s-24h) and `--once` renders a single frame. A non-TTY stdout or stdin (pipes, CI, screenshots) always renders one frame and exits.
 - Every refresh re-runs the same quota read as a bare `quota-axi`, including [delegated credential refresh](#delegated-credential-refresh) when a stored session has expired in the meantime. Run `quota-axi --tui --no-credential-refresh` to keep the live report strictly read-only.
