@@ -6,11 +6,6 @@ import {
 } from "./providers/delegated-refresh.js";
 import { grokCliRefreshNeeded } from "./providers/grok.js";
 import {
-  PI_OPENCODE_GO_AUTH_ENV,
-  PI_OPENCODE_GO_OPT_IN_REQUIRED,
-  PI_OPENCODE_GO_SOURCE,
-} from "./providers/opencode-go.js";
-import {
   CLAUDE_KEYCHAIN_SERVICE,
   CLAUDE_PROFILES_ENV,
 } from "./lib/claude-profile.js";
@@ -34,39 +29,25 @@ export const INFERENCE_OPT_IN_REASON = "inference_opt_in_required";
 export const CLAUDE_INFERENCE_REMEDY_COMMAND =
   "quota-axi --provider claude --allow-claude-inference";
 const CLAUDE_ENV_SCOPE_DENIAL_ERROR = "claude_env_usage_scope_unavailable";
-export const OPENCODE_GO_PI_OPT_IN_REASON = PI_OPENCODE_GO_OPT_IN_REQUIRED;
-
-/** POSIX shells take the inline prefix; PowerShell and cmd.exe do not. */
-function openCodeGoPiOptInRemedyCommand(platform: NodeJS.Platform): string {
-  return platform === "win32"
-    ? `$env:${PI_OPENCODE_GO_AUTH_ENV}='1'; quota-axi --provider opencode-go`
-    : `${PI_OPENCODE_GO_AUTH_ENV}=1 quota-axi --provider opencode-go`;
-}
 
 export function annotateQuotaAdvice(
   response: Omit<QuotaAxiResponse, "schemaVersion">,
-  platform: NodeJS.Platform = process.platform,
 ): QuotaAxiResponse {
   const expanded = response.providers.some((provider) => provider.accountKey);
   const providers = response.providers.map((provider) => {
     const accountKey = expanded
       ? (provider.accountKey ?? "default")
       : undefined;
-    return annotateProviderAdvice(
-      {
-        ...provider,
-        ...(accountKey ? { accountKey } : {}),
-        accountKeys: coveredAccountKeys(
-          accountKey ?? provider.accountKeys?.[0] ?? "default",
-          provider.accountKeys,
-        ),
-      },
-      platform,
-    );
+    return annotateProviderAdvice({
+      ...provider,
+      ...(accountKey ? { accountKey } : {}),
+      accountKeys: coveredAccountKeys(
+        accountKey ?? provider.accountKeys?.[0] ?? "default",
+        provider.accountKeys,
+      ),
+    });
   });
-  const help = providers.flatMap((provider) =>
-    providerHelpLines(provider, platform),
-  );
+  const help = providers.flatMap(providerHelpLines);
   return {
     generatedAt: response.generatedAt,
     schemaVersion: providers.some((provider) => provider.accountKey) ? 6 : 5,
@@ -105,10 +86,7 @@ function omittedNotSetUpHelpLine(count: number): string {
   return `${subject} not set up ${verb} omitted; run \`quota-axi --full\` to list ${pronoun}`;
 }
 
-function annotateProviderAdvice(
-  provider: ProviderQuota,
-  platform: NodeJS.Platform,
-): ProviderQuota {
+function annotateProviderAdvice(provider: ProviderQuota): ProviderQuota {
   if (needsClaudeInferenceAdvice(provider)) {
     return {
       ...provider,
@@ -170,35 +148,7 @@ function annotateProviderAdvice(
       },
     };
   }
-  if (needsOpenCodeGoPiOptInAdvice(provider)) {
-    return {
-      ...provider,
-      state: {
-        ...provider.state,
-        reason: OPENCODE_GO_PI_OPT_IN_REASON,
-        remedyCommand: openCodeGoPiOptInRemedyCommand(platform),
-      },
-    };
-  }
   return provider;
-}
-
-/**
- * OpenCode Go found no key in the opencode store but Pi holds an `opencode-go`
- * entry it may read only under the opt-in flag. The sign-out stands, because
- * nothing established that Pi's key works, and the remedy names the flag.
- */
-function needsOpenCodeGoPiOptInAdvice(provider: ProviderQuota): boolean {
-  return (
-    provider.provider === "opencode-go" &&
-    provider.state.status === "auth_required" &&
-    (provider.attempts ?? []).some(
-      (attempt) =>
-        attempt.source === PI_OPENCODE_GO_SOURCE &&
-        attempt.status === "skipped" &&
-        attempt.error === PI_OPENCODE_GO_OPT_IN_REQUIRED,
-    )
-  );
 }
 
 /**
@@ -431,10 +381,7 @@ function isPromptBlockedKeychainAttempt(attempt: SourceAttempt): boolean {
   );
 }
 
-function providerHelpLines(
-  provider: ProviderQuota,
-  platform: NodeJS.Platform,
-): string[] {
+function providerHelpLines(provider: ProviderQuota): string[] {
   if (hasKeychainAccessAdvice(provider))
     return [keychainAccessHelpLine(provider)];
   if (hasGrokTokenRefreshAdvice(provider)) return [grokTokenRefreshHelpLine()];
@@ -445,20 +392,7 @@ function providerHelpLines(
   if (hasClaudeInferenceAdvice(provider)) return [claudeInferenceHelpLine()];
   if (hasKimiTokenRefreshAdvice(provider))
     return [kimiTokenRefreshHelpLine(provider.state.remedyCommand)];
-  if (hasOpenCodeGoPiOptInAdvice(provider, platform))
-    return [openCodeGoPiOptInHelpLine(platform)];
   return [];
-}
-
-function hasOpenCodeGoPiOptInAdvice(
-  provider: ProviderQuota,
-  platform: NodeJS.Platform,
-): boolean {
-  return (
-    provider.provider === "opencode-go" &&
-    provider.state.reason === OPENCODE_GO_PI_OPT_IN_REASON &&
-    provider.state.remedyCommand === openCodeGoPiOptInRemedyCommand(platform)
-  );
 }
 
 function hasClaudeInferenceAdvice(provider: ProviderQuota): boolean {
@@ -540,14 +474,6 @@ function kimiTokenRefreshHelpLine(remedy: string | undefined): string {
     return "Tell your user: run a Kimi Code session with `kimi` once so Kimi Code refreshes its own session token. quota-axi stays read-only and never rotates Kimi credentials.";
   }
   return "Tell your user: use a Kimi model in `pi` once so Pi refreshes its own Kimi session token; Pi refreshes a provider's token only when that provider is used. quota-axi stays read-only and never rotates Kimi credentials.";
-}
-
-function openCodeGoPiOptInHelpLine(platform: NodeJS.Platform): string {
-  const everyRead =
-    platform === "win32"
-      ? `set it for every read in PowerShell with \`$env:${PI_OPENCODE_GO_AUTH_ENV}='1'\` or in cmd.exe with \`set ${PI_OPENCODE_GO_AUTH_ENV}=1\``
-      : `export ${PI_OPENCODE_GO_AUTH_ENV}=1 for every read`;
-  return `Tell your user: Pi holds an OpenCode Go key that quota-axi reads only on opt-in, and the opencode store has none. Run \`${openCodeGoPiOptInRemedyCommand(platform)}\` to read it, or ${everyRead}. quota-axi never launches Pi or opencode and never copies the key.`;
 }
 
 function grokTokenRefreshHelpLine(): string {

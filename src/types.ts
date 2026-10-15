@@ -69,8 +69,7 @@ export type ProviderAuthStatus = "usable" | "expired_refreshable" | "unusable";
 export type ProviderStateReason =
   | "keychain_access_required"
   | "credentials_expired"
-  | "inference_opt_in_required"
-  | "opencode_go_pi_opt_in_required";
+  | "inference_opt_in_required";
 
 export type QuotaPaceStatus = "ahead" | "on_pace" | "behind" | "unknown";
 
