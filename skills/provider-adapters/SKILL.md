@@ -115,7 +115,7 @@ This reference details the credential sources, endpoint contracts, quota window 
 
 - **Quota Semantics**: Rolling 5-hour ($12), weekly ($30), and monthly ($60) stacked plan caps jointly bind `all_models`. Requests are blocked when any cap is hit.
 - **Limitations**: The endpoint supplies no cycle duration of its own, so plan-declared cycle lengths fill in when the payload carries none (a payload-supplied duration still wins) and pace, runway, and selection are measurable. The endpoint provides no Zen balance. An exhausted plan window with balance fallback reports plan-exhausted with fallback named in prose.
-- **Sources**: `defaultOpenCodeGoCredentialSources` (supports opt-in Pi auth). Read-only; no refresh delegate.
+- **Sources**: `defaultOpenCodeGoCredentialSources` (opencode store first, then Pi's `opencode-go` entry; `QUOTA_AXI_OPENCODE_GO_PI_AUTH=1` reads Pi first). Read-only; no refresh delegate.
 
 ---
 

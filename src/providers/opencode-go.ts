@@ -31,17 +31,11 @@ export const OPENCODE_GO_USAGE_URL = "https://opencode.ai/zen/go/v1/usage";
 export const OPENCODE_GO_CREDENTIAL_SOURCE = "opencode:auth.json";
 export const PI_OPENCODE_GO_SOURCE = "pi:opencode-go";
 /**
- * Explicit opt-in that lets OpenCode Go read Pi's `opencode-go` entry ahead of
- * the opencode store. Unset or falsey keeps the long-standing default: the
- * opencode store is the only source, so an unscoped run never probes Pi.
+ * Explicit override that reads Pi's `opencode-go` entry ahead of the opencode
+ * store. Unset or falsey keeps the default order: the opencode store first,
+ * then Pi as the fallback.
  */
 export const PI_OPENCODE_GO_AUTH_ENV = "QUOTA_AXI_OPENCODE_GO_PI_AUTH";
-/**
- * The error on the `pi:opencode-go` attempt and `auth` row when the opt-in is
- * off but Pi holds an `opencode-go` entry, so the advice layer can name the
- * flag instead of leaving a bare sign-out.
- */
-export const PI_OPENCODE_GO_OPT_IN_REQUIRED = "opencode_go_pi_opt_in_required";
 
 const PI_OPENCODE_GO_PROVIDER_ID = "opencode-go";
 
@@ -72,23 +66,8 @@ export type NamedOpenCodeGoCredentialSource = {
   source: OpenCodeGoCredentialSource;
 };
 
-export type PiEntryPresence = {
-  status: "present" | "missing" | "invalid" | "error";
-  path: string;
-};
-
-/**
- * Pi's `opencode-go` entry while the opt-in is off: only whether the entry
- * exists is established, never whether its key is usable, and the key's value
- * is never extracted.
- */
-export type OptedOutPiOpenCodeGoSource = {
-  probe(): PiEntryPresence;
-};
-
 type Dependencies = {
   credentialSources: NamedOpenCodeGoCredentialSource[];
-  optedOutPiSource?: OptedOutPiOpenCodeGoSource;
   fetch: typeof globalThis.fetch;
   now: () => number;
   deadlineMs: number;
@@ -186,61 +165,24 @@ export function createPiOpenCodeGoCredentialSource(
   return createJsonCredentialSource(filePath, extractPiOpenCodeGoCredential);
 }
 
-export function createOptedOutPiOpenCodeGoSource(
-  filePath: () => string = resolvePiAuthFilePath,
-): OptedOutPiOpenCodeGoSource {
-  return {
-    probe(): PiEntryPresence {
-      const path = filePath();
-      const result = readJsonFileResult(path);
-      if (result.status === "missing") return { status: "missing", path };
-      if (result.status === "invalid") {
-        return {
-          status: result.error === "file_read_error" ? "error" : "invalid",
-          path,
-        };
-      }
-      const classified = classifyPiAuthEntry(
-        result.value,
-        PI_OPENCODE_GO_PROVIDER_ID,
-      );
-      return { status: classified.status, path };
-    },
-  };
-}
-
 /**
- * Pi's `opencode-go` entry is added first only when the opt-in environment
- * flag asks for it; the opencode store stays the default and fallback. See
- * README "Security Posture > Provider credential sources" for the rationale.
+ * The opencode store comes first so a user with different keys in each store
+ * keeps reading the account opencode itself uses; Pi's `opencode-go` entry is
+ * the fallback. The override flag reverses the order. See README "Security
+ * Posture > Provider credential sources" for the rationale.
  */
 export function defaultOpenCodeGoCredentialSources(
   environment: Readonly<Record<string, string | undefined>> = process.env,
 ): NamedOpenCodeGoCredentialSource[] {
-  const sources: NamedOpenCodeGoCredentialSource[] = [];
-  if (piOpenCodeGoAuthEnabled(environment)) {
-    sources.push({
-      name: PI_OPENCODE_GO_SOURCE,
-      source: createPiOpenCodeGoCredentialSource(),
-    });
-  }
-  sources.push({
+  const opencode: NamedOpenCodeGoCredentialSource = {
     name: OPENCODE_GO_CREDENTIAL_SOURCE,
     source: createOpencodeGoAuthCredentialSource(),
-  });
-  return sources;
-}
-
-/**
- * The presence-only Pi probe for a run that did not opt in; an opted-in run
- * reads Pi as a credential source instead and needs no probe.
- */
-export function defaultOptedOutPiOpenCodeGoSource(
-  environment: Readonly<Record<string, string | undefined>> = process.env,
-): OptedOutPiOpenCodeGoSource | undefined {
-  return piOpenCodeGoAuthEnabled(environment)
-    ? undefined
-    : createOptedOutPiOpenCodeGoSource();
+  };
+  const pi: NamedOpenCodeGoCredentialSource = {
+    name: PI_OPENCODE_GO_SOURCE,
+    source: createPiOpenCodeGoCredentialSource(),
+  };
+  return piOpenCodeGoAuthEnabled(environment) ? [pi, opencode] : [opencode, pi];
 }
 
 function piOpenCodeGoAuthEnabled(
@@ -259,26 +201,12 @@ export function resolveOpenCodeGoCredential(
 export function createOpenCodeGoAdapter(
   overrides: Partial<Dependencies> = {},
 ): ProviderAdapter {
-  // Injected credential sources are the whole discovery, so a caller that
-  // supplies them never has the machine's Pi store probed behind its back.
-  const discovery: Pick<
-    Dependencies,
-    "credentialSources" | "optedOutPiSource"
-  > = overrides.credentialSources
-    ? {
-        credentialSources: overrides.credentialSources,
-        optedOutPiSource: overrides.optedOutPiSource,
-      }
-    : {
-        credentialSources: defaultOpenCodeGoCredentialSources(),
-        optedOutPiSource: defaultOptedOutPiOpenCodeGoSource(),
-      };
   const dependencies: Dependencies = {
+    credentialSources: defaultOpenCodeGoCredentialSources(),
     fetch: globalThis.fetch,
     now: Date.now,
     deadlineMs: DEADLINE_MS,
     ...overrides,
-    ...discovery,
   };
   return {
     id: "opencode-go",
@@ -298,10 +226,7 @@ type ResolvedCredentialSource = {
 async function fetchQuota(dependencies: Dependencies): Promise<ProviderQuota> {
   const { resolved, selection } =
     await selectOpenCodeGoCredential(dependencies);
-  const attempts = [
-    ...sourceAttempts(resolved, selection),
-    ...optedOutPiAttempts(resolved, dependencies),
-  ];
+  const attempts = sourceAttempts(resolved, selection);
 
   if (selection.outcome === "quota" && selection.result) {
     const normalized = selection.result;
@@ -439,42 +364,6 @@ function sourceAttempts(
   });
 }
 
-/**
- * Pi's entry is checked only when every configured store had no entry at all,
- * so a read served or refused by the opencode store is reported exactly as
- * before and the Pi file is left untouched.
- */
-function optedOutPiEntry(
-  resolved: readonly { resolution: { status: string } }[],
-  dependencies: Pick<Dependencies, "optedOutPiSource">,
-): PiEntryPresence | undefined {
-  if (!dependencies.optedOutPiSource) return undefined;
-  if (!resolved.every(({ resolution }) => resolution.status === "missing"))
-    return undefined;
-  try {
-    const presence = dependencies.optedOutPiSource.probe();
-    return presence.status === "present" ? presence : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function optedOutPiAttempts(
-  resolved: readonly ResolvedCredentialSource[],
-  dependencies: Pick<Dependencies, "optedOutPiSource">,
-): SourceAttempt[] {
-  return optedOutPiEntry(resolved, dependencies)
-    ? [
-        {
-          source: PI_OPENCODE_GO_SOURCE,
-          status: "skipped",
-          error: PI_OPENCODE_GO_OPT_IN_REQUIRED,
-          credentialPresent: true,
-        },
-      ]
-    : [];
-}
-
 function selectionAttemptRecord(
   sourceName: string,
   result: CandidateResult | undefined,
@@ -570,35 +459,26 @@ function localCredentialFailure(
 async function inspectAuth(
   dependencies: Dependencies,
 ): Promise<AuthProviderReport> {
-  const inspected = dependencies.credentialSources.map(({ name, source }) => ({
-    name,
-    resolution: inspectSafely(source),
-  }));
-  const sources: AuthSourceReport[] = inspected.map(({ name, resolution }) => ({
-    source: name,
-    path: resolution.path,
-    status:
-      resolution.status === "available"
-        ? "available"
-        : resolution.status === "missing"
-          ? "missing"
-          : resolution.status === "error"
-            ? "error"
-            : "invalid",
-    ...(resolution.status === "error"
-      ? { error: "credential_resolution_failed" }
-      : {}),
-  }));
-  const optedOut = optedOutPiEntry(inspected, dependencies);
-  if (optedOut) {
-    sources.push({
-      source: PI_OPENCODE_GO_SOURCE,
-      path: optedOut.path,
-      status: "skipped",
-      error: PI_OPENCODE_GO_OPT_IN_REQUIRED,
-      credentialPresent: true,
-    });
-  }
+  const sources: AuthSourceReport[] = dependencies.credentialSources.map(
+    ({ name, source }) => {
+      const inspection = inspectSafely(source);
+      return {
+        source: name,
+        path: inspection.path,
+        status:
+          inspection.status === "available"
+            ? "available"
+            : inspection.status === "missing"
+              ? "missing"
+              : inspection.status === "error"
+                ? "error"
+                : "invalid",
+        ...(inspection.status === "error"
+          ? { error: "credential_resolution_failed" }
+          : {}),
+      };
+    },
+  );
   return { provider: "opencode-go", sources };
 }
 
