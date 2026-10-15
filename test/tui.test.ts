@@ -1,5 +1,8 @@
 import { createHash } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   detectTuiColorDepth,
   formatCountdown,
@@ -11,6 +14,7 @@ import {
 import { withQuotaSemantics } from "../src/interpretation.js";
 import { withUsageFetchFailure } from "../src/providers/usage-fetch-failure.js";
 import { providerPresence } from "../src/lib/source-attempts.js";
+import { readTuiCardOrder } from "../src/lib/user-config.js";
 import { redactedResponse } from "../src/render.js";
 import { PROVIDER_IDS } from "../src/types.js";
 import type { ProviderQuota, QuotaAxiResponse } from "../src/types.js";
@@ -1887,5 +1891,59 @@ describe("card grid width", () => {
       fallback,
     );
     expect(gridShape(render({ columns: Number.NaN }))).toEqual(fallback);
+  });
+});
+
+describe("card order and status groups", () => {
+  const roots: string[] = [];
+  afterEach(() => {
+    for (const root of roots.splice(0))
+      rmSync(root, { recursive: true, force: true });
+  });
+
+  function orderFrom(entries: string[]): ReturnType<typeof readTuiCardOrder> {
+    const root = mkdtempSync(join(tmpdir(), "quota-axi-tui-order-"));
+    roots.push(root);
+    mkdirSync(join(root, "quota-axi"));
+    const file = join(root, "quota-axi", "config.json");
+    writeFileSync(file, JSON.stringify({ tui: { order: entries } }));
+    return readTuiCardOrder(file);
+  }
+
+  /** Card titles in reading order, whatever status glyph leads them. */
+  function titles(text: string): string[] {
+    return [...text.matchAll(/╭─ \S+ ([a-z-]+)/g)].map((match) => match[1]);
+  }
+
+  it("orders cards inside each status group, never across groups", () => {
+    const response = fixtureResponse();
+    const claude = response.providers[0];
+    claude.state.status = "stale";
+    claude.state.stale = true;
+    response.providers[0] = withQuotaSemantics(claude, GENERATED_AT);
+    const options = { columns: 400, timeZone: "America/Los_Angeles" };
+
+    expect(titles(renderQuotaTui(response, options))).toEqual([
+      "codex",
+      "grok",
+      "claude",
+      "cursor",
+      "copilot",
+      "kimi",
+    ]);
+
+    const order = orderFrom(["kimi", "claude", "grok", "codex", "cursor"]);
+    const ordered = { ...response, providers: order(response.providers) };
+
+    // Live, then stale, then needs attention, as without a setting; the
+    // listed place only decides the order within each group.
+    expect(titles(renderQuotaTui(ordered, options))).toEqual([
+      "grok",
+      "codex",
+      "claude",
+      "kimi",
+      "cursor",
+      "copilot",
+    ]);
   });
 });
