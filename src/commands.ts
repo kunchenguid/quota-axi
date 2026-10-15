@@ -27,6 +27,7 @@ import { createModelsResponse, MODEL_CATALOG_PROVIDER_IDS } from "./models.js";
 import { providerPresence } from "./lib/source-attempts.js";
 import {
   readTuiAccountLabels,
+  readTuiCardOrder,
   readTuiShowPreference,
 } from "./lib/user-config.js";
 import { resolveSystemTuiTheme } from "./lib/system-theme.js";
@@ -155,6 +156,7 @@ async function quotaTuiReport(
   // JSON never see them.
   const show = readTuiShowPreference();
   const accountLabel = readTuiAccountLabels();
+  const cardOrder = readTuiCardOrder();
   // Precedence: --theme, then QUOTA_AXI_THEME, then dark.
   // A blank variable selects nothing, matching the project's env conventions.
   // Validated once here so a variable edited mid-session can never throw inside
@@ -185,7 +187,10 @@ async function quotaTuiReport(
   // providers that are not set up fold into one line until `a` or --all.
   let showNotSetUp = flags.all || flags.explicitProviders;
   let notSetUp = 0;
-  const frame = (response: QuotaAxiResponse): string => {
+  const frame = (report: QuotaAxiResponse): string => {
+    // The user's card order, like every display preference, reaches only this
+    // frame: the model, the cache, TOON, and JSON keep declaration order.
+    const response = { ...report, providers: cardOrder(report.providers) };
     // Presence reads the source attempts, which redaction removes, so it is
     // derived from the complete model before the renderer sees the report.
     const presence = response.providers.map((provider) =>

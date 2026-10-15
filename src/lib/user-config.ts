@@ -2,6 +2,7 @@ import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import type { TuiShow } from "../tui.js";
+import { PROVIDER_IDS } from "../types.js";
 import { readJsonFile } from "./fs.js";
 
 /**
@@ -70,6 +71,73 @@ export function readTuiAccountLabels(
     (accountLocator && paths.size > 0
       ? paths.get(canonicalPath(accountLocator.path))
       : undefined);
+}
+
+/** Puts `--tui` cards in the user's order; returns a new array. */
+export type TuiCardOrder = <
+  Card extends {
+    provider: string;
+    accountKey?: string;
+    accountLocator?: { path: string };
+  },
+>(
+  cards: readonly Card[],
+) => Card[];
+
+/**
+ * The `--tui` card order, `tui.order` in the user config file: a list of
+ * provider ids, lane locator paths, and lane account keys, matched like
+ * `tui.accountLabels` (a path is absolute or `~/`-relative and compared after
+ * `~` expansion and symlink resolution; any other entry that is not a provider
+ * id is an exact account key). A lane listed by path or account key takes that
+ * place, any other card of a listed provider takes the provider's place, and
+ * unlisted cards follow in their own relative order. An absent, unreadable, or
+ * malformed file or setting keeps declaration order; a non-string or blank
+ * entry is skipped, and a repeated entry keeps its first place.
+ */
+export function readTuiCardOrder(
+  file: string = userConfigFilePath(),
+): TuiCardOrder {
+  const config = readJsonFile(file);
+  const tui = isRecord(config) ? config.tui : undefined;
+  const entries = isRecord(tui) ? tui.order : undefined;
+  const providers = new Map<string, number>();
+  const lanes = new Map<string, number>();
+  const accountKeys = new Map<string, number>();
+  // Unlisted cards sort after every listed place.
+  const unlisted = Array.isArray(entries) ? entries.length : 0;
+  if (Array.isArray(entries)) {
+    entries.forEach((entry: unknown, place) => {
+      if (typeof entry !== "string" || !entry.trim()) return;
+      if ((PROVIDER_IDS as readonly string[]).includes(entry)) {
+        if (!providers.has(entry)) providers.set(entry, place);
+        return;
+      }
+      const expanded = expandHome(entry);
+      if (!isAbsolute(expanded)) {
+        if (!accountKeys.has(entry)) accountKeys.set(entry, place);
+        return;
+      }
+      const path = canonicalPath(expanded);
+      if (!lanes.has(path)) lanes.set(path, place);
+    });
+  }
+  return (cards) => {
+    const placed = cards.map((card, index) => ({
+      card,
+      index,
+      place:
+        (card.accountLocator &&
+          lanes.get(canonicalPath(card.accountLocator.path))) ??
+        (card.accountKey === undefined
+          ? undefined
+          : accountKeys.get(card.accountKey)) ??
+        providers.get(card.provider) ??
+        unlisted,
+    }));
+    placed.sort((a, b) => a.place - b.place || a.index - b.index);
+    return placed.map(({ card }) => card);
+  };
 }
 
 function expandHome(path: string): string {
