@@ -195,7 +195,7 @@ $ quota-axi --provider claude --json
 $ quota-axi auth
 bin: ~/.npm/_npx/.../quota-axi
 description: Inspect local quota auth sources without printing secret values
-auth[42]{provider,source,path,status,error}:
+auth[43]{provider,source,path,status,error}:
   claude,oauth-file,~/.claude/.credentials.json,available,none
   claude,keychain,none,skipped,keychain_prompt_required
   codex,auth-json,~/.codex/auth.json,available,none
@@ -216,6 +216,7 @@ auth[42]{provider,source,path,status,error}:
   alibaba,bl-cli,none,available,none
   opencode-go,opencode:opencode.db,~/.local/share/opencode/opencode.db,available,none
   opencode-go,opencode:auth.json,~/.local/share/opencode/auth.json,missing,none
+  opencode-go,pi:opencode-go,~/.pi/agent/auth.json,missing,none
   commandcode,pi:commandcode,~/.pi/agent/auth.json,missing,none
   commandcode,env:COMMAND_CODE_API_KEY,none,missing,none
   commandcode,env:COMMANDCODE_API_KEY,none,missing,none
