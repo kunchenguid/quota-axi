@@ -251,6 +251,19 @@ describe("--tui card order", () => {
     ]);
   }, 30_000);
 
+  it("draws a lane listed by key and later by path at the key's place", () => {
+    const reordered = builtCli().run(
+      ["--tui", "--once"],
+      order(["profile:bbbbbbbbbbbbbbbbbbbbbbbb", "claude", "~/.claude-work"]),
+    );
+
+    expect(reordered.status, reordered.stderr).toBe(0);
+    expect(titles(reordered.stdout)).toEqual([
+      "claude · work",
+      "claude · personal",
+    ]);
+  }, 30_000);
+
   it("leaves TOON and JSON byte-identical whatever it says", () => {
     const cli = builtCli();
     const config = order(["~/.claude-work", "~/.claude"]);

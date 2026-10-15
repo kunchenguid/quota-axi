@@ -313,6 +313,35 @@ describe("readTuiCardOrder", () => {
     ).toEqual(["claude-swap:aaaa", "claude-swap:bbbb", "codex"]);
   });
 
+  it("places a lane listed by both key and path at the earlier listing", () => {
+    const work: Card = {
+      provider: "claude",
+      accountKey: "profile:bbbb",
+      accountLocator: { path: join(homedir(), ".claude-work") },
+    };
+    const personal: Card = {
+      provider: "claude",
+      accountKey: "profile:aaaa",
+      accountLocator: { path: join(homedir(), ".claude") },
+    };
+    const cards: Card[] = [personal, { provider: "codex" }, work];
+
+    expect(order(["profile:bbbb", "codex", "~/.claude-work"])(cards)).toEqual([
+      work,
+      cards[1],
+      personal,
+    ]);
+    expect(order(["~/.claude-work", "codex", "profile:bbbb"])(cards)).toEqual([
+      work,
+      cards[1],
+      personal,
+    ]);
+    // An unlisted lane still takes its listed provider's place.
+    expect(
+      order(["codex", "profile:bbbb", "claude", "~/.claude-work"])(cards),
+    ).toEqual([cards[1], work, personal]);
+  });
+
   it("matches a lane by a trailing-slash or symlinked path", () => {
     const root = mkdtempSync(join(tmpdir(), "quota-axi-card-order-"));
     temporaryDirectories.push(root);

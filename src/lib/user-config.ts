@@ -90,7 +90,7 @@ export type TuiCardOrder = <
  * `tui.accountLabels` (a path is absolute or `~/`-relative and compared after
  * `~` expansion and symlink resolution; any other entry that is not a provider
  * id is an exact account key). A lane listed by path or account key takes that
- * place, any other card of a listed provider takes the provider's place, and
+ * place (the earlier one when it is listed by both), any other card of a listed provider takes the provider's place, and
  * unlisted cards follow in their own relative order. An absent, unreadable, or
  * malformed file or setting keeps declaration order; a non-string or blank
  * entry is skipped, and a repeated entry keeps its first place.
@@ -123,18 +123,24 @@ export function readTuiCardOrder(
     });
   }
   return (cards) => {
-    const placed = cards.map((card, index) => ({
-      card,
-      index,
-      place:
-        (card.accountLocator &&
-          lanes.get(canonicalPath(card.accountLocator.path))) ??
-        (card.accountKey === undefined
+    const placed = cards.map((card, index) => {
+      // A lane listed by both path and account key takes the earlier place.
+      const lanePlaces = [
+        card.accountLocator &&
+          lanes.get(canonicalPath(card.accountLocator.path)),
+        card.accountKey === undefined
           ? undefined
-          : accountKeys.get(card.accountKey)) ??
-        providers.get(card.provider) ??
-        unlisted,
-    }));
+          : accountKeys.get(card.accountKey),
+      ].filter((place) => place !== undefined);
+      return {
+        card,
+        index,
+        place:
+          lanePlaces.length > 0
+            ? Math.min(...lanePlaces)
+            : (providers.get(card.provider) ?? unlisted),
+      };
+    });
     placed.sort((a, b) => a.place - b.place || a.index - b.index);
     return placed.map(({ card }) => card);
   };
