@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { formatInterval, runLiveTui, type LiveTuiIo } from "../src/tui-live.js";
-import { renderTuiHintLine } from "../src/tui.js";
+import { renderQuotaTui, renderTuiHintLine } from "../src/tui.js";
 import { scrollFrame, scrollHint } from "../src/tui-viewport.js";
+import { fixtureResponse } from "./fixtures/tui-response.js";
 
 const ENTER_SCREEN = "\x1b[?1049h";
 const LEAVE_SCREEN = "\x1b[?1049l";
@@ -331,6 +332,45 @@ describe("live terminal report loop", () => {
 
     expect(source.calls()).toBe(1);
     expect(io.pendingTimers()).toBe(armed);
+
+    io.press("q");
+    await run;
+  });
+
+  it("reflows the card grid each time the terminal is resized", async () => {
+    const io = harness();
+    let width = 120;
+    io.io.columns = () => width;
+    const cardsPerRow = (): number =>
+      (
+        io
+          .frame()
+          .split("\n")
+          .find((line) => line.startsWith("╭─")) ?? ""
+      ).split("╭─").length - 1;
+
+    // Like the CLI, each paint reads the width the terminal has right now.
+    const run = runLiveTui({
+      load: () => Promise.resolve(fixtureResponse()),
+      render: (response) =>
+        renderQuotaTui(response, { columns: io.io.columns?.() }),
+      intervalMillis: 300_000,
+      io: io.io,
+    });
+    await flush();
+    expect(cardsPerRow()).toBe(2);
+
+    for (const [next, expected] of [
+      [202, 4],
+      [151, 3],
+      [80, 1],
+      [253, 5],
+    ]) {
+      width = next;
+      io.resize();
+      await flush();
+      expect(cardsPerRow()).toBe(expected);
+    }
 
     io.press("q");
     await run;
