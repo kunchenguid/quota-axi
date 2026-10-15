@@ -445,7 +445,10 @@ export type ProviderAdapter = {
    * error wording. A provider with such a skip is never folded as not set up.
    */
   isUncertainSkip?(attempt: SourceAttempt): boolean;
-  discoverAccounts?(): Promise<ProviderAccount[] | undefined>;
+  discoverAccounts?(
+    options?: ProviderOptions,
+    operation?: "quota" | "auth",
+  ): Promise<ProviderAccount[] | undefined>;
   fetchQuota(options: ProviderOptions): Promise<ProviderQuota>;
   inspectAuth(options: ProviderOptions): Promise<AuthProviderReport>;
 };

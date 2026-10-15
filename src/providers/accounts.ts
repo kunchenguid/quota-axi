@@ -25,11 +25,12 @@ import { sourceNames } from "./common.js";
 async function accountsFor(
   adapter: ProviderAdapter,
   options: ProviderOptions,
+  operation: "quota" | "auth",
 ): Promise<ProviderAccount[] | undefined> {
   if (options.credentialMode === "profile-only") return undefined;
   let accounts: ProviderAccount[] | undefined;
   try {
-    accounts = await adapter.discoverAccounts?.();
+    accounts = await adapter.discoverAccounts?.(options, operation);
   } catch {
     return undefined;
   }
@@ -51,7 +52,7 @@ export async function fetchAccountQuotas(
   adapter: ProviderAdapter,
   options: ProviderOptions,
 ): Promise<ProviderQuota[]> {
-  const accounts = await accountsFor(adapter, options);
+  const accounts = await accountsFor(adapter, options, "quota");
   if (!accounts) return [await adapter.fetchQuota(options)];
   // Keep each adapter's declaration order, including failed accounts. Readers
   // return their own structured failure; no account selects a sibling's token.
@@ -115,7 +116,7 @@ export async function inspectAccountAuth(
   adapter: ProviderAdapter,
   options: ProviderOptions,
 ): Promise<AuthProviderReport[]> {
-  const accounts = await accountsFor(adapter, options);
+  const accounts = await accountsFor(adapter, options, "auth");
   if (!accounts) return [await adapter.inspectAuth(options)];
   const reports: AuthProviderReport[] = [];
   for (const account of accounts) {
