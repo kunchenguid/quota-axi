@@ -457,7 +457,10 @@ quota-axi enrolls those already-present keys; it does not read `codex-accounts.j
 Discovery order is the built-in `openai-codex` entry, then the other `openai`, `openai-*`, and `openai-codex-*` keys in lexical order.
 An `openai` or `openai-*` key is enrolled only when its entry is `oauth`, because Pi also stores a plain OpenAI API key under `openai`.
 An `openai` or `openai-*` entry is published as its own lane with `state.status: unavailable` and `state.error: pi_openai_chatgpt_token_unmeasured`.
-Pi's `openai` provider stores a "Sign in with ChatGPT" token for the OpenAI API, and it is not established that the usage endpoint accepts it, so its token is never sent there, whatever fields the entry carries, and such a lane never folds into another account.
+Pi's `openai` provider stores a "Sign in with ChatGPT" token for the OpenAI API, which the Codex usage endpoint does not accept (a live check on 2026-10-15 got HTTP 401 from `wham/usage` and 403 from `codex/usage`), so its token is never sent there, whatever fields the entry carries, and such a lane never folds into another account.
+Such a lane carries `state.reason: codex_sign_in_required`, `state.remedyCommand: codex login`, and an agent-directed JSON `help` entry naming both ways to a measured Codex lane: `codex login` for the Codex CLI, or `/login` inside `pi` for the `openai-codex` provider.
+The remedy names `codex login` because a remedy is one copy-paste command and Pi's login is an interactive step inside `pi`.
+`quota-axi auth` prints the same help line once per skipped `pi:openai` or `pi:openai-*` source, and its `--json` output carries it as `help`.
 Only `openai-codex` and `openai-codex-*` entries are probed.
 Two keys that carry the same stored `accountId` are the same ChatGPT account and are not reported as extra capacity.
 The later key stays a credential fallback until a probe succeeds or every candidate is rejected.
@@ -956,7 +959,7 @@ The Claude and Codex rows describe default discovery; [`--profile-only`](#profil
   The built-in keys are `openai-codex` and `openai`.
   Sibling keys such as `openai-codex-work` or `openai-work` from `pi-codex-accounts` are enrolled from that same file when they are already present.
   Two or more distinct Pi entries become independent Codex account lanes; one account's failure or exhaustion does not hide or substitute another.
-  An `openai` or `openai-*` entry is Pi's "Sign in with ChatGPT" login; it is reported under its own key as `unavailable` with error `pi_openai_chatgpt_token_unmeasured` and is never sent to the usage endpoint, whatever fields it stores; see [Multiple accounts](#multiple-accounts).
+  An `openai` or `openai-*` entry is Pi's "Sign in with ChatGPT" login; it is reported under its own key as `unavailable` with error `pi_openai_chatgpt_token_unmeasured`, reason `codex_sign_in_required`, and remedy `codex login`, and is never sent to the usage endpoint, whatever fields it stores; see [Multiple accounts](#multiple-accounts).
   A successful Pi-backed probe reports source `pi:<provider-id>` (`pi:openai-codex`, `pi:openai-codex-work`, …).
   quota-axi never reads `codex-accounts.json`, copies tokens, or changes Pi's active account.
 
@@ -966,7 +969,7 @@ The Claude and Codex rows describe default discovery; [`--profile-only`](#profil
   A stored-expired `access_token` is still probed in native OAuth's first declared source position rather than skipped, so only the usage endpoint's own rejection is an authentication verdict. A missing `access_token` skips OAuth and preserves the Pi and read-only CLI fallbacks.
 - The Pi broker opens `auth.json` read-only with a strict 64 KiB cap and guaranteed descriptor cleanup.
   It probes only Pi's literal Codex subscription OAuth shape under `openai-codex` or `openai-codex-*`: nonempty, control-byte-free `access` and `accountId` strings plus a numeric millisecond `expires` value.
-  An `openai` or `openai-*` `oauth` entry is Pi's ChatGPT sign-in; it is classified `unsupported` with `pi_openai_chatgpt_token_unmeasured` instead of being probed, even when it carries an `accountId`, and `quota-axi auth` reports that source as `skipped`.
+  An `openai` or `openai-*` `oauth` entry is Pi's ChatGPT sign-in; it is classified `unsupported` with `pi_openai_chatgpt_token_unmeasured` instead of being probed, even when it carries an `accountId`, and `quota-axi auth` reports that source as `skipped` with the `codex login` help line.
   Strings containing `$` or beginning with `!` are rejected rather than resolved.
   Pi `api_key` entries are unsupported because platform API billing is not ChatGPT subscription quota.
   Malformed, unsupported, expired-refreshable, and expired-non-refreshable states remain distinct diagnostics.

@@ -9,6 +9,7 @@ import {
   fetchAccountQuotas,
   inspectAccountAuth,
 } from "../../src/providers/accounts.js";
+import { annotateQuotaAdvice } from "../../src/advice.js";
 import { quotaJsonReport, renderQuotaToon } from "../../src/render.js";
 import { renderQuotaTui } from "../../src/tui.js";
 import type { ProviderOptions, ProviderQuota } from "../../src/types.js";
@@ -454,6 +455,27 @@ describe("Codex Pi sibling account lanes", () => {
     });
     expect(fetch).not.toHaveBeenCalled();
     expect(JSON.stringify(reports)).not.toContain("personal-chatgpt-token");
+
+    const advised = annotateQuotaAdvice({
+      generatedAt: "",
+      providers: reports,
+    });
+    expect(advised.providers[0]?.state).toMatchObject({
+      status: "unavailable",
+      reason: "codex_sign_in_required",
+      remedyCommand: "codex login",
+    });
+    expect(advised.help).toEqual([
+      expect.stringContaining(
+        'Pi\'s `openai` entry is a "Sign in with ChatGPT" token for the OpenAI API',
+      ),
+    ]);
+    expect(advised.help?.[0]).toContain(
+      "run `codex login` for the Codex CLI, or run `/login` inside `pi` and pick `openai-codex`",
+    );
+    expect(renderQuotaToon(advised, "quota-axi", false)).toContain(
+      "codex login",
+    );
   });
 
   it("inspects a ChatGPT sign-in as skipped, not invalid", async () => {
@@ -482,6 +504,57 @@ describe("Codex Pi sibling account lanes", () => {
       }),
     ]);
     expect(JSON.stringify(reports)).not.toContain("personal-chatgpt-token");
+  });
+
+  it("shows the Codex sign-in hint under quota-axi auth for a ChatGPT sign-in", async () => {
+    writePiAuth({
+      "openai-codex": piOauthEntry({
+        access: "personal-access-token",
+        accountId: "acct-personal",
+      }),
+      openai: chatGptEntry({ access: "personal-chatgpt-token" }),
+    });
+    const { authCommand } = await import("../../src/commands.js");
+
+    const json = JSON.parse(
+      await authCommand(["--provider", "codex", "--json"], undefined),
+    ) as { auth: unknown[]; help?: string[] };
+    const toon = await authCommand(["--provider", "codex"], {
+      binPath: "quota-axi",
+    });
+
+    expect(json.help).toEqual([
+      expect.stringContaining(
+        'Pi\'s `openai` entry is a "Sign in with ChatGPT" token for the OpenAI API',
+      ),
+    ]);
+    expect(json.help?.[0]).toContain("run `codex login` for the Codex CLI");
+    expect(toon).toContain("pi:openai");
+    expect(toon).toContain("run `codex login` for the Codex CLI");
+    expect(toon).toContain(
+      "Run `quota-axi --allow-keychain-prompt auth` to permit native secure-store access",
+    );
+    expect(JSON.stringify(json) + toon).not.toContain("personal-chatgpt-token");
+  });
+
+  it("prints no Codex sign-in hint under quota-axi auth without a ChatGPT sign-in", async () => {
+    writePiAuth({
+      "openai-codex": piOauthEntry({
+        access: "personal-access-token",
+        accountId: "acct-personal",
+      }),
+    });
+    const { authCommand } = await import("../../src/commands.js");
+
+    const json = JSON.parse(
+      await authCommand(["--provider", "codex", "--json"], undefined),
+    ) as { help?: string[] };
+    const toon = await authCommand(["--provider", "codex"], {
+      binPath: "quota-axi",
+    });
+
+    expect(json.help).toBeUndefined();
+    expect(toon).not.toContain("codex login");
   });
 
   it("keeps an OpenAI API key under openai out of Codex discovery", async () => {
