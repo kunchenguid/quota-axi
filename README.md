@@ -887,11 +887,11 @@ Default model order is deterministic and non-preferential: provider, then `accou
 
 ### `auth --json` shape
 
-| Object               | Fields                                                                         |
-| -------------------- | ------------------------------------------------------------------------------ |
-| Auth report          | `generatedAt`, `schemaVersion` (`1`, or `2` when account-expanded), and `auth` |
-| Provider auth report | `provider`, optional `accountKey`, and `sources`                               |
-| Auth source entry    | `source`, optional `path`, `status`, and optional `error`                      |
+| Object               | Fields                                                                                                         |
+| -------------------- | -------------------------------------------------------------------------------------------------------------- |
+| Auth report          | `generatedAt`, `schemaVersion` (`1`, or `2` when account-expanded), `auth`, and optional agent-directed `help` |
+| Provider auth report | `provider`, optional `accountKey`, and `sources`                                                               |
+| Auth source entry    | `source`, optional `path`, `status`, and optional `error`                                                      |
 
 Auth source entries can include `credentialPresent` when a source is not genuinely absent, including when a read failure prevents a more precise classification.
 
