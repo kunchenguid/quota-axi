@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.64](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.63...quota-axi-v0.1.64) (2026-10-15)
+
+
+### Features
+
+* **tui:** name account lanes by account key in tui.accountLabels ([#335](https://github.com/kunchenguid/quota-axi/issues/335)) ([b3ccf8e](https://github.com/kunchenguid/quota-axi/commit/b3ccf8ed1b3ef6be7d7e920ac51fd620789f2d14))
+
 ## [0.1.63](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.62...quota-axi-v0.1.63) (2026-10-15)
 
 
