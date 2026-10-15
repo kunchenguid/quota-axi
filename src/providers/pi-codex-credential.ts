@@ -8,8 +8,9 @@ import { traceInput } from "../lib/input-trace.js";
 export const PI_CODEX_BUILTIN_ID = "openai-codex";
 /**
  * Pi's `openai` provider stores a "Sign in with ChatGPT" token for the OpenAI
- * API. Whether the ChatGPT usage endpoint accepts such a token is not
- * established, so it is never probed, whatever fields the entry carries.
+ * API. The Codex usage endpoint does not accept that token (HTTP 401 from
+ * `wham/usage` and 403 from `codex/usage` on 2026-10-15), so it is never
+ * probed, whatever fields the entry carries.
  */
 export const PI_OPENAI_CHATGPT_TOKEN_UNMEASURED =
   "pi_openai_chatgpt_token_unmeasured";
