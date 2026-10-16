@@ -31,9 +31,9 @@ export const OPENCODE_GO_USAGE_URL = "https://opencode.ai/zen/go/v1/usage";
 export const OPENCODE_GO_CREDENTIAL_SOURCE = "opencode:auth.json";
 export const PI_OPENCODE_GO_SOURCE = "pi:opencode-go";
 /**
- * Explicit opt-in that lets OpenCode Go read Pi's `opencode-go` entry ahead of
- * the opencode store. Unset or falsey keeps the long-standing default: the
- * opencode store is the only source, so an unscoped run never probes Pi.
+ * Explicit override that reads Pi's `opencode-go` entry ahead of the opencode
+ * store. Unset or falsey keeps the default order: the opencode store first,
+ * then Pi as the fallback.
  */
 export const PI_OPENCODE_GO_AUTH_ENV = "QUOTA_AXI_OPENCODE_GO_PI_AUTH";
 
@@ -166,25 +166,23 @@ export function createPiOpenCodeGoCredentialSource(
 }
 
 /**
- * Pi's `opencode-go` entry is added first only when the opt-in environment
- * flag asks for it; the opencode store stays the default and fallback. See
- * README "Security Posture > Provider credential sources" for the rationale.
+ * The opencode store comes first so a user with different keys in each store
+ * keeps reading the account opencode itself uses; Pi's `opencode-go` entry is
+ * the fallback. The override flag reverses the order. See README "Security
+ * Posture > Provider credential sources" for the rationale.
  */
 export function defaultOpenCodeGoCredentialSources(
   environment: Readonly<Record<string, string | undefined>> = process.env,
 ): NamedOpenCodeGoCredentialSource[] {
-  const sources: NamedOpenCodeGoCredentialSource[] = [];
-  if (piOpenCodeGoAuthEnabled(environment)) {
-    sources.push({
-      name: PI_OPENCODE_GO_SOURCE,
-      source: createPiOpenCodeGoCredentialSource(),
-    });
-  }
-  sources.push({
+  const opencode: NamedOpenCodeGoCredentialSource = {
     name: OPENCODE_GO_CREDENTIAL_SOURCE,
     source: createOpencodeGoAuthCredentialSource(),
-  });
-  return sources;
+  };
+  const pi: NamedOpenCodeGoCredentialSource = {
+    name: PI_OPENCODE_GO_SOURCE,
+    source: createPiOpenCodeGoCredentialSource(),
+  };
+  return piOpenCodeGoAuthEnabled(environment) ? [pi, opencode] : [opencode, pi];
 }
 
 function piOpenCodeGoAuthEnabled(
