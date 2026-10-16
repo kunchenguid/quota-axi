@@ -1127,7 +1127,11 @@ export function normalizeCodexUsage(raw: unknown):
     ...spendControlWindows(data.spend_control),
   ]);
 
-  if (windows.length === 0) return undefined;
+  const credits = normalizeCredits(data.credits ?? rateLimit?.credits);
+  // An unlimited Business seat has no rate-limit windows at all: the usage
+  // body carries `rate_limit: null` and `credits.unlimited: true`. That is a
+  // real reading with no windows, not a failed read.
+  if (windows.length === 0 && credits?.unlimited !== true) return undefined;
 
   return {
     plan: stringValue(data.plan_type) ?? stringValue(data.planType),
@@ -1136,7 +1140,7 @@ export function normalizeCodexUsage(raw: unknown):
       accountId: stringValue(data.account_id) ?? stringValue(data.accountId),
     },
     windows,
-    credits: normalizeCredits(data.credits ?? rateLimit?.credits),
+    credits,
     refreshedAt: nowIso(),
   };
 }
