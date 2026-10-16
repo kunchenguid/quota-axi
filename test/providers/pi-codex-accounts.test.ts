@@ -9,6 +9,7 @@ import {
   fetchAccountQuotas,
   inspectAccountAuth,
 } from "../../src/providers/accounts.js";
+import { annotateQuotaAdvice } from "../../src/advice.js";
 import { quotaJsonReport, renderQuotaToon } from "../../src/render.js";
 import { renderQuotaTui } from "../../src/tui.js";
 import type { ProviderOptions, ProviderQuota } from "../../src/types.js";
@@ -356,6 +357,280 @@ describe("Codex Pi sibling account lanes", () => {
       windows: [],
     });
     expect(reports[1]?.state.status).not.toBe("fresh");
+  });
+
+  it("reports Pi's openai sign-ins beside the openai-codex entries without probing ChatGPT tokens", async () => {
+    writePiAuth({
+      openai: chatGptEntry({ access: "personal-chatgpt-token" }),
+      "openai-work": chatGptEntry({ access: "work-chatgpt-token" }),
+      "openai-codex": piOauthEntry({
+        access: "personal-access-token",
+        accountId: "acct-personal",
+      }),
+      "openai-codex-work": piOauthEntry({
+        access: "work-access-token",
+        accountId: "acct-work",
+      }),
+    });
+    stubUsageByAccount({
+      "acct-personal": usage(20, "personal@example.invalid", "acct-personal"),
+      "acct-work": usage(80, "work@example.invalid", "acct-work"),
+    });
+
+    const reports = await readCodexLanes();
+
+    expect(reports.map((report) => report.accountKey)).toEqual([
+      "openai-codex",
+      "openai",
+      "openai-codex-work",
+      "openai-work",
+    ]);
+    expect(reports[0]).toMatchObject({
+      source: "pi:openai-codex",
+      account: { accountId: "acct-personal" },
+      windows: [{ percentUsed: 20 }],
+      state: { status: "fresh" },
+    });
+    expect(reports[2]).toMatchObject({
+      source: "pi:openai-codex-work",
+      account: { accountId: "acct-work" },
+      windows: [{ percentUsed: 80 }],
+      state: { status: "fresh" },
+    });
+    for (const [report, key] of [
+      [reports[1], "openai"],
+      [reports[3], "openai-work"],
+    ] as const) {
+      expect(report).toMatchObject({
+        accountKey: key,
+        accountKeys: [key],
+        source: `pi:${key}`,
+        windows: [],
+        state: {
+          status: "unavailable",
+          stale: false,
+          error: "pi_openai_chatgpt_token_unmeasured",
+          sourcesTried: [`pi:${key}`],
+        },
+        attempts: [
+          {
+            source: `pi:${key}`,
+            status: "skipped",
+            error: "pi_openai_chatgpt_token_unmeasured",
+            credentialPresent: true,
+          },
+        ],
+      });
+      expect(report?.state.authStatus).toBeUndefined();
+    }
+    const fetchMock = vi.mocked(fetch);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    for (const [, init] of fetchMock.mock.calls) {
+      const headers = new Headers((init as RequestInit | undefined)?.headers);
+      expect(headers.get("authorization")).toMatch(
+        /^Bearer (personal|work)-access-token$/,
+      );
+    }
+    expect(JSON.stringify(reports)).not.toMatch(
+      /chatgpt-token|access-token|refresh-token/,
+    );
+  });
+
+  it("reports a lone ChatGPT sign-in as its own unmeasured row", async () => {
+    writePiAuth({ openai: chatGptEntry({ access: "personal-chatgpt-token" }) });
+    vi.stubGlobal("fetch", vi.fn());
+
+    const reports = await readCodexLanes();
+
+    expect(reports).toHaveLength(1);
+    expect(reports[0]).toMatchObject({
+      provider: "codex",
+      accountKeys: ["openai"],
+      source: "pi:openai",
+      windows: [],
+      state: {
+        status: "unavailable",
+        error: "pi_openai_chatgpt_token_unmeasured",
+      },
+    });
+    expect(fetch).not.toHaveBeenCalled();
+    expect(JSON.stringify(reports)).not.toContain("personal-chatgpt-token");
+
+    const advised = annotateQuotaAdvice({
+      generatedAt: "",
+      providers: reports,
+    });
+    expect(advised.providers[0]?.state).toMatchObject({
+      status: "unavailable",
+      reason: "codex_sign_in_required",
+      remedyCommand: "codex login",
+    });
+    expect(advised.help).toEqual([
+      expect.stringContaining(
+        'Pi\'s `openai` entry is a "Sign in with ChatGPT" token for the OpenAI API',
+      ),
+    ]);
+    expect(advised.help?.[0]).toContain(
+      "run `codex login` for the Codex CLI, or run `/login` inside `pi` and pick `openai-codex`",
+    );
+    expect(renderQuotaToon(advised, "quota-axi", false)).toContain(
+      "codex login",
+    );
+  });
+
+  it("inspects a ChatGPT sign-in as skipped, not invalid", async () => {
+    writePiAuth({
+      "openai-codex": piOauthEntry({
+        access: "personal-access-token",
+        accountId: "acct-personal",
+      }),
+      openai: chatGptEntry({ access: "personal-chatgpt-token" }),
+    });
+
+    const adapter = (
+      await import("../../src/providers/codex.js")
+    ).createCodexAdapter();
+    const reports = await inspectAccountAuth(adapter, OPTIONS);
+
+    expect(reports.map((report) => report.accountKey)).toEqual([
+      "openai-codex",
+      "openai",
+    ]);
+    expect(reports[1]?.sources).toEqual([
+      expect.objectContaining({
+        source: "pi:openai",
+        status: "skipped",
+        error: "pi_openai_chatgpt_token_unmeasured",
+      }),
+    ]);
+    expect(JSON.stringify(reports)).not.toContain("personal-chatgpt-token");
+  });
+
+  it("shows the Codex sign-in hint under quota-axi auth for a ChatGPT sign-in", async () => {
+    writePiAuth({
+      "openai-codex": piOauthEntry({
+        access: "personal-access-token",
+        accountId: "acct-personal",
+      }),
+      openai: chatGptEntry({ access: "personal-chatgpt-token" }),
+    });
+    const { authCommand } = await import("../../src/commands.js");
+
+    const json = JSON.parse(
+      await authCommand(["--provider", "codex", "--json"], undefined),
+    ) as { auth: unknown[]; help?: string[] };
+    const toon = await authCommand(["--provider", "codex"], {
+      binPath: "quota-axi",
+    });
+
+    expect(json.help).toEqual([
+      expect.stringContaining(
+        'Pi\'s `openai` entry is a "Sign in with ChatGPT" token for the OpenAI API',
+      ),
+    ]);
+    expect(json.help?.[0]).toContain("run `codex login` for the Codex CLI");
+    expect(toon).toContain("pi:openai");
+    expect(toon).toContain("run `codex login` for the Codex CLI");
+    expect(toon).toContain(
+      "Run `quota-axi --allow-keychain-prompt auth` to permit native secure-store access",
+    );
+    expect(JSON.stringify(json) + toon).not.toContain("personal-chatgpt-token");
+  });
+
+  it("prints no Codex sign-in hint under quota-axi auth without a ChatGPT sign-in", async () => {
+    writePiAuth({
+      "openai-codex": piOauthEntry({
+        access: "personal-access-token",
+        accountId: "acct-personal",
+      }),
+    });
+    const { authCommand } = await import("../../src/commands.js");
+
+    const json = JSON.parse(
+      await authCommand(["--provider", "codex", "--json"], undefined),
+    ) as { help?: string[] };
+    const toon = await authCommand(["--provider", "codex"], {
+      binPath: "quota-axi",
+    });
+
+    expect(json.help).toBeUndefined();
+    expect(toon).not.toContain("codex login");
+  });
+
+  it("keeps an OpenAI API key under openai out of Codex discovery", async () => {
+    writePiAuth({ openai: { type: "api_key", key: "sk-must-not-be-used" } });
+    vi.stubGlobal("fetch", vi.fn());
+
+    const alone = await readCodexLanes();
+
+    expect(alone).toHaveLength(1);
+    expect(alone[0]?.accountKey).toBeUndefined();
+    expect(alone[0]?.source).not.toBe("pi:openai");
+    expect(alone[0]?.state.sourcesTried).not.toContain("pi:openai");
+    expect(fetch).not.toHaveBeenCalled();
+
+    writeNativeAuth("native-access-token", "acct-native");
+    stubUsageByAccount({
+      "acct-native": usage(30, "native@example.invalid", "acct-native"),
+    });
+
+    const beside = await readCodexLanes();
+
+    expect(beside).toHaveLength(1);
+    expect(beside[0]).toMatchObject({
+      account: { accountId: "acct-native" },
+      windows: [{ percentUsed: 30 }],
+      state: { status: "fresh" },
+    });
+    expect(beside[0]?.accountKey).toBeUndefined();
+    expect(JSON.stringify([alone, beside])).not.toContain(
+      "sk-must-not-be-used",
+    );
+  });
+
+  it("never probes an openai entry that carries an accountId, even for a known account", async () => {
+    writePiAuth({
+      "openai-codex": piOauthEntry({
+        access: "personal-access-token",
+        accountId: "acct-a",
+      }),
+      openai: piOauthEntry({
+        access: "openai-access-token",
+        accountId: "acct-a",
+      }),
+    });
+    stubUsageByAccount({
+      "acct-a": usage(20, "personal@example.invalid", "acct-a"),
+    });
+
+    const reports = await readCodexLanes();
+
+    expect(reports.map((report) => report.accountKeys)).toEqual([
+      ["openai-codex"],
+      ["openai"],
+    ]);
+    expect(reports[0]).toMatchObject({
+      source: "pi:openai-codex",
+      account: { accountId: "acct-a" },
+      windows: [{ percentUsed: 20 }],
+      state: { status: "fresh" },
+    });
+    expect(reports[1]).toMatchObject({
+      source: "pi:openai",
+      windows: [],
+      state: {
+        status: "unavailable",
+        error: "pi_openai_chatgpt_token_unmeasured",
+      },
+    });
+    expect(reports[1]?.account).toBeUndefined();
+    const fetchMock = vi.mocked(fetch);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const headers = new Headers(
+      (fetchMock.mock.calls[0]?.[1] as RequestInit | undefined)?.headers,
+    );
+    expect(headers.get("authorization")).toBe("Bearer personal-access-token");
+    expect(JSON.stringify(reports)).not.toContain("openai-access-token");
   });
 
   it("does not treat one account's exhaustion as the other's remaining capacity", async () => {
@@ -2277,6 +2552,19 @@ function piOauthEntry(overrides: Record<string, unknown> = {}) {
     refresh: "pi-fixture-refresh-token",
     expires: Date.now() + 3_600_000,
     accountId: "acct-pi-fixture",
+    ...overrides,
+  };
+}
+
+/** Pi's "Sign in with ChatGPT" shape: no accountId. */
+function chatGptEntry(overrides: Record<string, unknown> = {}) {
+  return {
+    type: "oauth",
+    access: "pi-fixture-chatgpt-token",
+    refresh: "pi-fixture-chatgpt-refresh-token",
+    expires: Date.now() + 3_600_000,
+    clientId: "client_fixture",
+    scopes: ["openid", "offline_access", "chatgpt.tokens.use.direct"],
     ...overrides,
   };
 }
