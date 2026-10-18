@@ -1,4 +1,5 @@
 import { statSync } from "node:fs";
+import { devNull } from "node:os";
 import { dirname, resolve } from "node:path";
 import { traceInput } from "./input-trace.js";
 import { commandExists, execFileText } from "./process.js";
@@ -57,6 +58,12 @@ export async function readOpenCodeDbCredential(
       "sqlite3",
       [
         "-readonly",
+        // An empty init file replaces ~/.sqliterc, so a user's `.mode json` or
+        // `.headers on` cannot change the output shape.
+        "-init",
+        devNull,
+        "-list",
+        "-noheader",
         databasePath,
         `select '${VALUE_PREFIX}' || value from credential where integration_id = '${integrationId.replace(/'/g, "''")}' order by active desc, time_created desc, id desc limit 1;`,
       ],

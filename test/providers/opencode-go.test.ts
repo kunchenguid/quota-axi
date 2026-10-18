@@ -39,9 +39,9 @@ vi.mock("../../src/lib/process.js", async (importOriginal) => {
       if (command !== "sqlite3" || args[0] !== "-readonly") {
         throw new Error(`unexpected command ${command}`);
       }
-      const db = new Database(args[1]!, { readOnly: true });
+      const db = new Database(args.at(-2)!, { readOnly: true });
       try {
-        const row = db.prepare(args[2]!.replace(/;\s*$/, "")).get() as
+        const row = db.prepare(args.at(-1)!.replace(/;\s*$/, "")).get() as
           | Record<string, unknown>
           | undefined;
         return row ? `${Object.values(row)[0]}\n` : "";
@@ -1579,7 +1579,10 @@ describe("OpenCode Go database credential source", () => {
       ],
       async (path) => {
         const before = readFileSync(path);
-        createOpencodeGoDbCredentialSource(() => path).resolve();
+        const result = await createOpencodeGoDbCredentialSource(
+          () => path,
+        ).resolve();
+        expect(result.status).toBe("available");
         expect(readFileSync(path).equals(before)).toBe(true);
       },
     );
