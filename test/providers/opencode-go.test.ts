@@ -1,4 +1,5 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -11,6 +12,8 @@ import {
   normalizeOpenCodeGoPayload,
   opencodeGoAuthFilePath,
   OPENCODE_GO_CREDENTIAL_SOURCE,
+  OPENCODE_GO_DB_CREDENTIAL_SOURCE,
+  createOpencodeGoDbCredentialSource,
   PI_OPENCODE_GO_AUTH_ENV,
   PI_OPENCODE_GO_SOURCE,
   type CredentialResolution,
@@ -1263,8 +1266,9 @@ describe("OpenCode Go Pi-auth opt-in", () => {
   const names = (sources: NamedOpenCodeGoCredentialSource[]) =>
     sources.map((source) => source.name);
 
-  it("keeps the opencode store as the only default source", () => {
+  it("reads the OpenCode database ahead of the legacy auth.json by default", () => {
     expect(names(defaultOpenCodeGoCredentialSources({}))).toEqual([
+      OPENCODE_GO_DB_CREDENTIAL_SOURCE,
       OPENCODE_GO_CREDENTIAL_SOURCE,
     ]);
   });
@@ -1278,12 +1282,16 @@ describe("OpenCode Go Pi-auth opt-in", () => {
             [PI_OPENCODE_GO_AUTH_ENV]: value,
           }),
         ),
-      ).toEqual([PI_OPENCODE_GO_SOURCE, OPENCODE_GO_CREDENTIAL_SOURCE]);
+      ).toEqual([
+        PI_OPENCODE_GO_SOURCE,
+        OPENCODE_GO_DB_CREDENTIAL_SOURCE,
+        OPENCODE_GO_CREDENTIAL_SOURCE,
+      ]);
     },
   );
 
   it.each(["0", "yes", "", "false", undefined])(
-    "stays opencode-only when the flag is %j",
+    "stays Pi-free when the flag is %j",
     (value) => {
       expect(
         names(
@@ -1291,7 +1299,10 @@ describe("OpenCode Go Pi-auth opt-in", () => {
             [PI_OPENCODE_GO_AUTH_ENV]: value,
           }),
         ),
-      ).toEqual([OPENCODE_GO_CREDENTIAL_SOURCE]);
+      ).toEqual([
+        OPENCODE_GO_DB_CREDENTIAL_SOURCE,
+        OPENCODE_GO_CREDENTIAL_SOURCE,
+      ]);
     },
   );
 
@@ -1325,3 +1336,336 @@ describe("OpenCode Go Pi-auth opt-in", () => {
     }
   });
 });
+
+describe("OpenCode Go database credential source", () => {
+  const rows = (
+    entries: Array<{
+      id: string;
+      integration: string;
+      value: unknown;
+      active?: number | null;
+      created: number;
+    }>,
+    path: string,
+  ): void => {
+    const db = new DatabaseSync(path);
+    db.exec(
+      "CREATE TABLE credential (id TEXT PRIMARY KEY, integration_id TEXT, label TEXT NOT NULL, value TEXT NOT NULL, active INTEGER, time_created INTEGER NOT NULL)",
+    );
+    const insert = db.prepare(
+      "INSERT INTO credential (id, integration_id, label, value, active, time_created) VALUES (?, ?, 'default', ?, ?, ?)",
+    );
+    for (const entry of entries) {
+      insert.run(
+        entry.id,
+        entry.integration,
+        typeof entry.value === "string"
+          ? entry.value
+          : JSON.stringify(entry.value),
+        entry.active ?? null,
+        entry.created,
+      );
+    }
+    db.close();
+  };
+
+  function withDatabase(
+    entries: Parameters<typeof rows>[0],
+    check: (path: string) => void,
+  ): void {
+    const directory = mkdtempSync(join(tmpdir(), "quota-axi-opencode-db-"));
+    try {
+      const path = join(directory, "opencode.db");
+      rows(entries, path);
+      check(path);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  }
+
+  const keyValue = (key: string) => ({ type: "key", key });
+
+  it("picks the active opencode-go row, then the newest, like OpenCode", () => {
+    withDatabase(
+      [
+        {
+          id: "a",
+          integration: "opencode-go",
+          value: keyValue("old"),
+          created: 1,
+        },
+        {
+          id: "b",
+          integration: "opencode-go",
+          value: keyValue(KEY),
+          active: 1,
+          created: 2,
+        },
+        {
+          id: "c",
+          integration: "opencode-go",
+          value: keyValue("newer-inactive"),
+          active: 0,
+          created: 3,
+        },
+        {
+          id: "d",
+          integration: "other",
+          value: keyValue("other"),
+          active: 1,
+          created: 4,
+        },
+      ],
+      (path) => {
+        const source = createOpencodeGoDbCredentialSource(() => path);
+        expect(source.resolve()).toEqual({
+          status: "available",
+          key: KEY,
+          path,
+        });
+        expect(JSON.stringify(source.inspect())).not.toContain(KEY);
+      },
+    );
+    withDatabase(
+      [
+        {
+          id: "a",
+          integration: "opencode-go",
+          value: keyValue("old"),
+          created: 1,
+        },
+        {
+          id: "b",
+          integration: "opencode-go",
+          value: keyValue(KEY),
+          created: 2,
+        },
+      ],
+      (path) => {
+        expect(
+          createOpencodeGoDbCredentialSource(() => path).resolve(),
+        ).toEqual({
+          status: "available",
+          key: KEY,
+          path,
+        });
+      },
+    );
+  });
+
+  it.each([
+    [
+      "oauth",
+      { type: "oauth", methodID: "m", refresh: "r", access: "a", expires: 1 },
+    ],
+    ["external", { type: "external", methodID: "m" }],
+    ["template key", keyValue("${OPENCODE_API_KEY}")],
+    ["command key", keyValue("!op read x")],
+    ["empty key", keyValue("")],
+    ["bad JSON", "{not json"],
+    ["non-object", "42"],
+  ])("rejects a %s value as invalid", (_name, value) => {
+    withDatabase(
+      [{ id: "a", integration: "opencode-go", value, active: 1, created: 1 }],
+      (path) => {
+        expect(
+          createOpencodeGoDbCredentialSource(() => path).resolve(),
+        ).toEqual({
+          status: "invalid",
+          path,
+        });
+      },
+    );
+  });
+
+  it("reports missing for no file, no row, no table, and :memory:", () => {
+    const directory = mkdtempSync(join(tmpdir(), "quota-axi-opencode-db-"));
+    try {
+      const absent = join(directory, "nope.db");
+      expect(
+        createOpencodeGoDbCredentialSource(() => absent).resolve().status,
+      ).toBe("missing");
+      expect(
+        createOpencodeGoDbCredentialSource(() => ":memory:").resolve().status,
+      ).toBe("missing");
+      const legacy = join(directory, "legacy.db");
+      const db = new DatabaseSync(legacy);
+      db.exec("CREATE TABLE session (id TEXT)");
+      db.close();
+      expect(
+        createOpencodeGoDbCredentialSource(() => legacy).resolve().status,
+      ).toBe("missing");
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+    withDatabase(
+      [{ id: "a", integration: "anthropic", value: keyValue("x"), created: 1 }],
+      (path) => {
+        expect(
+          createOpencodeGoDbCredentialSource(() => path).resolve().status,
+        ).toBe("missing");
+      },
+    );
+  });
+
+  it("reports an unreadable database as an error, never a sign-out", () => {
+    const directory = mkdtempSync(join(tmpdir(), "quota-axi-opencode-db-"));
+    try {
+      const path = join(directory, "opencode.db");
+      writeFileSync(
+        path,
+        "this is not a sqlite database, just text padding".repeat(8),
+      );
+      expect(createOpencodeGoDbCredentialSource(() => path).resolve()).toEqual({
+        status: "error",
+        path,
+      });
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("never writes the database", () => {
+    withDatabase(
+      [
+        {
+          id: "a",
+          integration: "opencode-go",
+          value: keyValue(KEY),
+          active: 1,
+          created: 1,
+        },
+      ],
+      (path) => {
+        const before = readFileSync(path);
+        createOpencodeGoDbCredentialSource(() => path).resolve();
+        expect(readFileSync(path).equals(before)).toBe(true);
+      },
+    );
+  });
+
+  it("resolves the path like OpenCode: XDG_DATA_HOME, then OPENCODE_DB", () => {
+    const original = { ...process.env };
+    try {
+      process.env.XDG_DATA_HOME = "/data/xdg";
+      delete process.env.OPENCODE_DB;
+      const path = () =>
+        defaultOpenCodeGoCredentialSources({})
+          .find((s) => s.name === OPENCODE_GO_DB_CREDENTIAL_SOURCE)!
+          .source.inspect().path;
+      expect(path()).toBe(join("/data/xdg", "opencode", "opencode.db"));
+      process.env.OPENCODE_DB = "custom.db";
+      expect(path()).toBe(join("/data/xdg", "opencode", "custom.db"));
+      process.env.OPENCODE_DB = "/abs/other.db";
+      expect(path()).toBe("/abs/other.db");
+    } finally {
+      process.env = original;
+    }
+  });
+
+  it("prefers the database key over a stale auth.json key end to end", async () => {
+    const fetchSpy = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      const auth = (init?.headers as Record<string, string>).Authorization;
+      return auth === `Bearer ${KEY}`
+        ? usageResponse()
+        : new Response("", { status: 401 });
+    });
+    await withDatabaseAsync(KEY, async (dbPath) => {
+      const adapter = createOpenCodeGoAdapter({
+        credentialSources: [
+          {
+            name: OPENCODE_GO_DB_CREDENTIAL_SOURCE,
+            source: createOpencodeGoDbCredentialSource(() => dbPath),
+          },
+          {
+            name: OPENCODE_GO_CREDENTIAL_SOURCE,
+            source: fakeSource({
+              status: "available",
+              key: "stale-key",
+              path: "/auth.json",
+            }),
+          },
+        ],
+        fetch: fetchSpy as unknown as typeof fetch,
+      });
+      const quota = await adapter.fetchQuota(OPTIONS);
+      expect(quota.state.status).toBe("fresh");
+      expect(quota.attempts).toEqual([
+        { source: OPENCODE_GO_DB_CREDENTIAL_SOURCE, status: "success" },
+      ]);
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("falls back to auth.json when the database holds no opencode-go row", async () => {
+    const fetchSpy = vi.fn(async () => usageResponse());
+    const adapter = createOpenCodeGoAdapter({
+      credentialSources: [
+        {
+          name: OPENCODE_GO_DB_CREDENTIAL_SOURCE,
+          source: fakeSource({ status: "missing", path: "/x/opencode.db" }),
+        },
+        {
+          name: OPENCODE_GO_CREDENTIAL_SOURCE,
+          source: fakeSource({
+            status: "available",
+            key: KEY,
+            path: "/auth.json",
+          }),
+        },
+      ],
+      fetch: fetchSpy as unknown as typeof fetch,
+    });
+    const quota = await adapter.fetchQuota(OPTIONS);
+    expect(quota.attempts).toEqual([
+      {
+        source: OPENCODE_GO_DB_CREDENTIAL_SOURCE,
+        status: "skipped",
+        error: "opencode_go_credential_unavailable",
+      },
+      { source: OPENCODE_GO_CREDENTIAL_SOURCE, status: "success" },
+    ]);
+  });
+
+  it("reports an unreadable database as a local failure, not a rejection", async () => {
+    const adapter = createOpenCodeGoAdapter({
+      credentialSources: [
+        {
+          name: OPENCODE_GO_DB_CREDENTIAL_SOURCE,
+          source: fakeSource({ status: "error", path: "/x/opencode.db" }),
+        },
+        {
+          name: OPENCODE_GO_CREDENTIAL_SOURCE,
+          source: fakeSource({ status: "missing", path: "/auth.json" }),
+        },
+      ],
+      fetch: vi.fn() as unknown as typeof fetch,
+    });
+    const quota = await adapter.fetchQuota(OPTIONS);
+    expect(quota.state).toMatchObject({
+      status: "error",
+      error: "credential_resolution_failed",
+    });
+  });
+});
+
+async function withDatabaseAsync(
+  key: string,
+  check: (path: string) => Promise<void>,
+): Promise<void> {
+  const directory = mkdtempSync(join(tmpdir(), "quota-axi-opencode-db-"));
+  try {
+    const path = join(directory, "opencode.db");
+    const db = new DatabaseSync(path);
+    db.exec(
+      "CREATE TABLE credential (id TEXT PRIMARY KEY, integration_id TEXT, label TEXT NOT NULL, value TEXT NOT NULL, active INTEGER, time_created INTEGER NOT NULL)",
+    );
+    db.prepare(
+      "INSERT INTO credential VALUES ('a', 'opencode-go', 'default', ?, 1, 1)",
+    ).run(JSON.stringify({ type: "key", key }));
+    db.close();
+    await check(path);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
