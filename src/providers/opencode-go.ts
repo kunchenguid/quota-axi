@@ -56,15 +56,17 @@ const WEEK_SECONDS = 7 * 24 * 60 * 60;
 
 export type CredentialResolution =
   | { status: "available"; key: string; path: string }
-  | { status: "missing" | "invalid" | "error"; path: string };
+  | { status: "missing" | "invalid" | "error" | "skipped"; path: string };
 
 export type CredentialInspection =
   | { status: "available"; path: string }
-  | { status: "missing" | "invalid" | "error"; path: string };
+  | { status: "missing" | "invalid" | "error" | "skipped"; path: string };
+
+type MaybePromise<T> = T | Promise<T>;
 
 export type OpenCodeGoCredentialSource = {
-  resolve(): CredentialResolution;
-  inspect(): CredentialInspection;
+  resolve(): MaybePromise<CredentialResolution>;
+  inspect(): MaybePromise<CredentialInspection>;
 };
 
 export type NamedOpenCodeGoCredentialSource = {
@@ -172,17 +174,20 @@ export function createOpencodeGoAuthCredentialSource(
 export function createOpencodeGoDbCredentialSource(
   filePath: () => string = () => opencodeDatabasePath(opencodeGoAuthFilePath()),
 ): OpenCodeGoCredentialSource {
-  function resolve(): CredentialResolution {
+  async function resolve(): Promise<CredentialResolution> {
     const path = filePath();
-    const result = readOpenCodeDbCredential(path, OPENCODE_GO_INTEGRATION_ID);
+    const result = await readOpenCodeDbCredential(
+      path,
+      OPENCODE_GO_INTEGRATION_ID,
+    );
     return result.status === "available"
       ? { status: "available", key: result.key, path }
       : { status: result.status, path };
   }
   return {
     resolve,
-    inspect(): CredentialInspection {
-      const resolution = resolve();
+    async inspect(): Promise<CredentialInspection> {
+      const resolution = await resolve();
       return resolution.status === "available"
         ? { status: "available", path: resolution.path }
         : resolution;
@@ -233,9 +238,9 @@ function piOpenCodeGoAuthEnabled(
   return value === "1" || value === "true";
 }
 
-export function resolveOpenCodeGoCredential(
+export async function resolveOpenCodeGoCredential(
   path = opencodeGoAuthFilePath(),
-): CredentialResolution {
+): Promise<CredentialResolution> {
   return createOpencodeGoAuthCredentialSource(() => path).resolve();
 }
 
@@ -295,21 +300,21 @@ async function fetchQuota(dependencies: Dependencies): Promise<ProviderQuota> {
   });
 }
 
-function resolveSafely(
+async function resolveSafely(
   source: OpenCodeGoCredentialSource,
-): CredentialResolution {
+): Promise<CredentialResolution> {
   try {
-    return source.resolve();
+    return await source.resolve();
   } catch {
     return { status: "error", path: "" };
   }
 }
 
-function inspectSafely(
+async function inspectSafely(
   source: OpenCodeGoCredentialSource,
-): CredentialInspection {
+): Promise<CredentialInspection> {
   try {
-    return source.inspect();
+    return await source.inspect();
   } catch {
     return { status: "error", path: "" };
   }
@@ -323,7 +328,7 @@ async function selectOpenCodeGoCredential(dependencies: Dependencies): Promise<{
   const results: CandidateResult[] = [];
 
   for (const { name, source } of dependencies.credentialSources) {
-    const resolution = resolveSafely(source);
+    const resolution = await resolveSafely(source);
     resolved.push({ name, resolution });
     if (resolution.status !== "available") continue;
 
@@ -400,7 +405,9 @@ function sourceAttempts(
       source: name,
       status: resolution.status === "error" ? "failed" : "skipped",
       error: credentialError(resolution),
-      ...(resolution.status === "invalid" ? { credentialPresent: true } : {}),
+      ...(resolution.status === "invalid" || resolution.status === "skipped"
+        ? { credentialPresent: true }
+        : {}),
     };
   });
 }
@@ -472,7 +479,9 @@ function indeterminateFailureFor(
     ({ name, resolution }) =>
       (name === OPENCODE_GO_CREDENTIAL_SOURCE ||
         name === OPENCODE_GO_DB_CREDENTIAL_SOURCE) &&
-      (resolution.status === "invalid" || resolution.status === "error"),
+      (resolution.status === "invalid" ||
+        resolution.status === "error" ||
+        resolution.status === "skipped"),
   );
   const preferred = resolved.find(
     ({ name, resolution }) =>
@@ -495,15 +504,18 @@ function localCredentialFailure(
   if (resolution.status === "error") {
     return { status: "error", code: "credential_resolution_failed" };
   }
+  if (resolution.status === "skipped") {
+    return { status: "error", code: "sqlite3_unavailable" };
+  }
   return { status: "error", code: "opencode_go_credential_invalid" };
 }
 
 async function inspectAuth(
   dependencies: Dependencies,
 ): Promise<AuthProviderReport> {
-  const sources: AuthSourceReport[] = dependencies.credentialSources.map(
-    ({ name, source }) => {
-      const inspection = inspectSafely(source);
+  const sources: AuthSourceReport[] = await Promise.all(
+    dependencies.credentialSources.map(async ({ name, source }) => {
+      const inspection = await inspectSafely(source);
       return {
         source: name,
         path: inspection.path,
@@ -514,12 +526,17 @@ async function inspectAuth(
               ? "missing"
               : inspection.status === "error"
                 ? "error"
-                : "invalid",
+                : inspection.status === "skipped"
+                  ? "skipped"
+                  : "invalid",
         ...(inspection.status === "error"
           ? { error: "credential_resolution_failed" }
           : {}),
+        ...(inspection.status === "skipped"
+          ? { error: "sqlite3_unavailable", credentialPresent: true }
+          : {}),
       };
-    },
+    }),
   );
   return { provider: "opencode-go", sources };
 }
@@ -857,7 +874,9 @@ function credentialError(
     ? "opencode_go_credential_unavailable"
     : resolution.status === "invalid"
       ? "opencode_go_credential_invalid"
-      : "credential_resolution_failed";
+      : resolution.status === "skipped"
+        ? "sqlite3_unavailable"
+        : "credential_resolution_failed";
 }
 
 function errorCode(error: unknown): string {

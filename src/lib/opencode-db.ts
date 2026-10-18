@@ -1,23 +1,15 @@
 import { statSync } from "node:fs";
-import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import { traceInput } from "./input-trace.js";
+import { commandExists, execFileText } from "./process.js";
 import { usableLiteralSecret } from "./secret.js";
 
 export type OpenCodeDbCredential =
   | { status: "available"; key: string }
-  | { status: "missing" | "invalid" | "error" };
+  | { status: "missing" | "invalid" | "error" | "skipped" };
 
-/** The slice of `node:sqlite` used here; the installed `@types/node` predates it. */
-type SqliteModule = {
-  DatabaseSync: new (
-    path: string,
-    options: { readOnly: boolean },
-  ) => {
-    prepare(sql: string): { get(...params: string[]): unknown };
-    close(): void;
-  };
-};
+const SQLITE_TIMEOUT_MS = 5_000;
+const VALUE_PREFIX = "v";
 
 /**
  * OpenCode 2.x's database file, resolved the way its `databasePath` does
@@ -39,14 +31,15 @@ export function opencodeDatabasePath(
 /**
  * The credential OpenCode itself would select for `integrationId`: the row
  * ordered by `active` desc, `time_created` desc, `id` desc (its
- * `Credential.create` selection order). The database is opened read-only and
- * only a `Credential.Key` value (`{type: "key", key}`) with a literal key is
- * accepted; OAuth and external values are `invalid`.
+ * `Credential.create` selection order). The database is read through
+ * `sqlite3 -readonly` and only a `Credential.Key` value (`{type: "key", key}`)
+ * with a literal key is accepted; OAuth and external values are `invalid`.
+ * Without `sqlite3` an existing database is `skipped`, never a sign-out.
  */
-export function readOpenCodeDbCredential(
+export async function readOpenCodeDbCredential(
   databasePath: string,
   integrationId: string,
-): OpenCodeDbCredential {
+): Promise<OpenCodeDbCredential> {
   if (databasePath === ":memory:") return { status: "missing" };
   // A WAL-mode commit lands in the `-wal` file and leaves the main file's
   // metadata alone, so a fresh login is only visible through both.
@@ -58,32 +51,26 @@ export function readOpenCodeDbCredential(
   } catch {
     return { status: "error" };
   }
-  let database: { close(): void } | undefined;
+  if (!(await commandExists("sqlite3"))) return { status: "skipped" };
   try {
-    const { DatabaseSync } = createRequire(import.meta.url)(
-      "node:sqlite",
-    ) as SqliteModule;
-    const opened = new DatabaseSync(databasePath, { readOnly: true });
-    database = opened;
-    const row = opened
-      .prepare(
-        "SELECT value FROM credential WHERE integration_id = ? ORDER BY active DESC, time_created DESC, id DESC LIMIT 1",
-      )
-      .get(integrationId) as { value?: unknown } | undefined;
-    if (!row) return { status: "missing" };
-    return classifyValue(row.value);
+    const output = await execFileText(
+      "sqlite3",
+      [
+        "-readonly",
+        databasePath,
+        `select '${VALUE_PREFIX}' || value from credential where integration_id = '${integrationId.replace(/'/g, "''")}' order by active desc, time_created desc, id desc limit 1;`,
+      ],
+      SQLITE_TIMEOUT_MS,
+    );
+    const line = output.replace(/\r?\n$/, "");
+    if (!line.startsWith(VALUE_PREFIX)) return { status: "missing" };
+    return classifyValue(line.slice(VALUE_PREFIX.length));
   } catch (error) {
     // A 1.x database has no `credential` table: nothing was stored here.
     if (error instanceof Error && /no such table/i.test(error.message)) {
       return { status: "missing" };
     }
     return { status: "error" };
-  } finally {
-    try {
-      database?.close();
-    } catch {
-      // Closing a read-only handle has nothing left to lose.
-    }
   }
 }
 
