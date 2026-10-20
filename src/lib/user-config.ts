@@ -32,16 +32,21 @@ export function readTuiShowPreference(
   return show === "used" ? "used" : "remaining";
 }
 
-/** Resolves a lane's `accountLocator.path` to the label its card shows. */
-export type TuiAccountLabels = (locatorPath: string) => string | undefined;
+/** Resolves a lane to the label its card shows. */
+export type TuiAccountLabels = (lane: {
+  accountKey?: string;
+  accountLocator?: { path: string };
+}) => string | undefined;
 
 /**
  * The `--tui` lane names, `tui.accountLabels` in the user config file: an
- * object from a lane's locator path (absolute, or `~/`-relative) to the name
- * its card shows. Paths are compared after `~` expansion and symlink
- * resolution, so a trailing slash or a linked directory names the same lane.
- * An absent, unreadable, or malformed file or setting names nothing; a
- * relative path, a non-string label, or a blank label skips only that entry.
+ * object from a lane's locator path (absolute, or `~/`-relative) or its
+ * account key to the name its card shows. Paths are compared after `~`
+ * expansion and symlink resolution, so a trailing slash or a linked directory
+ * names the same lane; any other entry is matched exactly against the lane's
+ * account key, so a relative path names nothing. An absent, unreadable, or
+ * malformed file or setting names nothing; a non-string or blank label skips
+ * only that entry.
  */
 export function readTuiAccountLabels(
   file: string = userConfigFilePath(),
@@ -49,17 +54,22 @@ export function readTuiAccountLabels(
   const config = readJsonFile(file);
   const tui = isRecord(config) ? config.tui : undefined;
   const entries = isRecord(tui) ? tui.accountLabels : undefined;
-  const labels = new Map<string, string>();
+  const paths = new Map<string, string>();
+  const accountKeys = new Map<string, string>();
   if (isRecord(entries)) {
-    for (const [path, label] of Object.entries(entries)) {
-      const expanded = expandHome(path);
-      if (!isAbsolute(expanded) || typeof label !== "string") continue;
-      const trimmed = label.trim();
-      if (trimmed) labels.set(canonicalPath(expanded), trimmed);
+    for (const [entry, label] of Object.entries(entries)) {
+      if (typeof label !== "string" || !label.trim()) continue;
+      const expanded = expandHome(entry);
+      if (isAbsolute(expanded))
+        paths.set(canonicalPath(expanded), label.trim());
+      else accountKeys.set(entry, label.trim());
     }
   }
-  return (locatorPath) =>
-    labels.size === 0 ? undefined : labels.get(canonicalPath(locatorPath));
+  return ({ accountKey, accountLocator }) =>
+    (accountKey && accountKeys.get(accountKey)) ||
+    (accountLocator && paths.size > 0
+      ? paths.get(canonicalPath(accountLocator.path))
+      : undefined);
 }
 
 function expandHome(path: string): string {

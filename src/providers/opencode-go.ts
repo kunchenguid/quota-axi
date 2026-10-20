@@ -1,5 +1,9 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
+import {
+  opencodeDatabasePath,
+  readOpenCodeDbCredential,
+} from "../lib/opencode-db.js";
 import { readJsonFileResult, type JsonFileReadResult } from "../lib/fs.js";
 import { resolvePiAuthFilePath } from "../lib/pi-agent-dir.js";
 import { classifyPiAuthEntry } from "../lib/pi-auth-store.js";
@@ -29,6 +33,7 @@ import {
 
 export const OPENCODE_GO_USAGE_URL = "https://opencode.ai/zen/go/v1/usage";
 export const OPENCODE_GO_CREDENTIAL_SOURCE = "opencode:auth.json";
+export const OPENCODE_GO_DB_CREDENTIAL_SOURCE = "opencode:opencode.db";
 export const PI_OPENCODE_GO_SOURCE = "pi:opencode-go";
 /**
  * Explicit opt-in that lets OpenCode Go read Pi's `opencode-go` entry ahead of
@@ -38,6 +43,7 @@ export const PI_OPENCODE_GO_SOURCE = "pi:opencode-go";
 export const PI_OPENCODE_GO_AUTH_ENV = "QUOTA_AXI_OPENCODE_GO_PI_AUTH";
 
 const PI_OPENCODE_GO_PROVIDER_ID = "opencode-go";
+const OPENCODE_GO_INTEGRATION_ID = "opencode-go";
 
 const LABEL = "OpenCode Go";
 const RESPONSE_LIMIT_BYTES = 262_144;
@@ -50,15 +56,17 @@ const WEEK_SECONDS = 7 * 24 * 60 * 60;
 
 export type CredentialResolution =
   | { status: "available"; key: string; path: string }
-  | { status: "missing" | "invalid" | "error"; path: string };
+  | { status: "missing" | "invalid" | "error" | "skipped"; path: string };
 
 export type CredentialInspection =
   | { status: "available"; path: string }
-  | { status: "missing" | "invalid" | "error"; path: string };
+  | { status: "missing" | "invalid" | "error" | "skipped"; path: string };
+
+type MaybePromise<T> = T | Promise<T>;
 
 export type OpenCodeGoCredentialSource = {
-  resolve(): CredentialResolution;
-  inspect(): CredentialInspection;
+  resolve(): MaybePromise<CredentialResolution>;
+  inspect(): MaybePromise<CredentialInspection>;
 };
 
 export type NamedOpenCodeGoCredentialSource = {
@@ -159,6 +167,34 @@ export function createOpencodeGoAuthCredentialSource(
   return createJsonCredentialSource(filePath, extractOpenCodeGoCredential);
 }
 
+/**
+ * OpenCode 2.x keeps new and updated logins only in its SQLite `credential`
+ * table. Read-only; see `src/lib/opencode-db.ts`.
+ */
+export function createOpencodeGoDbCredentialSource(
+  filePath: () => string = () => opencodeDatabasePath(opencodeGoAuthFilePath()),
+): OpenCodeGoCredentialSource {
+  async function resolve(): Promise<CredentialResolution> {
+    const path = filePath();
+    const result = await readOpenCodeDbCredential(
+      path,
+      OPENCODE_GO_INTEGRATION_ID,
+    );
+    return result.status === "available"
+      ? { status: "available", key: result.key, path }
+      : { status: result.status, path };
+  }
+  return {
+    resolve,
+    async inspect(): Promise<CredentialInspection> {
+      const resolution = await resolve();
+      return resolution.status === "available"
+        ? { status: "available", path: resolution.path }
+        : resolution;
+    },
+  };
+}
+
 export function createPiOpenCodeGoCredentialSource(
   filePath: () => string = resolvePiAuthFilePath,
 ): OpenCodeGoCredentialSource {
@@ -167,7 +203,9 @@ export function createPiOpenCodeGoCredentialSource(
 
 /**
  * Pi's `opencode-go` entry is added first only when the opt-in environment
- * flag asks for it; the opencode store stays the default and fallback. See
+ * flag asks for it. OpenCode 2.x's database comes next because it is where a
+ * current login is stored, then the legacy `auth.json` stays as the fallback
+ * for 1.x installs. See
  * README "Security Posture > Provider credential sources" for the rationale.
  */
 export function defaultOpenCodeGoCredentialSources(
@@ -180,10 +218,16 @@ export function defaultOpenCodeGoCredentialSources(
       source: createPiOpenCodeGoCredentialSource(),
     });
   }
-  sources.push({
-    name: OPENCODE_GO_CREDENTIAL_SOURCE,
-    source: createOpencodeGoAuthCredentialSource(),
-  });
+  sources.push(
+    {
+      name: OPENCODE_GO_DB_CREDENTIAL_SOURCE,
+      source: createOpencodeGoDbCredentialSource(),
+    },
+    {
+      name: OPENCODE_GO_CREDENTIAL_SOURCE,
+      source: createOpencodeGoAuthCredentialSource(),
+    },
+  );
   return sources;
 }
 
@@ -194,9 +238,9 @@ function piOpenCodeGoAuthEnabled(
   return value === "1" || value === "true";
 }
 
-export function resolveOpenCodeGoCredential(
+export async function resolveOpenCodeGoCredential(
   path = opencodeGoAuthFilePath(),
-): CredentialResolution {
+): Promise<CredentialResolution> {
   return createOpencodeGoAuthCredentialSource(() => path).resolve();
 }
 
@@ -256,21 +300,21 @@ async function fetchQuota(dependencies: Dependencies): Promise<ProviderQuota> {
   });
 }
 
-function resolveSafely(
+async function resolveSafely(
   source: OpenCodeGoCredentialSource,
-): CredentialResolution {
+): Promise<CredentialResolution> {
   try {
-    return source.resolve();
+    return await source.resolve();
   } catch {
     return { status: "error", path: "" };
   }
 }
 
-function inspectSafely(
+async function inspectSafely(
   source: OpenCodeGoCredentialSource,
-): CredentialInspection {
+): Promise<CredentialInspection> {
   try {
-    return source.inspect();
+    return await source.inspect();
   } catch {
     return { status: "error", path: "" };
   }
@@ -284,7 +328,7 @@ async function selectOpenCodeGoCredential(dependencies: Dependencies): Promise<{
   const results: CandidateResult[] = [];
 
   for (const { name, source } of dependencies.credentialSources) {
-    const resolution = resolveSafely(source);
+    const resolution = await resolveSafely(source);
     resolved.push({ name, resolution });
     if (resolution.status !== "available") continue;
 
@@ -361,7 +405,9 @@ function sourceAttempts(
       source: name,
       status: resolution.status === "error" ? "failed" : "skipped",
       error: credentialError(resolution),
-      ...(resolution.status === "invalid" ? { credentialPresent: true } : {}),
+      ...(resolution.status === "invalid" || resolution.status === "skipped"
+        ? { credentialPresent: true }
+        : {}),
     };
   });
 }
@@ -431,8 +477,11 @@ function indeterminateFailureFor(
 ): LocalFailure | undefined {
   const fallback = resolved.find(
     ({ name, resolution }) =>
-      name === OPENCODE_GO_CREDENTIAL_SOURCE &&
-      (resolution.status === "invalid" || resolution.status === "error"),
+      (name === OPENCODE_GO_CREDENTIAL_SOURCE ||
+        name === OPENCODE_GO_DB_CREDENTIAL_SOURCE) &&
+      (resolution.status === "invalid" ||
+        resolution.status === "error" ||
+        resolution.status === "skipped"),
   );
   const preferred = resolved.find(
     ({ name, resolution }) =>
@@ -455,15 +504,18 @@ function localCredentialFailure(
   if (resolution.status === "error") {
     return { status: "error", code: "credential_resolution_failed" };
   }
+  if (resolution.status === "skipped") {
+    return { status: "error", code: "sqlite3_unavailable" };
+  }
   return { status: "error", code: "opencode_go_credential_invalid" };
 }
 
 async function inspectAuth(
   dependencies: Dependencies,
 ): Promise<AuthProviderReport> {
-  const sources: AuthSourceReport[] = dependencies.credentialSources.map(
-    ({ name, source }) => {
-      const inspection = inspectSafely(source);
+  const sources: AuthSourceReport[] = await Promise.all(
+    dependencies.credentialSources.map(async ({ name, source }) => {
+      const inspection = await inspectSafely(source);
       return {
         source: name,
         path: inspection.path,
@@ -474,12 +526,17 @@ async function inspectAuth(
               ? "missing"
               : inspection.status === "error"
                 ? "error"
-                : "invalid",
+                : inspection.status === "skipped"
+                  ? "skipped"
+                  : "invalid",
         ...(inspection.status === "error"
           ? { error: "credential_resolution_failed" }
           : {}),
+        ...(inspection.status === "skipped"
+          ? { error: "sqlite3_unavailable", credentialPresent: true }
+          : {}),
       };
-    },
+    }),
   );
   return { provider: "opencode-go", sources };
 }
@@ -817,7 +874,9 @@ function credentialError(
     ? "opencode_go_credential_unavailable"
     : resolution.status === "invalid"
       ? "opencode_go_credential_invalid"
-      : "credential_resolution_failed";
+      : resolution.status === "skipped"
+        ? "sqlite3_unavailable"
+        : "credential_resolution_failed";
 }
 
 function errorCode(error: unknown): string {

@@ -192,12 +192,8 @@ async function quotaTuiReport(
       providerPresence(provider, PROVIDERS[provider.provider]),
     );
     notSetUp = presence.filter((entry) => entry === "absent").length;
-    // Redaction also removes the locator a lane label is keyed by.
-    const accountLabels = response.providers.map((provider) =>
-      provider.accountLocator
-        ? accountLabel(provider.accountLocator.path)
-        : undefined,
-    );
+    // Redaction also removes the locator a lane label can be keyed by.
+    const accountLabels = response.providers.map(accountLabel);
     return renderQuotaTui(redactedResponse(response, flags.full), {
       ...terminal(),
       full: flags.full,

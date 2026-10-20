@@ -50,9 +50,10 @@ class FixedDate extends RealDate {
 globalThis.Date = FixedDate;
 `,
   );
-  // A cache record keeps a lane's locator on its reuse stamp.
+  // A cache record keeps a profile lane's locator on its reuse stamp; a
+  // claude-swap lane has none.
   const lane = (
-    directory: string,
+    directory: string | undefined,
     accountKey: string,
     remaining: number,
     index: number,
@@ -83,13 +84,15 @@ globalThis.Date = FixedDate;
       inputs: [],
       inputsDigest: "d".repeat(64),
       readingAt: new Date(FIXED_NOW - 60_000).toISOString(),
-      lanes: 2,
+      lanes: 3,
       lane: index,
-      accountLocator: {
-        kind: "config-dir",
-        path: join(home, directory),
-        delegateEligible: index === 0,
-      },
+      ...(directory && {
+        accountLocator: {
+          kind: "config-dir",
+          path: join(home, directory),
+          delegateEligible: index === 0,
+        },
+      }),
     },
   });
   const snapshot = join(root, "snapshot.json");
@@ -100,6 +103,7 @@ globalThis.Date = FixedDate;
       providers: [
         lane(".claude", "profile:aaaaaaaaaaaaaaaaaaaaaaaa", 70, 0),
         lane(".claude-work", "profile:bbbbbbbbbbbbbbbbbbbbbbbb", 40, 1),
+        lane(undefined, "claude-swap:9a1c20d6b88a9bcec745fb70", 20, 2),
       ],
     }),
   );
@@ -170,6 +174,18 @@ describe("--tui account labels", () => {
     );
   }, 30_000);
 
+  it("names a claude-swap lane, which has no locator, by its account key", () => {
+    const cli = builtCli();
+    const labelled = cli.run(
+      ["--tui", "--once"],
+      '{"tui":{"accountLabels":{"claude-swap:9a1c20d6b88a9bcec745fb70":"team"}}}',
+    );
+
+    expect(labelled.status, labelled.stderr).toBe(0);
+    expect(labelled.stdout).toMatch(/╭─ ● claude · team ─+ oauth · reused/);
+    expect(labelled.stdout.match(/claude · /g)).toHaveLength(1);
+  }, 30_000);
+
   it("keeps the --tui report unchanged without a usable setting", () => {
     const cli = builtCli();
     const baseline = cli.run(["--tui", "--once"]);
@@ -186,7 +202,14 @@ describe("--tui account labels", () => {
 
   it("leaves TOON and JSON byte-identical whatever it says", () => {
     const cli = builtCli();
-    const config = '{"tui":{"accountLabels":{"~/.claude":"personal"}}}';
+    const config = JSON.stringify({
+      tui: {
+        accountLabels: {
+          "~/.claude": "personal",
+          "claude-swap:9a1c20d6b88a9bcec745fb70": "team",
+        },
+      },
+    });
     for (const flags of [[], ["--full"], ["--json"], ["--json", "--full"]]) {
       const baseline = cli.run(flags);
       expect(baseline.status, baseline.stderr).toBe(0);

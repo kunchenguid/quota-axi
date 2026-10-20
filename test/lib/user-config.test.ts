@@ -97,10 +97,12 @@ describe("readTuiShowPreference", () => {
 });
 
 describe("readTuiAccountLabels", () => {
-  function labels(entries: unknown): ReturnType<typeof readTuiAccountLabels> {
-    return readTuiAccountLabels(
+  // Resolves a lane by its locator path alone, as a profile lane is named.
+  function labels(entries: unknown): (path: string) => string | undefined {
+    const label = readTuiAccountLabels(
       configFile(JSON.stringify({ tui: { accountLabels: entries } })),
     );
+    return (path) => label({ accountLocator: { path } });
   }
 
   it("names a lane by its home-relative or absolute locator path", () => {
@@ -114,6 +116,41 @@ describe("readTuiAccountLabels", () => {
     expect(label("/srv/claude")).toBe("shared");
     expect(label("/srv/claude/../claude")).toBe("shared");
     expect(label(join(homedir(), ".claude"))).toBeUndefined();
+  });
+
+  it("names a lane by its exact account key, ahead of its locator", () => {
+    const label = readTuiAccountLabels(
+      configFile(
+        JSON.stringify({
+          tui: {
+            accountLabels: {
+              "claude-swap:9a1c20d6b88a9bcec745fb70": " team ",
+              "profile:aaaaaaaaaaaaaaaaaaaaaaaa": "by key",
+              "/srv/claude": "by path",
+            },
+          },
+        }),
+      ),
+    );
+
+    expect(label({ accountKey: "claude-swap:9a1c20d6b88a9bcec745fb70" })).toBe(
+      "team",
+    );
+    expect(label({ accountKey: "claude-swap:9A1C20D6B88A9BCEC745FB70" })).toBe(
+      undefined,
+    );
+    expect(
+      label({
+        accountKey: "profile:aaaaaaaaaaaaaaaaaaaaaaaa",
+        accountLocator: { path: "/srv/claude" },
+      }),
+    ).toBe("by key");
+    expect(
+      label({
+        accountKey: "profile:bbbbbbbbbbbbbbbbbbbbbbbb",
+        accountLocator: { path: "/srv/claude" },
+      }),
+    ).toBe("by path");
   });
 
   it("names a lane reached through a symlinked directory", () => {
@@ -158,7 +195,9 @@ describe("readTuiAccountLabels", () => {
       '{"accountLabels":{"/kept":"kept"}}',
     ]) {
       expect(
-        readTuiAccountLabels(configFile(contents))("/kept"),
+        readTuiAccountLabels(configFile(contents))({
+          accountLocator: { path: "/kept" },
+        }),
         contents,
       ).toBe(undefined);
     }

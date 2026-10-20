@@ -65,8 +65,8 @@ export type TuiOptions = {
   show?: TuiShow;
   /**
    * Each provider's human lane name from `tui.accountLabels`, aligned with
-   * `response.providers`. The caller resolves it from the unredacted
-   * `accountLocator`, which a redacted response no longer carries.
+   * `response.providers`. The caller resolves it from the account key or the
+   * unredacted `accountLocator`, which a redacted response no longer carries.
    */
   accountLabels?: readonly (string | undefined)[];
 };
