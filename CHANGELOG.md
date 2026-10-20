@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.65](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.64...quota-axi-v0.1.65) (2026-10-20)
+
+
+### Features
+
+* **opencode-go:** read OpenCode 2.x credentials from opencode.db ([#341](https://github.com/kunchenguid/quota-axi/issues/341)) ([040fe36](https://github.com/kunchenguid/quota-axi/commit/040fe36178518cc04c21d35742b670fe31225e4d))
+
 ## [0.1.64](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.63...quota-axi-v0.1.64) (2026-10-15)
 
 
