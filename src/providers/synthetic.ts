@@ -44,10 +44,10 @@ const HOUR_SECONDS = 60 * 60;
 
 /**
  * The payload's request-count meters. Each is a `{ limit, requests, renewsAt }`
- * triple describing one counter's own renewal period, so each is published as
- * its own named window. `subscription` counts model requests, so it also
- * bounds `all_models` alongside the weekly allowance; the search and tool-call
- * meters do not. `search.hourly` names its own bucket length.
+ * triple describing one rolling counter that refills continuously, so each is
+ * published as its own named window. `subscription` counts model requests, so
+ * it also bounds `all_models` alongside the weekly allowance; the search and
+ * tool-call meters do not. `search.hourly` names its own bucket length.
  */
 type RequestCountWindow = {
   id: string;
@@ -241,9 +241,14 @@ async function inspectAuth(
  * The request-count meters - `subscription`, `search.hourly`, and a positive
  * `freeToolCalls` limit - are named scopes of their own; only `subscription`,
  * which counts model requests, also enters the account-wide bound. A
- * `freeToolCalls` limit of zero is an established "no
- * allowance of this kind", so it publishes no window and is not treated as an
- * exhausted account.
+ * `freeToolCalls` limit of zero is an established "no allowance of this kind",
+ * so it publishes no window and is not treated as an exhausted account.
+ *
+ * Each counter's `renewsAt` refills a rolling bucket rather than turning a
+ * cycle over - Synthetic restores a slice of the allowance continuously - so it
+ * is carried as renewal text and the window has no `resetsAt`, for the same
+ * reason as the weekly `nextRegenAt`: a rolling moment drawn as a reset moves
+ * forward on every read and claims a turnover that never happens.
  */
 export function normalizeSyntheticPayload(
   raw: unknown,
@@ -362,9 +367,10 @@ type RequestCountResolution =
 
 /**
  * One request-count window from a `{ limit, requests, renewsAt }` triple. The
- * vendor names `renewsAt` as that counter's own renewal date, so it is the
- * window's `resetsAt`; `limit: 0` is an established absence of that allowance
- * rather than an exhausted meter.
+ * counter refills continuously, so `renewsAt` is the next refill, not a cycle
+ * turnover: it is published as renewal text and never as `resetsAt`, which
+ * would claim a reset on every read. `limit: 0` is an established absence of
+ * that allowance rather than an exhausted meter.
  */
 function requestCountWindow(
   value: unknown,
@@ -382,7 +388,7 @@ function requestCountWindow(
     return requests === 0 ? { kind: "no_allowance" } : { kind: "untrusted" };
   }
   const percentUsed = Math.min(100, (requests / limit) * 100);
-  const resetsAt = isoTimestamp(entry.renewsAt);
+  const renewsAt = isoTimestamp(entry.renewsAt);
   return {
     kind: "window",
     window: {
@@ -394,7 +400,7 @@ function requestCountWindow(
       ...(spec.windowSeconds !== undefined
         ? { windowSeconds: spec.windowSeconds }
         : {}),
-      ...(resetsAt ? { resetsAt } : {}),
+      ...(renewsAt ? { resetText: `next renewal ${renewsAt}` } : {}),
     },
   };
 }

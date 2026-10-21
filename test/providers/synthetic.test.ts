@@ -113,23 +113,25 @@ describe("Synthetic provider", () => {
       "subscription",
       "weekly",
     ]);
-    expect(
-      report.windows.find(({ id }) => id === "subscription"),
-    ).toMatchObject({
+    const subscription = report.windows.find(({ id }) => id === "subscription");
+    expect(subscription).toMatchObject({
       label: "requests",
       kind: "unknown",
       percentUsed: 0,
       percentRemaining: 100,
-      resetsAt: "2026-10-21T13:01:31.726Z",
+      // The counter refills continuously, so its renewal moment is text and
+      // never a `resetsAt` turnover.
+      resetText: "next renewal 2026-10-21T13:01:31.726Z",
     });
-    expect(
-      report.windows.find(({ id }) => id === "search_hourly"),
-    ).toMatchObject({
+    expect(subscription?.resetsAt).toBeUndefined();
+    const search = report.windows.find(({ id }) => id === "search_hourly");
+    expect(search).toMatchObject({
       label: "search",
       percentUsed: (1 / 250) * 100,
       windowSeconds: 3_600,
-      resetsAt: "2026-10-21T09:00:23.727Z",
+      resetText: "next renewal 2026-10-21T09:00:23.727Z",
     });
+    expect(search?.resetsAt).toBeUndefined();
 
     const account = report.quotaSemantics?.effectiveAvailability.find(
       ({ scope }) => scope === "all_models",
@@ -141,8 +143,10 @@ describe("Synthetic provider", () => {
       boundedBy: ["weekly", "subscription"],
       limitingWindowIds: ["weekly"],
     });
-    // No reset means no cycle, so the aggregate stays honestly unknown.
+    // No reset means no cycle, so the aggregate stays honestly unknown even
+    // though the effective percentage publishes.
     expect(account?.runway?.status).toBe("unknown");
+    expect(account?.effectivePercentRemaining).toBe(98.02535828571428);
     expect(
       report.quotaSemantics?.effectiveAvailability.map(({ scope }) => scope),
     ).toEqual(["all_models", "requests", "search"]);
@@ -240,6 +244,45 @@ describe("Synthetic provider", () => {
     });
     expect(account?.effectivePercentRemaining).toBeUndefined();
     expect(report.credits).toBeUndefined();
+  });
+
+  it("keeps an untrusted search or tool meter out of the account-wide bound", async () => {
+    const report = await interpreted(
+      payloadWith((copy) => {
+        // A bucket this reader cannot place, and a tool meter of the wrong
+        // shape: both feed only their own named scope.
+        copy.search = {
+          hourly: {
+            limit: 250,
+            requests: 1,
+            renewsAt: "2026-10-21T09:00:23.727Z",
+          },
+          daily: { limit: 10, requests: 1 },
+        };
+        copy.freeToolCalls = { limit: "none" };
+      }),
+    );
+
+    expect(report.state.untrustedWindowIds?.sort()).toEqual([
+      "free_tool_calls",
+      "search.daily",
+    ]);
+    expect(report.quotaSemantics?.status).toBe("partial");
+    const account = report.quotaSemantics?.effectiveAvailability.find(
+      ({ scope }) => scope === "all_models",
+    );
+    // The two bound fields are both readable, so the account figure still
+    // publishes even though a sibling scope is unresolved.
+    expect(account).toMatchObject({
+      status: "known",
+      effectivePercentRemaining: 98.02535828571428,
+      boundedBy: ["weekly", "subscription"],
+    });
+    expect(
+      report.quotaSemantics?.effectiveAvailability.find(
+        ({ scope }) => scope === "search",
+      )?.effectivePercentRemaining,
+    ).toBeUndefined();
   });
 
   it("names an unreadable weekly percentage rather than deriving one from credits", () => {

@@ -213,8 +213,14 @@ function semanticsFor(
  * `free_tool_calls`) meter search and tool calls against their own renewal
  * periods, so they stay named scopes that never enter the model bound.
  *
- * The weekly allowance regenerates incrementally rather than turning over at a
- * reset, so the vendor reports no turnover instant and the window carries no
+ * Unresolved-ness is scope-local. A field that could only feed its own named
+ * scope - an unreadable `search.hourly` bucket, `freeToolCalls`, or a total
+ * request counter - leaves that scope unknown without withholding the
+ * account-wide figure it cannot affect. An unresolved `weekly` or
+ * `subscription` field does withhold `all_models`, because both bound it.
+ *
+ * Neither the weekly allowance nor the request counter reports a cycle
+ * turnover: both refill continuously, so the windows carry renewal text and no
  * `resetsAt`. Pace, runway, and the selection scalar stay unknown without a
  * cycle, while `effectivePercentRemaining` still publishes the minimum of the
  * vendor's own figures - the fact a caller actually needs before spending.
@@ -227,6 +233,17 @@ const SYNTHETIC_REQUEST_WINDOW_IDS: Readonly<Record<string, string>> = {
   free_tool_calls: "tools",
 };
 
+/**
+ * Which unresolved field can add a bound to a request meter's own scope. A
+ * `search` bucket this reader does not place (such as an unfamiliar
+ * `search.daily`) belongs to the search scope, never to the model bound.
+ */
+function syntheticScopeOwns(scope: string, unresolvedId: string): boolean {
+  return scope === "search"
+    ? unresolvedId === "search" || unresolvedId.startsWith("search.")
+    : unresolvedId === scope;
+}
+
 function syntheticSemantics(
   windows: QuotaWindow[],
   untrustedWindowIds: string[],
@@ -235,26 +252,44 @@ function syntheticSemantics(
   const bounds = windows.filter(({ id }) =>
     SYNTHETIC_ACCOUNT_WINDOW_IDS.has(id),
   );
-  const recognized = new Set([...bounds, ...requestWindows(windows)]);
+  const requestMeters = requestWindows(windows);
+  const recognized = new Set([...bounds, ...requestMeters]);
   const unresolved = windows.filter((window) => !recognized.has(window));
+  // Only a field that can bound the account-wide scope withholds it; the rest
+  // are named on their own scope and stay out of the model bound's reading.
+  const accountUnresolved = [
+    ...new Set([
+      ...unresolved.map(({ id }) => id),
+      ...untrustedWindowIds.filter((id) =>
+        SYNTHETIC_ACCOUNT_WINDOW_IDS.has(id),
+      ),
+    ]),
+  ];
   const unresolvedWindowIds = [
     ...new Set([...unresolved.map(({ id }) => id), ...untrustedWindowIds]),
   ];
   const description =
-    "Synthetic's weekly credit allowance and its subscription request counter both gate model calls, so effective remaining is the minimum across them. The weekly allowance regenerates incrementally instead of turning over at a reset, so the vendor reports no reset instant and pace, runway, and selection stay unknown while the percentage still publishes. The search and tool-call request meters are separate scopes and never enter the account-wide bound.";
+    "Synthetic's weekly credit allowance and its subscription request counter both gate model calls, so effective remaining is the minimum across them. Both refill continuously instead of turning over at a reset, so the vendor reports no reset instant and pace, runway, and selection stay unknown while the percentage still publishes. The search and tool-call request meters are separate scopes and never enter the account-wide bound.";
   const effectiveAvailability: EffectiveAvailability[] = [];
   if (bounds.length > 0) {
     effectiveAvailability.push(
-      unresolvedWindowIds.length > 0
-        ? unresolvedAvailability("all_models", bounds, unresolvedWindowIds)
+      accountUnresolved.length > 0
+        ? unresolvedAvailability("all_models", bounds, accountUnresolved)
         : availability("all_models", bounds, generatedAt),
     );
   }
-  for (const window of requestWindows(windows)) {
+  for (const window of requestMeters) {
     const scope = SYNTHETIC_REQUEST_WINDOW_IDS[window.id] ?? window.id;
+    // A named scope is blocked only by a field that could feed it.
+    const scopeUnresolved = unresolvedWindowIds.filter(
+      (id) =>
+        id !== "weekly" &&
+        id !== "subscription" &&
+        syntheticScopeOwns(scope, id),
+    );
     effectiveAvailability.push(
-      unresolvedWindowIds.length > 0
-        ? unresolvedAvailability(scope, [window], unresolvedWindowIds)
+      scopeUnresolved.length > 0
+        ? unresolvedAvailability(scope, [window], scopeUnresolved)
         : availability(scope, [window], generatedAt),
     );
   }
