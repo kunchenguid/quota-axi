@@ -234,9 +234,9 @@ async function inspectAuth(
  *
  * `weeklyTokenLimit` is Synthetic's account-wide weekly credit allowance, so
  * it is the `weekly` window that, with `rollingFiveHourLimit`, bounds model
- * usage. Its
- * `percentRemaining` is already a percentage, so it is published exactly as
- * reported rather than rounded or re-derived from the dollar strings. The
+ * usage. Its `percentRemaining` is already a percentage, so it is published
+ * exactly as reported rather than rounded or re-derived from the dollar
+ * strings. The
  * vendor regenerates that allowance incrementally, so `nextRegenAt` is the next
  * top-up moment and not a window turnover: it is published as `resetText`
  * worded as the next regeneration, and the window carries no `resetsAt`. A
