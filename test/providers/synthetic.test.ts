@@ -535,4 +535,28 @@ describe("Synthetic provider", () => {
     });
     expect(account?.effectivePercentRemaining).toBeUndefined();
   });
+
+  it("names a zero-limit subscription counter instead of bounding by weekly alone", async () => {
+    const report = await interpreted(
+      payloadWith((copy) => {
+        copy.subscription = {
+          limit: 0,
+          requests: 0,
+          renewsAt: "2026-10-21T13:01:31.729Z",
+        };
+      }),
+    );
+
+    expect(report.windows.map(({ id }) => id)).not.toContain("subscription");
+    expect(report.state.untrustedWindowIds).toEqual(["subscription"]);
+    expect(report.quotaSemantics?.status).toBe("partial");
+    const account = report.quotaSemantics?.effectiveAvailability.find(
+      ({ scope }) => scope === "all_models",
+    );
+    expect(account).toMatchObject({
+      status: "unknown",
+      boundedBy: ["weekly"],
+    });
+    expect(account?.effectivePercentRemaining).toBeUndefined();
+  });
 });
