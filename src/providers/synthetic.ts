@@ -448,11 +448,11 @@ function requestCountWindow(
 }
 
 /**
- * Renewal evidence led by its UTC `HH:MM`, so a narrow reset column still
+ * Renewal evidence led by its UTC `HHMMZ`, so a narrow reset column still
  * shows when it lands, followed by the full timestamp.
  */
 function renewalText(kind: string, at: string): string {
-  return `${at.slice(11, 16)}Z ${kind} - ${at}`;
+  return `${at.slice(11, 13)}${at.slice(14, 16)}Z ${kind} - ${at}`;
 }
 
 function objectValue(value: unknown): Record<string, unknown> | undefined {

@@ -95,7 +95,7 @@ describe("Synthetic provider", () => {
       // The vendor's own fractional percentage, preserved rather than rounded.
       percentRemaining: 98.02535828571428,
       limitUsd: 10.5,
-      resetText: "08:56Z regen - 2026-10-21T08:56:36.000Z",
+      resetText: "0856Z regen - 2026-10-21T08:56:36.000Z",
     });
     expect(weekly?.percentUsed).toBeCloseTo(1.97464171428572, 10);
     // `nextRegenAt` is the next top-up, never a window turnover.
@@ -131,8 +131,8 @@ describe("Synthetic provider", () => {
     const resetColumn = (label: string) =>
       lines.find((line) => line.startsWith(`│   ${label} `))?.trimEnd();
 
-    expect(resetColumn("week")).toMatch(/08:56… *│$/u);
-    expect(resetColumn("5-hour")).toMatch(/08:15… *│$/u);
+    expect(resetColumn("week")).toMatch(/0856Z… *│$/u);
+    expect(resetColumn("5-hour")).toMatch(/0815Z… *│$/u);
     expect(report.windows.every(({ resetsAt }) => resetsAt === undefined)).toBe(
       true,
     );
@@ -154,7 +154,7 @@ describe("Synthetic provider", () => {
       percentRemaining: 100,
       // The renewal moment is not established as a turnover, so it is text and
       // never a `resetsAt` turnover.
-      resetText: "13:01Z renewal - 2026-10-21T13:01:31.726Z",
+      resetText: "1301Z renewal - 2026-10-21T13:01:31.726Z",
     });
     expect(subscription?.resetsAt).toBeUndefined();
     const search = report.windows.find(({ id }) => id === "search_hourly");
@@ -162,7 +162,7 @@ describe("Synthetic provider", () => {
       label: "search",
       percentUsed: (1 / 250) * 100,
       windowSeconds: 3_600,
-      resetText: "09:00Z renewal - 2026-10-21T09:00:23.727Z",
+      resetText: "0900Z renewal - 2026-10-21T09:00:23.727Z",
     });
     expect(search?.resetsAt).toBeUndefined();
 
@@ -621,7 +621,7 @@ describe("Synthetic provider", () => {
       percentUsed: 25,
       percentRemaining: 75,
       windowSeconds: 18_000,
-      resetText: "08:15Z tick - 2026-10-21T08:15:00.000Z",
+      resetText: "0815Z tick - 2026-10-21T08:15:00.000Z",
     });
     // The next tick is a refill slice, never a window turnover.
     expect(fiveHour?.resetsAt).toBeUndefined();
