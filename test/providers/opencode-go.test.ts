@@ -2010,6 +2010,7 @@ describe("OpenCode Go Pi fallback through the commands", () => {
     mkdirSync(join(directory, "data", "opencode"), { recursive: true });
     vi.stubEnv("PI_CODING_AGENT_DIR", join(directory, "pi"));
     vi.stubEnv("XDG_DATA_HOME", join(directory, "data"));
+    vi.stubEnv("OPENCODE_DB", "");
     vi.stubEnv("XDG_CACHE_HOME", join(directory, "cache"));
     vi.stubEnv(PI_OPENCODE_GO_AUTH_ENV, stores.override ?? "");
     if (stores.pi)
