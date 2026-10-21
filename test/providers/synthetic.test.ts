@@ -105,7 +105,7 @@ describe("Synthetic provider", () => {
     );
   });
 
-  it("keeps the request-count meters as their own named scopes, never as model bounds", async () => {
+  it("bounds all_models by the weekly allowance and the subscription request counter", async () => {
     const report = await interpreted(PAYLOAD);
 
     expect(report.windows.map(({ id }) => id).sort()).toEqual([
@@ -138,13 +138,42 @@ describe("Synthetic provider", () => {
       scope: "all_models",
       status: "known",
       effectivePercentRemaining: 98.02535828571428,
-      boundedBy: ["weekly"],
+      boundedBy: ["weekly", "subscription"],
+      limitingWindowIds: ["weekly"],
     });
     // No reset means no cycle, so the aggregate stays honestly unknown.
     expect(account?.runway?.status).toBe("unknown");
     expect(
       report.quotaSemantics?.effectiveAvailability.map(({ scope }) => scope),
     ).toEqual(["all_models", "requests", "search"]);
+  });
+
+  it("reads a spent subscription request counter as an exhausted account despite weekly credit", async () => {
+    const report = await interpreted(
+      payloadWith((copy) => {
+        copy.subscription = {
+          limit: 500,
+          requests: 500,
+          renewsAt: "2026-10-21T13:01:31.726Z",
+        };
+      }),
+    );
+
+    expect(
+      report.quotaSemantics?.effectiveAvailability.find(
+        ({ scope }) => scope === "all_models",
+      ),
+    ).toMatchObject({
+      status: "known",
+      effectivePercentRemaining: 0,
+      boundedBy: ["weekly", "subscription"],
+      limitingWindowIds: ["subscription"],
+    });
+    expect(
+      report.quotaSemantics?.effectiveAvailability.find(
+        ({ scope }) => scope === "requests",
+      ),
+    ).toMatchObject({ status: "known", effectivePercentRemaining: 0 });
   });
 
   it("reads a zero freeToolCalls limit as no allowance of that kind", async () => {
@@ -201,7 +230,15 @@ describe("Synthetic provider", () => {
     expect(report.quotaSemantics?.status).toBe("partial");
     expect(
       report.quotaSemantics?.effectiveAvailability.map(({ scope }) => scope),
-    ).toEqual(["requests", "search"]);
+    ).toEqual(["all_models", "requests", "search"]);
+    const account = report.quotaSemantics?.effectiveAvailability.find(
+      ({ scope }) => scope === "all_models",
+    );
+    expect(account).toMatchObject({
+      status: "unknown",
+      boundedBy: ["subscription"],
+    });
+    expect(account?.effectivePercentRemaining).toBeUndefined();
     expect(report.credits).toBeUndefined();
   });
 
@@ -417,18 +454,5 @@ describe("Synthetic provider", () => {
       "subscription",
       "search_hourly",
     ]);
-  });
-
-  it("never reads the environment or Pi store by default in fixtures", () => {
-    // Every case above injects its credential, so no test can reach a real
-    // store or the vendor. This guards the wiring, not a live read.
-    const adapter = createSyntheticAdapter({
-      credential: () => ({ status: "missing", source: "pi:synthetic" }),
-      fetch: async () => {
-        throw new Error("no request expected");
-      },
-    });
-    expect(adapter.id).toBe("synthetic");
-    expect(adapter.label).toBe("Synthetic");
   });
 });

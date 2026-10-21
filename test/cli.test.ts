@@ -1931,7 +1931,7 @@ describe("new provider public quota output", () => {
     ).toMatchObject({
       status: "known",
       effectivePercentRemaining: 98.02535828571428,
-      boundedBy: ["weekly"],
+      boundedBy: ["weekly", "subscription"],
     });
     expect(JSON.stringify(json)).not.toContain(key);
     expect(process.exitCode).toBeUndefined();

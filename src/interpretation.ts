@@ -206,18 +206,21 @@ function semanticsFor(
 }
 
 /**
- * Synthetic's weekly credit allowance is the account-wide bound, so the
- * `weekly` window alone bounds `all_models`. The payload's request-count
- * meters (`subscription`, `search_hourly`, `free_tool_calls`) count requests
- * against their own renewal periods, so they stay named scopes that never
- * enter the model bound.
+ * Synthetic's weekly credit allowance and its `subscription` request counter
+ * both gate model calls, so together they bound `all_models` and effective
+ * remaining is the minimum across them. The `subscription` counter also keeps
+ * its own `requests` scope. The other request-count meters (`search_hourly`,
+ * `free_tool_calls`) meter search and tool calls against their own renewal
+ * periods, so they stay named scopes that never enter the model bound.
  *
- * That allowance regenerates incrementally rather than turning over at a
+ * The weekly allowance regenerates incrementally rather than turning over at a
  * reset, so the vendor reports no turnover instant and the window carries no
  * `resetsAt`. Pace, runway, and the selection scalar stay unknown without a
- * cycle, while `effectivePercentRemaining` still publishes the vendor's own
- * figure - the fact a caller actually needs before spending.
+ * cycle, while `effectivePercentRemaining` still publishes the minimum of the
+ * vendor's own figures - the fact a caller actually needs before spending.
  */
+const SYNTHETIC_ACCOUNT_WINDOW_IDS = new Set(["weekly", "subscription"]);
+
 const SYNTHETIC_REQUEST_WINDOW_IDS: Readonly<Record<string, string>> = {
   subscription: "requests",
   search_hourly: "search",
@@ -229,20 +232,22 @@ function syntheticSemantics(
   untrustedWindowIds: string[],
   generatedAt: string,
 ): QuotaSemantics {
-  const weekly = windows.filter(({ id }) => id === "weekly");
-  const recognized = new Set([...weekly, ...requestWindows(windows)]);
+  const bounds = windows.filter(({ id }) =>
+    SYNTHETIC_ACCOUNT_WINDOW_IDS.has(id),
+  );
+  const recognized = new Set([...bounds, ...requestWindows(windows)]);
   const unresolved = windows.filter((window) => !recognized.has(window));
   const unresolvedWindowIds = [
     ...new Set([...unresolved.map(({ id }) => id), ...untrustedWindowIds]),
   ];
   const description =
-    "Synthetic's weekly credit allowance is the account-wide bound, so effective remaining is that window's own figure. The allowance regenerates incrementally instead of turning over at a reset, so the vendor reports no reset instant and pace, runway, and selection stay unknown while the percentage still publishes. The payload's request-count meters are separate scopes and never enter the account-wide bound.";
+    "Synthetic's weekly credit allowance and its subscription request counter both gate model calls, so effective remaining is the minimum across them. The weekly allowance regenerates incrementally instead of turning over at a reset, so the vendor reports no reset instant and pace, runway, and selection stay unknown while the percentage still publishes. The search and tool-call request meters are separate scopes and never enter the account-wide bound.";
   const effectiveAvailability: EffectiveAvailability[] = [];
-  if (weekly.length > 0) {
+  if (bounds.length > 0) {
     effectiveAvailability.push(
       unresolvedWindowIds.length > 0
-        ? unresolvedAvailability("all_models", weekly, unresolvedWindowIds)
-        : availability("all_models", weekly, generatedAt),
+        ? unresolvedAvailability("all_models", bounds, unresolvedWindowIds)
+        : availability("all_models", bounds, generatedAt),
     );
   }
   for (const window of requestWindows(windows)) {

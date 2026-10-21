@@ -38,15 +38,16 @@ const SYNTHETIC_SOURCES: EnvPiCredentialSources = {
   piSource: SYNTHETIC_PI_SOURCE,
 };
 
-/** The account-wide weekly credit allowance, the only model-scoped bound. */
+/** The account-wide weekly credit allowance, one of the two model bounds. */
 const WEEKLY_WINDOW_ID = "weekly";
 const HOUR_SECONDS = 60 * 60;
 
 /**
  * The payload's request-count meters. Each is a `{ limit, requests, renewsAt }`
  * triple describing one counter's own renewal period, so each is published as
- * its own named window and none of them bounds the account-wide model
- * allowance. `search.hourly` names its own bucket length.
+ * its own named window. `subscription` counts model requests, so it also
+ * bounds `all_models` alongside the weekly allowance; the search and tool-call
+ * meters do not. `search.hourly` names its own bucket length.
  */
 type RequestCountWindow = {
   id: string;
@@ -226,8 +227,8 @@ async function inspectAuth(
 /**
  * Normalize the vendor's own quota payload into windows.
  *
- * `weeklyTokenLimit` is Synthetic's account-wide weekly credit allowance, and
- * it is the only bound on model usage, so it is the `weekly` window. Its
+ * `weeklyTokenLimit` is Synthetic's account-wide weekly credit allowance, so
+ * it is the `weekly` window that, with `subscription`, bounds model usage. Its
  * `percentRemaining` is already a percentage, so it is published exactly as
  * reported rather than rounded or re-derived from the dollar strings. The
  * vendor regenerates that allowance incrementally, so `nextRegenAt` is the next
@@ -238,8 +239,9 @@ async function inspectAuth(
  * tree refuses to publish.
  *
  * The request-count meters - `subscription`, `search.hourly`, and a positive
- * `freeToolCalls` limit - are named scopes of their own and never enter the
- * account-wide bound. A `freeToolCalls` limit of zero is an established "no
+ * `freeToolCalls` limit - are named scopes of their own; only `subscription`,
+ * which counts model requests, also enters the account-wide bound. A
+ * `freeToolCalls` limit of zero is an established "no
  * allowance of this kind", so it publishes no window and is not treated as an
  * exhausted account.
  */
