@@ -40,15 +40,18 @@ const SYNTHETIC_SOURCES: EnvPiCredentialSources = {
 
 /** The account-wide weekly credit allowance, one of the two model bounds. */
 const WEEKLY_WINDOW_ID = "weekly";
+/** The vendor's rolling five-hour model-request limit, the other model bound. */
+const FIVE_HOUR_WINDOW_ID = "five_hour";
 const HOUR_SECONDS = 60 * 60;
+const FIVE_HOUR_SECONDS = 5 * HOUR_SECONDS;
 
 /**
  * The payload's request-count meters. Each is a `{ limit, requests, renewsAt }`
- * triple and becomes its own named window. Only `subscription` also bounds
- * `all_models` alongside the weekly allowance: it is the account's request cap
- * and this tree has not established that model calls bypass it, so a counter at
- * its limit must not be published as headroom. The search and tool-call meters
- * do not gate model calls. `search.hourly` names its own bucket length.
+ * triple and becomes its own named window and scope; none bounds `all_models`.
+ * The vendor documents `rollingFiveHourLimit` as its model-request cap, so
+ * `subscription` is treated as a lane of its own rather than inferred to be
+ * that cap from its renewal cadence. `search.hourly` names its own bucket
+ * length.
  */
 type RequestCountWindow = {
   id: string;
@@ -72,6 +75,7 @@ const FREE_TOOL_CALLS_WINDOW: RequestCountWindow = {
 
 const RECOGNIZED_ROOT_KEYS = new Set([
   "weeklyTokenLimit",
+  "rollingFiveHourLimit",
   "subscription",
   "search",
   "freeToolCalls",
@@ -229,7 +233,8 @@ async function inspectAuth(
  * Normalize the vendor's own quota payload into windows.
  *
  * `weeklyTokenLimit` is Synthetic's account-wide weekly credit allowance, so
- * it is the `weekly` window that, with `subscription`, bounds model usage. Its
+ * it is the `weekly` window that, with `rollingFiveHourLimit`, bounds model
+ * usage. Its
  * `percentRemaining` is already a percentage, so it is published exactly as
  * reported rather than rounded or re-derived from the dollar strings. The
  * vendor regenerates that allowance incrementally, so `nextRegenAt` is the next
@@ -239,11 +244,13 @@ async function inspectAuth(
  * `resetsAt` that moves forward on every read is exactly the false reading this
  * tree refuses to publish.
  *
- * The request-count meters - `subscription`, `search.hourly`, and a positive
- * `freeToolCalls` limit - are named scopes of their own; only `subscription`,
- * the account's request cap, also enters the account-wide bound. A
- * `freeToolCalls` limit of zero is an established "no allowance of this kind",
- * so it publishes no window and is not treated as an exhausted account.
+ * `rollingFiveHourLimit` is the vendor's rolling five-hour model-request
+ * limit and becomes the `five_hour` window; see `rollingFiveHourWindow`.
+ *
+ * The request-count meters - `subscription`, `search.hourly`, and
+ * `freeToolCalls` - are named scopes of their own and never enter the
+ * account-wide bound. A zero limit is an established "no allowance of this
+ * kind", so it publishes no window and is not treated as an exhausted meter.
  *
  * A counter's `renewsAt` is not established as a cycle turnover: it may be the
  * next slice of a continuously refilling bucket rather than a period end. It is
@@ -265,27 +272,34 @@ export function normalizeSyntheticPayload(
 
   const weeklyTokenLimit = objectValue(root.weeklyTokenLimit);
   const weekly = weeklyTokenWindow(weeklyTokenLimit);
-  // The two account-wide bounds are the fields whose absence leaves model
-  // headroom unstated, so a missing, unreadable, or zero-limit one is named
-  // rather than silently dropped.
+  // A missing or unreadable weekly allowance leaves model headroom unstated,
+  // so it is named rather than silently dropped. The five-hour limit is named
+  // only when declared but unreadable: the captured live payload omits it.
   if (weekly) windows.push(weekly);
   else untrustedWindowIds.push(WEEKLY_WINDOW_ID);
 
-  const subscription = requestCountWindow(
-    root.subscription,
-    SUBSCRIPTION_WINDOW,
-  );
-  if (subscription.kind === "window") windows.push(subscription.window);
-  else untrustedWindowIds.push(SUBSCRIPTION_WINDOW.id);
+  if (
+    root.rollingFiveHourLimit !== undefined &&
+    root.rollingFiveHourLimit !== null
+  ) {
+    const fiveHour = rollingFiveHourWindow(root.rollingFiveHourLimit);
+    if (fiveHour) windows.push(fiveHour);
+    else untrustedWindowIds.push(FIVE_HOUR_WINDOW_ID);
+  }
+
+  const addRequestCount = (value: unknown, spec: RequestCountWindow) => {
+    const resolution = requestCountWindow(value, spec);
+    if (resolution.kind === "window") windows.push(resolution.window);
+    if (resolution.kind === "untrusted") untrustedWindowIds.push(spec.id);
+  };
+
+  addRequestCount(root.subscription, SUBSCRIPTION_WINDOW);
 
   const search = objectValue(root.search);
   if (root.search !== undefined && root.search !== null && !search) {
     untrustedWindowIds.push("search");
   } else if (search) {
-    const hourly = requestCountWindow(search.hourly, SEARCH_HOURLY_WINDOW);
-    if (hourly.kind === "window") windows.push(hourly.window);
-    if (hourly.kind === "untrusted")
-      untrustedWindowIds.push(SEARCH_HOURLY_WINDOW.id);
+    addRequestCount(search.hourly, SEARCH_HOURLY_WINDOW);
     for (const key of Object.keys(search)) {
       if (key === "hourly") continue;
       const unread = search[key];
@@ -295,13 +309,7 @@ export function normalizeSyntheticPayload(
     }
   }
 
-  const freeToolCalls = requestCountWindow(
-    root.freeToolCalls,
-    FREE_TOOL_CALLS_WINDOW,
-  );
-  if (freeToolCalls.kind === "window") windows.push(freeToolCalls.window);
-  if (freeToolCalls.kind === "untrusted")
-    untrustedWindowIds.push(FREE_TOOL_CALLS_WINDOW.id);
+  addRequestCount(root.freeToolCalls, FREE_TOOL_CALLS_WINDOW);
 
   const weeklyCredits = weeklyRemainingCredits(weeklyTokenLimit);
 
@@ -344,6 +352,40 @@ function weeklyTokenWindow(
     percentRemaining: remaining,
     ...(nextRegenAt ? { resetText: `next regen ${nextRegenAt}` } : {}),
     ...(limitUsd !== undefined ? { limitUsd } : {}),
+  };
+}
+
+/**
+ * One `five_hour` window from `rollingFiveHourLimit`, the vendor's rolling
+ * five-hour model-request limit. Its percentage is `remaining / max`; a
+ * non-positive `max` carries no allowance to divide by, so no percentage is
+ * published and the field reads as unresolved. `limited: true` is the vendor
+ * stating the limit is in force now, so it reads as exhausted whatever the
+ * counts say. `nextTickAt` is the next slice of a continuously refilling
+ * bucket rather than a turnover, so it is renewal text and never `resetsAt`.
+ */
+function rollingFiveHourWindow(value: unknown): QuotaWindow | undefined {
+  const entry = objectValue(value);
+  if (!entry) return undefined;
+  const max = nonnegativeNumber(entry.max);
+  const remaining = nonnegativeNumber(entry.remaining);
+  if (max === undefined || max === 0 || remaining === undefined) {
+    return undefined;
+  }
+  if (entry.limited !== undefined && typeof entry.limited !== "boolean") {
+    return undefined;
+  }
+  const percentRemaining =
+    entry.limited === true ? 0 : Math.min(100, (remaining / max) * 100);
+  const nextTickAt = isoTimestamp(entry.nextTickAt);
+  return {
+    id: FIVE_HOUR_WINDOW_ID,
+    label: "5-hour",
+    kind: "session",
+    percentUsed: 100 - percentRemaining,
+    percentRemaining,
+    windowSeconds: FIVE_HOUR_SECONDS,
+    ...(nextTickAt ? { resetText: `next tick ${nextTickAt}` } : {}),
   };
 }
 

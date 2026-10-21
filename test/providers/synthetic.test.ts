@@ -21,6 +21,14 @@ const PAYLOAD = JSON.parse(
   readFileSync("test/fixtures/synthetic/quotas.json", "utf8"),
 ) as Record<string, unknown>;
 
+const FIVE_HOUR_LIMIT = {
+  nextTickAt: "2026-10-21T08:15:00.000Z",
+  tickPercent: 0.05,
+  remaining: 450,
+  max: 600,
+  limited: false,
+};
+
 function payloadWith(mutate: (copy: Record<string, unknown>) => void): unknown {
   const copy = structuredClone(PAYLOAD);
   mutate(copy);
@@ -105,7 +113,7 @@ describe("Synthetic provider", () => {
     );
   });
 
-  it("bounds all_models by the weekly allowance and the subscription request counter", async () => {
+  it("bounds all_models by the weekly allowance alone when no five-hour limit is reported", async () => {
     const report = await interpreted(PAYLOAD);
 
     expect(report.windows.map(({ id }) => id).sort()).toEqual([
@@ -119,7 +127,7 @@ describe("Synthetic provider", () => {
       kind: "unknown",
       percentUsed: 0,
       percentRemaining: 100,
-      // The counter refills continuously, so its renewal moment is text and
+      // The renewal moment is not established as a turnover, so it is text and
       // never a `resetsAt` turnover.
       resetText: "next renewal 2026-10-21T13:01:31.726Z",
     });
@@ -140,7 +148,7 @@ describe("Synthetic provider", () => {
       scope: "all_models",
       status: "known",
       effectivePercentRemaining: 98.02535828571428,
-      boundedBy: ["weekly", "subscription"],
+      boundedBy: ["weekly"],
       limitingWindowIds: ["weekly"],
     });
     // No reset means no cycle, so the aggregate stays honestly unknown even
@@ -152,7 +160,7 @@ describe("Synthetic provider", () => {
     ).toEqual(["all_models", "requests", "search"]);
   });
 
-  it("reads a spent subscription request counter as an exhausted account despite weekly credit", async () => {
+  it("keeps a spent subscription request counter in its own lane", async () => {
     const report = await interpreted(
       payloadWith((copy) => {
         copy.subscription = {
@@ -169,9 +177,8 @@ describe("Synthetic provider", () => {
       ),
     ).toMatchObject({
       status: "known",
-      effectivePercentRemaining: 0,
-      boundedBy: ["weekly", "subscription"],
-      limitingWindowIds: ["subscription"],
+      effectivePercentRemaining: 98.02535828571428,
+      boundedBy: ["weekly"],
     });
     expect(
       report.quotaSemantics?.effectiveAvailability.find(
@@ -238,10 +245,7 @@ describe("Synthetic provider", () => {
     const account = report.quotaSemantics?.effectiveAvailability.find(
       ({ scope }) => scope === "all_models",
     );
-    expect(account).toMatchObject({
-      status: "unknown",
-      boundedBy: ["subscription"],
-    });
+    expect(account).toMatchObject({ status: "unknown", boundedBy: [] });
     expect(account?.effectivePercentRemaining).toBeUndefined();
     expect(report.credits).toBeUndefined();
   });
@@ -271,12 +275,12 @@ describe("Synthetic provider", () => {
     const account = report.quotaSemantics?.effectiveAvailability.find(
       ({ scope }) => scope === "all_models",
     );
-    // The two bound fields are both readable, so the account figure still
-    // publishes even though a sibling scope is unresolved.
+    // The bound field is readable, so the account figure still publishes
+    // even though a sibling scope is unresolved.
     expect(account).toMatchObject({
       status: "known",
       effectivePercentRemaining: 98.02535828571428,
-      boundedBy: ["weekly", "subscription"],
+      boundedBy: ["weekly"],
     });
     expect(
       report.quotaSemantics?.effectiveAvailability.find(
@@ -481,16 +485,10 @@ describe("Synthetic provider", () => {
 
   it("names unrecognized object-valued fields instead of folding them into the bound", async () => {
     const payload = payloadWith((copy) => {
-      copy.rollingFiveHourLimit = {
-        nextTickAt: "2026-10-21T08:15:00.000Z",
-        tickPercent: 0.05,
-        remaining: 0,
-        max: 600,
-        limited: true,
-      };
+      copy.rollingDailyLimit = { remaining: 0, max: 600, limited: true };
     });
     const normalized = normalizeSyntheticPayload(payload);
-    expect(normalized.untrustedWindowIds).toEqual(["rollingFiveHourLimit"]);
+    expect(normalized.untrustedWindowIds).toEqual(["rollingDailyLimit"]);
     expect(normalized.windows.map(({ id }) => id)).toEqual([
       "weekly",
       "subscription",
@@ -504,59 +502,171 @@ describe("Synthetic provider", () => {
     const account = report.quotaSemantics?.effectiveAvailability.find(
       ({ scope }) => scope === "all_models",
     );
-    expect(account).toMatchObject({
-      status: "unknown",
-      boundedBy: ["weekly", "subscription"],
-    });
+    expect(account).toMatchObject({ status: "unknown", boundedBy: ["weekly"] });
     expect(account?.effectivePercentRemaining).toBeUndefined();
     expect(
       report.quotaSemantics?.effectiveAvailability.find(
         ({ scope }) => scope === "search",
       ),
     ).toMatchObject({ status: "known" });
+
+    // A root field sharing a name with an object prototype member is still an
+    // unrecognized field that withholds the account-wide figure.
+    const prototypeNamed = await interpreted(
+      JSON.parse(
+        JSON.stringify(PAYLOAD).replace(
+          /^\{/u,
+          '{"toString":{"max":600},"__proto__":{"max":600},',
+        ),
+      ),
+    );
+    expect(prototypeNamed.state.untrustedWindowIds?.sort()).toEqual([
+      "__proto__",
+      "toString",
+    ]);
+    expect(
+      prototypeNamed.quotaSemantics?.effectiveAvailability.find(
+        ({ scope }) => scope === "all_models",
+      )?.status,
+    ).toBe("unknown");
   });
 
-  it("names a payload missing the subscription counter instead of bounding by weekly alone", async () => {
-    const report = await interpreted(
-      payloadWith((copy) => {
+  it("publishes no requests scope for a missing or zero-limit subscription counter", async () => {
+    for (const mutate of [
+      (copy: Record<string, unknown>) => {
         delete copy.subscription;
-      }),
-    );
-
-    expect(report.windows.map(({ id }) => id)).not.toContain("subscription");
-    expect(report.state.untrustedWindowIds).toEqual(["subscription"]);
-    expect(report.quotaSemantics?.status).toBe("partial");
-    const account = report.quotaSemantics?.effectiveAvailability.find(
-      ({ scope }) => scope === "all_models",
-    );
-    expect(account).toMatchObject({
-      status: "unknown",
-      boundedBy: ["weekly"],
-    });
-    expect(account?.effectivePercentRemaining).toBeUndefined();
-  });
-
-  it("names a zero-limit subscription counter instead of bounding by weekly alone", async () => {
-    const report = await interpreted(
-      payloadWith((copy) => {
+      },
+      (copy: Record<string, unknown>) => {
         copy.subscription = {
           limit: 0,
           requests: 0,
           renewsAt: "2026-10-21T13:01:31.729Z",
         };
+      },
+    ]) {
+      const report = await interpreted(payloadWith(mutate));
+
+      expect(report.windows.map(({ id }) => id)).not.toContain("subscription");
+      expect(report.state.untrustedWindowIds).toBeUndefined();
+      expect(report.quotaSemantics?.status).toBe("known");
+      expect(
+        report.quotaSemantics?.effectiveAvailability.map(({ scope }) => scope),
+      ).toEqual(["all_models", "search"]);
+      expect(
+        report.quotaSemantics?.effectiveAvailability.find(
+          ({ scope }) => scope === "all_models",
+        ),
+      ).toMatchObject({
+        status: "known",
+        effectivePercentRemaining: 98.02535828571428,
+        boundedBy: ["weekly"],
+      });
+    }
+  });
+
+  it("names an unreadable subscription counter only in its own scope", async () => {
+    const report = await interpreted(
+      payloadWith((copy) => {
+        copy.subscription = { limit: "unlimited", requests: 0 };
       }),
     );
 
-    expect(report.windows.map(({ id }) => id)).not.toContain("subscription");
     expect(report.state.untrustedWindowIds).toEqual(["subscription"]);
     expect(report.quotaSemantics?.status).toBe("partial");
+    expect(
+      report.quotaSemantics?.effectiveAvailability.find(
+        ({ scope }) => scope === "all_models",
+      ),
+    ).toMatchObject({ status: "known", boundedBy: ["weekly"] });
+  });
+
+  it("bounds all_models by the weekly allowance and the rolling five-hour limit", async () => {
+    const report = await interpreted(
+      payloadWith((copy) => {
+        copy.rollingFiveHourLimit = { ...FIVE_HOUR_LIMIT };
+      }),
+    );
+
+    expect(report.state.status).toBe("fresh");
+    expect(report.state.untrustedWindowIds).toBeUndefined();
+    const fiveHour = report.windows.find(({ id }) => id === "five_hour");
+    expect(fiveHour).toMatchObject({
+      label: "5-hour",
+      kind: "session",
+      percentUsed: 25,
+      percentRemaining: 75,
+      windowSeconds: 18_000,
+      resetText: "next tick 2026-10-21T08:15:00.000Z",
+    });
+    // The next tick is a refill slice, never a window turnover.
+    expect(fiveHour?.resetsAt).toBeUndefined();
+
+    expect(report.quotaSemantics?.status).toBe("known");
     const account = report.quotaSemantics?.effectiveAvailability.find(
       ({ scope }) => scope === "all_models",
     );
     expect(account).toMatchObject({
-      status: "unknown",
-      boundedBy: ["weekly"],
+      status: "known",
+      effectivePercentRemaining: 75,
+      boundedBy: ["weekly", "five_hour"],
+      limitingWindowIds: ["five_hour"],
     });
-    expect(account?.effectivePercentRemaining).toBeUndefined();
+    expect(
+      report.quotaSemantics?.effectiveAvailability.map(({ scope }) => scope),
+    ).toEqual(["all_models", "requests", "search"]);
+  });
+
+  it("reads a limited rolling five-hour limit as exhausted now", async () => {
+    const report = await interpreted(
+      payloadWith((copy) => {
+        copy.rollingFiveHourLimit = { ...FIVE_HOUR_LIMIT, limited: true };
+      }),
+    );
+
+    expect(report.windows.find(({ id }) => id === "five_hour")).toMatchObject({
+      percentUsed: 100,
+      percentRemaining: 0,
+    });
+    expect(
+      report.quotaSemantics?.effectiveAvailability.find(
+        ({ scope }) => scope === "all_models",
+      ),
+    ).toMatchObject({
+      status: "known",
+      effectivePercentRemaining: 0,
+      limitingWindowIds: ["five_hour"],
+    });
+  });
+
+  it("publishes no five-hour percentage for a non-positive or unreadable limit", async () => {
+    for (const rollingFiveHourLimit of [
+      { ...FIVE_HOUR_LIMIT, remaining: 0, max: 0 },
+      { ...FIVE_HOUR_LIMIT, max: "600" },
+      { ...FIVE_HOUR_LIMIT, limited: "yes" },
+      "unlimited",
+    ]) {
+      const report = await interpreted(
+        payloadWith((copy) => {
+          copy.rollingFiveHourLimit = rollingFiveHourLimit;
+        }),
+      );
+
+      expect(report.windows.map(({ id }) => id)).not.toContain("five_hour");
+      expect(report.state.untrustedWindowIds).toEqual(["five_hour"]);
+      expect(report.quotaSemantics?.status).toBe("partial");
+      const account = report.quotaSemantics?.effectiveAvailability.find(
+        ({ scope }) => scope === "all_models",
+      );
+      expect(account).toMatchObject({
+        status: "unknown",
+        boundedBy: ["weekly"],
+      });
+      expect(account?.effectivePercentRemaining).toBeUndefined();
+      expect(
+        report.quotaSemantics?.effectiveAvailability.find(
+          ({ scope }) => scope === "requests",
+        ),
+      ).toMatchObject({ status: "known" });
+    }
   });
 });

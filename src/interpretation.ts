@@ -206,48 +206,44 @@ function semanticsFor(
 }
 
 /**
- * Synthetic's weekly credit allowance and its `subscription` request counter
- * both gate model calls, so together they bound `all_models` and effective
- * remaining is the minimum across them. The `subscription` counter also keeps
- * its own `requests` scope. The other request-count meters (`search_hourly`,
- * `free_tool_calls`) meter search and tool calls against their own renewal
- * periods, so they stay named scopes that never enter the model bound.
+ * Synthetic documents two model limits: the weekly credit allowance and the
+ * rolling five-hour request limit. Together they bound `all_models`, so
+ * effective remaining is the minimum across them. The request-count meters
+ * (`subscription`, `search_hourly`, `free_tool_calls`) stay named scopes of
+ * their own and never enter the model bound: the vendor's model-request cap is
+ * the five-hour limit, so `subscription` is treated as its own lane.
  *
- * Unresolved-ness is scope-local. A field that could only feed a search or
- * tool-call scope - an unreadable `search` bucket or `freeToolCalls` - leaves
- * that scope unknown without withholding the account-wide figure it cannot
- * affect. Every other unresolved field, including `weekly`, `subscription`,
- * and an unrecognized root field that may carry a limit of its own, withholds
- * `all_models`.
+ * Unresolved-ness is scope-local. A field that could only feed a request,
+ * search, or tool-call scope leaves that scope unknown without withholding the
+ * account-wide figure it cannot affect. Every other unresolved field,
+ * including `weekly`, `five_hour`, and an unrecognized root field that may
+ * carry a limit of its own, withholds `all_models`.
  *
- * Neither bound reports an established cycle turnover: the allowance
- * regenerates incrementally and the counter's renewal moment may be the next
- * slice of a refilling bucket, so both windows carry renewal text and no
- * `resetsAt`. Pace, runway, and the selection scalar stay unknown without a
- * cycle, while `effectivePercentRemaining` still publishes the minimum of the
- * vendor's own figures - the fact a caller actually needs before spending.
+ * Neither bound's renewal field is established as a cycle turnover, so both
+ * windows carry renewal text and no `resetsAt`. Pace, runway, and the
+ * selection scalar stay unknown without a cycle, while
+ * `effectivePercentRemaining` still publishes the minimum of the vendor's own
+ * figures - the fact a caller actually needs before spending.
  */
-const SYNTHETIC_ACCOUNT_WINDOW_IDS = new Set(["weekly", "subscription"]);
+const SYNTHETIC_ACCOUNT_WINDOW_IDS = new Set(["weekly", "five_hour"]);
 
-const SYNTHETIC_REQUEST_WINDOW_IDS: Readonly<Record<string, string>> = {
-  subscription: "requests",
-  search_hourly: "search",
-  free_tool_calls: "tools",
-};
+const SYNTHETIC_REQUEST_WINDOW_IDS: ReadonlyMap<string, string> = new Map([
+  ["subscription", "requests"],
+  ["search_hourly", "search"],
+  ["free_tool_calls", "tools"],
+]);
 
 /**
- * The scope an unresolved field could feed. Only the search and tool-call
- * meters, and a `search` bucket this reader does not place (such as an
- * unfamiliar `search.daily`), stay out of the model bound; anything else may
- * limit model calls and so belongs to `all_models`.
+ * The scope an unresolved field could feed. Only the request-count meters,
+ * and a `search` bucket this reader does not place (such as an unfamiliar
+ * `search.daily`), stay out of the model bound; anything else may limit model
+ * calls and so belongs to `all_models`.
  */
 function syntheticUnresolvedScope(unresolvedId: string): string {
   if (unresolvedId === "search" || unresolvedId.startsWith("search.")) {
     return "search";
   }
-  if (unresolvedId === "search_hourly") return "search";
-  if (unresolvedId === "free_tool_calls") return "tools";
-  return "all_models";
+  return SYNTHETIC_REQUEST_WINDOW_IDS.get(unresolvedId) ?? "all_models";
 }
 
 function syntheticSemantics(
@@ -268,9 +264,9 @@ function syntheticSemantics(
     (id) => syntheticUnresolvedScope(id) === "all_models",
   );
   const description =
-    "Synthetic's weekly credit allowance and its subscription request counter both gate model calls, so effective remaining is the minimum across them. Both refill continuously instead of turning over at a reset, so the vendor reports no reset instant and pace, runway, and selection stay unknown while the percentage still publishes. The search and tool-call request meters are separate scopes and never enter the account-wide bound.";
+    "Synthetic's weekly credit allowance and its rolling five-hour request limit bound model calls, so effective remaining is the minimum across them. Neither renewal field is established as a reset, so no reset instant is published and pace, runway, and selection stay unknown while the percentage still publishes. This tree treats the subscription request counter as its own lane rather than a model bound, and it, the search meter, and the tool-call meter are separate scopes that never enter the account-wide bound.";
   const effectiveAvailability: EffectiveAvailability[] = [];
-  if (bounds.length > 0) {
+  if (bounds.length > 0 || accountUnresolved.length > 0) {
     effectiveAvailability.push(
       accountUnresolved.length > 0
         ? unresolvedAvailability("all_models", bounds, accountUnresolved)
@@ -278,7 +274,7 @@ function syntheticSemantics(
     );
   }
   for (const window of requestMeters) {
-    const scope = SYNTHETIC_REQUEST_WINDOW_IDS[window.id] ?? window.id;
+    const scope = SYNTHETIC_REQUEST_WINDOW_IDS.get(window.id) ?? window.id;
     // A named scope is blocked only by a field that could feed it.
     const scopeUnresolved = unresolvedWindowIds.filter(
       (id) => syntheticUnresolvedScope(id) === scope,
@@ -301,7 +297,7 @@ function syntheticSemantics(
 }
 
 function requestWindows(windows: QuotaWindow[]): QuotaWindow[] {
-  return windows.filter(({ id }) => id in SYNTHETIC_REQUEST_WINDOW_IDS);
+  return windows.filter(({ id }) => SYNTHETIC_REQUEST_WINDOW_IDS.has(id));
 }
 
 /**
