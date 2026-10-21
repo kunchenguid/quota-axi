@@ -120,6 +120,7 @@ const ENV_KEYS = [
   "DEEPSEEK_API_KEY",
   "OPENROUTER_API_KEY",
   "MINIMAX_API_KEY",
+  "SYNTHETIC_API_KEY",
   "MMX_CONFIG_DIR",
   "WINDSURF_API_KEY",
   "WINDSURF_API_SERVER_URL",
@@ -163,6 +164,7 @@ beforeEach(() => {
   delete process.env.MIMO_API_KEY;
   delete process.env.DEEPSEEK_API_KEY;
   delete process.env.OPENROUTER_API_KEY;
+  delete process.env.SYNTHETIC_API_KEY;
   delete process.env.MINIMAX_API_KEY;
   process.env.MMX_CONFIG_DIR = join(tempDir, "mmx");
   process.env.XDG_CONFIG_HOME = join(tempDir, "config");
@@ -334,6 +336,7 @@ describe("credential source contract", { timeout: 30_000 }, () => {
       "OPENROUTER_API_KEY",
       "pi:openrouter",
     ],
+    ["synthetic", "env:SYNTHETIC_API_KEY", "SYNTHETIC_API_KEY", "pi:synthetic"],
   ])("%s env axis", (provider, source, envVar, piSource) => {
     const invalidError = `${provider}_credential_invalid`;
 

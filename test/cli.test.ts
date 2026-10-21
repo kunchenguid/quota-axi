@@ -41,6 +41,7 @@ const originalElevenLabsProvider = PROVIDERS.elevenlabs;
 const originalDevinProvider = PROVIDERS.devin;
 const originalMuseProvider = PROVIDERS.muse;
 const originalHiggsfieldProvider = PROVIDERS.higgsfield;
+const originalSyntheticProvider = PROVIDERS.synthetic;
 const originalXdgCacheHome = process.env.XDG_CACHE_HOME;
 const originalClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
 const originalCodexHome = process.env.CODEX_HOME;
@@ -48,6 +49,7 @@ const originalMinimaxApiKey = process.env.MINIMAX_API_KEY;
 const originalMimoApiKey = process.env.MIMO_API_KEY;
 const originalDeepSeekApiKey = process.env.DEEPSEEK_API_KEY;
 const originalOpenRouterApiKey = process.env.OPENROUTER_API_KEY;
+const originalSyntheticApiKey = process.env.SYNTHETIC_API_KEY;
 const originalPiCodingAgentDir = process.env.PI_CODING_AGENT_DIR;
 const originalMmxConfigDir = process.env.MMX_CONFIG_DIR;
 const originalTheme = process.env.QUOTA_AXI_THEME;
@@ -75,6 +77,7 @@ afterEach(() => {
   PROVIDERS.devin = originalDevinProvider;
   PROVIDERS.muse = originalMuseProvider;
   PROVIDERS.higgsfield = originalHiggsfieldProvider;
+  PROVIDERS.synthetic = originalSyntheticProvider;
   vi.unstubAllGlobals();
   if (originalXdgCacheHome === undefined) delete process.env.XDG_CACHE_HOME;
   else process.env.XDG_CACHE_HOME = originalXdgCacheHome;
@@ -84,6 +87,7 @@ afterEach(() => {
   restoreEnvironment("MIMO_API_KEY", originalMimoApiKey);
   restoreEnvironment("DEEPSEEK_API_KEY", originalDeepSeekApiKey);
   restoreEnvironment("OPENROUTER_API_KEY", originalOpenRouterApiKey);
+  restoreEnvironment("SYNTHETIC_API_KEY", originalSyntheticApiKey);
   restoreEnvironment("PI_CODING_AGENT_DIR", originalPiCodingAgentDir);
   restoreEnvironment("MMX_CONFIG_DIR", originalMmxConfigDir);
   restoreEnvironment("QUOTA_AXI_THEME", originalTheme);
@@ -117,6 +121,7 @@ describe("CLI flag parsing", () => {
       "devin",
       "muse",
       "higgsfield",
+      "synthetic",
     ]);
   });
 
@@ -193,6 +198,7 @@ describe("CLI flag parsing", () => {
           "devin",
           "muse",
           "higgsfield",
+          "synthetic",
         ],
         json: true,
         full: true,
@@ -1496,12 +1502,12 @@ describe("human report folding for providers that are not set up", () => {
     expect(output.trimEnd().split("\n").slice(-3)).toEqual([
       "  ○ not set up  cursor · copilot · grok · kimi · zai · agy · alibaba · opencode-go · commandcode",
       "                minimax · mimo · deepseek · openrouter · elevenlabs · devin · muse · higgsfield",
-      "                quota-axi auth shows where each is read",
+      "                synthetic   quota-axi auth shows where each is read",
     ]);
     expect(output).not.toMatch(/╭─ ○ (agy|alibaba|commandcode) /);
 
     expect(output).toMatch(
-      /· 1 live · 0 stale · 1 needs attention · 17 not set up\n/,
+      /· 1 live · 0 stale · 1 needs attention · 18 not set up\n/,
     );
     expect(output).toContain("╭─ ● codex ");
     expect(output).toContain("╭─ ○ claude ");
@@ -1514,7 +1520,7 @@ describe("human report folding for providers that are not set up", () => {
     stubFoldFleet();
     const output = await capture(["--tui", "--once", "--all"]);
 
-    expect(output).toContain("  ○ not set up · 17\n");
+    expect(output).toContain("  ○ not set up · 18\n");
     expect(output).toContain("╭─ ○ copilot ");
     expect(output).toContain("╭─ ○ elevenlabs ");
     expect(output).toContain("╭─ ○ higgsfield ");
@@ -1580,7 +1586,7 @@ describe("human report folding for providers that are not set up", () => {
 
       process.stdin.emit("data", Buffer.from("a"));
       await settle("a hide not set up");
-      expect(lastFrame()).toContain("  ○ not set up · 17");
+      expect(lastFrame()).toContain("  ○ not set up · 18");
       expect(lastFrame()).toContain("╭─ ○ zai ");
 
       process.stdin.emit("data", Buffer.from("q"));
@@ -1871,6 +1877,67 @@ describe("new provider public quota output", () => {
 
     const report = await capture(["--provider", "openrouter"]);
     expect(report).toContain("openrouter,all,unresolved_windows,key-limit");
+  });
+
+  it("publishes the registered Synthetic weekly allowance in JSON and TOON", async () => {
+    useTempCache();
+    const key = "synthetic-fixture-cli-key";
+    process.env.SYNTHETIC_API_KEY = key;
+    process.env.PI_CODING_AGENT_DIR = join(tempDir!, "pi-agent-empty");
+    const fetch = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        expect(String(input)).toBe("https://api.synthetic.new/v2/quotas");
+        expect(new Headers(init?.headers).get("authorization")).toBe(
+          `Bearer ${key}`,
+        );
+        return new Response(
+          readFileSync("test/fixtures/synthetic/quotas.json", "utf8"),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      },
+    );
+    vi.stubGlobal("fetch", fetch);
+
+    const json = JSON.parse(
+      await capture(["--provider", "synthetic", "--json", "--full"]),
+    ) as QuotaAxiResponse;
+    const provider = json.providers[0];
+
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(provider).toMatchObject({
+      provider: "synthetic",
+      source: "api",
+      credits: { remaining: 10.29, unit: "usd" },
+      state: {
+        status: "fresh",
+        stale: false,
+        sourcesTried: ["env:SYNTHETIC_API_KEY"],
+      },
+      attempts: [{ source: "env:SYNTHETIC_API_KEY", status: "success" }],
+    });
+    const weekly = provider?.windows.find(({ id }) => id === "weekly");
+    expect(weekly).toMatchObject({
+      kind: "weekly",
+      percentRemaining: 98.02535828571428,
+      limitUsd: 10.5,
+      resetText: "next regen 2026-10-21T08:56:36.000Z",
+    });
+    // The next regeneration is a top-up, not a window turnover.
+    expect(weekly?.resetsAt).toBeUndefined();
+    expect(
+      provider?.quotaSemantics?.effectiveAvailability.find(
+        ({ scope }) => scope === "all_models",
+      ),
+    ).toMatchObject({
+      status: "known",
+      effectivePercentRemaining: 98.02535828571428,
+      boundedBy: ["weekly"],
+    });
+    expect(JSON.stringify(json)).not.toContain(key);
+    expect(process.exitCode).toBeUndefined();
+
+    const report = await capture(["--provider", "synthetic"]);
+    expect(report).toContain("synthetic,all_models,98.02535828571428");
   });
 
   it("reports both new providers as signed out when no key is present", async () => {
@@ -2205,6 +2272,9 @@ describe("default TOON decision blocks", () => {
     PROVIDERS.devin = providerWithQuota(freshDevinQuota());
     PROVIDERS.muse = providerWithQuota(emptyFreshQuota("muse", "Muse"));
     PROVIDERS.higgsfield = providerWithQuota(freshHiggsfieldQuota());
+    PROVIDERS.synthetic = providerWithQuota(
+      emptyFreshQuota("synthetic", "Synthetic"),
+    );
 
     const output = await capture([]);
     const named = new Set([
@@ -2231,6 +2301,7 @@ describe("default TOON decision blocks", () => {
       "muse",
       "opencode-go",
       "openrouter",
+      "synthetic",
       "zai",
     ]);
     expect(output).not.toContain("omitted");

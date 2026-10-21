@@ -16,6 +16,7 @@ import { mimoAdapter } from "./mimo.js";
 import { museAdapter } from "./muse.js";
 import { deepseekAdapter } from "./deepseek.js";
 import { openrouterAdapter } from "./openrouter.js";
+import { syntheticAdapter } from "./synthetic.js";
 import { zaiAdapter } from "./zai.js";
 import {
   PROVIDER_IDS,
@@ -43,6 +44,7 @@ export const PROVIDERS: Record<ProviderId, ProviderAdapter> = {
   devin: devinAdapter,
   muse: museAdapter,
   higgsfield: higgsfieldAdapter,
+  synthetic: syntheticAdapter,
 };
 
 export function parseProviders(value: string | undefined): ProviderId[] {

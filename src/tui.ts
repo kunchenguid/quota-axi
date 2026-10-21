@@ -139,6 +139,7 @@ const MOCHA: Palette = {
     devin: { rgb: [126, 196, 224], ansi16: "96", bold: true },
     muse: { rgb: [0, 132, 255], ansi16: "94", bold: true },
     higgsfield: { rgb: [255, 176, 122], ansi16: "93", bold: true },
+    synthetic: { rgb: [167, 219, 141], ansi16: "92", bold: true },
   },
   styles: {
     dim: { rgb: [127, 132, 156], ansi16: "90" },
@@ -188,6 +189,7 @@ const LATTE: Palette = {
     devin: { rgb: [20, 130, 160], ansi16: "96", bold: true },
     muse: { rgb: [90, 80, 210], ansi16: "94", bold: true },
     higgsfield: { rgb: [200, 80, 20], ansi16: "93", bold: true },
+    synthetic: { rgb: [56, 122, 32], ansi16: "92", bold: true },
   },
   styles: {
     dim: { rgb: [124, 127, 147], ansi16: "90" },

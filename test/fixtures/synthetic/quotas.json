@@ -1,0 +1,26 @@
+{
+  "subscription": {
+    "limit": 500,
+    "requests": 0,
+    "renewsAt": "2026-10-21T13:01:31.726Z"
+  },
+  "search": {
+    "hourly": {
+      "limit": 250,
+      "requests": 1,
+      "renewsAt": "2026-10-21T09:00:23.727Z"
+    }
+  },
+  "freeToolCalls": {
+    "limit": 0,
+    "requests": 0,
+    "renewsAt": "2026-10-22T08:01:31.729Z"
+  },
+  "weeklyTokenLimit": {
+    "nextRegenAt": "2026-10-21T08:56:36.000Z",
+    "percentRemaining": 98.02535828571428,
+    "maxCredits": "$10.50",
+    "remainingCredits": "$10.29",
+    "nextRegenCredits": "$0.21"
+  }
+}

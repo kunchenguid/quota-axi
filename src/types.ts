@@ -17,7 +17,8 @@ export type ProviderId =
   | "elevenlabs"
   | "devin"
   | "muse"
-  | "higgsfield";
+  | "higgsfield"
+  | "synthetic";
 
 export const PROVIDER_IDS = [
   "claude",
@@ -39,6 +40,7 @@ export const PROVIDER_IDS = [
   "devin",
   "muse",
   "higgsfield",
+  "synthetic",
 ] as const satisfies readonly ProviderId[];
 
 export type ProviderSource =
