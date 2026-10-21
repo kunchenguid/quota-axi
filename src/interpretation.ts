@@ -220,8 +220,9 @@ function semanticsFor(
  * and an unrecognized root field that may carry a limit of its own, withholds
  * `all_models`.
  *
- * Neither the weekly allowance nor the request counter reports a cycle
- * turnover: both refill continuously, so the windows carry renewal text and no
+ * Neither bound reports an established cycle turnover: the allowance
+ * regenerates incrementally and the counter's renewal moment may be the next
+ * slice of a refilling bucket, so both windows carry renewal text and no
  * `resetsAt`. Pace, runway, and the selection scalar stay unknown without a
  * cycle, while `effectivePercentRemaining` still publishes the minimum of the
  * vendor's own figures - the fact a caller actually needs before spending.
