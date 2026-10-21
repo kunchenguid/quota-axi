@@ -350,7 +350,7 @@ function weeklyTokenWindow(
     kind: "weekly",
     percentUsed: Math.min(100, Math.max(0, 100 - remaining)),
     percentRemaining: remaining,
-    ...(nextRegenAt ? { resetText: `next regen ${nextRegenAt}` } : {}),
+    ...(nextRegenAt ? { resetText: renewalText("regen", nextRegenAt) } : {}),
     ...(limitUsd !== undefined ? { limitUsd } : {}),
   };
 }
@@ -385,7 +385,7 @@ function rollingFiveHourWindow(value: unknown): QuotaWindow | undefined {
     percentUsed: 100 - percentRemaining,
     percentRemaining,
     windowSeconds: FIVE_HOUR_SECONDS,
-    ...(nextTickAt ? { resetText: `next tick ${nextTickAt}` } : {}),
+    ...(nextTickAt ? { resetText: renewalText("tick", nextTickAt) } : {}),
   };
 }
 
@@ -442,9 +442,17 @@ function requestCountWindow(
       ...(spec.windowSeconds !== undefined
         ? { windowSeconds: spec.windowSeconds }
         : {}),
-      ...(renewsAt ? { resetText: `next renewal ${renewsAt}` } : {}),
+      ...(renewsAt ? { resetText: renewalText("renewal", renewsAt) } : {}),
     },
   };
+}
+
+/**
+ * Renewal evidence led by its UTC `HH:MM`, so a narrow reset column still
+ * shows when it lands, followed by the full timestamp.
+ */
+function renewalText(kind: string, at: string): string {
+  return `${at.slice(11, 16)}Z ${kind} - ${at}`;
 }
 
 function objectValue(value: unknown): Record<string, unknown> | undefined {

@@ -1920,7 +1920,7 @@ describe("new provider public quota output", () => {
       kind: "weekly",
       percentRemaining: 98.02535828571428,
       limitUsd: 10.5,
-      resetText: "next regen 2026-10-21T08:56:36.000Z",
+      resetText: "08:56Z regen - 2026-10-21T08:56:36.000Z",
     });
     // The next regeneration is a top-up, not a window turnover.
     expect(weekly?.resetsAt).toBeUndefined();
