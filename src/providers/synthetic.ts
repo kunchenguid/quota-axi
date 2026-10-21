@@ -264,7 +264,7 @@ export function normalizeSyntheticPayload(
 
   const weeklyTokenLimit = objectValue(root.weeklyTokenLimit);
   const weekly = weeklyTokenWindow(weeklyTokenLimit);
-  // The account-wide bound is the one field whose absence leaves model
+  // The two account-wide bounds are the fields whose absence leaves model
   // headroom unstated, so a missing or unreadable one is named rather than
   // silently dropped.
   if (weekly) windows.push(weekly);
@@ -275,7 +275,7 @@ export function normalizeSyntheticPayload(
     SUBSCRIPTION_WINDOW,
   );
   if (subscription.kind === "window") windows.push(subscription.window);
-  if (subscription.kind === "untrusted")
+  if (subscription.kind === "untrusted" || subscription.kind === "absent")
     untrustedWindowIds.push(SUBSCRIPTION_WINDOW.id);
 
   const search = objectValue(root.search);

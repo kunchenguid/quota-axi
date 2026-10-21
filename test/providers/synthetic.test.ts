@@ -480,22 +480,59 @@ describe("Synthetic provider", () => {
   });
 
   it("names unrecognized object-valued fields instead of folding them into the bound", async () => {
-    const normalized = normalizeSyntheticPayload(
-      payloadWith((copy) => {
-        copy.rollingFiveHourLimit = {
-          nextTickAt: "2026-10-21T08:15:00.000Z",
-          tickPercent: 0.05,
-          remaining: 600,
-          max: 600,
-          limited: false,
-        };
-      }),
-    );
+    const payload = payloadWith((copy) => {
+      copy.rollingFiveHourLimit = {
+        nextTickAt: "2026-10-21T08:15:00.000Z",
+        tickPercent: 0.05,
+        remaining: 0,
+        max: 600,
+        limited: true,
+      };
+    });
+    const normalized = normalizeSyntheticPayload(payload);
     expect(normalized.untrustedWindowIds).toEqual(["rollingFiveHourLimit"]);
     expect(normalized.windows.map(({ id }) => id)).toEqual([
       "weekly",
       "subscription",
       "search_hourly",
     ]);
+
+    // A root field that may carry a model limit of its own withholds the
+    // account-wide figure rather than letting it publish as known.
+    const report = await interpreted(payload);
+    expect(report.quotaSemantics?.status).toBe("partial");
+    const account = report.quotaSemantics?.effectiveAvailability.find(
+      ({ scope }) => scope === "all_models",
+    );
+    expect(account).toMatchObject({
+      status: "unknown",
+      boundedBy: ["weekly", "subscription"],
+    });
+    expect(account?.effectivePercentRemaining).toBeUndefined();
+    expect(
+      report.quotaSemantics?.effectiveAvailability.find(
+        ({ scope }) => scope === "search",
+      ),
+    ).toMatchObject({ status: "known" });
+  });
+
+  it("names a payload missing the subscription counter instead of bounding by weekly alone", async () => {
+    const report = await interpreted(
+      payloadWith((copy) => {
+        delete copy.subscription;
+      }),
+    );
+
+    expect(report.windows.map(({ id }) => id)).not.toContain("subscription");
+    expect(report.state.untrustedWindowIds).toEqual(["subscription"]);
+    expect(report.quotaSemantics?.status).toBe("partial");
+    const account = report.quotaSemantics?.effectiveAvailability.find(
+      ({ scope }) => scope === "all_models",
+    );
+    expect(account).toMatchObject({
+      status: "unknown",
+      boundedBy: ["weekly"],
+    });
+    expect(account?.effectivePercentRemaining).toBeUndefined();
   });
 });

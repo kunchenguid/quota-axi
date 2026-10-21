@@ -213,11 +213,12 @@ function semanticsFor(
  * `free_tool_calls`) meter search and tool calls against their own renewal
  * periods, so they stay named scopes that never enter the model bound.
  *
- * Unresolved-ness is scope-local. A field that could only feed its own named
- * scope - an unreadable `search.hourly` bucket, `freeToolCalls`, or a total
- * request counter - leaves that scope unknown without withholding the
- * account-wide figure it cannot affect. An unresolved `weekly` or
- * `subscription` field does withhold `all_models`, because both bound it.
+ * Unresolved-ness is scope-local. A field that could only feed a search or
+ * tool-call scope - an unreadable `search` bucket or `freeToolCalls` - leaves
+ * that scope unknown without withholding the account-wide figure it cannot
+ * affect. Every other unresolved field, including `weekly`, `subscription`,
+ * and an unrecognized root field that may carry a limit of its own, withholds
+ * `all_models`.
  *
  * Neither the weekly allowance nor the request counter reports a cycle
  * turnover: both refill continuously, so the windows carry renewal text and no
@@ -234,14 +235,18 @@ const SYNTHETIC_REQUEST_WINDOW_IDS: Readonly<Record<string, string>> = {
 };
 
 /**
- * Which unresolved field can add a bound to a request meter's own scope. A
- * `search` bucket this reader does not place (such as an unfamiliar
- * `search.daily`) belongs to the search scope, never to the model bound.
+ * The scope an unresolved field could feed. Only the search and tool-call
+ * meters, and a `search` bucket this reader does not place (such as an
+ * unfamiliar `search.daily`), stay out of the model bound; anything else may
+ * limit model calls and so belongs to `all_models`.
  */
-function syntheticScopeOwns(scope: string, unresolvedId: string): boolean {
-  return scope === "search"
-    ? unresolvedId === "search" || unresolvedId.startsWith("search.")
-    : unresolvedId === scope;
+function syntheticUnresolvedScope(unresolvedId: string): string {
+  if (unresolvedId === "search" || unresolvedId.startsWith("search.")) {
+    return "search";
+  }
+  if (unresolvedId === "search_hourly") return "search";
+  if (unresolvedId === "free_tool_calls") return "tools";
+  return "all_models";
 }
 
 function syntheticSemantics(
@@ -255,19 +260,12 @@ function syntheticSemantics(
   const requestMeters = requestWindows(windows);
   const recognized = new Set([...bounds, ...requestMeters]);
   const unresolved = windows.filter((window) => !recognized.has(window));
-  // Only a field that can bound the account-wide scope withholds it; the rest
-  // are named on their own scope and stay out of the model bound's reading.
-  const accountUnresolved = [
-    ...new Set([
-      ...unresolved.map(({ id }) => id),
-      ...untrustedWindowIds.filter((id) =>
-        SYNTHETIC_ACCOUNT_WINDOW_IDS.has(id),
-      ),
-    ]),
-  ];
   const unresolvedWindowIds = [
     ...new Set([...unresolved.map(({ id }) => id), ...untrustedWindowIds]),
   ];
+  const accountUnresolved = unresolvedWindowIds.filter(
+    (id) => syntheticUnresolvedScope(id) === "all_models",
+  );
   const description =
     "Synthetic's weekly credit allowance and its subscription request counter both gate model calls, so effective remaining is the minimum across them. Both refill continuously instead of turning over at a reset, so the vendor reports no reset instant and pace, runway, and selection stay unknown while the percentage still publishes. The search and tool-call request meters are separate scopes and never enter the account-wide bound.";
   const effectiveAvailability: EffectiveAvailability[] = [];
@@ -282,10 +280,7 @@ function syntheticSemantics(
     const scope = SYNTHETIC_REQUEST_WINDOW_IDS[window.id] ?? window.id;
     // A named scope is blocked only by a field that could feed it.
     const scopeUnresolved = unresolvedWindowIds.filter(
-      (id) =>
-        id !== "weekly" &&
-        id !== "subscription" &&
-        syntheticScopeOwns(scope, id),
+      (id) => syntheticUnresolvedScope(id) === scope,
     );
     effectiveAvailability.push(
       scopeUnresolved.length > 0
