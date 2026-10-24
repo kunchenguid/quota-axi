@@ -13,7 +13,7 @@ import type {
 } from "./types.js";
 
 /**
- * Human terminal report ("Direction D'"): a two-up card grid with thin
+ * Human terminal report ("Direction D'"): a width-filling card grid with thin
  * headroom bars and a linear-pace marker wherever pace is known. This surface is
  * presentation only - it renders the same redacted response the TOON and JSON
  * surfaces receive, grouped by the caller's presence classification, and
@@ -40,7 +40,7 @@ export const TUI_THEME_SETTINGS: readonly TuiThemeSetting[] = [
 ];
 
 export type TuiOptions = {
-  /** Raw terminal width; clamped to [80, 120], defaults to 100. */
+  /** Raw terminal width; at least 80, defaults to 100. */
   columns?: number;
   colorDepth?: TuiColorDepth;
   /** Truecolor/256 palette; defaults to `dark`. The ANSI-16 path is theme-free. */
@@ -81,7 +81,6 @@ const ACCOUNT_LABEL_WIDTH = 20;
 /** 3 gutter + 8 label + bar + 1 + 4 percent + 2 + 6 reset + 1 = CARD_INTERIOR. */
 const WINDOW_BAR_WIDTH = CARD_INTERIOR - 25;
 const MIN_COLUMNS = 80;
-const MAX_COLUMNS = 120;
 const GRAPHEME_SEGMENTER = new Intl.Segmenter("en", {
   granularity: "grapheme",
 });
@@ -237,7 +236,7 @@ export function renderQuotaTui(
   options: TuiOptions = {},
 ): string {
   const columns = resolveColumns(options.columns);
-  const twoColumn = columns >= TWO_COLUMN_MIN;
+  const perRow = cardsPerRow(columns);
   const generatedAtMs = Date.parse(response.generatedAt);
   const timeZone = options.timeZone;
   const show = options.show ?? "remaining";
@@ -272,7 +271,7 @@ export function renderQuotaTui(
   ]);
   lines.push([]);
   if (carded.length > 0) {
-    lines.push(...layoutCards(carded.map(card), twoColumn));
+    lines.push(...layoutCards(carded.map(card), perRow));
   }
   if (absent.length > 0) {
     if (lines.length > 2) lines.push([]);
@@ -282,7 +281,7 @@ export function renderQuotaTui(
         { text: ` · ${absent.length}`, style: "dim" },
       ]);
       lines.push([]);
-      lines.push(...layoutCards(absent.map(card), twoColumn));
+      lines.push(...layoutCards(absent.map(card), perRow));
     } else {
       lines.push(...notSetUpFooter(absent, labelOf, columns));
     }
@@ -382,9 +381,15 @@ function renderStyle(options: TuiOptions): RenderStyle {
 }
 
 function resolveColumns(columns: number | undefined): number {
-  return Math.min(
-    MAX_COLUMNS,
-    Math.max(MIN_COLUMNS, columns ?? TWO_COLUMN_MIN),
+  if (columns === undefined || !Number.isFinite(columns)) return TWO_COLUMN_MIN;
+  return Math.max(MIN_COLUMNS, Math.floor(columns));
+}
+
+/** As many cards as fit side by side with their gutters, never fewer than one. */
+function cardsPerRow(columns: number): number {
+  return Math.max(
+    1,
+    Math.floor((columns + CARD_GUTTER) / (CARD_WIDTH + CARD_GUTTER)),
   );
 }
 
@@ -1242,32 +1247,21 @@ function fitFooterParts(
     .join(separator);
 }
 
-function layoutCards(cards: Card[], twoColumn: boolean): Line[] {
+function layoutCards(cards: Card[], perRow: number): Line[] {
   const lines: Line[] = [];
-  if (!twoColumn) {
-    cards.forEach((card, index) => {
-      if (index > 0) lines.push([]);
-      lines.push(...card);
-    });
-    return lines;
-  }
-  for (let index = 0; index < cards.length; index += 2) {
+  for (let index = 0; index < cards.length; index += perRow) {
     if (index > 0) lines.push([]);
-    const left = cards[index];
-    const right = cards[index + 1];
-    if (!right) {
-      lines.push(...left);
-      continue;
-    }
-    const height = Math.max(left.length, right.length);
-    const paddedLeft = padCardToHeight(left, height);
-    const paddedRight = padCardToHeight(right, height);
-    for (let row = 0; row < height; row++) {
-      lines.push([
-        ...paddedLeft[row],
-        { text: " ".repeat(CARD_GUTTER) },
-        ...paddedRight[row],
-      ]);
+    const row = cards.slice(index, index + perRow);
+    const height = Math.max(...row.map((card) => card.length));
+    const padded = row.map((card) => padCardToHeight(card, height));
+    for (let line = 0; line < height; line++) {
+      lines.push(
+        padded.flatMap((card, column) =>
+          column === 0
+            ? card[line]
+            : [{ text: " ".repeat(CARD_GUTTER) }, ...card[line]],
+        ),
+      );
     }
   }
   return lines;
