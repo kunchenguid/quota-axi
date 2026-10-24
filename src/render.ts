@@ -1,5 +1,5 @@
 import { encode } from "@toon-format/toon";
-import { quotaHelpLines } from "./advice.js";
+import { authHelpLines, quotaHelpLines } from "./advice.js";
 import { accountColumns } from "./providers/accounts.js";
 import { collapseHome } from "./lib/fs.js";
 import { isUsageFetchFailure } from "./providers/usage-fetch-failure.js";
@@ -558,6 +558,7 @@ export function renderAuthToon(
     }),
     encode({ auth: sources }),
     renderHelp([
+      ...authHelpLines(reports),
       "Run `quota-axi --allow-keychain-prompt auth` to permit native secure-store access",
     ]),
   ].join("\n");

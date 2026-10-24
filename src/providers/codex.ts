@@ -45,6 +45,7 @@ import {
 import {
   createPiCodexCredentialBroker,
   PI_CODEX_BUILTIN_ID,
+  PI_OPENAI_CHATGPT_TOKEN_UNMEASURED,
   piCodexSource,
   type PiCodexCredentialBroker,
   type PiCodexCredentialInspection,
@@ -552,7 +553,10 @@ async function fetchPiAccountQuota(
             ? "Pi Codex access token expired"
             : piResolution?.status === "missing"
               ? "Codex quota unavailable"
-              : CODEX_SIGN_IN_REQUIRED;
+              : piResolution?.status === "unsupported" &&
+                  piResolution.error === PI_OPENAI_CHATGPT_TOKEN_UNMEASURED
+                ? PI_OPENAI_CHATGPT_TOKEN_UNMEASURED
+                : CODEX_SIGN_IN_REQUIRED;
   return codexFailureReport(
     finalError,
     piSelection.outcome === "transient" ? piSelection.retryAfter : undefined,
@@ -919,9 +923,11 @@ function codexFailureReport(
       accountKeys: [codexCredentialKey(cached?.source) ?? credentialKey],
     };
   }
+  // A ChatGPT sign-in token is never probed, so its row is neither an auth
+  // verdict nor a failed request: the quota is simply not measurable.
   const failureStatus = retryAfter
     ? "rate_limited"
-    : softExpiry
+    : softExpiry || error === PI_OPENAI_CHATGPT_TOKEN_UNMEASURED
       ? "unavailable"
       : statusFromError(error);
   // A failed CLI read after only absent local stores names no ChatGPT seat.
@@ -1058,7 +1064,7 @@ function piSourceAttempt(
     resolution.status === "missing"
       ? "credentials_missing"
       : resolution.status === "unsupported"
-        ? "unsupported_credential_type"
+        ? resolution.error
         : "credentials_invalid";
   return {
     source,
@@ -1078,7 +1084,9 @@ function piInspectionSource(
     inspection.status === "expired" ||
     inspection.status === "error"
       ? inspection.status
-      : "invalid";
+      : inspection.error === PI_OPENAI_CHATGPT_TOKEN_UNMEASURED
+        ? "skipped"
+        : "invalid";
   return {
     source,
     path: inspection.path,
