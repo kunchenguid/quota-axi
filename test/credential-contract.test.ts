@@ -151,9 +151,7 @@ beforeEach(() => {
     "apps.json",
   );
   process.env.GH_CONFIG_DIR = join(tempDir, "gh");
-  // OpenCode Go reads its Pi store only behind this opt-in; the contract here
-  // exercises that real file-to-adapter path.
-  process.env.QUOTA_AXI_OPENCODE_GO_PI_AUTH = "1";
+  delete process.env.QUOTA_AXI_OPENCODE_GO_PI_AUTH;
   process.env.COPILOT_HOME = join(tempDir, "copilot");
   delete process.env.GROK_AUTH;
   delete process.env.GROK_AUTH_JSON;
