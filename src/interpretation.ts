@@ -1010,12 +1010,24 @@ function agySemantics(
       availability("claude_gpt", claudeGpt, generatedAt),
     );
   }
-  if (argon.length > 0) {
+  const unresolvedArgonIds = unresolved
+    .map(({ id }) => id)
+    .filter((id) => id.startsWith("gemini_argon_"));
+  if (unresolvedArgonIds.length > 0) {
+    effectiveAvailability.push(
+      unresolvedAvailability(
+        "model:gemini-4-argon-high",
+        [...gemini, ...argon],
+        unresolvedArgonIds,
+      ),
+    );
+  } else if (argon.length > 0) {
     effectiveAvailability.push(
       availability(
         "model:gemini-4-argon-high",
         [...gemini, ...argon],
         generatedAt,
+        argon,
       ),
     );
   }
@@ -1023,14 +1035,14 @@ function agySemantics(
     return {
       status: effectiveAvailability.length > 0 ? "partial" : "unknown",
       description:
-        "Antigravity groups Gemini windows separately from Claude/GPT windows. Within a group, the weekly and 5-hour windows jointly bound that group. Gemini 4 Argon has its own model scope bounded by the Gemini group windows and its weekly window; the general Gemini scope does not cover Argon. Unfamiliar windows are not folded into any bound, so they stay unresolved.",
+        "Antigravity groups Gemini windows separately from Claude/GPT windows. Within a group, the weekly and 5-hour windows jointly bound that group. Gemini 4 Argon has its own model scope bounded by its weekly window and the inherited Gemini group windows; the general Gemini scope does not cover Argon. An inherited Gemini window at zero while the Argon weekly window still reports allowance is published as a bound conflict rather than as Argon exhaustion. Unfamiliar windows are not folded into any bound, so they stay unresolved, and an unfamiliar Argon window leaves the Argon scope non-definitive.",
       effectiveAvailability,
       unresolvedWindowIds: unresolved.map(({ id }) => id),
     };
   }
   return knownSemantics(
     effectiveAvailability,
-    "Antigravity groups Gemini windows separately from Claude/GPT windows. Within a group, the weekly and 5-hour windows jointly bound that group, so that group's effective remaining percentage is the minimum across the named windows. Gemini 4 Argon has its own model scope bounded by the Gemini group windows and its weekly window; the general Gemini scope does not cover Argon.",
+    "Antigravity groups Gemini windows separately from Claude/GPT windows. Within a group, the weekly and 5-hour windows jointly bound that group, so that group's effective remaining percentage is the minimum across the named windows. Gemini 4 Argon has its own model scope bounded by its weekly window and the inherited Gemini group windows, so its effective remaining is the minimum across them; the general Gemini scope does not cover Argon. An inherited Gemini window at zero while the Argon weekly window still reports allowance is published as a bound conflict rather than as Argon exhaustion.",
   );
 }
 
