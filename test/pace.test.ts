@@ -564,7 +564,7 @@ describe("computeEffectiveRunway", () => {
     });
   });
 
-  it("does not block established runway on a provably unopened account window", () => {
+  it("keeps a future unopened account window unmeasurable", () => {
     const futureAccount = window({
       id: "five_hour",
       kind: "session",
@@ -585,9 +585,15 @@ describe("computeEffectiveRunway", () => {
     expect(
       computeEffectiveRunway([establishedAccount, futureAccount], GENERATED_AT),
     ).toEqual({
-      status: "through_reset",
-      projectionConfidence: "established",
+      status: "unknown",
+      unmeasurableWindowIds: ["five_hour"],
     });
+    expect(
+      summarizeEffectiveSelection(
+        [establishedAccount, futureAccount],
+        GENERATED_AT,
+      ),
+    ).toEqual({ status: "unknown", unmeasurableWindowIds: ["five_hour"] });
   });
 
   it.each([

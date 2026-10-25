@@ -484,12 +484,11 @@ function isNotYetTriggeredZeroUse(window: QuotaWindow): boolean {
  * The cycle length, in seconds, of a provably unopened future cycle, or
  * undefined. Both usage fields must prove that nothing has been consumed, pace
  * must identify only a cycle start ahead of the snapshot, and the reset must
- * be valid and ahead. A cycle given by `startsAt` and `resetsAt` is admitted
- * when its start is no more than one cycle ahead, so the window describes at
- * most the next cycle. A cycle implied by `windowSeconds` is admitted when its
- * reset is no more than one declared duration plus the bounded snapshot skew
- * ahead. A named-model window keeps that `windowSeconds` rule whether or not
- * it carries a `startsAt`.
+ * be valid and ahead. A non-model window is admitted only from `startsAt` and
+ * `resetsAt`, when its start is no more than one cycle ahead, so the window
+ * describes at most the next cycle. A named-model window is admitted only from
+ * `windowSeconds`, when its reset is no more than one declared duration plus
+ * the bounded snapshot skew ahead, whether or not it carries a `startsAt`.
  */
 function unopenedFutureCycleSeconds(
   window: QuotaWindow,
@@ -508,9 +507,9 @@ function unopenedFutureCycleSeconds(
     return undefined;
   }
 
-  const startsAtMs =
-    window.kind === "model" ? undefined : parseTimestamp(window.startsAt);
-  if (startsAtMs !== undefined) {
+  if (window.kind !== "model") {
+    const startsAtMs = parseTimestamp(window.startsAt);
+    if (startsAtMs === undefined) return undefined;
     const cycleSeconds = (resetsAtMs - startsAtMs) / 1000;
     return Number.isFinite(cycleSeconds) &&
       cycleSeconds > 0 &&
