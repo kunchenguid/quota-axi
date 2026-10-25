@@ -28,15 +28,17 @@ export function renderHelp(lines: string[]): string {
 }
 
 /**
- * One measurable scope. Every column is populated for every row, and rows stay
- * in provider-declaration and account-discovery order: a `spendPriority`
- * column must never read as a published ranking.
+ * One measurable scope. Every column is populated for every row, except that
+ * `effectivePercentRemaining` is empty for a scope whose selection is known
+ * without a remaining figure. Rows stay in provider-declaration and
+ * account-discovery order: a `spendPriority` column must never read as a
+ * published ranking.
  */
 type QuotaRow = {
   provider: ProviderId;
   accountKey?: string;
   scope: string;
-  effectivePercentRemaining: number;
+  effectivePercentRemaining: number | "";
   [SELECTION_SCALAR_KEY]: number | string;
   runway: string;
   confidence: string;
@@ -129,7 +131,10 @@ function quotaBlocks(response: QuotaAxiResponse): ProviderBlocks {
     let measured = false;
 
     for (const scope of scopes) {
-      if (scope.effectivePercentRemaining === undefined) {
+      if (
+        scope.effectivePercentRemaining === undefined &&
+        scope.selection?.status !== "known"
+      ) {
         scopeAttention.push({
           ...providerColumns(provider),
           scope: scope.scope,
@@ -174,7 +179,7 @@ function quotaRow(
   return {
     ...providerColumns(provider),
     scope: scope.scope,
-    effectivePercentRemaining: scope.effectivePercentRemaining as number,
+    effectivePercentRemaining: scope.effectivePercentRemaining ?? "",
     // `unknown`, never `0`: `0` is exact utilization, a different claim.
     [SELECTION_SCALAR_KEY]: scope.selection?.[SELECTION_SCALAR_KEY] ?? UNKNOWN,
     runway: scope.runway?.status ?? UNKNOWN,

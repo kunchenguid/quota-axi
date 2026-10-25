@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withQuotaSemantics } from "../../src/interpretation.js";
+import { renderQuotaToon } from "../../src/render.js";
 import {
   createMistralAdapter,
   MISTRAL_ENV_SOURCE,
@@ -287,6 +288,43 @@ describe("Mistral provider", () => {
         selection: { status: "known", [SELECTION_SCALAR_KEY]: 0 },
       },
     ]);
+  });
+
+  it("renders the fixed spendPriority as a default TOON quota row", async () => {
+    const report = await adapterFor({
+      MISTRAL_API_KEY: SYNTHETIC_KEY,
+    }).fetchQuota(OPTIONS);
+
+    const toon = renderQuotaToon(
+      {
+        generatedAt: GENERATED_AT,
+        schemaVersion: 5,
+        providers: [withQuotaSemantics(report, GENERATED_AT)],
+      },
+      "quota-axi",
+      false,
+    );
+
+    expect(toon).toContain(
+      'mistral,all_models,"",0,unknown,unknown,unknown,unknown',
+    );
+    expect(toon).not.toContain("headroom_unknown");
+  });
+
+  it("renders no quota row without a usable credential", async () => {
+    const report = await adapterFor().fetchQuota(OPTIONS);
+
+    const toon = renderQuotaToon(
+      {
+        generatedAt: GENERATED_AT,
+        schemaVersion: 5,
+        providers: [withQuotaSemantics(report, GENERATED_AT)],
+      },
+      "quota-axi",
+      false,
+    );
+
+    expect(toon).toContain("quota[0]");
   });
 
   it("publishes no scope and unknown selection without a usable credential", async () => {
