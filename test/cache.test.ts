@@ -372,6 +372,21 @@ describe("quota cache", () => {
     });
   });
 
+  it("keeps a cached credit balance's vendor availability flag", () => {
+    useTempCache();
+    writeCachedProviders([
+      {
+        ...quota("deepseek", 0),
+        credits: { remaining: 5, unit: "usd", available: false },
+      },
+    ]);
+    expect(readCachedProvider("deepseek")?.credits).toEqual({
+      remaining: 5,
+      unit: "usd",
+      available: false,
+    });
+  });
+
   it("does not serve Higgsfield through --max-age, including after a login switch", () => {
     useTempCache();
     const jobs = { sampled: 4, completed: 2, failed: 1, other: 1 };
