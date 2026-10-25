@@ -180,7 +180,7 @@ function quotaRow(
     ...providerColumns(provider),
     scope: scope.scope,
     effectivePercentRemaining: scope.effectivePercentRemaining ?? "",
-    // `unknown`, never `0`: `0` is exact utilization, a different claim.
+    // `unknown`, never `0`: `0` is a known scalar, a different claim.
     [SELECTION_SCALAR_KEY]: scope.selection?.[SELECTION_SCALAR_KEY] ?? UNKNOWN,
     runway: scope.runway?.status ?? UNKNOWN,
     confidence: scope.runway?.projectionConfidence ?? UNKNOWN,
