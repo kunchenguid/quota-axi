@@ -13,6 +13,9 @@ importers:
       axi-sdk-js:
         specifier: ^0.1.10
         version: 0.1.10
+      js-yaml:
+        specifier: ^4.1.1
+        version: 4.1.1
       proxy-from-env:
         specifier: 2.1.0
         version: 2.1.0
@@ -38,9 +41,6 @@ importers:
       globals:
         specifier: 17.7.0
         version: 17.7.0
-      js-yaml:
-        specifier: ^4.1.1
-        version: 4.1.1
       prettier:
         specifier: 3.8.1
         version: 3.8.1

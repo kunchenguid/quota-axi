@@ -12,6 +12,7 @@ export type ProviderId =
   | "commandcode"
   | "minimax"
   | "mimo"
+  | "mistral"
   | "deepseek"
   | "openrouter"
   | "elevenlabs"
@@ -33,6 +34,7 @@ export const PROVIDER_IDS = [
   "commandcode",
   "minimax",
   "mimo",
+  "mistral",
   "deepseek",
   "openrouter",
   "elevenlabs",
