@@ -1576,6 +1576,101 @@ describe("per-scope selection signal", () => {
     expect(result.quotaSemantics?.status).toBe("unknown");
   });
 
+  it("publishes a credits scope with the fixed scalar for a healthy balance", () => {
+    const deepseek: ProviderQuota = {
+      ...provider("deepseek", []),
+      credits: { remaining: 29.97, unit: "usd" },
+    };
+    const result = withQuotaSemantics(deepseek, GENERATED_AT);
+    expect(result.credits).toEqual({ remaining: 29.97, unit: "usd" });
+    expect(result.quotaSemantics?.effectiveAvailability).toEqual([
+      {
+        scope: "credits",
+        status: "unknown",
+        boundedBy: [],
+        runway: { status: "unknown" },
+        selection: { status: "known", [SELECTION_SCALAR_KEY]: 0 },
+      },
+    ]);
+  });
+
+  it("publishes a steep negative scalar for a low USD balance, still usable", () => {
+    const deepseek: ProviderQuota = {
+      ...provider("deepseek", []),
+      credits: { remaining: 1.5, unit: "usd" },
+    };
+    const scope = withQuotaSemantics(deepseek, GENERATED_AT).quotaSemantics
+      ?.effectiveAvailability[0];
+    expect(scope?.selection).toEqual({
+      status: "known",
+      [SELECTION_SCALAR_KEY]: -50,
+    });
+    expect(scope?.runway).toEqual({ status: "unknown" });
+    expect(scope?.effectivePercentRemaining).toBeUndefined();
+  });
+
+  it("publishes exhausted_now at a zero or negative balance", () => {
+    for (const remaining of [0, -4.25]) {
+      const deepseek: ProviderQuota = {
+        ...provider("deepseek", []),
+        credits: { remaining, unit: "usd" },
+      };
+      const scope = withQuotaSemantics(deepseek, GENERATED_AT).quotaSemantics
+        ?.effectiveAvailability[0];
+      expect(scope?.runway).toEqual({
+        status: "exhausted_now",
+        usableRunwaySeconds: 0,
+        projectedExhaustedAt: GENERATED_AT,
+      });
+      expect(scope?.selection).toEqual({
+        status: "known",
+        [SELECTION_SCALAR_KEY]: -50,
+      });
+    }
+  });
+
+  it("applies no USD threshold to non-USD units and keeps unknown shapes unknown", () => {
+    const lowCredits: ProviderQuota = {
+      ...provider("deepseek", []),
+      credits: { remaining: 1.5, unit: "credits" },
+    };
+    expect(
+      withQuotaSemantics(lowCredits, GENERATED_AT).quotaSemantics
+        ?.effectiveAvailability[0]?.selection,
+    ).toEqual({ status: "known", [SELECTION_SCALAR_KEY]: 0 });
+
+    for (const credits of [
+      { remaining: 10 },
+      { unlimited: true, unit: "usd" },
+      { unit: "usd" },
+    ] as const) {
+      const deepseek: ProviderQuota = {
+        ...provider("deepseek", []),
+        credits,
+      };
+      const scope = withQuotaSemantics(deepseek, GENERATED_AT).quotaSemantics
+        ?.effectiveAvailability[0];
+      expect(scope?.selection).toEqual({ status: "unknown" });
+      expect(scope?.runway).toEqual({ status: "unknown" });
+      expect(scope?.effectivePercentRemaining).toBeUndefined();
+    }
+  });
+
+  it("keeps windowed providers with a balance on their window semantics", () => {
+    const openrouter: ProviderQuota = {
+      ...provider("openrouter", [
+        window("key-limit", "credits", 73.25, {
+          percentUsed: 26.75,
+        }),
+      ]),
+      credits: { remaining: 73.25, unit: "usd" },
+    };
+    const scopes =
+      withQuotaSemantics(openrouter, GENERATED_AT).quotaSemantics
+        ?.effectiveAvailability ?? [];
+    expect(scopes.map(({ scope }) => scope)).not.toContain("credits");
+  });
+
   it("bounds Higgsfield credits at included_credits and does not invent a model lane", () => {
     const result = withQuotaSemantics(
       provider("higgsfield", [window("credits", "credits", 99)]),

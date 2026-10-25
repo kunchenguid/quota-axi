@@ -130,6 +130,10 @@ function quotaBlocks(response: QuotaAxiResponse): ProviderBlocks {
 
     for (const scope of scopes) {
       if (scope.effectivePercentRemaining === undefined) {
+        // The credit-balance scope has no percentage by design; the
+        // provider's `credits` attention row already states the balance, so
+        // a `headroom_unknown` row would only repeat it as a gap.
+        if (scope.scope === "credits") continue;
         scopeAttention.push({
           ...providerColumns(provider),
           scope: scope.scope,

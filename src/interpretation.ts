@@ -2,6 +2,7 @@ import { degradedSources } from "./lib/source-attempts.js";
 import {
   computeEffectiveRunway,
   computeWindowPace,
+  summarizeCreditBalance,
   summarizeEffectivePace,
   summarizeEffectiveSelection,
 } from "./pace.js";
@@ -176,6 +177,12 @@ function semanticsFor(
       );
     case "deepseek":
     case "openrouter":
+      // Balance-only readings get the credit-balance scope. A reading that
+      // also reports real windows (an OpenRouter key cap) keeps the raw
+      // balance beside its windows, with no scope inferred from the amount.
+      if (provider.windows.length === 0 && provider.credits !== undefined) {
+        return creditBalanceSemantics(provider, generatedAt);
+      }
       return unknownSemantics(
         provider.windows,
         `${provider.label ?? provider.provider} reports a credit balance, not a usage window. quota-axi exposes the raw balance but does not infer an effective remaining percentage.`,
@@ -1022,6 +1029,36 @@ function agySemantics(
     effectiveAvailability,
     "Antigravity groups Gemini windows separately from Claude/GPT windows. Within a group, the weekly and 5-hour windows jointly bound that group, so that group's effective remaining percentage is the minimum across the named windows.",
   );
+}
+
+/**
+ * A prepaid credit balance with no cap, cycle, or reset bounds no model
+ * percentage, so the `credits` scope publishes no
+ * `effectivePercentRemaining`. What it can state is the fixed credit-balance
+ * selection convention and runway from `summarizeCreditBalance`: usable
+ * while the balance is positive, `exhausted_now` at or below zero. DeepSeek
+ * is the balance-only provider today; any provider that also reports real
+ * windows never reaches this scope.
+ */
+function creditBalanceSemantics(
+  provider: ProviderQuota,
+  generatedAt: string,
+): QuotaSemantics {
+  const { runway, selection } = summarizeCreditBalance(
+    provider.credits,
+    generatedAt,
+  );
+  const scope: EffectiveAvailability = {
+    scope: "credits",
+    status: "unknown",
+    boundedBy: [],
+    runway,
+    selection,
+  };
+  const description = `${provider.label ?? provider.provider} reports a prepaid credit balance, not a usage window, so no effective remaining percentage is inferred from the amount. The credits scope publishes the fixed credit-balance selection signal: a positive balance is usable at spendPriority 0 (a USD balance below 2 at -50), a balance at or below zero is exhausted_now, and a missing unit or unlimited balance stays unknown.`;
+  return selection?.status === "known"
+    ? knownSemantics([scope], description)
+    : { status: "unknown", description, effectiveAvailability: [scope] };
 }
 
 function unknownSemantics(
