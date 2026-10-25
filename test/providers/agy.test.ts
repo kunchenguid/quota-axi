@@ -37,6 +37,7 @@ import {
 } from "../../src/providers/agy.js";
 import { providerPresence } from "../../src/lib/source-attempts.js";
 import { withQuotaSemantics } from "../../src/interpretation.js";
+import { renderQuotaToon } from "../../src/render.js";
 import type { ProviderQuota } from "../../src/types.js";
 
 const originalXdgCacheHome = process.env.XDG_CACHE_HOME;
@@ -1090,7 +1091,145 @@ exec node "$0-cli.js" "$@"
     ]);
   });
 
-  it("keeps the Gemini 4 Argon bucket out of the Gemini bound", async () => {
+  it.each([0, 0.25])(
+    "bounds Argon separately at %s remaining while Gemini is unused",
+    async (remainingFraction) => {
+      const nowIso = "2026-10-25T12:00:00.000Z";
+      const quotaData = fixture("cli-quota-argon-exhausted.json") as {
+        command: {
+          data: {
+            groups: Array<{ buckets: Array<{ remaining_fraction: number }> }>;
+          };
+        };
+      };
+      quotaData.command.data.groups[1].buckets[0].remaining_fraction =
+        remainingFraction;
+      const fetched = await fetchQuotaWithRuntime(
+        runtimeWith({ ps: "", cliQuota: JSON.stringify(quotaData) }),
+      );
+      const result = withQuotaSemantics(fetched, nowIso);
+      const scopes = result.quotaSemantics?.effectiveAvailability;
+      expect(result.quotaSemantics?.status).toBe("known");
+      expect(result.quotaSemantics?.unresolvedWindowIds).toBeUndefined();
+      expect(scopes?.find(({ scope }) => scope === "gemini")).toMatchObject({
+        effectivePercentRemaining: 100,
+        boundedBy: ["gemini_5h", "gemini_weekly"],
+        runway: { status: "through_reset" },
+        selection: { status: "known", spendPriority: 1.9711 },
+      });
+      const argon = scopes?.find(
+        ({ scope }) => scope === "model:gemini-4-argon-high",
+      );
+      expect(argon).toMatchObject({
+        status: "known",
+        effectivePercentRemaining: remainingFraction * 100,
+        boundedBy: ["gemini_5h", "gemini_weekly", "gemini_argon_weekly"],
+        limitingWindowIds: ["gemini_argon_weekly"],
+        runway:
+          remainingFraction === 0
+            ? {
+                status: "exhausted_now",
+                usableRunwaySeconds: 0,
+                limitingWindowId: "gemini_argon_weekly",
+              }
+            : {
+                status: "projected_exhaustion",
+                usableRunwaySeconds: 100800,
+                projectedExhaustedAt: "2026-10-26T16:00:00.000Z",
+                limitingWindowId: "gemini_argon_weekly",
+              },
+        selection: { status: "known" },
+      });
+      // Both weekly cycles are halfway elapsed; the 5h cycle is untouched.
+      // Argon's gap is -2 when exhausted and -1 at 25% remaining. Weight
+      // that with the Gemini gaps (weekly 2, 5h 1) by their durations.
+      expect(argon?.selection?.spendPriority).toBeCloseTo(
+        (604800 * (remainingFraction === 0 ? 0 : 1) + 18000) / 1227600,
+        4,
+      );
+      expect(
+        renderQuotaToon(
+          { schemaVersion: 5, generatedAt: nowIso, providers: [result] },
+          "quota-axi",
+          false,
+        ),
+      ).not.toContain("unresolved_windows");
+    },
+  );
+
+  it.each([0, 1])(
+    "includes Gemini group bucket %s in the Argon model bound",
+    async (bucketIndex) => {
+      const quotaData = fixture("cli-quota-argon-exhausted.json") as {
+        command: {
+          data: {
+            groups: Array<{ buckets: Array<{ remaining_fraction: number }> }>;
+          };
+        };
+      };
+      quotaData.command.data.groups[0].buckets[bucketIndex].remaining_fraction =
+        0.1;
+      quotaData.command.data.groups[1].buckets[0].remaining_fraction = 0.25;
+      const fetched = await fetchQuotaWithRuntime(
+        runtimeWith({ ps: "", cliQuota: JSON.stringify(quotaData) }),
+      );
+      const result = withQuotaSemantics(fetched, "2026-10-25T12:00:00.000Z");
+      expect(
+        result.quotaSemantics?.effectiveAvailability.find(
+          ({ scope }) => scope === "model:gemini-4-argon-high",
+        ),
+      ).toMatchObject({
+        effectivePercentRemaining: 10,
+        limitingWindowIds: [bucketIndex === 0 ? "gemini_5h" : "gemini_weekly"],
+      });
+    },
+  );
+
+  it("keeps genuinely unknown Antigravity windows unresolved alongside Argon", async () => {
+    const quotaData = fixture("cli-quota-argon-exhausted.json") as {
+      command: {
+        data: {
+          groups: Array<{
+            buckets: Array<{
+              id: string;
+              window: string;
+              remaining_fraction: number;
+              reset_time: string;
+            }>;
+          }>;
+        };
+      };
+    };
+    quotaData.command.data.groups[0].buckets.push({
+      id: "gemini-mystery",
+      window: "mystery",
+      remaining_fraction: 0,
+      reset_time: "2026-10-29T00:00:00Z",
+    });
+    const fetched = await fetchQuotaWithRuntime(
+      runtimeWith({ ps: "", cliQuota: JSON.stringify(quotaData) }),
+    );
+    const nowIso = "2026-10-25T12:00:00.000Z";
+    const result = withQuotaSemantics(fetched, nowIso);
+    expect(result.quotaSemantics).toMatchObject({
+      status: "partial",
+      unresolvedWindowIds: ["gemini_unknown"],
+    });
+    expect(
+      result.quotaSemantics?.effectiveAvailability.find(
+        ({ scope }) => scope === "model:gemini-4-argon-high",
+      ),
+    ).toMatchObject({ effectivePercentRemaining: 0 });
+    expect(
+      renderQuotaToon(
+        { schemaVersion: 5, generatedAt: nowIso, providers: [result] },
+        "quota-axi",
+        false,
+      ),
+    ).toContain("unresolved_windows");
+  });
+
+  it("keeps the Gemini 4 Argon bucket out of the general Gemini bound", async () => {
     const nowIso = "2026-10-20T00:00:00.000Z";
     const fetched = await fetchQuotaWithRuntime(
       runtimeWith({
@@ -1107,10 +1246,8 @@ exec node "$0-cli.js" "$@"
 
     const result = withQuotaSemantics(fetched, nowIso);
 
-    expect(result.quotaSemantics).toMatchObject({
-      status: "partial",
-      unresolvedWindowIds: ["gemini_argon_weekly"],
-    });
+    expect(result.quotaSemantics?.status).toBe("known");
+    expect(result.quotaSemantics?.unresolvedWindowIds).toBeUndefined();
     expect(result.quotaSemantics?.effectiveAvailability).toMatchObject([
       {
         scope: "gemini",
@@ -1121,6 +1258,11 @@ exec node "$0-cli.js" "$@"
         scope: "claude_gpt",
         boundedBy: ["claude_gpt_weekly"],
         effectivePercentRemaining: 90,
+      },
+      {
+        scope: "model:gemini-4-argon-high",
+        boundedBy: ["gemini_weekly", "gemini_argon_weekly"],
+        effectivePercentRemaining: 78,
       },
     ]);
   });
