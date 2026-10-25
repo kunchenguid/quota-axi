@@ -146,6 +146,7 @@ export function computeEffectiveRunway(
     windows.some(({ kind }) => kind === "model") &&
     accountWindows.length > 0 &&
     computeEffectiveRunway(accountWindows, generatedAt).status !== "unknown";
+  const unopenedBounds = unopenedNonModelBounds(windows, generatedAt);
 
   const unmeasurableWindowIds: string[] = [];
   const projections: Array<{
@@ -174,22 +175,18 @@ export function computeEffectiveRunway(
       continue;
     }
 
-    // A provider can publish a fresh named-model window just before its cycle
-    // opens. When both usage fields prove that nothing has been consumed, the
-    // reset is valid and no more than one declared cycle plus the bounded
-    // snapshot skew ahead, and pace identifies only that skew, the unopened
-    // window has no exhaustion projection and does not block one
-    // established by the scope's other bounds. Keep every other unknown pace
-    // fail-closed.
+    // A provider can publish a fresh window just before its cycle opens. When
+    // both usage fields prove that nothing has been consumed and the cycle is
+    // provably the next one (`unopenedFutureCycleSeconds`), the unopened
+    // window has no exhaustion projection and does not block one established
+    // by the scope's other bounds: a named-model window needs its enclosing
+    // account bounds, any other bound the scope's remaining bounds. Keep
+    // every other unknown pace fail-closed.
     if (
-      isProvablyUnopenedFutureCycle(
-        window,
-        remaining,
-        pace,
-        resetsAt,
-        generatedAtMs,
-        accountBoundsEstablishRunway,
-      )
+      window.kind === "model"
+        ? accountBoundsEstablishRunway &&
+          unopenedFutureCycleSeconds(window, generatedAtMs) !== undefined
+        : unopenedBounds.has(window)
     ) {
       continue;
     }
@@ -338,17 +335,35 @@ export function summarizeEffectivePace(
  * from this weighted mean instead of blocking. When every bound is that shape
  * the scalar is withheld with no blockers named; the runway aggregate withholds
  * its verdict too but names every bound (README "Effective usable runway").
+ *
+ * Given the snapshot time, a provably unopened non-model bound that runway
+ * also exempts (`unopenedNonModelBounds`) contributes the term of its cycle's
+ * first instant instead of blocking: all of it remaining with all of its time
+ * ahead and nothing burned, so `gap_w = 1`, weighted by its cycle length. Its
+ * own pace stays `unknown`; only its term in this mean is derived.
  */
 export function summarizeEffectiveSelection(
   windows: QuotaWindow[],
+  generatedAt?: string,
 ): EffectiveSelection {
   if (windows.length === 0) return { status: "unknown" };
 
+  const unopenedBounds =
+    generatedAt === undefined
+      ? new Map<QuotaWindow, number>()
+      : unopenedNonModelBounds(windows, generatedAt);
   const unmeasurableWindowIds: string[] = [];
   let weightedGapSum = 0;
   let cycleSecondsSum = 0;
 
   for (const window of windows) {
+    const unopenedCycleSeconds = unopenedBounds.get(window);
+    if (unopenedCycleSeconds !== undefined) {
+      // gap_w = 100 / 100 - 0 = 1.
+      weightedGapSum += unopenedCycleSeconds;
+      cycleSecondsSum += unopenedCycleSeconds;
+      continue;
+    }
     const gap = windowSelectionGap(window);
     const cycleSeconds = finiteNumber(window.pace?.cycleSeconds);
     if (gap === undefined || cycleSeconds === undefined || cycleSeconds <= 0) {
@@ -465,37 +480,87 @@ function isNotYetTriggeredZeroUse(window: QuotaWindow): boolean {
   return remaining !== undefined && isZeroUse(window, remaining);
 }
 
-function isProvablyUnopenedFutureCycle(
+/**
+ * The cycle length, in seconds, of a provably unopened future cycle, or
+ * undefined. Both usage fields must prove that nothing has been consumed, pace
+ * must identify only a cycle start ahead of the snapshot, and the reset must
+ * be valid and ahead. A cycle given by `startsAt` and `resetsAt` is admitted
+ * when its start is no more than one cycle ahead, so the window describes at
+ * most the next cycle. A cycle implied by `windowSeconds` is admitted when its
+ * reset is no more than one declared duration plus the bounded snapshot skew
+ * ahead. A named-model window keeps that `windowSeconds` rule whether or not
+ * it carries a `startsAt`.
+ */
+function unopenedFutureCycleSeconds(
   window: QuotaWindow,
-  percentRemaining: number | undefined,
-  pace: QuotaPace | undefined,
-  resetsAt: ResetsAtOutcome,
   generatedAtMs: number,
-  accountBoundsEstablishRunway: boolean,
-): boolean {
-  const windowSeconds = finiteNumber(window.windowSeconds);
+): number | undefined {
+  const pace = window.pace;
+  const resetsAtMs = parseTimestamp(window.resetsAt);
   if (
-    window.kind !== "model" ||
-    !accountBoundsEstablishRunway ||
-    percentRemaining !== 100 ||
+    finiteNumber(window.percentRemaining) !== 100 ||
     window.percentUsed !== 0 ||
     pace?.status !== "unknown" ||
     pace.reason !== "future_cycle_start" ||
-    resetsAt.kind !== "ok" ||
-    windowSeconds === undefined ||
-    windowSeconds <= 0
+    resetsAtMs === undefined ||
+    resetsAtMs <= generatedAtMs
   ) {
-    return false;
+    return undefined;
   }
 
+  const startsAtMs =
+    window.kind === "model" ? undefined : parseTimestamp(window.startsAt);
+  if (startsAtMs !== undefined) {
+    const cycleSeconds = (resetsAtMs - startsAtMs) / 1000;
+    return Number.isFinite(cycleSeconds) &&
+      cycleSeconds > 0 &&
+      startsAtMs > generatedAtMs &&
+      startsAtMs - generatedAtMs <= cycleSeconds * 1000
+      ? cycleSeconds
+      : undefined;
+  }
+
+  const windowSeconds = finiteNumber(window.windowSeconds);
+  if (windowSeconds === undefined || windowSeconds <= 0) return undefined;
   const latestPlausibleResetMs =
     generatedAtMs +
     (windowSeconds + UNOPENED_WINDOW_MAX_FUTURE_START_SKEW_SECONDS) * 1000;
-  return (
-    isRepresentableDateMs(latestPlausibleResetMs) &&
-    resetsAt.ms > generatedAtMs &&
-    resetsAt.ms <= latestPlausibleResetMs
-  );
+  return isRepresentableDateMs(latestPlausibleResetMs) &&
+    resetsAtMs <= latestPlausibleResetMs
+    ? windowSeconds
+    : undefined;
+}
+
+/**
+ * The scope's provably unopened non-model bounds, mapped to their cycle
+ * lengths, when the scope's remaining bounds independently establish runway.
+ * A scope whose every bound is unopened, or whose remaining bounds cannot
+ * establish runway themselves, exempts none of them.
+ */
+function unopenedNonModelBounds(
+  windows: QuotaWindow[],
+  generatedAt: string,
+): Map<QuotaWindow, number> {
+  const generatedAtMs = Date.parse(generatedAt);
+  const unopened = new Map<QuotaWindow, number>();
+  if (!isRepresentableDateMs(generatedAtMs)) return unopened;
+  for (const window of windows) {
+    if (window.kind === "model") continue;
+    const cycleSeconds = unopenedFutureCycleSeconds(window, generatedAtMs);
+    if (cycleSeconds !== undefined) unopened.set(window, cycleSeconds);
+  }
+  if (unopened.size === 0) return unopened;
+
+  // The remaining bounds hold no unopened non-model bound, so this does not
+  // recurse further.
+  const remaining = windows.filter((window) => !unopened.has(window));
+  if (
+    remaining.length === 0 ||
+    computeEffectiveRunway(remaining, generatedAt).status === "unknown"
+  ) {
+    return new Map();
+  }
+  return unopened;
 }
 
 function resolveCycle(

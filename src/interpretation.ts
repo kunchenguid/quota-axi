@@ -898,7 +898,7 @@ function availability(
   const boundedBy = windows.map(({ id }) => id);
   const remaining = windows.map(({ percentRemaining }) => percentRemaining);
   const pace = summarizeEffectivePace(windows);
-  const selection = summarizeEffectiveSelection(windows);
+  const selection = summarizeEffectiveSelection(windows, generatedAt);
   const conflict = ownWindows && boundConflict(windows, ownWindows);
   if (conflict) {
     // Both sides of the contradiction block the aggregate: the inherited zero
