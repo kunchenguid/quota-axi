@@ -351,6 +351,11 @@ export type ProviderQuota = {
     remaining?: number;
     unlimited?: boolean;
     unit?: "usd" | "cny" | "credits";
+    /**
+     * Vendor-reported usability of the balance. `false` means the vendor
+     * refuses requests on it whatever the amount; absent when not reported.
+     */
+    available?: boolean;
   };
   /**
    * PHI-safe job-outcome sample from a vendor list command. Counts only;

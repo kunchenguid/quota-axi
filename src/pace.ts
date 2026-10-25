@@ -412,7 +412,8 @@ export function summarizeEffectiveSelection(
  * `CREDIT_LOW_BALANCE_USD_THRESHOLD` instead publishes
  * `CREDIT_LOW_BALANCE_SPEND_PRIORITY` while staying usable; the threshold is
  * USD-only because other units are not comparable magnitudes. A balance at
- * or below zero is `exhausted_now`. An absent or non-finite balance, a
+ * or below zero, or one the vendor marks unavailable
+ * (`credits.available: false`), is `exhausted_now`. An absent or non-finite balance, a
  * missing unit, and an unlimited balance stay `unknown`: no scalar is
  * invented for evidence quota-axi cannot bound.
  */
@@ -421,18 +422,20 @@ export function summarizeCreditBalance(
   generatedAt: string,
 ): Pick<EffectiveAvailability, "runway" | "selection"> {
   const remaining = finiteNumber(credits?.remaining);
+  const unavailable = credits?.available === false;
   if (
-    credits === undefined ||
-    credits.unlimited ||
-    credits.unit === undefined ||
-    remaining === undefined
+    !unavailable &&
+    (credits === undefined ||
+      credits.unlimited ||
+      credits.unit === undefined ||
+      remaining === undefined)
   ) {
     return {
       runway: { status: "unknown" },
       selection: { status: "unknown" },
     };
   }
-  if (remaining <= 0) {
+  if (unavailable || remaining === undefined || remaining <= 0) {
     const generatedAtMs = Date.parse(generatedAt);
     return {
       runway: {
@@ -449,7 +452,7 @@ export function summarizeCreditBalance(
     };
   }
   const low =
-    credits.unit === "usd" && remaining < CREDIT_LOW_BALANCE_USD_THRESHOLD;
+    credits?.unit === "usd" && remaining < CREDIT_LOW_BALANCE_USD_THRESHOLD;
   return {
     runway: { status: "unknown" },
     selection: {

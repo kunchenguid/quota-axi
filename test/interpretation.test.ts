@@ -1656,6 +1656,84 @@ describe("per-scope selection signal", () => {
     }
   });
 
+  it("publishes exhausted_now for a positive balance the vendor marks unavailable", () => {
+    const deepseek: ProviderQuota = {
+      ...provider("deepseek", []),
+      credits: { remaining: 29.97, unit: "usd", available: false },
+    };
+    const scope = withQuotaSemantics(deepseek, GENERATED_AT).quotaSemantics
+      ?.effectiveAvailability[0];
+    expect(scope?.runway).toEqual({
+      status: "exhausted_now",
+      usableRunwaySeconds: 0,
+      projectedExhaustedAt: GENERATED_AT,
+    });
+    expect(scope?.selection).toEqual({
+      status: "known",
+      [SELECTION_SCALAR_KEY]: -50,
+    });
+  });
+
+  it("keeps a zero balance with no unit unknown", () => {
+    const deepseek: ProviderQuota = {
+      ...provider("deepseek", []),
+      credits: { remaining: 0 },
+    };
+    const scope = withQuotaSemantics(deepseek, GENERATED_AT).quotaSemantics
+      ?.effectiveAvailability[0];
+    expect(scope?.selection).toEqual({ status: "unknown" });
+    expect(scope?.runway).toEqual({ status: "unknown" });
+  });
+
+  it("keeps an OpenRouter unlimited key out of the credits scope", () => {
+    const openrouter: ProviderQuota = {
+      ...provider("openrouter", []),
+      credits: { unlimited: true, unit: "usd" },
+    };
+    const result = withQuotaSemantics(openrouter, GENERATED_AT);
+    expect(result.quotaSemantics?.status).toBe("unknown");
+    expect(result.quotaSemantics?.effectiveAvailability).toEqual([]);
+  });
+
+  it("emits a credits quota row with an empty remaining column in default TOON", () => {
+    const healthy = withQuotaSemantics(
+      {
+        ...provider("deepseek", []),
+        credits: { remaining: 29.97, unit: "usd", available: true },
+      },
+      GENERATED_AT,
+    );
+    const report = renderQuotaToon(
+      { generatedAt: GENERATED_AT, schemaVersion: 5, providers: [healthy] },
+      "quota-axi",
+      false,
+    );
+    expect(report).toContain(
+      'deepseek,credits,"",0,unknown,unknown,unknown,unknown',
+    );
+    expect(report).toContain("exhaustion[0]:");
+    expect(report).toContain("deepseek,all,credits,remaining 29.97 usd,none");
+
+    const exhausted = withQuotaSemantics(
+      {
+        ...provider("deepseek", []),
+        credits: { remaining: 0, unit: "usd", available: true },
+      },
+      GENERATED_AT,
+    );
+    const exhaustedReport = renderQuotaToon(
+      { generatedAt: GENERATED_AT, schemaVersion: 5, providers: [exhausted] },
+      "quota-axi",
+      false,
+    );
+    expect(exhaustedReport).toContain(
+      'deepseek,credits,"",-50,exhausted_now,unknown,unknown,unknown',
+    );
+    expect(exhaustedReport).toContain(
+      `deepseek,credits,0,"${GENERATED_AT}",unknown`,
+    );
+  });
+
   it("keeps windowed providers with a balance on their window semantics", () => {
     const openrouter: ProviderQuota = {
       ...provider("openrouter", [
