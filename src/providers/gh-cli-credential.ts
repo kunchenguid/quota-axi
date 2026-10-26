@@ -33,11 +33,11 @@ const TOKEN_KEY = "oauth_token";
 const HOSTS_FILE_LIMIT_BYTES = 64 * 1024;
 
 export type GhCliCredentialResolution =
-  /** No `hosts.yml`, or one with no `github.com` login. */
+  /** No `hosts.yml`, or one with no login for the selected host. */
   | { status: "absent"; path: string }
   /** The file exists but is not a `hosts.yml` this reader can walk. */
   | { status: "structurally_invalid"; path: string }
-  /** A `github.com` login whose token `gh` keeps in the OS keyring. */
+  /** A selected-host login whose token `gh` keeps in the OS keyring. */
   | { status: "unsupported"; path: string }
   /** The file exists but could not be read. */
   | { status: "read_error"; path: string }
@@ -132,7 +132,7 @@ type ScannedHosts =
   | { status: "invalid" }
   | {
       status: "read";
-      /** What the first `github.com` key holds. */
+      /** What the selected host key holds. */
       host: "absent" | "mapping" | "other";
       /** The host's own token scalar, or `non_scalar` for a nested value. */
       token?: string | "non_scalar";

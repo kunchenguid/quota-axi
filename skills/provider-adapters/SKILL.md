@@ -62,9 +62,9 @@ This reference details the credential sources, endpoint contracts, quota window 
 - **Credential Sources** (`COPILOT_SOURCE_ORDER`):
   1. `api`: `$GITHUB_COPILOT_APPS_JSON` or local `github-copilot/apps.json`.
   2. `copilot-cli:keychain`: Native secure store for standalone Copilot CLI (macOS Keychain or Windows Credential Manager via `src/lib/windows-credential.ts`).
-  3. `gh:hosts.yml`: Narrow block-mapping reader in `src/providers/gh-cli-credential.ts` that extracts only the `github.com` host `oauth_token`. Never read the `gh` keyring or `GH_TOKEN`/`GITHUB_TOKEN`.
+  3. `gh:hosts.yml`: Narrow block-mapping reader in `src/providers/gh-cli-credential.ts` that extracts the selected host's `oauth_token` (`github.com` unless `QUOTA_AXI_COPILOT_HOST` names a `*.ghe.com` host). Never read the `gh` keyring or `GH_TOKEN`/`GITHUB_TOKEN`.
 - **Scope & Entitlement**:
-  - Public GitHub tokens only. Enterprise tokens are treated as unavailable on the public endpoint.
+  - Default endpoint is `https://api.github.com/copilot_internal/user` with `github.com` tokens. `QUOTA_AXI_COPILOT_HOST=<subdomain>.ghe.com` (case-insensitive; lowercased) opts into that GHE Cloud host: `https://api.<host>/copilot_internal/user`, tokens only from matching `apps.json` entries and the `gh` login for that host. Full URLs, `api.` prefixes, `github.com`, and other non-`*.ghe.com` values are ignored. Copilot CLI source is github.com-only. Cache is per host.
   - Quota snapshot windows include `chat`, `completions`, and `premium_interactions`.
   - If the endpoint returns entitlement without numeric quota windows, return a fresh report with `windows: []` rather than inventing numbers or percentages.
   - Native CLI readings (`source: cli`) are never cached.
