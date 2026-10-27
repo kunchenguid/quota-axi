@@ -1,6 +1,10 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { readCachedProvider, retireCachedSlot } from "../cache.js";
+import {
+  copilotCacheContextId,
+  readCachedCopilotProvider,
+  retireCachedSlot,
+} from "../cache.js";
 import { readJsonFileResult, type JsonFileReadResult } from "../lib/fs.js";
 import { providerFetch } from "../lib/http.js";
 import {
@@ -34,6 +38,7 @@ import {
   type GhCliCredentialResolution,
   resolveGhCliCredential,
 } from "./gh-cli-credential.js";
+import { copilotGithubHost } from "./copilot-host.js";
 
 import {
   COPILOT_CLI_KEYCHAIN_PROMPT_REQUIRED,
@@ -43,8 +48,13 @@ import {
   resolveCopilotCliCredential,
 } from "./copilot-cli-credential.js";
 
-const USER_URL = "https://api.github.com/copilot_internal/user";
-const USER_HOST = new URL(USER_URL).hostname;
+function userHost(host: string): string {
+  return host === "github.com" ? "api.github.com" : `api.${host}`;
+}
+
+function userUrl(host: string): string {
+  return `https://${userHost(host)}/copilot_internal/user`;
+}
 const API_TIMEOUT_MS = 15_000;
 
 type CopilotCredentials = {
@@ -125,6 +135,7 @@ export const copilotAdapter: ProviderAdapter = {
 export async function fetchQuota(
   options: ProviderOptions,
 ): Promise<ProviderQuota> {
+  const host = copilotGithubHost();
   const attempts: SourceAttempt[] = [];
   let failure: CopilotFailure | undefined;
   let unavailable: string | undefined;
@@ -133,7 +144,7 @@ export async function fetchQuota(
   let nativePromptRequired = false;
 
   for (const source of COPILOT_SOURCE_ORDER) {
-    const resolution = await resolveCopilotCredential(source, options);
+    const resolution = await resolveCopilotCredential(source, options, host);
     if (source === COPILOT_CLI_SOURCE) {
       nativeResolved = true;
       nativeSilent = resolution.silent ?? false;
@@ -168,7 +179,7 @@ export async function fetchQuota(
         try {
           return {
             kind: "quota",
-            result: await fetchCopilotUser(candidate.credential),
+            result: await fetchCopilotUser(candidate.credential, host),
           };
         } catch (error) {
           if (error instanceof CopilotAuthError) {
@@ -230,6 +241,7 @@ export async function fetchQuota(
     const resolution = await resolveCopilotCredential(
       COPILOT_CLI_SOURCE,
       options,
+      host,
       "silence",
     );
     nativeSilent = resolution.silent ?? false;
@@ -244,7 +256,7 @@ export async function fetchQuota(
   // Native snapshots have no established revalidation contract across CLI
   // profile/account changes. Never serve them as stale, or substitute an older
   // legacy source snapshot for a present but unmeasurable native selection.
-  const cached = readCachedProvider("copilot");
+  const cached = readCachedCopilotProvider(copilotCacheContextId(host));
   const signOut = verdict.error === SIGN_IN_REQUIRED;
   const stale = staleUnlessSignOut(
     cached && cached.source !== "cli" && nativeSilent && !nativePromptRequired
@@ -288,6 +300,7 @@ function withPromptRemedy(result: ProviderQuota): ProviderQuota {
 export async function inspectAuth(
   options: ProviderOptions,
 ): Promise<AuthProviderReport> {
+  const host = copilotGithubHost();
   const sources: AuthSourceReport[] = [];
   for (const source of COPILOT_SOURCE_ORDER) {
     sources.push(
@@ -295,6 +308,7 @@ export async function inspectAuth(
         await resolveCopilotCredential(
           source,
           options,
+          host,
           !options.allowKeychainPrompt,
         )
       ).report,
@@ -306,13 +320,21 @@ export async function inspectAuth(
 async function resolveCopilotCredential(
   source: CopilotSource,
   options: ProviderOptions,
+  host: string,
   presenceOnly: boolean | "silence" = false,
 ): Promise<CopilotCredentialResolution> {
   if (source === APPS_JSON_SOURCE) {
     const authFile = copilotAppsFile();
-    return extractCredentialState(readJsonFileResult(authFile), authFile);
+    return extractCredentialState(readJsonFileResult(authFile), authFile, host);
   }
   if (source === COPILOT_CLI_SOURCE) {
+    if (host !== "github.com") {
+      return {
+        status: "absent",
+        report: { source: COPILOT_CLI_SOURCE, status: "missing" },
+        silent: true,
+      };
+    }
     const result = await resolveCopilotCliCredential(options, presenceOnly);
     return result.status === "resolved"
       ? {
@@ -323,7 +345,7 @@ async function resolveCopilotCredential(
         }
       : { ...result };
   }
-  return fromGhCliResolution(await resolveGhCliCredential());
+  return fromGhCliResolution(await resolveGhCliCredential({ host }));
 }
 
 function fromGhCliResolution(
@@ -453,7 +475,10 @@ export function normalizeCopilotUser(raw: unknown):
   };
 }
 
-async function fetchCopilotUser(credentials: CopilotCredentials): Promise<{
+async function fetchCopilotUser(
+  credentials: CopilotCredentials,
+  host: string,
+): Promise<{
   plan?: string;
   account?: ProviderQuota["account"];
   windows: QuotaWindow[];
@@ -462,7 +487,7 @@ async function fetchCopilotUser(credentials: CopilotCredentials): Promise<{
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
   try {
-    const response = await providerFetch(USER_URL, {
+    const response = await providerFetch(userUrl(host), {
       redirect: "error",
       headers: {
         authorization: `Bearer ${credentials.oauthToken}`,
@@ -517,6 +542,7 @@ function normalizeQuotaSnapshots(
 function extractCredentialState(
   raw: JsonFileReadResult,
   path: string,
+  githubHost: string,
 ): CopilotCredentialResolution {
   if (raw.status === "missing")
     return {
@@ -552,8 +578,13 @@ function extractCredentialState(
     }
   }
   const selected =
-    candidates.find(({ host }) => host && matchesUserEndpoint(host)) ??
-    (candidates.some(({ host }) => host) ? undefined : candidates[0]);
+    candidates.find(
+      ({ host }) => host && matchesUserEndpoint(host, githubHost),
+    ) ??
+    // A token with no recorded host is only trusted for the public host.
+    (githubHost === "github.com" && !candidates.some(({ host }) => host)
+      ? candidates[0]
+      : undefined);
   if (selected) {
     return {
       status: "resolved",
@@ -604,10 +635,12 @@ function normalizeHost(value: string | undefined): string | undefined {
   }
 }
 
-function matchesUserEndpoint(host: string): boolean {
+function matchesUserEndpoint(host: string, githubHost: string): boolean {
+  const apiHost = userHost(githubHost);
   return (
-    host === USER_HOST ||
-    (USER_HOST === "api.github.com" && host === "github.com")
+    host === apiHost ||
+    (apiHost === "api.github.com" && host === "github.com") ||
+    (apiHost !== "api.github.com" && `api.${host}` === apiHost)
   );
 }
 

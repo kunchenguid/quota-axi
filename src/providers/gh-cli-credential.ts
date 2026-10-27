@@ -1,6 +1,7 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { readBoundedFile } from "../lib/fs.js";
+import { copilotGithubHost } from "./copilot-host.js";
 import { usableLiteralSecret } from "../lib/secret.js";
 
 /**
@@ -9,7 +10,8 @@ import { usableLiteralSecret } from "../lib/secret.js";
  * Current Copilot sign-ins no longer write `github-copilot/apps.json`, and the
  * Copilot CLI accepts a `gh` OAuth token as a Copilot credential, so the `gh`
  * login is often the one a signed-in user actually has. quota-axi reads the
- * token `gh` itself would send to `github.com` and uses it only as the bearer of
+ * token `gh` itself would send to `github.com` (or to the one `*.ghe.com` host
+ * `QUOTA_AXI_COPILOT_HOST` opts into) and uses it only as the bearer of
  * GitHub's first-party Copilot user request - the host `gh` already sends it to.
  *
  * `gh` keeps that token in `hosts.yml` only when it stores credentials in plain
@@ -19,24 +21,23 @@ import { usableLiteralSecret } from "../lib/secret.js";
  * owns the final verdict (see README Provider notes).
  *
  * The reader is deliberately narrow rather than a YAML dependency. It walks the
- * block mappings `gh` writes and keeps exactly one value, the `github.com`
- * host's own `oauth_token`, which is the token `gh` resolves for that host
- * before it looks in the keyring. Enterprise hosts, per-user token copies, and
+ * block mappings `gh` writes and keeps exactly one value, the selected host's
+ * own `oauth_token` (`github.com` unless `QUOTA_AXI_COPILOT_HOST` names a
+ * `*.ghe.com` host), which is the token `gh` resolves for that host
+ * before it looks in the keyring. Other hosts, per-user token copies, and
  * every other key are parsed past and never kept.
  */
 export const GH_CLI_CREDENTIAL_SOURCE = "gh:hosts.yml";
 
-/** The only host whose token may reach the public Copilot user endpoint. */
-const PUBLIC_GITHUB_HOST = "github.com";
 const TOKEN_KEY = "oauth_token";
 const HOSTS_FILE_LIMIT_BYTES = 64 * 1024;
 
 export type GhCliCredentialResolution =
-  /** No `hosts.yml`, or one with no `github.com` login. */
+  /** No `hosts.yml`, or one with no login for the selected host. */
   | { status: "absent"; path: string }
   /** The file exists but is not a `hosts.yml` this reader can walk. */
   | { status: "structurally_invalid"; path: string }
-  /** A `github.com` login whose token `gh` keeps in the OS keyring. */
+  /** A selected-host login whose token `gh` keeps in the OS keyring. */
   | { status: "unsupported"; path: string }
   /** The file exists but could not be read. */
   | { status: "read_error"; path: string }
@@ -52,6 +53,7 @@ type GhCliCredentialDependencies = {
   platform: NodeJS.Platform;
   homeDirectory: () => string;
   readFile: (path: string, maxBytes: number) => Promise<Buffer>;
+  host?: string;
 };
 
 /**
@@ -102,7 +104,10 @@ export async function resolveGhCliCredential(
     return { status: "structurally_invalid", path };
   }
 
-  const scanned = scanHostsFile(contents.toString("utf8"));
+  const scanned = scanHostsFile(
+    contents.toString("utf8"),
+    dependencies.host ?? copilotGithubHost(dependencies.environment),
+  );
   if (scanned.status === "invalid") {
     return { status: "structurally_invalid", path };
   }
@@ -127,7 +132,7 @@ type ScannedHosts =
   | { status: "invalid" }
   | {
       status: "read";
-      /** What the first `github.com` key holds. */
+      /** What the selected host key holds. */
       host: "absent" | "mapping" | "other";
       /** The host's own token scalar, or `non_scalar` for a nested value. */
       token?: string | "non_scalar";
@@ -151,7 +156,11 @@ type Frame = {
  * rather than guessed at, because a misread structure could attribute one
  * host's token to another.
  */
-function scanHostsFile(text: string): ScannedHosts {
+function scanHostsFile(text: string, targetHost: string): ScannedHosts {
+  const isHostPath = (path: string[]): boolean =>
+    path.length === 1 && path[0] === targetHost;
+  const isTokenPath = (path: string[]): boolean =>
+    path.length === 2 && path[0] === targetHost && path[1] === TOKEN_KEY;
   const result: Extract<ScannedHosts, { status: "read" }> = {
     status: "read",
     host: "absent",
@@ -228,16 +237,6 @@ function scanHostsFile(text: string): ScannedHosts {
 
   if (pending) recordEmpty(pending);
   return result;
-}
-
-function isHostPath(path: string[]): boolean {
-  return path.length === 1 && path[0] === PUBLIC_GITHUB_HOST;
-}
-
-function isTokenPath(path: string[]): boolean {
-  return (
-    path.length === 2 && path[0] === PUBLIC_GITHUB_HOST && path[1] === TOKEN_KEY
-  );
 }
 
 /**

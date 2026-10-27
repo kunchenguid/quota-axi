@@ -1090,6 +1090,41 @@ exec node "$0-cli.js" "$@"
     ]);
   });
 
+  it("keeps the Gemini 4 Argon bucket out of the Gemini bound", async () => {
+    const nowIso = "2026-10-20T00:00:00.000Z";
+    const fetched = await fetchQuotaWithRuntime(
+      runtimeWith({
+        ps: "",
+        cliQuota: JSON.stringify(fixture("cli-quota-argon.json")),
+      }),
+    );
+    expect(fetched.state.status).toBe("fresh");
+    expect(fetched.windows.map(({ id }) => id)).toEqual([
+      "gemini_weekly",
+      "gemini_argon_weekly",
+      "claude_gpt_weekly",
+    ]);
+
+    const result = withQuotaSemantics(fetched, nowIso);
+
+    expect(result.quotaSemantics).toMatchObject({
+      status: "partial",
+      unresolvedWindowIds: ["gemini_argon_weekly"],
+    });
+    expect(result.quotaSemantics?.effectiveAvailability).toMatchObject([
+      {
+        scope: "gemini",
+        boundedBy: ["gemini_weekly"],
+        effectivePercentRemaining: 99,
+      },
+      {
+        scope: "claude_gpt",
+        boundedBy: ["claude_gpt_weekly"],
+        effectivePercentRemaining: 90,
+      },
+    ]);
+  });
+
   it("marks reading stale when resetsAt is in the past", async () => {
     const nowIso = "2026-09-15T12:00:00.000Z";
     const pastReset = new Date(Date.parse(nowIso) - 60_000).toISOString();

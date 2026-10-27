@@ -7,7 +7,7 @@ import {
 import { resolveGhCliCredential } from "../../src/providers/gh-cli-credential.js";
 import { readBoundedFile, readJsonFileResult } from "../../src/lib/fs.js";
 import { providerFetch } from "../../src/lib/http.js";
-import { readCachedProvider } from "../../src/cache.js";
+import { readCachedCopilotProvider as readCachedProvider } from "../../src/cache.js";
 import { degradedSources } from "../../src/lib/source-attempts.js";
 vi.mock("../../src/providers/copilot-cli-credential.js", async (actual) => ({
   ...(await actual<
@@ -21,7 +21,10 @@ vi.mock("../../src/providers/gh-cli-credential.js", () => ({
   resolveGhCliCredential: vi.fn(),
 }));
 vi.mock("../../src/lib/http.js", () => ({ providerFetch: vi.fn() }));
-vi.mock("../../src/cache.js", () => ({ readCachedProvider: vi.fn() }));
+vi.mock("../../src/cache.js", () => ({
+  readCachedCopilotProvider: vi.fn(),
+  copilotCacheContextId: (host: string) => `ctx:${host}`,
+}));
 vi.mock("../../src/lib/fs.js", async (actual) => ({
   ...(await actual<typeof import("../../src/lib/fs.js")>()),
   readJsonFileResult: vi.fn(),

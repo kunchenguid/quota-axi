@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { copilotGithubHost } from "../../src/providers/copilot-host.js";
 import {
   ghCliHostsPath,
   resolveGhCliCredential,
@@ -48,6 +49,54 @@ describe("GitHub CLI hosts.yml path", () => {
 });
 
 describe("GitHub CLI credential resolution", () => {
+  it("reads the QUOTA_AXI_COPILOT_HOST enterprise host instead of github.com", async () => {
+    const dir = join(tempDir, "gh-ghe");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "hosts.yml"),
+      [
+        "github.com:",
+        "    oauth_token: gho_public_fixture",
+        "acme.ghe.com:",
+        "    users:",
+        "        fixture-user:",
+        "            oauth_token: gho_per_user_copy",
+        "    oauth_token: gho_enterprise_fixture",
+        "    user: fixture-user",
+        "",
+      ].join("\n"),
+      { mode: 0o600 },
+    );
+    const resolved = await resolveGhCliCredential({
+      environment: {
+        GH_CONFIG_DIR: dir,
+        QUOTA_AXI_COPILOT_HOST: "Acme.GHE.com",
+      },
+    });
+    expect(resolved).toMatchObject({
+      status: "resolved",
+      token: "gho_enterprise_fixture",
+    });
+    const unset = await resolveGhCliCredential({
+      environment: { GH_CONFIG_DIR: dir },
+    });
+    expect(unset).toMatchObject({
+      status: "resolved",
+      token: "gho_public_fixture",
+    });
+  });
+
+  it("ignores an override that is not a ghe.com host", async () => {
+    expect(
+      copilotGithubHost({ QUOTA_AXI_COPILOT_HOST: "evil.example.com" }),
+    ).toBe("github.com");
+    expect(
+      copilotGithubHost({ QUOTA_AXI_COPILOT_HOST: "a.ghe.com.evil.io" }),
+    ).toBe("github.com");
+    expect(copilotGithubHost({ QUOTA_AXI_COPILOT_HOST: "acme.ghe.com" })).toBe(
+      "acme.ghe.com",
+    );
+  });
   it("resolves the github.com host token gh writes with plain-text storage", async () => {
     const result = await resolveHosts(
       [

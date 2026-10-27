@@ -1,0 +1,45 @@
+{
+  "status": "SUCCESS",
+  "response": "Gemini Models\tWeekly Limit Remaining\t99%\nGemini 4 Argon\tWeekly Limit Remaining\t78%\n",
+  "command": {
+    "name": "quota",
+    "data": {
+      "groups": [
+        {
+          "name": "Gemini Models (Flash, Pro)",
+          "buckets": [
+            {
+              "id": "gemini-weekly",
+              "window": "weekly",
+              "remaining_fraction": 0.99,
+              "reset_time": "2026-10-24T14:56:00Z"
+            }
+          ]
+        },
+        {
+          "name": "Gemini 4 Argon",
+          "buckets": [
+            {
+              "id": "gemini-argon-wtu-weekly",
+              "window": "weekly",
+              "remaining_fraction": 0.78,
+              "reset_time": "2026-10-24T14:49:00Z",
+              "description": "For paid Pro plans, Argon quota is separate."
+            }
+          ]
+        },
+        {
+          "name": "Claude and GPT models",
+          "buckets": [
+            {
+              "id": "3p-weekly",
+              "window": "weekly",
+              "remaining_fraction": 0.9,
+              "reset_time": "2026-10-24T01:34:53Z"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

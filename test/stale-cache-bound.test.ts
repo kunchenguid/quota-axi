@@ -12,6 +12,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { copilotCacheContextId } from "../src/cache.js";
 import type { ProviderQuota, QuotaAxiResponse } from "../src/types.js";
 
 const BUILT_CLI_ENTRYPOINT = resolve("dist/bin/quota-axi.js");
@@ -151,11 +152,14 @@ function fixture(seed?: { timing: WindowTiming; refreshedAt: string }) {
             label: "included_usage",
             kind: "monthly",
           }),
-          snapshot("copilot", "GitHub Copilot", "api", {
-            id: "premium_interactions",
-            label: "premium_interactions",
-            kind: "monthly",
-          }),
+          {
+            ...snapshot("copilot", "GitHub Copilot", "api", {
+              id: "premium_interactions",
+              label: "premium_interactions",
+              kind: "monthly",
+            }),
+            credentialContext: copilotCacheContextId("github.com"),
+          },
           snapshot("zai", "Z.AI", "api", {
             id: "weekly",
             label: "weekly",
