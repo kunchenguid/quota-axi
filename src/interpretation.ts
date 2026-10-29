@@ -5,12 +5,13 @@ import {
   summarizeEffectivePace,
   summarizeEffectiveSelection,
 } from "./pace.js";
-import type {
-  BoundConflict,
-  EffectiveAvailability,
-  ProviderQuota,
-  QuotaSemantics,
-  QuotaWindow,
+import {
+  SELECTION_SCALAR_KEY,
+  type BoundConflict,
+  type EffectiveAvailability,
+  type ProviderQuota,
+  type QuotaSemantics,
+  type QuotaWindow,
 } from "./types.js";
 
 export function markAgyStaleIfExpiredReset(
@@ -174,6 +175,8 @@ function semanticsFor(
         provider.windows,
         "MiMo exposes local API authentication, but no first-party read-only quota endpoint is established, so model headroom remains unknown.",
       );
+    case "mistral":
+      return mistralSemantics(provider);
     case "deepseek":
     case "openrouter":
       return unknownSemantics(
@@ -310,6 +313,43 @@ function devinSemantics(
     [availability("included_quota", expected, generatedAt)],
     description,
   );
+}
+
+/**
+ * Mistral exposes no read-only usage, billing, or balance endpoint for a
+ * standard API key, so there is no window and no effective remaining. A
+ * usable credential still publishes the `all_models` scope with a fixed
+ * selection scalar of 0 - the fixed-scalar convention for a lane that is
+ * neither on track to forfeit prepaid allowance nor heading to exhaustion -
+ * while runway stays unknown. Without a usable credential the scope is
+ * unpublished and selection is unknown. This fixed scalar is the minimum
+ * local form of the shared fixed-scalar convention; it carries no measured
+ * usage and invents no window.
+ */
+function mistralSemantics(provider: ProviderQuota): QuotaSemantics {
+  if (provider.state.authStatus !== "usable") {
+    return unknownSemantics(
+      provider.windows,
+      "Mistral exposes local API authentication, but no first-party read-only quota endpoint is established, so model headroom remains unknown.",
+    );
+  }
+  return {
+    status: "known",
+    description:
+      "Mistral exposes local API authentication, but no first-party read-only usage, billing, or balance endpoint is established for a standard API key, so no effective remaining percentage or runway can be computed. The all_models scope publishes a fixed spendPriority of 0 for a usable credential: neither forfeiting nor exhausting, so the lane is chosen only when competing lanes are worse.",
+    effectiveAvailability: [fixedSpendPriorityAvailability("all_models")],
+  };
+}
+
+function fixedSpendPriorityAvailability(scope: string): EffectiveAvailability {
+  return {
+    scope,
+    status: "unknown",
+    boundedBy: [],
+    pace: { status: "unknown" },
+    runway: { status: "unknown" },
+    selection: { status: "known", [SELECTION_SCALAR_KEY]: 0 },
+  };
 }
 
 function elevenLabsSemantics(
