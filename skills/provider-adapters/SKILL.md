@@ -21,7 +21,7 @@ This reference details the credential sources, endpoint contracts, quota window 
   - When the OAuth usage payload includes a `limits` array, that array is authoritative over top-level fields. It exposes active limits, including model-scoped limits (e.g. Fable) via `scope.model.display_name`, assigned window ID `model:<slug>`.
 - **Soft Expiry**: A stored-expired, refreshable Claude token definitively rejected by the endpoint produces `authStatus: expired_refreshable` (a soft failure retaining cache), never `auth_required`.
 - **Native Quota Probe**: Bounded opt-in native inference quota probe lives in `src/providers/claude-native-quota.ts`. Keep it distinct from delegated refresh.
-- **Delegated Refresh**: Permitted via `claude doctor` only when no Claude Code process is running (`src/lib/running-processes.ts`).
+- **Delegated Refresh**: See [README Delegated credential refresh](../../README.md#delegated-credential-refresh) for `claude doctor` eligibility and the profile-scoped live-process guard.
 
 ---
 

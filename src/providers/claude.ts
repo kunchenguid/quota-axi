@@ -770,22 +770,19 @@ function shouldDelegateClaudeRefresh(
  *
  * Claude Code owns its own session and refreshes it on its own schedule, and
  * the refresh token behind that session is single-use. A second refresher
- * racing a live session is how one holder ends up presenting a spent token, so
- * when the snapshot contains a live Claude Code process, quota-axi's
- * `claude doctor` is at best redundant and at worst the thing that signs the
- * user out. A quota reader loses nothing by standing down: the process that
- * owns the store is already doing the work, and the next read picks up the
- * session it wrote.
+ * racing a live session using the same store is how one holder ends up
+ * presenting a spent token. A same-profile session therefore owns the work;
+ * the next quota read picks up the session it wrote. Only session records
+ * proving another known profile's ownership can rule out that collision.
  *
- * Not knowing is treated the same as knowing a session is live, so an
- * unlistable process table (Windows, no effective uid, no `ps`) stays read-only
- * rather than guessing. The check and spawn are not atomic: a Claude Code
- * session starting after the check or another concurrent quota-axi read can
- * still overlap the delegate. This narrows the common repeated five-minute
- * `--tui` versus live-session collision and, together with never signaling the
- * delegate, is strictly safer than force-killing without adding a failure mode
- * beyond the pre-existing vendor-owned race. The skipped reason is recorded so
- * `--full` shows why no refresh happened.
+ * Unknown ownership or an unlistable process table (Windows, no effective uid,
+ * no `ps`) stays read-only rather than guessing. The check and spawn are not
+ * atomic: a Claude Code session starting after the check or another concurrent
+ * quota-axi read can still overlap the delegate. This narrows the common
+ * repeated five-minute `--tui` versus live-session collision and, together
+ * with never signaling the delegate, is strictly safer than force-killing
+ * without adding a failure mode beyond the pre-existing vendor-owned race.
+ * The skipped reason is recorded so `--full` shows why no refresh happened.
  */
 async function liveClaudeRefreshBlocker(
   profileConfigDir: string,
