@@ -859,6 +859,56 @@ describe("quota semantics", () => {
     ]);
   });
 
+  it("measures Kimi all_models while a new member's first monthly cycle has not opened", () => {
+    const monthStartsAtSeconds = 10 * 60 * 60;
+    const monthCode: QuotaWindow = {
+      id: "month_code",
+      label: "code month",
+      kind: "monthly",
+      percentUsed: 0,
+      shareOf: "month_total",
+    };
+    const result = withQuotaSemantics(
+      provider("kimi", [
+        window("five_hour", "session", 100, {
+          windowSeconds: 18_000,
+          resetsAt: offsetFromGeneratedAt(3 * 60 * 60),
+        }),
+        window("month_total", "monthly", 100, {
+          startsAt: offsetFromGeneratedAt(monthStartsAtSeconds),
+          resetsAt: offsetFromGeneratedAt(monthStartsAtSeconds + 31 * 86_400),
+        }),
+        monthCode,
+      ]),
+      GENERATED_AT,
+    );
+
+    expect(result.windows.find(({ id }) => id === "month_total")?.pace).toEqual(
+      { status: "unknown", reason: "future_cycle_start" },
+    );
+    const allModels = result.quotaSemantics?.effectiveAvailability.find(
+      ({ scope }) => scope === "all_models",
+    );
+    expect(allModels?.runway).toEqual({
+      status: "through_reset",
+      projectionConfidence: "established",
+    });
+    expect(allModels?.selection?.status).toBe("known");
+    expect(allModels?.selection?.[SELECTION_SCALAR_KEY]).toEqual(
+      expect.any(Number),
+    );
+
+    const report = renderQuotaToon(
+      { generatedAt: GENERATED_AT, schemaVersion: 5, providers: [result] },
+      "quota-axi",
+      false,
+    );
+    expect(report).toContain(
+      `kimi,all_models,100,${allModels?.selection?.[SELECTION_SCALAR_KEY]},through_reset,`,
+    );
+    expect(report).not.toContain("blocks runway");
+  });
+
   it("recognizes any Kimi window marked as a used-share without bounding by it", () => {
     const result = withQuotaSemantics(
       provider("kimi", [
