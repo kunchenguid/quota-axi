@@ -1,5 +1,5 @@
 import { AxiError } from "axi-sdk-js";
-import { annotateQuotaAdvice } from "./advice.js";
+import { annotateQuotaAdvice, authHelpLines } from "./advice.js";
 import {
   parseFlags,
   parseModelsFlags,
@@ -384,12 +384,14 @@ export async function authCommand(
   };
 
   const reports = await inspectAuth(flags.providers, options);
+  const help = authHelpLines(reports);
   return flags.json
     ? JSON.stringify(
         {
           generatedAt: nowIso(),
           schemaVersion: reports.some((report) => report.accountKey) ? 2 : 1,
           auth: reports,
+          ...(help.length > 0 ? { help } : {}),
         },
         null,
         2,
