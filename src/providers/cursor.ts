@@ -14,6 +14,7 @@ import {
 import type {
   AuthProviderReport,
   AuthSourceReport,
+  ProviderAccount,
   ProviderAdapter,
   ProviderOptions,
   ProviderQuota,
@@ -31,14 +32,26 @@ import {
 import {
   CURSOR_CLI_AUTHFILE_SOURCE,
   CURSOR_CLI_SOURCE,
+  cursorCliConfigPath,
   isCursorCliSourceSupported,
   readCursorCliCredentialState,
+  readCursorCliIdentity,
 } from "./cursor-cli-credential.js";
 
 const API_URL = "https://api2.cursor.sh";
 const API_TIMEOUT_MS = 15_000;
 const SQLITE_TIMEOUT_MS = 5_000;
 const STATE_DB = cursorStateDbPath();
+
+/**
+ * When the editor and CLI are signed in to different accounts, each becomes
+ * its own lane under these keys. They are stable store identities (like Codex's
+ * `codex-home`), not a credential digest: there is exactly one editor store and
+ * one CLI store on a machine, so the key names the lane, and a separate cache
+ * slot per key is what keeps one account's windows from answering for the other.
+ */
+const CURSOR_EDITOR_ACCOUNT_KEY = "cursor-editor";
+const CURSOR_CLI_ACCOUNT_KEY = "cursor-cli";
 
 type CursorCredentials = {
   accessToken: string;
@@ -64,6 +77,7 @@ export const cursorAdapter: ProviderAdapter = {
   label: "Cursor",
   fetchQuota,
   inspectAuth,
+  discoverAccounts: discoverCursorAccounts,
 };
 
 export async function fetchQuota(
@@ -209,6 +223,179 @@ export async function inspectAuth(
     );
   }
   return { provider: "cursor", sources };
+}
+
+/**
+ * The editor (`state.vscdb`) and the `cursor-agent` CLI (identity in
+ * `cli-config.json`, token in the login Keychain or `auth.json`) are separate
+ * sign-ins that can be different accounts. When both logins are present and
+ * their emails differ, quota is reported as two account lanes so a team login
+ * is never hidden behind a personal one: the editor keeps its own lane and the
+ * CLI becomes a lane beside it. Each lane reads only its own store and caches
+ * under its own account key, so one account's windows never stand in for the
+ * other's. When the identities match, or either is unknown, there is nothing
+ * to split and Cursor keeps its single selected account, read exactly as
+ * before.
+ *
+ * The comparison reads only `cursorAuth/cachedEmail` and `cli-config.json`
+ * `authInfo.email`; it never reads a token, prompts, or calls the API. On Linux
+ * the CLI credential carries no identity, so no split is ever established there
+ * and the single-lane path is kept.
+ */
+async function discoverCursorAccounts(
+  _options?: ProviderOptions,
+  _operation?: "quota" | "auth",
+): Promise<ProviderAccount[] | undefined> {
+  if (!isCursorCliSourceSupported()) return undefined;
+  const editorEmail = await readEditorEmail();
+  const cliEmail = readCliIdentityEmail();
+  if (!editorEmail || !cliEmail) return undefined;
+  if (normalizeEmail(editorEmail) === normalizeEmail(cliEmail))
+    return undefined;
+  return [editorLaneAccount(), cliLaneAccount()];
+}
+
+function editorLaneAccount(): ProviderAccount {
+  return {
+    accountKey: CURSOR_EDITOR_ACCOUNT_KEY,
+    fetchQuota: (options) => fetchLaneQuota("editor", options),
+    inspectAuth: (options) => inspectLaneAuth("editor", options),
+  };
+}
+
+function cliLaneAccount(): ProviderAccount {
+  return {
+    accountKey: CURSOR_CLI_ACCOUNT_KEY,
+    fetchQuota: (options) => fetchLaneQuota("cli", options),
+    inspectAuth: (options) => inspectLaneAuth("cli", options),
+  };
+}
+
+/** The editor sign-in's cached email, or undefined when it cannot be read. */
+async function readEditorEmail(): Promise<string | undefined> {
+  const state = await readCredentialState();
+  return state.status === "available" ? state.credentials.email : undefined;
+}
+
+/**
+ * The CLI sign-in's email, read from the identity file the CLI credential
+ * itself uses (so the comparison matches the store the CLI lane will read). The
+ * Linux auth file carries no identity, so no comparison is made there.
+ */
+function readCliIdentityEmail(): string | undefined {
+  if (process.platform !== "darwin") return undefined;
+  const result = readCursorCliIdentity(cursorCliConfigPath());
+  return result.status === "present" ? result.identity.email : undefined;
+}
+
+function normalizeEmail(email: string): string {
+  return email.trim().toLowerCase();
+}
+
+/**
+ * One lane's reading: its own credential store, its own cache slot, and no
+ * fallback to the sibling's store - a rejected editor token is this lane's auth
+ * error, not a reason to report the CLI's account as the editor's.
+ */
+async function fetchLaneQuota(
+  lane: "editor" | "cli",
+  options: ProviderOptions,
+): Promise<ProviderQuota> {
+  const accountKey =
+    lane === "editor" ? CURSOR_EDITOR_ACCOUNT_KEY : CURSOR_CLI_ACCOUNT_KEY;
+  const retire = () => retireCachedSlot("cursor", accountKey);
+  const attempts: SourceAttempt[] = [];
+  const state =
+    lane === "editor"
+      ? await readCredentialState()
+      : await readCliCredentialState(options);
+  if (state.status !== "available") {
+    attempts.push({
+      source: state.source.source,
+      status: "skipped",
+      error: cursorCredentialError(state),
+      ...(state.source.credentialPresent === undefined
+        ? {}
+        : { credentialPresent: state.source.credentialPresent }),
+    });
+    return laneFailure(
+      accountKey,
+      cursorFinalError(state, cursorCredentialError(state)),
+      undefined,
+      attempts,
+      retire,
+    );
+  }
+  // The editor fetch keeps its established `api` attempt name; a CLI fetch is
+  // named for its credential store so `sourcesTried` shows which store answered.
+  const quotaSource = lane === "editor" ? "api" : state.source.source;
+  attempts.push({ source: quotaSource, status: "failed" });
+  try {
+    const quota = await fetchCursorUsage(state.credentials);
+    attempts[attempts.length - 1] = { source: quotaSource, status: "success" };
+    return cursorSuccess(quota, attempts);
+  } catch (error) {
+    const finalError = errorMessage(error);
+    attempts[attempts.length - 1] = {
+      source: quotaSource,
+      status: "failed",
+      error: finalError,
+    };
+    const retryAfter =
+      error instanceof RateLimitError ? error.retryAfter : undefined;
+    return laneFailure(accountKey, finalError, retryAfter, attempts, retire);
+  }
+}
+
+function laneFailure(
+  accountKey: string,
+  finalError: string,
+  retryAfter: string | undefined,
+  attempts: SourceAttempt[],
+  retire: () => void,
+): ProviderQuota {
+  const cached = readCachedProvider("cursor", accountKey);
+  const stale = staleUnlessSignOut(
+    cached,
+    finalError,
+    sourceNames(attempts),
+    attempts,
+    {
+      definitive: finalError === "Cursor sign-in required",
+      retire,
+    },
+  );
+  if (stale) return stale;
+  return failedProvider({
+    provider: "cursor",
+    label: "Cursor",
+    status: retryAfter ? "rate_limited" : statusFromError(finalError),
+    error: finalError,
+    retryAfter,
+    sourcesTried: sourceNames(attempts),
+    attempts,
+  });
+}
+
+/**
+ * One lane's credential sources. The CLI lane never forces a Keychain prompt
+ * here: `auth` reports the state it finds on disk (so a granted marker reads as
+ * available), and the gated one-time value read belongs to the lane's quota
+ * fetch, not to a describe-only pass.
+ */
+async function inspectLaneAuth(
+  lane: "editor" | "cli",
+  options: ProviderOptions,
+): Promise<AuthProviderReport> {
+  if (lane === "editor") {
+    const editorState = await readCredentialState();
+    return { provider: "cursor", sources: [editorState.source] };
+  }
+  const cliState = await readCliCredentialState({
+    ...options,
+    allowKeychainPrompt: false,
+  });
+  return { provider: "cursor", sources: [cliState.source] };
 }
 
 /**
