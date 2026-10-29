@@ -71,6 +71,8 @@ const originalUserProfile = process.env.USERPROFILE;
 const originalUser = process.env.USER;
 const originalXdgCacheHome = process.env.XDG_CACHE_HOME;
 const originalClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
+const originalClaudeSecureStorage = process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR;
+const originalClaudeProfiles = process.env.QUOTA_AXI_CLAUDE_PROFILES;
 const originalPath = process.env.PATH;
 const originalPathExt = process.env.PATHEXT;
 const originalCodexHome = process.env.CODEX_HOME;
@@ -87,6 +89,8 @@ beforeEach(() => {
   process.env.USER = "fixture-user";
   process.env.XDG_CACHE_HOME = join(tempDir, "cache");
   delete process.env.CLAUDE_CONFIG_DIR;
+  delete process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR;
+  delete process.env.QUOTA_AXI_CLAUDE_PROFILES;
   process.env.PATH = join(tempDir, "empty-bin");
   process.env.PATHEXT = ".CMD;.EXE";
   process.env.CODEX_HOME = join(tempDir, ".codex");
@@ -109,6 +113,8 @@ afterEach(() => {
   restore("USER", originalUser);
   restore("XDG_CACHE_HOME", originalXdgCacheHome);
   restore("CLAUDE_CONFIG_DIR", originalClaudeConfigDir);
+  restore("CLAUDE_SECURESTORAGE_CONFIG_DIR", originalClaudeSecureStorage);
+  restore("QUOTA_AXI_CLAUDE_PROFILES", originalClaudeProfiles);
   restore("PATH", originalPath);
   restore("PATHEXT", originalPathExt);
   restore("CODEX_HOME", originalCodexHome);
@@ -337,7 +343,13 @@ function stubClaudeCli(options: { rotateTo?: string } = {}): ClaudeStub {
             subscriptionType: "max",
           },
         }),
-      )} > ${JSON.stringify(join(tempDir, ".claude", ".credentials.json"))}`
+      )} > ${JSON.stringify(
+        join(
+          process.env.CLAUDE_CONFIG_DIR?.normalize("NFC") ??
+            join(tempDir, ".claude"),
+          ".credentials.json",
+        ),
+      )}`
     : "";
   installStub("claude", [
     `echo "$@" >> ${JSON.stringify(log)}`,
@@ -350,10 +362,41 @@ function stubClaudeCli(options: { rotateTo?: string } = {}): ClaudeStub {
   return { invocationCount: () => lines().length, arguments: lines };
 }
 
-function writeExpiredClaudeCredential(refreshable = true): void {
-  mkdirSync(join(tempDir, ".claude"), { recursive: true });
+function writeClaudeSession(configDir: string, pid: number): void {
+  mkdirSync(join(configDir, "sessions"), { recursive: true });
   writeFileSync(
-    join(tempDir, ".claude", ".credentials.json"),
+    join(configDir, "sessions", `${pid}.json`),
+    JSON.stringify({ pid, procStart: 1_750_000_000 }),
+  );
+}
+
+function useDarwinSessionRecords(): void {
+  usePlatform("darwin");
+  vi.doMock("../../src/lib/process.js", async (importOriginal) => {
+    const actual =
+      await importOriginal<typeof import("../../src/lib/process.js")>();
+    return {
+      ...actual,
+      execFileText: vi.fn(async (_command: string, args: string[]) => {
+        if (args[0] === "list-keychains") return CLAUDE_LOGIN_KEYCHAIN;
+        if (args[0] === "dump-keychain")
+          return CLAUDE_KEYCHAIN_METADATA.replace(
+            "Claude Code-credentials",
+            "fixture-unrelated-service",
+          );
+        throw new Error("Unexpected process inspection");
+      }),
+    };
+  });
+}
+
+function writeExpiredClaudeCredential(
+  refreshable = true,
+  configDir = join(tempDir, ".claude"),
+): void {
+  mkdirSync(configDir, { recursive: true });
+  writeFileSync(
+    join(configDir, ".credentials.json"),
     JSON.stringify({
       claudeAiOauth: {
         accessToken: "stale-access-token",
@@ -632,68 +675,207 @@ describe.skipIf(process.platform === "win32")(
       });
     });
 
-    it("stands down while Claude Code is already running", async () => {
-      // Claude Code refreshes its own single-use session on its own schedule.
-      // A second refresher racing it is how one holder ends up presenting a
-      // spent token, so quota-axi's doctor is redundant and racy here.
-      withRunningProcessEntries({
-        pid: 10_001,
-        commandLine:
-          "/Users/fixture/.local/share/claude/versions/2.1.251/claude --resume",
-        claudeConfigDir: join(tempDir, ".claude"),
-      });
-      writeExpiredClaudeCredential();
-      const cli = stubClaudeCli({ rotateTo: "rotated-access-token" });
-      stubBearerAwareFetch("rotated-access-token");
+    it.each(["default", "Claude Work", "Cafe\u0301"])(
+      "stands down for a same-profile session record: %s",
+      async (selector) => {
+        useDarwinSessionRecords();
+        const configDir = join(
+          tempDir,
+          selector === "default" ? ".claude" : selector,
+        ).normalize("NFC");
+        if (selector !== "default")
+          process.env.CLAUDE_CONFIG_DIR = join(tempDir, selector);
+        withRunningProcessEntries({
+          pid: 10_001,
+          commandLine:
+            "/Users/fixture/.local/share/claude/versions/2.1.251/claude --resume",
+        });
+        writeClaudeSession(configDir, 10_001);
+        writeExpiredClaudeCredential(true, configDir);
+        const cli = stubClaudeCli({ rotateTo: "rotated-access-token" });
+        stubBearerAwareFetch("rotated-access-token");
 
-      const { fetchQuota } = await import("../../src/providers/claude.js");
-      const result = await fetchQuota({
-        allowKeychainPrompt: false,
-        refreshCredentials: true,
-      });
+        const { fetchQuota } = await import("../../src/providers/claude.js");
+        const result = await fetchQuota({
+          allowKeychainPrompt: false,
+          refreshCredentials: true,
+        });
 
-      expect(cli.invocationCount()).toBe(0);
-      expect(result.attempts).toContainEqual({
-        source: "claude-cli-refresh",
-        status: "skipped",
-        error: "refresh_live_vendor_process",
-      });
-    });
+        expect(cli.invocationCount()).toBe(0);
+        expect(result.attempts).toContainEqual({
+          source: "claude-cli-refresh",
+          status: "skipped",
+          error: "refresh_live_vendor_process",
+        });
+      },
+    );
 
-    it("delegates when a live Claude session belongs to another config directory", async () => {
-      withRunningProcessEntries({
-        pid: 10_001,
-        commandLine: "/fixture/bin/claude --resume",
-        claudeConfigDir: "/fixture/other-profile",
-      });
-      writeExpiredClaudeCredential();
-      const cli = stubClaudeCli({ rotateTo: "rotated-access-token" });
-      stubBearerAwareFetch("rotated-access-token");
-      const { fetchQuota } = await import("../../src/providers/claude.js");
-      await fetchQuota({
-        allowKeychainPrompt: false,
-        refreshCredentials: true,
-      });
-      expect(cli.invocationCount()).toBe(1);
-    });
+    it.each(["listed", "default"])(
+      "delegates when a live session belongs to a %s sibling profile",
+      async (sibling) => {
+        useDarwinSessionRecords();
+        const configDir = join(
+          tempDir,
+          sibling === "listed" ? ".claude" : "selected profile",
+        );
+        const siblingDir = join(
+          tempDir,
+          sibling === "listed" ? "other profile" : ".claude",
+        );
+        if (sibling === "listed")
+          process.env.QUOTA_AXI_CLAUDE_PROFILES = siblingDir;
+        else process.env.CLAUDE_CONFIG_DIR = configDir;
+        writeClaudeSession(siblingDir, 10_001);
+        withRunningProcessEntries({
+          pid: 10_001,
+          commandLine: "/fixture/bin/claude --resume",
+        });
+        writeExpiredClaudeCredential(true, configDir);
+        const cli = stubClaudeCli({ rotateTo: "rotated-access-token" });
+        stubBearerAwareFetch("rotated-access-token");
+        const { fetchQuota } = await import("../../src/providers/claude.js");
+        const result = await fetchQuota({
+          allowKeychainPrompt: false,
+          refreshCredentials: true,
+        });
+        expect(cli.invocationCount()).toBe(1);
+        expect(result.state.status).toBe("fresh");
+        expect(cli.arguments()).toEqual(["doctor"]);
+      },
+    );
 
-    it("stands down when live Claude config ownership is unreadable", async () => {
-      withRunningProcesses("/fixture/bin/claude --resume");
-      writeExpiredClaudeCredential();
-      const cli = stubClaudeCli({ rotateTo: "rotated-access-token" });
-      stubBearerAwareFetch("rotated-access-token");
-      const { fetchQuota } = await import("../../src/providers/claude.js");
-      const result = await fetchQuota({
-        allowKeychainPrompt: false,
-        refreshCredentials: true,
-      });
-      expect(cli.invocationCount()).toBe(0);
-      expect(result.attempts).toContainEqual({
-        source: "claude-cli-refresh",
-        status: "skipped",
-        error: "refresh_live_vendor_process",
-      });
-    });
+    it.each([false, true])(
+      "keeps the Keychain-only target profile with discovered lanes: %s",
+      async (discovered) => {
+        usePlatform("darwin");
+        const configDir = join(tempDir, "selected profile");
+        process.env.CLAUDE_CONFIG_DIR = configDir;
+        process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR = configDir;
+        process.env.QUOTA_AXI_CLAUDE_PROFILES = configDir;
+        writeClaudeSession(configDir, 10_000);
+        withRunningProcesses("/fixture/bin/claude --resume");
+        const cli = stubClaudeCli();
+        stubBearerAwareFetch("rotated-access-token");
+        const { claudeProfileLocations } = await import(
+          "../../src/lib/claude-profile.js"
+        );
+        const { keychainService } = claudeProfileLocations();
+        vi.doMock("../../src/lib/process.js", async (importOriginal) => {
+          const actual =
+            await importOriginal<typeof import("../../src/lib/process.js")>();
+          return {
+            ...actual,
+            execFileText: vi.fn(async (_command: string, args: string[]) => {
+              if (args[0] === "list-keychains") return CLAUDE_LOGIN_KEYCHAIN;
+              if (args[0] === "dump-keychain")
+                return CLAUDE_KEYCHAIN_METADATA.replace(
+                  "Claude Code-credentials",
+                  keychainService,
+                );
+              if (args[0] === "find-generic-password" && args.includes("-w"))
+                return JSON.stringify({
+                  claudeAiOauth: {
+                    accessToken: "stale-access-token",
+                    refreshToken: true,
+                    expiresAt: 1,
+                  },
+                });
+              throw new Error("Unexpected process inspection");
+            }),
+          };
+        });
+        const { claudeAdapter, fetchQuota } = await import(
+          "../../src/providers/claude.js"
+        );
+        const options = {
+          allowKeychainPrompt: true,
+          refreshCredentials: true,
+        };
+        const accounts = discovered
+          ? await claudeAdapter.discoverAccounts?.(options, "quota")
+          : undefined;
+        const selected = accounts?.find(
+          (account) => account.locator?.delegateEligible,
+        );
+        if (discovered) expect(selected).toBeDefined();
+        const result = await (selected
+          ? selected.fetchQuota(options)
+          : fetchQuota(options));
+        expect(cli.invocationCount()).toBe(0);
+        expect(result.state.authStatus).toBe("expired_refreshable");
+        expect(result.attempts).toContainEqual({
+          source: "claude-cli-refresh",
+          status: "skipped",
+          error: "refresh_live_vendor_process",
+        });
+      },
+    );
+
+    it.each([
+      "missing",
+      "unreadable-target",
+      "unreadable-sibling",
+      "malformed-target",
+      "mismatched-target-pid",
+      "mismatched-sibling-pid",
+      "unknown-second-process",
+      "non-darwin",
+    ])(
+      "stands down for unknown session-record ownership: %s",
+      async (ownership) => {
+        useDarwinSessionRecords();
+        const configDir = join(tempDir, ".claude");
+        const siblingDir = join(tempDir, "other profile");
+        process.env.QUOTA_AXI_CLAUDE_PROFILES = siblingDir;
+        if (ownership !== "missing") writeClaudeSession(siblingDir, 10_000);
+        if (ownership === "unreadable-target") {
+          mkdirSync(configDir, { recursive: true });
+          writeFileSync(join(configDir, "sessions"), "not a directory");
+        }
+        if (ownership === "unreadable-sibling") {
+          const unreadableDir = join(tempDir, "unreadable profile");
+          process.env.QUOTA_AXI_CLAUDE_PROFILES += `:${unreadableDir}`;
+          mkdirSync(unreadableDir, { recursive: true });
+          writeFileSync(join(unreadableDir, "sessions"), "not a directory");
+        }
+        if (
+          ownership === "malformed-target" ||
+          ownership === "mismatched-target-pid"
+        ) {
+          writeClaudeSession(configDir, 10_000);
+          writeFileSync(
+            join(configDir, "sessions", "10000.json"),
+            ownership === "malformed-target"
+              ? "{"
+              : JSON.stringify({ pid: 10_001, procStart: 1 }),
+          );
+        }
+        if (ownership === "mismatched-sibling-pid")
+          writeFileSync(
+            join(siblingDir, "sessions", "10000.json"),
+            JSON.stringify({ pid: 10_001, procStart: 1 }),
+          );
+        if (ownership === "non-darwin") usePlatform("linux");
+        withRunningProcesses(
+          "/fixture/bin/claude --resume",
+          ...(ownership === "unknown-second-process" ? ["claude --continue"] : []),
+        );
+        writeExpiredClaudeCredential();
+        const cli = stubClaudeCli({ rotateTo: "rotated-access-token" });
+        stubBearerAwareFetch("rotated-access-token");
+        const { fetchQuota } = await import("../../src/providers/claude.js");
+        const result = await fetchQuota({
+          allowKeychainPrompt: false,
+          refreshCredentials: true,
+        });
+        expect(cli.invocationCount()).toBe(0);
+        expect(result.attempts).toContainEqual({
+          source: "claude-cli-refresh",
+          status: "skipped",
+          error: "refresh_live_vendor_process",
+        });
+      },
+    );
 
     it("stands down when the Claude Code path contains a space", async () => {
       // `ps` gives one command line, so an installation path with a space

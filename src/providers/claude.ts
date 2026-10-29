@@ -1,6 +1,12 @@
-import { chmodSync, existsSync, renameSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  readFileSync,
+  renameSync,
+  writeFileSync,
+} from "node:fs";
 import { userInfo } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { join } from "node:path";
 import {
   carrySubscriptionStamp,
   readCachedClaudeProvider,
@@ -142,6 +148,7 @@ type ClaudeIdentityResult = {
   error?: string;
 };
 type ClaudeProfileLocations = {
+  configDir: string;
   credentialFile?: string;
   keychainAccount: string;
   keychainService: string;
@@ -527,9 +534,7 @@ async function fetchClaudeProfileQuota(
   // Soft expiry the Claude CLI can fix: hand the rotation to the CLI that owns
   // the credential store, then read back the session it rewrote.
   if (shouldDelegateClaudeRefresh(options, pass)) {
-    const blocker = await liveClaudeRefreshBlocker(
-      locations.credentialFile ? dirname(locations.credentialFile) : undefined,
-    );
+    const blocker = await liveClaudeRefreshBlocker(locations.configDir);
     if (blocker) {
       attempts.push({
         source: CLAUDE_CLI_REFRESH_DELEGATE.source,
@@ -761,7 +766,7 @@ function shouldDelegateClaudeRefresh(
 /**
  * A best-effort concurrency check on top of
  * {@link shouldDelegateClaudeRefresh}: quota-axi proceeds past this check only
- * when its process snapshot shows no Claude Code process already running.
+ * when no live Claude Code process has same-profile or unknown ownership.
  *
  * Claude Code owns its own session and refreshes it on its own schedule, and
  * the refresh token behind that session is single-use. A second refresher
@@ -783,33 +788,63 @@ function shouldDelegateClaudeRefresh(
  * `--full` shows why no refresh happened.
  */
 async function liveClaudeRefreshBlocker(
-  profileConfigDir?: string,
+  profileConfigDir: string,
 ): Promise<string | undefined> {
   const processes = await listRunningCommandLines();
   if (processes.status === "unavailable") return REFRESH_VENDOR_UNKNOWN;
-  for (const { pid, commandLine, claudeConfigDir } of processes.processes) {
+  const siblingDirs = new Set([
+    claudeProfileLocations({}).configDir,
+    ...(claudeListedProfiles()?.dirs ?? []).map(
+      (dir) => claudeProfileLocations({ CLAUDE_CONFIG_DIR: dir }).configDir,
+    ),
+  ]);
+  siblingDirs.delete(profileConfigDir);
+  for (const { pid, commandLine } of processes.processes) {
     if (pid === process.pid || !isLiveClaudeCodeProcess(commandLine)) continue;
-    // Unknown ownership preserves the conservative historical behavior.
-    if (claudeConfigDir === undefined) return REFRESH_LIVE_VENDOR_PROCESS;
-    const processConfigDir = normalizeClaudeConfigDir(claudeConfigDir);
-    const targetConfigDir = normalizeClaudeConfigDir(
-      profileConfigDir ?? join(userInfo().homedir, ".claude"),
-    );
-    if (processConfigDir === targetConfigDir)
+    if (
+      process.platform !== "darwin" ||
+      claudeSessionRecord(profileConfigDir, pid) !== "missing"
+    )
       return REFRESH_LIVE_VENDOR_PROCESS;
+    let ownedBySibling = false;
+    for (const dir of siblingDirs) {
+      const record = claudeSessionRecord(dir, pid);
+      if (record === "unknown") return REFRESH_LIVE_VENDOR_PROCESS;
+      if (record === "matching") ownedBySibling = true;
+    }
+    if (!ownedBySibling) return REFRESH_LIVE_VENDOR_PROCESS;
   }
   return undefined;
 }
 
-function normalizeClaudeConfigDir(value: string): string {
-  const home = userInfo().homedir;
-  const expanded =
-    value === "~"
-      ? home
-      : value.startsWith("~/")
-        ? join(home, value.slice(2))
-        : value;
-  return resolve(expanded.replace(/[\\/]+$/, ""));
+function claudeSessionRecord(
+  configDir: string,
+  pid: number,
+): "matching" | "missing" | "unknown" {
+  let text: string;
+  try {
+    text = readFileSync(join(configDir, "sessions", `${pid}.json`), "utf8");
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT"
+      ? "missing"
+      : "unknown";
+  }
+  try {
+    const record: unknown = JSON.parse(text, (key, value: unknown) =>
+      key === "" ||
+      ((key === "pid" || key === "procStart") && typeof value === "number")
+        ? value
+        : undefined,
+    );
+    return record &&
+      typeof record === "object" &&
+      "pid" in record &&
+      record.pid === pid
+      ? "matching"
+      : "unknown";
+  } catch {
+    return "unknown";
+  }
 }
 
 /**
@@ -1851,6 +1886,7 @@ function resolveClaudeProfileLocations(
   } = profile;
   const keychainAccount = claudeKeychainAccount();
   return {
+    configDir,
     credentialFile:
       secureStorageSelected && process.platform === "darwin"
         ? undefined

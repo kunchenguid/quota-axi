@@ -20,8 +20,6 @@ const PROCESS_LIST_TIMEOUT_MS = 4_000;
 export type RunningProcess = {
   pid: number;
   commandLine: string;
-  /** CLAUDE_CONFIG_DIR only; absent when environment ownership is unreadable. */
-  claudeConfigDir?: string;
 };
 
 export type RunningProcessList =
@@ -38,41 +36,15 @@ export async function listRunningCommandLines(): Promise<RunningProcessList> {
       currentUserProcessListArgs(effectiveUid),
       PROCESS_LIST_TIMEOUT_MS,
     );
-    const processes = output
-      .split("\n")
-      .map(parseProcessLine)
-      .filter((entry): entry is RunningProcess => entry !== undefined);
-    if (process.platform === "darwin") {
-      for (const entry of processes) {
-        if (!isClaudeCommand(entry.commandLine)) continue;
-        entry.claudeConfigDir = await readClaudeConfigDir(entry.pid);
-      }
-    }
-    return { status: "listed", processes };
+    return {
+      status: "listed",
+      processes: output
+        .split("\n")
+        .map(parseProcessLine)
+        .filter((entry): entry is RunningProcess => entry !== undefined),
+    };
   } catch {
     return { status: "unavailable" };
-  }
-}
-
-function isClaudeCommand(commandLine: string): boolean {
-  return (
-    /(?:^|\/)claude(?:\s|$)/.test(commandLine) ||
-    commandLine.includes("@anthropic-ai/claude-code/")
-  );
-}
-
-async function readClaudeConfigDir(pid: number): Promise<string | undefined> {
-  try {
-    const output = await execFileText(
-      "ps",
-      ["eww", "-p", String(pid)],
-      PROCESS_LIST_TIMEOUT_MS,
-    );
-    // Keep only the non-secret ownership hint; do not retain or expose the rest.
-    const match = /(?:^|\s)CLAUDE_CONFIG_DIR=([^\s]+)/.exec(output);
-    return match?.[1] ?? "";
-  } catch {
-    return undefined;
   }
 }
 
