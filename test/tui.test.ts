@@ -1,5 +1,8 @@
 import { createHash } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   detectTuiColorDepth,
   formatCountdown,
@@ -11,6 +14,7 @@ import {
 import { withQuotaSemantics } from "../src/interpretation.js";
 import { withUsageFetchFailure } from "../src/providers/usage-fetch-failure.js";
 import { providerPresence } from "../src/lib/source-attempts.js";
+import { readTuiCardOrder } from "../src/lib/user-config.js";
 import { redactedResponse } from "../src/render.js";
 import { PROVIDER_IDS } from "../src/types.js";
 import type { ProviderQuota, QuotaAxiResponse } from "../src/types.js";
@@ -1774,5 +1778,172 @@ describe("account labels", () => {
       expect(displayColumns(line)).toBeLessThanOrEqual(120);
     }
     expect(displayColumns(title)).toBe(CARD_COLUMNS);
+  });
+});
+
+describe("card grid width", () => {
+  /** Cards on each grid row, read from the row's top borders. */
+  function gridShape(lines: string[]): number[] {
+    return lines
+      .filter((line) => line.startsWith("╭─"))
+      .map((line) => line.split("╭─").length - 1);
+  }
+
+  /** Card titles in reading order: left to right, then down. */
+  function titles(lines: string[]): string[] {
+    return lines
+      .filter((line) => line.startsWith("╭─"))
+      .flatMap((line) =>
+        [...line.matchAll(/╭─ [●○] ([a-z-]+)/g)].map((match) => match[1]),
+      );
+  }
+
+  it.each([
+    [99, [1, 1, 1, 1, 1, 1]],
+    [100, [2, 2, 2]],
+    [150, [2, 2, 2]],
+    [151, [3, 3]],
+    [188, [3, 3]],
+    [201, [3, 3]],
+    [202, [4, 2]],
+    [253, [5, 1]],
+    [400, [6]],
+  ])("fits as many 49-column cards as %i columns hold", (columns, shape) => {
+    const lines = render({ columns });
+
+    expect(gridShape(lines)).toEqual(shape);
+    for (const line of lines)
+      expect(displayColumns(line)).toBeLessThanOrEqual(columns);
+  });
+
+  it.each([20, 40, 60, 79, 80])(
+    "keeps one readable column in a %i-column terminal",
+    (columns) => {
+      const lines = render({ columns });
+
+      expect(gridShape(lines)).toEqual([1, 1, 1, 1, 1, 1]);
+      for (const line of lines.filter((l) => /^[╭│╰]/.test(l)))
+        expect(displayColumns(line)).toBe(CARD_COLUMNS);
+    },
+  );
+
+  it("keeps the card width and the two-column gutter at every width", () => {
+    const lines = render({ columns: 260 });
+    const top = lines.find((line) => line.startsWith("╭─")) as string;
+
+    expect(top.match(/╮ {2}╭/g)).toHaveLength(4);
+    expect(displayColumns(top)).toBe(5 * CARD_COLUMNS + 4 * 2);
+  });
+
+  it("pads each grid row to its tallest card", () => {
+    const lines = render({ columns: 260 });
+    const bottoms = lines.filter((line) => line.startsWith("╰"));
+
+    expect(bottoms.map((line) => line.split("╰").length - 1)).toEqual([5, 1]);
+  });
+
+  it("does not widen a short report past its own cards", () => {
+    const lines = renderQuotaTui(
+      {
+        generatedAt: GENERATED_AT,
+        schemaVersion: 5,
+        providers: [claudeProvider(), codexProvider()],
+      },
+      { columns: 300, timeZone: "America/Los_Angeles" },
+    ).split("\n");
+
+    expect(gridShape(lines)).toEqual([2]);
+    const top = lines.find((line) => line.startsWith("╭─")) as string;
+    expect(displayColumns(top)).toBe(2 * CARD_COLUMNS + 2);
+  });
+
+  it("keeps card order at every width", () => {
+    const order = titles(render({ columns: 80 }));
+
+    expect(order).toHaveLength(6);
+    for (const columns of [100, 151, 202, 253, 400])
+      expect(titles(render({ columns }))).toEqual(order);
+  });
+
+  it("reflows in both directions as the terminal is resized", () => {
+    const shapes = [120, 200, 260, 120, 80, 202].map((columns) =>
+      gridShape(render({ columns })),
+    );
+
+    expect(shapes).toEqual([
+      [2, 2, 2],
+      [3, 3],
+      [5, 1],
+      [2, 2, 2],
+      [1, 1, 1, 1, 1, 1],
+      [4, 2],
+    ]);
+    // A frame depends only on the width it is drawn at, never on the last one.
+    render({ columns: 400 });
+    expect(render({ columns: 202 })).toEqual(render({ columns: 202 }));
+  });
+
+  it("falls back to the default two-up grid for a non-finite width", () => {
+    const fallback = gridShape(render());
+
+    expect(fallback).toEqual([2, 2, 2]);
+    expect(gridShape(render({ columns: Number.POSITIVE_INFINITY }))).toEqual(
+      fallback,
+    );
+    expect(gridShape(render({ columns: Number.NaN }))).toEqual(fallback);
+  });
+});
+
+describe("card order and status groups", () => {
+  const roots: string[] = [];
+  afterEach(() => {
+    for (const root of roots.splice(0))
+      rmSync(root, { recursive: true, force: true });
+  });
+
+  function orderFrom(entries: string[]): ReturnType<typeof readTuiCardOrder> {
+    const root = mkdtempSync(join(tmpdir(), "quota-axi-tui-order-"));
+    roots.push(root);
+    mkdirSync(join(root, "quota-axi"));
+    const file = join(root, "quota-axi", "config.json");
+    writeFileSync(file, JSON.stringify({ tui: { order: entries } }));
+    return readTuiCardOrder(file);
+  }
+
+  /** Card titles in reading order, whatever status glyph leads them. */
+  function titles(text: string): string[] {
+    return [...text.matchAll(/╭─ \S+ ([a-z-]+)/g)].map((match) => match[1]);
+  }
+
+  it("orders cards inside each status group, never across groups", () => {
+    const response = fixtureResponse();
+    const claude = response.providers[0];
+    claude.state.status = "stale";
+    claude.state.stale = true;
+    response.providers[0] = withQuotaSemantics(claude, GENERATED_AT);
+    const options = { columns: 400, timeZone: "America/Los_Angeles" };
+
+    expect(titles(renderQuotaTui(response, options))).toEqual([
+      "codex",
+      "grok",
+      "claude",
+      "cursor",
+      "copilot",
+      "kimi",
+    ]);
+
+    const order = orderFrom(["kimi", "claude", "grok", "codex", "cursor"]);
+    const ordered = { ...response, providers: order(response.providers) };
+
+    // Live, then stale, then needs attention, as without a setting; the
+    // listed place only decides the order within each group.
+    expect(titles(renderQuotaTui(ordered, options))).toEqual([
+      "grok",
+      "codex",
+      "claude",
+      "kimi",
+      "cursor",
+      "copilot",
+    ]);
   });
 });
