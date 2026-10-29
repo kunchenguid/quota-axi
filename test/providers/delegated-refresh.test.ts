@@ -636,10 +636,12 @@ describe.skipIf(process.platform === "win32")(
       // Claude Code refreshes its own single-use session on its own schedule.
       // A second refresher racing it is how one holder ends up presenting a
       // spent token, so quota-axi's doctor is redundant and racy here.
-      withRunningProcesses(
-        "/usr/bin/ssh -N kuns-mac-mini",
-        "/Users/fixture/.local/share/claude/versions/2.1.251/claude --resume",
-      );
+      withRunningProcessEntries({
+        pid: 10_001,
+        commandLine:
+          "/Users/fixture/.local/share/claude/versions/2.1.251/claude --resume",
+        claudeConfigDir: join(tempDir, ".claude"),
+      });
       writeExpiredClaudeCredential();
       const cli = stubClaudeCli({ rotateTo: "rotated-access-token" });
       stubBearerAwareFetch("rotated-access-token");
@@ -650,6 +652,41 @@ describe.skipIf(process.platform === "win32")(
         refreshCredentials: true,
       });
 
+      expect(cli.invocationCount()).toBe(0);
+      expect(result.attempts).toContainEqual({
+        source: "claude-cli-refresh",
+        status: "skipped",
+        error: "refresh_live_vendor_process",
+      });
+    });
+
+    it("delegates when a live Claude session belongs to another config directory", async () => {
+      withRunningProcessEntries({
+        pid: 10_001,
+        commandLine: "/fixture/bin/claude --resume",
+        claudeConfigDir: "/fixture/other-profile",
+      });
+      writeExpiredClaudeCredential();
+      const cli = stubClaudeCli({ rotateTo: "rotated-access-token" });
+      stubBearerAwareFetch("rotated-access-token");
+      const { fetchQuota } = await import("../../src/providers/claude.js");
+      await fetchQuota({
+        allowKeychainPrompt: false,
+        refreshCredentials: true,
+      });
+      expect(cli.invocationCount()).toBe(1);
+    });
+
+    it("stands down when live Claude config ownership is unreadable", async () => {
+      withRunningProcesses("/fixture/bin/claude --resume");
+      writeExpiredClaudeCredential();
+      const cli = stubClaudeCli({ rotateTo: "rotated-access-token" });
+      stubBearerAwareFetch("rotated-access-token");
+      const { fetchQuota } = await import("../../src/providers/claude.js");
+      const result = await fetchQuota({
+        allowKeychainPrompt: false,
+        refreshCredentials: true,
+      });
       expect(cli.invocationCount()).toBe(0);
       expect(result.attempts).toContainEqual({
         source: "claude-cli-refresh",

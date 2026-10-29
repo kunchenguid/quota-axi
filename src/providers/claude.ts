@@ -1,6 +1,6 @@
 import { chmodSync, existsSync, renameSync, writeFileSync } from "node:fs";
 import { userInfo } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import {
   carrySubscriptionStamp,
   readCachedClaudeProvider,
@@ -527,7 +527,9 @@ async function fetchClaudeProfileQuota(
   // Soft expiry the Claude CLI can fix: hand the rotation to the CLI that owns
   // the credential store, then read back the session it rewrote.
   if (shouldDelegateClaudeRefresh(options, pass)) {
-    const blocker = await liveClaudeRefreshBlocker();
+    const blocker = await liveClaudeRefreshBlocker(
+      locations.credentialFile ? dirname(locations.credentialFile) : undefined,
+    );
     if (blocker) {
       attempts.push({
         source: CLAUDE_CLI_REFRESH_DELEGATE.source,
@@ -780,15 +782,34 @@ function shouldDelegateClaudeRefresh(
  * beyond the pre-existing vendor-owned race. The skipped reason is recorded so
  * `--full` shows why no refresh happened.
  */
-async function liveClaudeRefreshBlocker(): Promise<string | undefined> {
+async function liveClaudeRefreshBlocker(
+  profileConfigDir?: string,
+): Promise<string | undefined> {
   const processes = await listRunningCommandLines();
   if (processes.status === "unavailable") return REFRESH_VENDOR_UNKNOWN;
-  return processes.processes.some(
-    ({ pid, commandLine }) =>
-      pid !== process.pid && isLiveClaudeCodeProcess(commandLine),
-  )
-    ? REFRESH_LIVE_VENDOR_PROCESS
-    : undefined;
+  for (const { pid, commandLine, claudeConfigDir } of processes.processes) {
+    if (pid === process.pid || !isLiveClaudeCodeProcess(commandLine)) continue;
+    // Unknown ownership preserves the conservative historical behavior.
+    if (claudeConfigDir === undefined) return REFRESH_LIVE_VENDOR_PROCESS;
+    const processConfigDir = normalizeClaudeConfigDir(claudeConfigDir);
+    const targetConfigDir = normalizeClaudeConfigDir(
+      profileConfigDir ?? join(userInfo().homedir, ".claude"),
+    );
+    if (processConfigDir === targetConfigDir)
+      return REFRESH_LIVE_VENDOR_PROCESS;
+  }
+  return undefined;
+}
+
+function normalizeClaudeConfigDir(value: string): string {
+  const home = userInfo().homedir;
+  const expanded =
+    value === "~"
+      ? home
+      : value.startsWith("~/")
+        ? join(home, value.slice(2))
+        : value;
+  return resolve(expanded.replace(/[\\/]+$/, ""));
 }
 
 /**
