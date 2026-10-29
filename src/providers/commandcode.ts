@@ -674,6 +674,7 @@ export function normalizeCommandCodePayload(
   if (windowLimits) {
     for (const [key, value] of Object.entries(windowLimits)) {
       if (KNOWN_WINDOW_LIMIT_KEYS.has(key)) continue;
+      if (key === "exceeded" && (value === null || value === false)) continue;
       const unknownId = `window:${sanitizeId(key)}`;
       if (isObject(value)) {
         windows.push(unknownWindow(unknownId, value, key));
@@ -681,6 +682,22 @@ export function normalizeCommandCodePayload(
       untrustedWindowIds.push(unknownId);
       diagnostics.push({ code: "unknown_window", id: unknownId });
     }
+  }
+
+  const monthly = creditPool(data).monthlyCredits;
+  if (
+    windows.some(({ id }) => id === "five_hour" || id === "weekly") &&
+    typeof monthly === "number" &&
+    Number.isFinite(monthly) &&
+    monthly <= 0
+  ) {
+    windows.push({
+      id: "credits",
+      label: "credits",
+      kind: "credits",
+      percentUsed: 100,
+      percentRemaining: 0,
+    });
   }
 
   for (const window of identity.orgLimitWindows) {
@@ -716,20 +733,31 @@ export function normalizeCommandCodePayload(
 function exactCredits(
   data: Record<string, unknown>,
 ): { remaining: number; unit: "credits" } | undefined {
-  const monthly = nonnegativeFinite(data.monthlyCredits);
-  const purchased = nonnegativeFinite(data.purchasedCredits);
-  const free = nonnegativeFinite(data.freeCredits);
+  const pool = creditPool(data);
+  const monthly = nonnegativeFinite(pool.monthlyCredits);
+  const purchased = nonnegativeFinite(pool.purchasedCredits);
+  const free = nonnegativeFinite(pool.freeCredits);
   if (monthly === undefined || purchased === undefined || free === undefined) {
     return undefined;
   }
   return { remaining: monthly + purchased + free, unit: "credits" };
 }
 
+/**
+ * The vendor nests the credit balances under `credits` and also reports the
+ * rate-limit state beside them. Older payloads carried the balances at the
+ * top level, so both shapes are accepted; the nested one is authoritative.
+ */
+function creditPool(data: Record<string, unknown>): Record<string, unknown> {
+  return objectValue(data.credits) ?? data;
+}
+
 function hasCreditFields(data: Record<string, unknown>): boolean {
+  const pool = creditPool(data);
   return (
-    Object.hasOwn(data, "monthlyCredits") ||
-    Object.hasOwn(data, "purchasedCredits") ||
-    Object.hasOwn(data, "freeCredits")
+    Object.hasOwn(pool, "monthlyCredits") ||
+    Object.hasOwn(pool, "purchasedCredits") ||
+    Object.hasOwn(pool, "freeCredits")
   );
 }
 
@@ -743,21 +771,29 @@ function measuredWindow(
 ): QuotaWindow | undefined {
   const entry = objectValue(raw);
   if (!entry) return undefined;
+  const resetsAt = parseResetAt(
+    entry.resetAt ?? entry.resetTime ?? entry.reset_at ?? entry.reset_time,
+  );
+  const base = {
+    id,
+    label: id === "five_hour" ? "5-hour" : "Weekly",
+    kind: id === "five_hour" ? "session" : "weekly",
+    windowSeconds: id === "five_hour" ? FIVE_HOURS_SECONDS : WEEK_SECONDS,
+    ...(resetsAt ? { resetsAt } : {}),
+  } as const;
+  // The vendor's own exceeded flag is the verdict for this window: it means
+  // the allowance is spent whatever the rolling used/cap counters say.
+  if (entry.exceeded === true) {
+    return { ...base, percentUsed: 100, percentRemaining: 0 };
+  }
   const used = nonnegativeFinite(entry.used);
   const cap = nonnegativeFinite(entry.cap);
   if (used === undefined || cap === undefined || cap <= 0) return undefined;
   const percentUsed = clampPercent((used / cap) * 100);
-  const resetsAt = parseResetAt(
-    entry.resetAt ?? entry.resetTime ?? entry.reset_at ?? entry.reset_time,
-  );
   return {
-    id,
-    label: id === "five_hour" ? "5-hour" : "Weekly",
-    kind: id === "five_hour" ? "session" : "weekly",
+    ...base,
     percentUsed,
     percentRemaining: clampPercent(100 - percentUsed),
-    windowSeconds: id === "five_hour" ? FIVE_HOURS_SECONDS : WEEK_SECONDS,
-    ...(resetsAt ? { resetsAt } : {}),
   };
 }
 
