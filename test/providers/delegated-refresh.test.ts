@@ -756,9 +756,8 @@ describe.skipIf(process.platform === "win32")(
         withRunningProcesses("/fixture/bin/claude --resume");
         const cli = stubClaudeCli();
         stubBearerAwareFetch("rotated-access-token");
-        const { claudeProfileLocations } = await import(
-          "../../src/lib/claude-profile.js"
-        );
+        const { claudeProfileLocations } =
+          await import("../../src/lib/claude-profile.js");
         const { keychainService } = claudeProfileLocations();
         vi.doMock("../../src/lib/process.js", async (importOriginal) => {
           const actual =
@@ -784,9 +783,8 @@ describe.skipIf(process.platform === "win32")(
             }),
           };
         });
-        const { claudeAdapter, fetchQuota } = await import(
-          "../../src/providers/claude.js"
-        );
+        const { claudeAdapter, fetchQuota } =
+          await import("../../src/providers/claude.js");
         const options = {
           allowKeychainPrompt: true,
           refreshCredentials: true,
@@ -858,7 +856,9 @@ describe.skipIf(process.platform === "win32")(
         if (ownership === "non-darwin") usePlatform("linux");
         withRunningProcesses(
           "/fixture/bin/claude --resume",
-          ...(ownership === "unknown-second-process" ? ["claude --continue"] : []),
+          ...(ownership === "unknown-second-process"
+            ? ["claude --continue"]
+            : []),
         );
         writeExpiredClaudeCredential();
         const cli = stubClaudeCli({ rotateTo: "rotated-access-token" });
