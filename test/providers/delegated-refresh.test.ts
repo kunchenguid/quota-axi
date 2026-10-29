@@ -362,22 +362,35 @@ function stubClaudeCli(options: { rotateTo?: string } = {}): ClaudeStub {
   return { invocationCount: () => lines().length, arguments: lines };
 }
 
-function writeClaudeSession(configDir: string, pid: number): void {
+const CLAUDE_PROCESS_START = "Sat Oct 24 02:33:57 2026";
+
+function writeClaudeSession(
+  configDir: string,
+  pid: number,
+  procStart: unknown = CLAUDE_PROCESS_START,
+): void {
   mkdirSync(join(configDir, "sessions"), { recursive: true });
   writeFileSync(
     join(configDir, "sessions", `${pid}.json`),
-    JSON.stringify({ pid, procStart: 1_750_000_000 }),
+    JSON.stringify({ pid, procStart }),
   );
 }
 
-function useDarwinSessionRecords(): void {
+function useDarwinSessionRecords(
+  liveStart: string | Error = "  Sat   Oct 24 02:33:57 2026\n",
+): void {
   usePlatform("darwin");
   vi.doMock("../../src/lib/process.js", async (importOriginal) => {
     const actual =
       await importOriginal<typeof import("../../src/lib/process.js")>();
     return {
       ...actual,
-      execFileText: vi.fn(async (_command: string, args: string[]) => {
+      execFileText: vi.fn(async (command: string, args: string[]) => {
+        if (command === "ps") {
+          expect(args).toEqual(["-o", "lstart=", "-p", expect.any(String)]);
+          if (liveStart instanceof Error) throw liveStart;
+          return liveStart;
+        }
         if (args[0] === "list-keychains") return CLAUDE_LOGIN_KEYCHAIN;
         if (args[0] === "dump-keychain")
           return CLAUDE_KEYCHAIN_METADATA.replace(
@@ -725,7 +738,13 @@ describe.skipIf(process.platform === "win32")(
         if (sibling === "listed")
           process.env.QUOTA_AXI_CLAUDE_PROFILES = siblingDir;
         else process.env.CLAUDE_CONFIG_DIR = configDir;
-        writeClaudeSession(siblingDir, 10_001);
+        writeClaudeSession(
+          siblingDir,
+          10_001,
+          sibling === "default"
+            ? "\n Sat  Oct  24 02:33:57 2026  "
+            : CLAUDE_PROCESS_START,
+        );
         withRunningProcessEntries({
           pid: 10_001,
           commandLine: "/fixture/bin/claude --resume",
@@ -741,6 +760,13 @@ describe.skipIf(process.platform === "win32")(
         expect(cli.invocationCount()).toBe(1);
         expect(result.state.status).toBe("fresh");
         expect(cli.arguments()).toEqual(["doctor"]);
+        const { execFileText } = await import("../../src/lib/process.js");
+        expect(execFileText).toHaveBeenCalledWith(
+          "ps",
+          ["-o", "lstart=", "-p", "10001"],
+          expect.any(Number),
+          { env: expect.objectContaining({ TZ: "UTC", LC_ALL: "C" }) },
+        );
       },
     );
 
@@ -816,12 +842,23 @@ describe.skipIf(process.platform === "win32")(
       "malformed-target",
       "mismatched-target-pid",
       "mismatched-sibling-pid",
+      "stale-sibling-start",
+      "missing-sibling-start",
+      "numeric-sibling-start",
+      "unreadable-live-start",
+      "empty-live-start",
       "unknown-second-process",
       "non-darwin",
     ])(
       "stands down for unknown session-record ownership: %s",
       async (ownership) => {
-        useDarwinSessionRecords();
+        useDarwinSessionRecords(
+          ownership === "unreadable-live-start"
+            ? new Error("process start unavailable")
+            : ownership === "empty-live-start"
+              ? "  \n"
+              : undefined,
+        );
         const configDir = join(tempDir, ".claude");
         const siblingDir = join(tempDir, "other profile");
         process.env.QUOTA_AXI_CLAUDE_PROFILES = siblingDir;
@@ -853,6 +890,15 @@ describe.skipIf(process.platform === "win32")(
             join(siblingDir, "sessions", "10000.json"),
             JSON.stringify({ pid: 10_001, procStart: 1 }),
           );
+        if (ownership === "stale-sibling-start")
+          writeClaudeSession(siblingDir, 10_000, "Fri Oct 23 02:33:57 2026");
+        if (ownership === "missing-sibling-start")
+          writeFileSync(
+            join(siblingDir, "sessions", "10000.json"),
+            JSON.stringify({ pid: 10_000 }),
+          );
+        if (ownership === "numeric-sibling-start")
+          writeClaudeSession(siblingDir, 10_000, 1_750_000_000);
         if (ownership === "non-darwin") usePlatform("linux");
         withRunningProcesses(
           "/fixture/bin/claude --resume",

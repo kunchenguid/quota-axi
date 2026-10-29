@@ -803,11 +803,29 @@ async function liveClaudeRefreshBlocker(
       claudeSessionRecord(profileConfigDir, pid) !== "missing"
     )
       return REFRESH_LIVE_VENDOR_PROCESS;
+    let liveStart: string;
+    try {
+      liveStart = (
+        await execFileText("ps", ["-o", "lstart=", "-p", String(pid)], 4_000, {
+          env: { ...process.env, TZ: "UTC", LC_ALL: "C" },
+        })
+      )
+        .trim()
+        .replace(/\s+/g, " ");
+    } catch {
+      return REFRESH_LIVE_VENDOR_PROCESS;
+    }
+    if (!liveStart) return REFRESH_LIVE_VENDOR_PROCESS;
     let ownedBySibling = false;
     for (const dir of siblingDirs) {
       const record = claudeSessionRecord(dir, pid);
-      if (record === "unknown") return REFRESH_LIVE_VENDOR_PROCESS;
-      if (record === "matching") ownedBySibling = true;
+      if (record === "missing") continue;
+      if (
+        record === "unknown" ||
+        record.procStart?.trim().replace(/\s+/g, " ") !== liveStart
+      )
+        return REFRESH_LIVE_VENDOR_PROCESS;
+      ownedBySibling = true;
     }
     if (!ownedBySibling) return REFRESH_LIVE_VENDOR_PROCESS;
   }
@@ -817,7 +835,7 @@ async function liveClaudeRefreshBlocker(
 function claudeSessionRecord(
   configDir: string,
   pid: number,
-): "matching" | "missing" | "unknown" {
+): { procStart: string | undefined } | "missing" | "unknown" {
   let text: string;
   try {
     text = readFileSync(join(configDir, "sessions", `${pid}.json`), "utf8");
@@ -829,7 +847,8 @@ function claudeSessionRecord(
   try {
     const record: unknown = JSON.parse(text, (key, value: unknown) =>
       key === "" ||
-      ((key === "pid" || key === "procStart") && typeof value === "number")
+      (key === "pid" && typeof value === "number") ||
+      (key === "procStart" && typeof value === "string")
         ? value
         : undefined,
     );
@@ -837,7 +856,12 @@ function claudeSessionRecord(
       typeof record === "object" &&
       "pid" in record &&
       record.pid === pid
-      ? "matching"
+      ? {
+          procStart:
+            "procStart" in record && typeof record.procStart === "string"
+              ? record.procStart
+              : undefined,
+        }
       : "unknown";
   } catch {
     return "unknown";
