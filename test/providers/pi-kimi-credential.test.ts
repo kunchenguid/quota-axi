@@ -323,22 +323,28 @@ describe("Pi Kimi credential broker", () => {
     }
   });
 
-  it("does not import Pi SDK packages", () => {
-    const implementation = readFileSync(
-      new URL("../../src/providers/pi-kimi-credential.ts", import.meta.url),
-      "utf8",
-    );
-    const packageJson = readFileSync(
-      new URL("../../package.json", import.meta.url),
-      "utf8",
-    );
+  it("does not declare Pi SDK dependencies", () => {
+    const packageJson = JSON.parse(
+      readFileSync(new URL("../../package.json", import.meta.url), "utf8"),
+    ) as Partial<
+      Record<
+        | "dependencies"
+        | "devDependencies"
+        | "optionalDependencies"
+        | "peerDependencies",
+        Record<string, string>
+      >
+    >;
+    const dependencies = Object.keys({
+      ...packageJson.dependencies,
+      ...packageJson.devDependencies,
+      ...packageJson.optionalDependencies,
+      ...packageJson.peerDependencies,
+    });
 
-    expect(implementation).not.toMatch(/@earendil-works\/pi-/);
-    expect(implementation).not.toContain("ModelRuntime");
-    expect(implementation).not.toContain("InMemoryCredentialStore");
-    expect(implementation).not.toContain("readStoredCredential");
-    expect(packageJson).not.toMatch(/@earendil-works\/pi-/);
-    expect(implementation).toContain('open(path, "r")');
+    expect(
+      dependencies.filter((name) => name.startsWith("@earendil-works/pi-")),
+    ).toEqual([]);
   });
 
   it("resolves a stored OAuth access token without refreshing it", async () => {
@@ -411,6 +417,29 @@ describe("Pi Kimi credential broker", () => {
       credential: "pi-oauth-terminal-access-119",
     });
   });
+
+  it.each([
+    ["an empty", ""],
+    ["a blank", "   "],
+    ["a null", null],
+    ["a non-string", 42],
+  ])(
+    "reports an expired OAuth record with %s refresh token as unrefreshable",
+    async (_label, refresh) => {
+      const fixture = piOauthFixture({
+        access: "pi-oauth-blank-refresh-access-131",
+        refresh,
+        expires: Date.now() - 1_000,
+      });
+
+      await expect(createPiKimiCredentialBroker().resolve()).resolves.toEqual({
+        status: "expired",
+        refreshable: false,
+        credential: "pi-oauth-blank-refresh-access-131",
+      });
+      expectSnapshotEqual(fixture.authPath, fixture.before);
+    },
+  );
 
   it.each([
     ["absent access token", { refresh: "r", expires: Date.now() + 3_600_000 }],

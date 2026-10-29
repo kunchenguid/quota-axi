@@ -877,11 +877,12 @@ process.disconnect();
       runner.on("message", (message) => messages.push(message));
       let child: { pid: number; descendant: number; cwd: string } | undefined;
       try {
-        await vi.waitFor(() => expect(existsSync(ready)).toBe(true), {
-          timeout: 4000,
-          interval: 20,
-        });
-        child = JSON.parse(readFileSync(ready, "utf8")) as typeof child;
+        await vi.waitFor(
+          () => {
+            child = JSON.parse(readFileSync(ready, "utf8")) as typeof child;
+          },
+          { timeout: 4000, interval: 20 },
+        );
         runner.kill(signal);
         const [code, exitSignal] = await closed;
         expect(hasHandler ? code : exitSignal).toBe(hasHandler ? 0 : signal);

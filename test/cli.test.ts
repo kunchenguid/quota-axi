@@ -3033,6 +3033,9 @@ describe("CLI plumbing via the axi SDK", () => {
     PROVIDERS.mimo = providerWithAuth("mimo", "MiMo");
     PROVIDERS.deepseek = providerWithAuth("deepseek", "DeepSeek");
     PROVIDERS.openrouter = providerWithAuth("openrouter", "OpenRouter");
+    PROVIDERS.elevenlabs = providerWithAuth("elevenlabs", "ElevenLabs");
+    PROVIDERS.devin = providerWithAuth("devin", "Devin");
+    PROVIDERS.muse = providerWithAuth("muse", "Muse");
     PROVIDERS.higgsfield = providerWithAuth("higgsfield", "Higgsfield");
 
     const output = await capture(["--allow-keychain-prompt", "auth"]);
@@ -3041,6 +3044,7 @@ describe("CLI plumbing via the axi SDK", () => {
     );
     expect(output).toContain("deepseek,test,none,available,none");
     expect(output).toContain("openrouter,test,none,available,none");
+    expect(output).toContain("muse,test,none,available,none");
     expect(output).not.toContain("unknown argument");
     expect(process.exitCode).toBeUndefined();
   });

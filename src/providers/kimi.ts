@@ -287,8 +287,8 @@ type KimiCandidate =
        */
       localState: CandidateLocalState;
       /**
-       * True when a stored-expired candidate's record carries a refresh
-       * token: an empirically rejected probe then reads as soft expiry with
+       * True when the credential reader establishes a refresh path for a
+       * stored-expired candidate: a rejected probe then reads as soft expiry with
        * a rotation path, not as sign-out. Meaningful only for `localState:
        * "expired"` candidates; a stored-valid credential the server rejected
        * was revoked, not soft-expired.
@@ -716,12 +716,12 @@ async function resolveCliCredential(
 
 /**
  * Soft expiry for a stored-expired credential whose record carries a refresh
- * path (a Kimi Code CLI `refresh_token`, a Pi `refresh` property). A
+ * path established by its credential reader. A
  * definitively rejected probe means the short-lived access token died before
  * its rotation, not that the login is gone, so the verdict is the soft
  * `expired_refreshable` classification (status `unavailable`, never
  * `auth_required`) and the cache survives. Rotation stays the vendor CLI's
- * job: nothing here reads or exchanges the refresh token.
+ * job: only the reader's refreshability boolean reaches this function.
  */
 function refreshableExpiryFailure(source: string): KimiFailure {
   return new KimiFailure(
