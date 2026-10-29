@@ -28,7 +28,8 @@ export function renderHelp(lines: string[]): string {
 }
 
 /**
- * One measurable scope. Every column is populated for every row, and rows stay
+ * One measurable scope. Every column is populated for every row except the
+ * credit-balance (`credits`) scope's empty `effectivePercentRemaining`, and rows stay
  * in provider-declaration and account-discovery order: a `spendPriority`
  * column must never read as a published ranking.
  */
@@ -36,7 +37,7 @@ type QuotaRow = {
   provider: ProviderId;
   accountKey?: string;
   scope: string;
-  effectivePercentRemaining: number;
+  effectivePercentRemaining: number | "";
   [SELECTION_SCALAR_KEY]: number | string;
   runway: string;
   confidence: string;
@@ -130,6 +131,18 @@ function quotaBlocks(response: QuotaAxiResponse): ProviderBlocks {
 
     for (const scope of scopes) {
       if (scope.effectivePercentRemaining === undefined) {
+        // The credit-balance scope has no percentage by design; the
+        // provider's `credits` attention row already states the balance, so
+        // a `headroom_unknown` row would only repeat it as a gap. A known
+        // credit-balance scalar still gets its `quota[]` row, with an empty
+        // remaining column.
+        if (scope.scope === "credits") {
+          if (scope.selection?.status !== "known") continue;
+          blocks.quota.push(quotaRow(provider, scope));
+          const exhaustion = exhaustionRow(provider, scope);
+          if (exhaustion) blocks.exhaustion.push(exhaustion);
+          continue;
+        }
         scopeAttention.push({
           ...providerColumns(provider),
           scope: scope.scope,
@@ -174,7 +187,7 @@ function quotaRow(
   return {
     ...providerColumns(provider),
     scope: scope.scope,
-    effectivePercentRemaining: scope.effectivePercentRemaining as number,
+    effectivePercentRemaining: scope.effectivePercentRemaining ?? "",
     // `unknown`, never `0`: `0` is exact utilization, a different claim.
     [SELECTION_SCALAR_KEY]: scope.selection?.[SELECTION_SCALAR_KEY] ?? UNKNOWN,
     runway: scope.runway?.status ?? UNKNOWN,

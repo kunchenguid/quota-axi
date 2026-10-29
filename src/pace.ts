@@ -1,8 +1,10 @@
 import { SELECTION_SCALAR_KEY } from "./types.js";
 import type {
+  EffectiveAvailability,
   EffectivePaceSummary,
   EffectiveRunway,
   EffectiveSelection,
+  ProviderQuota,
   QuotaPace,
   QuotaPaceReason,
   QuotaWindow,
@@ -19,6 +21,22 @@ export const PACE_EARLY_ELAPSED_PERCENT = 10;
 
 /** The selection scalar is reported within this symmetric bound. */
 export const SELECTION_CLAMP_PERCENT_POINTS = 100;
+
+/**
+ * Fixed `spendPriority` for a usable prepaid credit balance. Prepaid credits
+ * never expire unused, so a positive balance is neither forfeiting allowance
+ * (positive) nor overdrawn against a reset clock (negative): it reads `0`,
+ * the exact-utilization point, as a documented convention rather than a
+ * derived projection. Shared so every credit-balance scope — and any future
+ * usable provider with no readable balance — spells it the same way.
+ */
+export const CREDIT_BALANCE_SPEND_PRIORITY = 0;
+
+/** Steep negative `spendPriority` for a credit balance nearing exhaustion. */
+export const CREDIT_LOW_BALANCE_SPEND_PRIORITY = -50;
+
+/** Below this USD balance a credit scope is nearing exhaustion. USD only. */
+export const CREDIT_LOW_BALANCE_USD_THRESHOLD = 2;
 
 /**
  * Maximum snapshot-clock skew accepted beyond one declared window duration
@@ -381,6 +399,68 @@ export function summarizeEffectiveSelection(
     [SELECTION_SCALAR_KEY]: roundPace(
       clamp(scopeMetric, SELECTION_CLAMP_PERCENT_POINTS),
     ),
+  };
+}
+
+/**
+ * The selection and runway for a scope whose only quota evidence is a
+ * prepaid credit balance (`credits`), which has no cap, cycle, or reset to
+ * project against. A positive finite balance publishes the fixed
+ * `CREDIT_BALANCE_SPEND_PRIORITY` scalar with `runway: unknown` — a prepaid
+ * balance has no reset to run through, and no percentage is derived from an
+ * amount with no denominator. A USD balance below
+ * `CREDIT_LOW_BALANCE_USD_THRESHOLD` instead publishes
+ * `CREDIT_LOW_BALANCE_SPEND_PRIORITY` while staying usable; the threshold is
+ * USD-only because other units are not comparable magnitudes. A balance at
+ * or below zero, or one the vendor marks unavailable
+ * (`credits.available: false`), is `exhausted_now`. An absent or non-finite balance, a
+ * missing unit, and an unlimited balance stay `unknown`: no scalar is
+ * invented for evidence quota-axi cannot bound.
+ */
+export function summarizeCreditBalance(
+  credits: ProviderQuota["credits"],
+  generatedAt: string,
+): Pick<EffectiveAvailability, "runway" | "selection"> {
+  const remaining = finiteNumber(credits?.remaining);
+  const unavailable = credits?.available === false;
+  if (
+    !unavailable &&
+    (credits === undefined ||
+      credits.unlimited ||
+      credits.unit === undefined ||
+      remaining === undefined)
+  ) {
+    return {
+      runway: { status: "unknown" },
+      selection: { status: "unknown" },
+    };
+  }
+  if (unavailable || remaining === undefined || remaining <= 0) {
+    const generatedAtMs = Date.parse(generatedAt);
+    return {
+      runway: {
+        status: "exhausted_now",
+        usableRunwaySeconds: 0,
+        ...(isRepresentableDateMs(generatedAtMs)
+          ? { projectedExhaustedAt: new Date(generatedAtMs).toISOString() }
+          : {}),
+      },
+      selection: {
+        status: "known",
+        [SELECTION_SCALAR_KEY]: CREDIT_LOW_BALANCE_SPEND_PRIORITY,
+      },
+    };
+  }
+  const low =
+    credits?.unit === "usd" && remaining < CREDIT_LOW_BALANCE_USD_THRESHOLD;
+  return {
+    runway: { status: "unknown" },
+    selection: {
+      status: "known",
+      [SELECTION_SCALAR_KEY]: low
+        ? CREDIT_LOW_BALANCE_SPEND_PRIORITY
+        : CREDIT_BALANCE_SPEND_PRIORITY,
+    },
   };
 }
 

@@ -48,6 +48,7 @@ type Dependencies = {
 };
 
 export type NormalizedDeepSeekPayload = {
+  available: boolean;
   metrics: {
     id: "usd-total" | "cny-total";
     value: string;
@@ -122,7 +123,7 @@ async function fetchQuota(dependencies: Dependencies): Promise<ProviderQuota> {
         label: LABEL,
         source: "api",
         windows: [],
-        credits: computeCredits(normalized.metrics),
+        credits: computeCredits(normalized),
         refreshedAt: new Date(dependencies.now()).toISOString(),
         sourcesTried: sourceNames(attempts),
         attempts,
@@ -210,31 +211,35 @@ export function normalizeDeepSeekPayload(
     });
   }
 
-  return { metrics };
+  return { available: root.is_available, metrics };
 }
 
+/**
+ * Report the USD wallet unless it is at or below zero while the CNY wallet
+ * is funded; a zero USD wallet must not mask a funded CNY balance. Every
+ * wallet at or below zero reports the USD figure.
+ */
 function computeCredits(
-  metrics: NormalizedDeepSeekPayload["metrics"],
+  normalized: NormalizedDeepSeekPayload,
 ): ProviderQuota["credits"] | undefined {
-  const usdTotal = metrics.find(
-    (m) => m.currency === "USD" && m.id === "usd-total",
-  );
-  if (usdTotal) {
-    const value = Number(usdTotal.value);
-    if (Number.isFinite(value)) {
-      return { remaining: value, unit: "usd" };
-    }
-  }
-  const cnyTotal = metrics.find(
-    (m) => m.currency === "CNY" && m.id === "cny-total",
-  );
-  if (cnyTotal) {
-    const value = Number(cnyTotal.value);
-    if (Number.isFinite(value)) {
-      return { remaining: value, unit: "credits" };
-    }
-  }
-  return undefined;
+  const usd = walletTotal(normalized.metrics, "usd-total");
+  const cny = walletTotal(normalized.metrics, "cny-total");
+  const balance =
+    usd !== undefined && (usd > 0 || cny === undefined || cny <= 0)
+      ? { remaining: usd, unit: "usd" as const }
+      : cny !== undefined
+        ? { remaining: cny, unit: "credits" as const }
+        : undefined;
+  return balance && { ...balance, available: normalized.available };
+}
+
+function walletTotal(
+  metrics: NormalizedDeepSeekPayload["metrics"],
+  id: NormalizedDeepSeekPayload["metrics"][number]["id"],
+): number | undefined {
+  const metric = metrics.find((m) => m.id === id);
+  const value = Number(metric?.value);
+  return metric && Number.isFinite(value) ? value : undefined;
 }
 
 function objectValue(value: unknown): Record<string, unknown> | undefined {

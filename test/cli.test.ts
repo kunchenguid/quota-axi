@@ -1802,7 +1802,7 @@ describe("new provider public quota output", () => {
         provider: "deepseek",
         source: "api",
         windows: [],
-        credits: { remaining: 12.5, unit: "usd" },
+        credits: { remaining: 12.5, unit: "usd", available: true },
         state: expect.objectContaining({
           status: "fresh",
           stale: false,
