@@ -653,6 +653,7 @@ Everything a consumer branches on stays in the default tier: `accountKey` and `a
 
 Account identity and per-source `attempts` are omitted unless `--full` is passed.
 Claude `identityStatus` is `verified` only when Anthropic returns an authoritative account identifier; `email` and `organization` are display-only and must not be used for duplicate detection.
+Claude `plan` comes from the organization type in that same verified profile answer (`pro`, `max`, `team`, or `enterprise`), because the stored login's `subscriptionType` is written at sign-in and goes stale after a plan change; an unverified profile or an unknown organization type keeps the stored value.
 
 ### Provider `state`
 

@@ -139,6 +139,8 @@ type ClaudeIdentityResult = {
   account: ClaudeAccount;
   /** The organization the bearer is scoped to, which owns its limits. */
   organizationId?: string;
+  /** The plan the vendor reports for that organization right now. */
+  plan?: string;
   error?: string;
 };
 type ClaudeProfileLocations = {
@@ -1358,6 +1360,25 @@ export function normalizeClaudeProfile(
   };
 }
 
+/** Organization types mapped to the plan names the stored login uses. */
+const CLAUDE_ORGANIZATION_PLANS = new Map([
+  ["claude_pro", "pro"],
+  ["claude_max", "max"],
+  ["claude_team", "team"],
+  ["claude_enterprise", "enterprise"],
+]);
+
+/**
+ * The plan named by the oauth profile's organization type. An unknown type
+ * yields nothing, so the caller keeps the stored plan rather than guessing.
+ */
+export function claudeProfilePlan(raw: unknown): string | undefined {
+  const type = stringValue(
+    objectValue(objectValue(raw)?.organization)?.organization_type,
+  );
+  return type ? CLAUDE_ORGANIZATION_PLANS.get(type) : undefined;
+}
+
 function normalizeScopedLimits(raw: unknown): QuotaWindow[] {
   if (!Array.isArray(raw)) return [];
   const windows: QuotaWindow[] = [];
@@ -1974,6 +1995,9 @@ async function fetchOauthUsage(credentials: ClaudeCredentials): Promise<{
     const identity = await fetchOauthProfile(credentials);
     return {
       ...quota,
+      // The stored subscriptionType is written at sign-in and goes stale
+      // after a plan change; the live profile answer is current.
+      plan: identity.plan ?? quota.plan,
       account: identity.account,
       ...(identity.organizationId
         ? { organizationId: identity.organizationId }
@@ -2011,8 +2035,13 @@ async function fetchOauthProfile(
     const organizationId = stringValue(
       objectValue(objectValue(raw)?.organization)?.uuid,
     );
+    const plan = claudeProfilePlan(raw);
     return account
-      ? { account, ...(organizationId ? { organizationId } : {}) }
+      ? {
+          account,
+          ...(organizationId ? { organizationId } : {}),
+          ...(plan ? { plan } : {}),
+        }
       : unverifiedClaudeIdentity("identity_profile_unrecognized");
   } catch (error) {
     return unverifiedClaudeIdentity(

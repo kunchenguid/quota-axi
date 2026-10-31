@@ -2582,6 +2582,102 @@ describe("Claude credential-state reporting", () => {
     );
   });
 
+  describe("plan reporting", () => {
+    function storePlan(subscriptionType: string): void {
+      const home = useTempHome();
+      mkdirSync(join(home, ".claude"), { recursive: true });
+      writeFileSync(
+        join(home, ".claude", ".credentials.json"),
+        JSON.stringify({
+          claudeAiOauth: {
+            accessToken: "fresh-token",
+            expiresAt: "2035-01-01T00:00:00.000Z",
+            subscriptionType,
+          },
+        }),
+      );
+    }
+
+    function stubProfile(response: Response): void {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: string | URL | Request) =>
+          String(input).endsWith("/api/oauth/profile")
+            ? response
+            : new Response(JSON.stringify({ five_hour: { utilization: 12 } }), {
+                status: 200,
+              }),
+        ),
+      );
+    }
+
+    async function readPlan(): Promise<string | undefined> {
+      const { fetchQuota } = await import("../../src/providers/claude.js");
+      const result = await fetchQuota({
+        allowKeychainPrompt: false,
+        refreshCredentials: false,
+      });
+      expect(result.state.status).toBe("fresh");
+      return result.plan;
+    }
+
+    it("reports the live profile plan over a stale stored subscription type", async () => {
+      storePlan("pro");
+      stubProfile(
+        new Response(
+          JSON.stringify({
+            account: {
+              uuid: "11111111-2222-4333-8444-555555555555",
+              has_claude_max: true,
+            },
+            organization: {
+              uuid: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+              organization_type: "claude_max",
+              rate_limit_tier: "default_claude_max_20x",
+            },
+          }),
+          { status: 200 },
+        ),
+      );
+
+      expect(await readPlan()).toBe("max");
+    });
+
+    it("keeps the stored plan when the profile names an unknown organization type", async () => {
+      storePlan("pro");
+      stubProfile(
+        new Response(
+          JSON.stringify({
+            account: { uuid: "11111111-2222-4333-8444-555555555555" },
+            organization: { organization_type: "claude_future_tier" },
+          }),
+          { status: 200 },
+        ),
+      );
+
+      expect(await readPlan()).toBe("pro");
+    });
+
+    it("keeps the stored plan when the profile is unavailable", async () => {
+      storePlan("pro");
+      stubProfile(new Response("{}", { status: 500 }));
+
+      expect(await readPlan()).toBe("pro");
+    });
+
+    it("keeps the stored plan when the profile lacks a stable account id", async () => {
+      storePlan("pro");
+      stubProfile(
+        new Response(
+          JSON.stringify({ organization: { organization_type: "claude_max" } }),
+          { status: 200 },
+        ),
+      );
+
+      expect(await readPlan()).toBe("pro");
+    });
+  });
+
   it("marks identity unverified when the profile response lacks a stable account id", async () => {
     const home = useTempHome();
     mkdirSync(join(home, ".claude"), { recursive: true });
