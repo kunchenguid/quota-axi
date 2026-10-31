@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  claudeProfilePlan,
   isClaudeEnvProfileScopeDenial,
   normalizeClaudeApiUsage,
   normalizeClaudeProfile,
@@ -119,6 +120,21 @@ describe("Claude quota parsing", () => {
 });
 
 describe("Claude OAuth profile parsing", () => {
+  it("maps known organization types to the stored plan names", () => {
+    const plan = (organization_type: unknown) =>
+      claudeProfilePlan({ organization: { organization_type } });
+
+    expect(plan("claude_pro")).toBe("pro");
+    expect(plan("claude_max")).toBe("max");
+    expect(plan("claude_team")).toBe("team");
+    expect(plan("claude_enterprise")).toBe("enterprise");
+    expect(plan("claude_future_tier")).toBeUndefined();
+    expect(plan("constructor")).toBeUndefined();
+    expect(plan(7)).toBeUndefined();
+    expect(claudeProfilePlan({})).toBeUndefined();
+    expect(claudeProfilePlan(null)).toBeUndefined();
+  });
+
   it("normalizes the stable account UUID and non-secret full-output fields", () => {
     const raw = JSON.parse(
       readFileSync(join(fixtureDir, "oauth-profile.json"), "utf8"),
