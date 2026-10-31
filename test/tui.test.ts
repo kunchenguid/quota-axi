@@ -918,6 +918,56 @@ describe("cards for providers with no combinable bound", () => {
   );
 });
 
+describe("Cursor pool scopes on the headline", () => {
+  it("never promotes a pool row when all_models is unknown", () => {
+    const window = (id: string, percentRemaining: number) => ({
+      id,
+      label: id,
+      kind: "monthly" as const,
+      percentUsed: 100 - percentRemaining,
+      percentRemaining,
+    });
+    const cursor = withQuotaSemantics(
+      {
+        provider: "cursor",
+        label: "Cursor",
+        source: "api",
+        windows: [
+          window("included_usage", 90),
+          window("auto_usage", 93),
+          window("api_usage", 2),
+          { id: "spend_limit", label: "spend limit", kind: "credits" },
+        ],
+        state: {
+          status: "fresh",
+          stale: false,
+          sourcesTried: ["api"],
+        },
+        attempts: [{ source: "api", status: "success" }],
+      },
+      GENERATED_AT,
+    );
+    const scopes = cursor.quotaSemantics?.effectiveAvailability ?? [];
+    expect(scopes.find(({ scope }) => scope === "all_models")?.status).toBe(
+      "unknown",
+    );
+    expect(scopes.find(({ scope }) => scope === "pool:auto")?.status).toBe(
+      "known",
+    );
+
+    const lines = renderQuotaTui(
+      {
+        generatedAt: GENERATED_AT,
+        schemaVersion: 5,
+        providers: [cursor],
+      },
+      { timeZone: "America/Los_Angeles" },
+    ).split("\n");
+
+    expect(findLine(lines, "effective unknown")).toContain("runway unknown");
+  });
+});
+
 describe("used-share window rows", () => {
   it("prints percentUsed of the parent instead of a remaining bar or ?", () => {
     const kimi = withQuotaSemantics(

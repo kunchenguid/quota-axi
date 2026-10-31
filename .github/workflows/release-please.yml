@@ -1,8 +1,9 @@
 name: release-please
 
+# Fork: releases are parked; manual dispatch only so enabling fork workflows never
+# cuts a release or publishes to npm on push to main.
 on:
-  push:
-    branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: write

@@ -23,7 +23,11 @@ afterEach(() => {
   temporaryDirectories = [];
 });
 
-describe("Kimi CLI credential inspection is read-only", () => {
+// Each test spawns the CLI up to four times, and runCli bounds each spawn at 15
+// seconds.
+const SUITE_OPTIONS = { timeout: 60_000 };
+
+describe("Kimi CLI credential inspection is read-only", SUITE_OPTIONS, () => {
   it("does not create Pi auth state while inspecting auth in an empty home", () => {
     const fixture = isolatedFixture();
 

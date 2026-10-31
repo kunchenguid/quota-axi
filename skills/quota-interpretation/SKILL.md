@@ -14,7 +14,7 @@ This document specifies the mathematics and presentation rules for quota interpr
 
 Implemented in `src/interpretation.ts`:
 
-- **Effective Availability**: Analyzes provider windows across all scopes (`all_models`, product scopes, model scopes).
+- **Effective Availability**: Analyzes provider windows across all scopes (`all_models`, product scopes, model scopes, Cursor `pool:*` scopes).
 - **Bound Conflict Detection**:
   - `availability()` accepts an optional own-windows argument.
   - When every window metered strictly for a scope reports remaining allowance, but an inherited account-wide window reports zero, quota-axi publishes `effectiveAvailability[].boundConflict` and reports the scope status as `unknown` rather than asserting `exhausted_now` or `effective 0`.

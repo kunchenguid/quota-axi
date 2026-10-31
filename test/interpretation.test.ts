@@ -1246,6 +1246,20 @@ describe("quota semantics", () => {
         boundedBy: ["included_usage", "auto_usage", "api_usage", "spend_limit"],
         limitingWindowIds: ["api_usage"],
       }),
+      expect.objectContaining({
+        scope: "pool:auto",
+        status: "known",
+        effectivePercentRemaining: 88,
+        boundedBy: ["auto_usage"],
+        limitingWindowIds: ["auto_usage"],
+      }),
+      expect.objectContaining({
+        scope: "pool:api",
+        status: "known",
+        effectivePercentRemaining: 21,
+        boundedBy: ["api_usage"],
+        limitingWindowIds: ["api_usage"],
+      }),
     ]);
   });
 
@@ -1330,6 +1344,12 @@ describe("quota semantics", () => {
         boundedBy: ["grok_bot"],
         limitingWindowIds: ["grok_bot"],
       }),
+      expect.objectContaining({
+        scope: "pool:auto",
+        status: "known",
+        effectivePercentRemaining: 88,
+        boundedBy: ["auto_usage"],
+      }),
     ]);
   });
 
@@ -1361,6 +1381,174 @@ describe("quota semantics", () => {
         boundedBy: ["grok_bot"],
       }),
     ]);
+  });
+
+  describe("Cursor billing pools", () => {
+    const cycle = {
+      startsAt: offsetFromGeneratedAt(-20 * 86_400),
+      resetsAt: offsetFromGeneratedAt(10 * 86_400),
+    };
+    // The live shape that exposed the collapse: auto and included are nearly
+    // untouched while the API pool is almost spent and the spend limit has no
+    // cycle, so it cannot be paced.
+    const live = [
+      window("included_usage", "monthly", 90, cycle),
+      window("auto_usage", "monthly", 93, cycle),
+      window("api_usage", "monthly", 2, cycle),
+      window("spend_limit", "credits", 100),
+      window("grok_bot", "weekly", 42, {
+        startsAt: offsetFromGeneratedAt(-3 * 86_400),
+        resetsAt: offsetFromGeneratedAt(4 * 86_400),
+      }),
+    ];
+
+    function byScope(windows: QuotaWindow[]) {
+      const semantics = withQuotaSemantics(
+        provider("cursor", windows),
+        GENERATED_AT,
+      ).quotaSemantics;
+      return new Map(
+        (semantics?.effectiveAvailability ?? []).map((entry) => [
+          entry.scope,
+          entry,
+        ]),
+      );
+    }
+
+    it("publishes each billing pool beside the unchanged all_models row", () => {
+      const scopes = byScope(live);
+
+      expect([...scopes.keys()]).toEqual([
+        "all_models",
+        "grok_bot",
+        "pool:auto",
+        "pool:api",
+      ]);
+      expect(scopes.get("all_models")).toMatchObject({
+        status: "known",
+        effectivePercentRemaining: 2,
+        limitingWindowIds: ["api_usage"],
+        boundedBy: ["included_usage", "auto_usage", "api_usage", "spend_limit"],
+      });
+      expect(scopes.get("pool:auto")).toMatchObject({
+        status: "known",
+        effectivePercentRemaining: 93,
+        limitingWindowIds: ["auto_usage"],
+        boundedBy: ["auto_usage"],
+      });
+      expect(scopes.get("pool:api")).toMatchObject({
+        status: "known",
+        effectivePercentRemaining: 2,
+        limitingWindowIds: ["api_usage"],
+        boundedBy: ["api_usage"],
+      });
+    });
+
+    it("keeps a used spend_limit unmeasurable on all_models and out of the pools", () => {
+      // A spend limit has no billing cycle, so once it is drawn on it cannot
+      // be paced. At 100% remaining it is not yet triggered and drops out of
+      // the average, so draw it down to see the unmeasurable case.
+      const scopes = byScope([
+        ...live.filter(({ id }) => id !== "spend_limit"),
+        window("spend_limit", "credits", 60),
+      ]);
+
+      expect(scopes.get("all_models")?.selection).toEqual({
+        status: "unknown",
+        unmeasurableWindowIds: ["spend_limit"],
+      });
+      for (const scope of ["pool:auto", "pool:api"]) {
+        const entry = scopes.get(scope);
+        expect(entry?.boundedBy).not.toContain("spend_limit");
+        expect(entry?.selection?.status).toBe("known");
+        expect(typeof entry?.selection?.[SELECTION_SCALAR_KEY]).toBe("number");
+      }
+    });
+
+    it("gives the nearly spent API pool a lower spendPriority than the untouched auto pool", () => {
+      const scopes = byScope(live);
+      const auto = scopes.get("pool:auto")?.selection?.[SELECTION_SCALAR_KEY];
+      const api = scopes.get("pool:api")?.selection?.[SELECTION_SCALAR_KEY];
+
+      expect(auto).toBeGreaterThan(0);
+      expect(api).toBeLessThan(0);
+      expect(auto!).toBeGreaterThan(api!);
+    });
+
+    it("keeps included_usage on all_models and out of the pools", () => {
+      const scopes = byScope([
+        window("included_usage", "monthly", 0, cycle),
+        window("auto_usage", "monthly", 60, cycle),
+        window("api_usage", "monthly", 50, cycle),
+      ]);
+
+      expect(scopes.get("all_models")).toMatchObject({
+        effectivePercentRemaining: 0,
+        limitingWindowIds: ["included_usage"],
+      });
+      expect(scopes.get("pool:auto")).toMatchObject({
+        effectivePercentRemaining: 60,
+        boundedBy: ["auto_usage"],
+      });
+      expect(scopes.get("pool:api")).toMatchObject({
+        effectivePercentRemaining: 50,
+        boundedBy: ["api_usage"],
+      });
+    });
+
+    it("omits a pool whose window is not reported", () => {
+      const autoOnly = byScope([
+        window("included_usage", "monthly", 58, cycle),
+        window("auto_usage", "monthly", 88, cycle),
+      ]);
+      const apiOnly = byScope([window("api_usage", "monthly", 21, cycle)]);
+
+      expect([...autoOnly.keys()]).toEqual(["all_models", "pool:auto"]);
+      expect([...apiOnly.keys()]).toEqual(["all_models", "pool:api"]);
+      expect([
+        ...byScope([window("included_usage", "monthly", 58, cycle)]).keys(),
+      ]).toEqual(["all_models"]);
+      expect([
+        ...byScope([window("spend_limit", "credits", 40)]).keys(),
+      ]).toEqual(["all_models"]);
+    });
+
+    it("keeps pool rows to recognized windows when an unfamiliar one is present", () => {
+      const result = withQuotaSemantics(
+        provider("cursor", [...live, window("mystery_limit", "unknown", 1)]),
+        GENERATED_AT,
+      );
+      const scopes = result.quotaSemantics?.effectiveAvailability ?? [];
+
+      expect(result.quotaSemantics?.status).toBe("partial");
+      expect(result.quotaSemantics?.unresolvedWindowIds).toEqual([
+        "mystery_limit",
+      ]);
+      expect(
+        scopes.find(({ scope }) => scope === "pool:auto")
+          ?.effectivePercentRemaining,
+      ).toBe(93);
+      expect(
+        scopes.find(({ scope }) => scope === "pool:api")
+          ?.effectivePercentRemaining,
+      ).toBe(2);
+    });
+
+    it("reports every pool unknown when the reading is stale", () => {
+      const stale: ProviderQuota = {
+        ...provider("cursor", live),
+        state: { status: "stale", stale: true, sourcesTried: ["api"] },
+      };
+      const scopes =
+        withQuotaSemantics(stale, GENERATED_AT).quotaSemantics
+          ?.effectiveAvailability ?? [];
+
+      expect(scopes.map(({ scope }) => scope)).toContain("pool:api");
+      for (const entry of scopes) {
+        expect(entry.status).toBe("unknown");
+        expect(entry.selection?.status).toBe("unknown");
+      }
+    });
   });
 
   it("does not fabricate a Cursor bound from an unmeasured window", () => {

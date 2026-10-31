@@ -905,7 +905,9 @@ function pickHeadlineAvailability(
     availability.find(
       (entry) => entry.scope.startsWith("all_") && entry.status === "known",
     ) ??
-    availability.find((entry) => entry.status === "known") ??
+    availability.find(
+      (entry) => !entry.scope.startsWith("pool:") && entry.status === "known",
+    ) ??
     availability[0]
   );
 }
