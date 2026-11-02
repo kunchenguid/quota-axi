@@ -1,0 +1,64 @@
+{
+  "response": {
+    "groups": [
+      {
+        "displayName": "Gemini Models",
+        "description": "Models within this group: Gemini Flash, Gemini Pro",
+        "buckets": [
+          {
+            "bucketId": "gemini-weekly",
+            "displayName": "Weekly Limit",
+            "description": "Weekly reset",
+            "window": "weekly",
+            "remainingFraction": 0.9988,
+            "resetTime": "2026-11-08T13:56:00Z"
+          },
+          {
+            "bucketId": "gemini-5h",
+            "displayName": "Five Hour Limit",
+            "description": "Quota available",
+            "window": "5h",
+            "remainingFraction": 1.0,
+            "resetTime": "2026-11-02T17:00:00Z"
+          }
+        ]
+      },
+      {
+        "displayName": "Claude and GPT models",
+        "description": "Models within this group: Claude Opus, Claude Sonnet, GPT-OSS",
+        "buckets": [
+          {
+            "bucketId": "3p-weekly",
+            "displayName": "Weekly Limit",
+            "description": "Weekly reset",
+            "window": "weekly",
+            "remainingFraction": 0.4606,
+            "resetTime": "2026-11-07T11:47:00Z"
+          },
+          {
+            "bucketId": "3p-5h",
+            "displayName": "Five Hour Limit",
+            "description": "Quota available",
+            "window": "5h",
+            "remainingFraction": 1.0,
+            "resetTime": "2026-11-02T17:00:00Z"
+          }
+        ]
+      },
+      {
+        "displayName": "Gemini 4 Argon",
+        "description": "Separate quota on paid Pro plans",
+        "buckets": [
+          {
+            "bucketId": "gemini-argon-wtu-weekly",
+            "displayName": "Weekly Limit",
+            "description": "Weekly reset",
+            "window": "weekly",
+            "remainingFraction": 0.3787,
+            "resetTime": "2026-11-07T14:55:00Z"
+          }
+        ]
+      }
+    ]
+  }
+}

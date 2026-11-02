@@ -998,7 +998,8 @@ function agySemantics(
   const claudeGpt = windows.filter(
     ({ id }) => id === "claude_gpt_5h" || id === "claude_gpt_weekly",
   );
-  const resolved = new Set([...gemini, ...claudeGpt]);
+  const argon = windows.filter(({ id }) => id === "argon_weekly");
+  const resolved = new Set([...gemini, ...claudeGpt, ...argon]);
   const unresolved = windows.filter((window) => !resolved.has(window));
   const effectiveAvailability: EffectiveAvailability[] = [];
   if (gemini.length > 0) {
@@ -1008,6 +1009,9 @@ function agySemantics(
     effectiveAvailability.push(
       availability("claude_gpt", claudeGpt, generatedAt),
     );
+  }
+  if (argon.length > 0) {
+    effectiveAvailability.push(availability("argon", argon, generatedAt));
   }
   if (unresolved.length > 0) {
     return {
@@ -1020,7 +1024,7 @@ function agySemantics(
   }
   return knownSemantics(
     effectiveAvailability,
-    "Antigravity groups Gemini windows separately from Claude/GPT windows. Within a group, the weekly and 5-hour windows jointly bound that group, so that group's effective remaining percentage is the minimum across the named windows.",
+    "Antigravity groups Gemini windows separately from Claude/GPT windows, and Gemini 4 Argon is its own scope. Within a group, the weekly and 5-hour windows jointly bound that group, so that group's effective remaining percentage is the minimum across the named windows.",
   );
 }
 

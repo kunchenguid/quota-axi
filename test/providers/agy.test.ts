@@ -1101,16 +1101,16 @@ exec node "$0-cli.js" "$@"
     expect(fetched.state.status).toBe("fresh");
     expect(fetched.windows.map(({ id }) => id)).toEqual([
       "gemini_weekly",
-      "gemini_argon_weekly",
       "claude_gpt_weekly",
+      "argon_weekly",
     ]);
 
     const result = withQuotaSemantics(fetched, nowIso);
 
     expect(result.quotaSemantics).toMatchObject({
-      status: "partial",
-      unresolvedWindowIds: ["gemini_argon_weekly"],
+      status: "known",
     });
+    expect(result.quotaSemantics?.unresolvedWindowIds ?? []).toEqual([]);
     expect(result.quotaSemantics?.effectiveAvailability).toMatchObject([
       {
         scope: "gemini",
@@ -1122,7 +1122,134 @@ exec node "$0-cli.js" "$@"
         boundedBy: ["claude_gpt_weekly"],
         effectivePercentRemaining: 90,
       },
+      {
+        scope: "argon",
+        boundedBy: ["argon_weekly"],
+        effectivePercentRemaining: 78,
+      },
     ]);
+  });
+
+  describe("screen-shaped quota (unstarted 5-hour windows, Argon)", () => {
+    const nowIso = "2026-11-02T12:00:00.000Z";
+
+    it("reports Argon as its own window and scope, never a second gemini_weekly", () => {
+      const result = normalizeAgyQuotaSummary(
+        fixture("quota-summary-unstarted-5h.json"),
+      );
+      const ids = result?.windows.map(({ id }) => id);
+      expect(ids).toEqual([
+        "gemini_5h",
+        "gemini_weekly",
+        "claude_gpt_5h",
+        "claude_gpt_weekly",
+        "argon_weekly",
+      ]);
+      expect(ids?.filter((id) => id === "gemini_weekly")).toHaveLength(1);
+      const provider = withQuotaSemantics(
+        {
+          provider: "agy",
+          label: "Antigravity",
+          state: { status: "fresh", refreshedAt: nowIso },
+          windows: result?.windows ?? [],
+        } as ProviderQuota,
+        nowIso,
+      );
+      const scopes = provider.quotaSemantics?.effectiveAvailability ?? [];
+      expect(scopes.map(({ scope }) => scope).sort()).toEqual([
+        "argon",
+        "claude_gpt",
+        "gemini",
+      ]);
+      expect(scopes.find(({ scope }) => scope === "argon")).toMatchObject({
+        effectivePercentRemaining: 38,
+        boundedBy: ["argon_weekly"],
+        limitingWindowIds: ["argon_weekly"],
+      });
+      expect(scopes.find(({ scope }) => scope === "claude_gpt")).toMatchObject({
+        effectivePercentRemaining: 46,
+        limitingWindowIds: ["claude_gpt_weekly"],
+      });
+    });
+
+    it("marks a full 5-hour bucket as not started without inventing a reset", () => {
+      const result = normalizeAgyQuotaSummary(
+        fixture("quota-summary-unstarted-5h.json"),
+      );
+      for (const id of ["gemini_5h", "claude_gpt_5h"]) {
+        const window = result?.windows.find((w) => w.id === id);
+        expect(window).toMatchObject({
+          started: false,
+          percentRemaining: 100,
+          resetText: "Quota available",
+        });
+        expect(window?.resetsAt).toBeUndefined();
+      }
+      const weekly = result?.windows.find((w) => w.id === "gemini_weekly");
+      expect(weekly?.started).toBeUndefined();
+      expect(weekly?.resetsAt).toBeDefined();
+    });
+
+    it("does not let an unstarted 5-hour window supply pace evidence or change the bound", () => {
+      const result = normalizeAgyQuotaSummary(
+        fixture("quota-summary-unstarted-5h.json"),
+      );
+      const provider = withQuotaSemantics(
+        {
+          provider: "agy",
+          label: "Antigravity",
+          state: { status: "fresh", refreshedAt: nowIso },
+          windows: result?.windows ?? [],
+        } as ProviderQuota,
+        nowIso,
+      );
+      const gemini = provider.quotaSemantics?.effectiveAvailability.find(
+        ({ scope }) => scope === "gemini",
+      );
+      expect(gemini?.effectivePercentRemaining).toBe(100);
+      expect(gemini?.pace?.onPaceWindowIds ?? []).not.toContain("gemini_5h");
+      expect(gemini?.pace?.aheadWindowIds ?? []).not.toContain("gemini_5h");
+      expect(gemini?.pace?.behindWindowIds ?? []).not.toContain("gemini_5h");
+      const fiveHour = provider.windows.find((w) => w.id === "gemini_5h");
+      expect(fiveHour?.pace?.status).toBe("unknown");
+    });
+
+    it("keeps spendPriority identical with and without the unstarted 5-hour windows", () => {
+      const windows =
+        normalizeAgyQuotaSummary(fixture("quota-summary-unstarted-5h.json"))
+          ?.windows ?? [];
+      const priority = (list: typeof windows) =>
+        withQuotaSemantics(
+          {
+            provider: "agy",
+            label: "Antigravity",
+            state: { status: "fresh", refreshedAt: nowIso },
+            windows: list,
+          } as ProviderQuota,
+          nowIso,
+        ).quotaSemantics?.effectiveAvailability.map(({ scope, selection }) => [
+          scope,
+          selection?.spendPriority,
+        ]);
+      const withoutUnstarted = windows.filter((w) => w.started !== false);
+      expect(priority(windows)).toEqual(priority(withoutUnstarted));
+    });
+
+    it("shows the account email when the CLI output carries one", async () => {
+      const withEmail = {
+        status: "SUCCESS",
+        email: "person@example.invalid",
+        command: {
+          name: "quota",
+          data: fixture("quota-summary-unstarted-5h.json"),
+        },
+      };
+      const fetched = await fetchQuotaWithRuntime(
+        runtimeWith({ cliQuota: JSON.stringify(withEmail) }),
+      );
+      expect(fetched.source).toBe("cli");
+      expect(fetched.account?.email).toBe("person@example.invalid");
+    });
   });
 
   it("marks reading stale when resetsAt is in the past", async () => {

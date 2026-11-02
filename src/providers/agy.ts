@@ -368,6 +368,7 @@ export function normalizeAgyQuotaSummary(raw: unknown):
 
 export function normalizeAgyPrintUsage(raw: unknown):
   | {
+      account?: ProviderQuota["account"];
       windows: QuotaWindow[];
       refreshedAt: string;
     }
@@ -382,7 +383,23 @@ export function normalizeAgyPrintUsage(raw: unknown):
     name !== "/quota"
   )
     return undefined;
-  return normalizeAgyQuotaSummary(objectValue(command?.data));
+  const summary = normalizeAgyQuotaSummary(objectValue(command?.data));
+  if (!summary) return undefined;
+  // The print output carries no identity today; surface an email only when
+  // the source itself includes one.
+  const email = agyEmail(root) ?? agyEmail(objectValue(command?.data));
+  return email ? { ...summary, account: { email } } : summary;
+}
+
+function agyEmail(
+  data: Record<string, unknown> | undefined,
+): string | undefined {
+  return (
+    stringValue(data?.email) ??
+    stringValue(data?.userEmail) ??
+    stringValue(objectValue(data?.user)?.email) ??
+    stringValue(objectValue(data?.account)?.email)
+  );
 }
 
 export function normalizeAgyUserStatus(raw: unknown):
@@ -398,7 +415,7 @@ export function normalizeAgyUserStatus(raw: unknown):
   if (!status) return undefined;
   const planStatus = objectValue(status.planStatus);
   const planInfo = objectValue(planStatus?.planInfo);
-  const accountEmail = stringValue(status.email);
+  const accountEmail = agyEmail(status) ?? agyEmail(data);
   const userTier = objectValue(status.userTier);
   const plan = stringValue(userTier?.name) ?? stringValue(planInfo?.planName);
   const configData =
@@ -761,6 +778,12 @@ function normalizeQuotaSummaryBucket(
     result.percentUsed = percentUsed;
     result.percentRemaining = percentRemaining(percentUsed);
   }
+  // A full 5-hour bucket has no running reset: Antigravity only reports a
+  // placeholder `resetTime` of now + 5h until the first request starts it.
+  if (windowKind.id === "5h" && result.percentUsed === 0) {
+    result.started = false;
+    delete result.resetsAt;
+  }
   if (result.percentUsed === undefined && !result.resetsAt && !result.resetText)
     return undefined;
   return result;
@@ -824,7 +847,7 @@ function agyWindowGroup(
   // Argon is its own quota on paid Pro plans, so it must not share the
   // `gemini_*` window ids or the Gemini bound.
   if (normalized.includes("gemini") && normalized.includes("argon")) {
-    return { id: "gemini_argon", label: "Gemini Argon", sortRank: 2 };
+    return { id: "argon", label: "Gemini 4 Argon", sortRank: 2 };
   }
   if (normalized.includes("gemini")) {
     return { id: "gemini", label: "Gemini", sortRank: 0 };
