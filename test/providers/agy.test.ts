@@ -1190,6 +1190,28 @@ exec node "$0-cli.js" "$@"
       expect(weekly?.resetsAt).toBeDefined();
     });
 
+    it("keeps the real reset on a 5-hour window with small nonzero usage", () => {
+      const data = fixture("quota-summary-unstarted-5h.json") as {
+        response: {
+          groups: {
+            buckets: { bucketId: string; remainingFraction: number }[];
+          }[];
+        };
+      };
+      for (const group of data.response.groups) {
+        for (const bucket of group.buckets) {
+          if (bucket.bucketId === "gemini-5h") bucket.remainingFraction = 0.999;
+        }
+      }
+      const result = normalizeAgyQuotaSummary(data);
+      const window = result?.windows.find((w) => w.id === "gemini_5h");
+      expect(window?.started).toBeUndefined();
+      expect(window?.percentUsed).toBe(0);
+      expect(window?.resetsAt).toBeDefined();
+      const other = result?.windows.find((w) => w.id === "claude_gpt_5h");
+      expect(other?.started).toBe(false);
+    });
+
     it("does not let an unstarted 5-hour window supply pace evidence or change the bound", () => {
       const result = normalizeAgyQuotaSummary(
         fixture("quota-summary-unstarted-5h.json"),

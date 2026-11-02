@@ -780,7 +780,11 @@ function normalizeQuotaSummaryBucket(
   }
   // A full 5-hour bucket has no running reset: Antigravity only reports a
   // placeholder `resetTime` of now + 5h until the first request starts it.
-  if (windowKind.id === "5h" && result.percentUsed === 0) {
+  if (
+    windowKind.id === "5h" &&
+    remaining !== undefined &&
+    clampFraction(remaining) >= 1
+  ) {
     result.started = false;
     delete result.resetsAt;
   }
