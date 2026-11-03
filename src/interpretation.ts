@@ -998,7 +998,9 @@ function agySemantics(
   const claudeGpt = windows.filter(
     ({ id }) => id === "claude_gpt_5h" || id === "claude_gpt_weekly",
   );
-  const argon = windows.filter(({ id }) => id === "argon_weekly");
+  const argon = windows.filter(
+    ({ id }) => id === "argon_5h" || id === "argon_weekly",
+  );
   const resolved = new Set([...gemini, ...claudeGpt, ...argon]);
   const unresolved = windows.filter((window) => !resolved.has(window));
   const effectiveAvailability: EffectiveAvailability[] = [];

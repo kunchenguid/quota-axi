@@ -1172,6 +1172,28 @@ exec node "$0-cli.js" "$@"
       });
     });
 
+    it("bounds the Argon scope by an argon_5h window and keeps semantics known", () => {
+      const provider = withQuotaSemantics(
+        {
+          provider: "agy",
+          label: "Antigravity",
+          state: { status: "fresh", refreshedAt: nowIso },
+          windows: [
+            { id: "argon_5h", label: "Argon 5h", percentRemaining: 20 },
+            { id: "argon_weekly", label: "Argon weekly", percentRemaining: 70 },
+          ],
+        } as ProviderQuota,
+        nowIso,
+      );
+      expect(provider.quotaSemantics?.status).toBe("known");
+      expect(provider.quotaSemantics?.unresolvedWindowIds ?? []).toEqual([]);
+      expect(
+        provider.quotaSemantics?.effectiveAvailability?.find(
+          ({ scope }) => scope === "argon",
+        ),
+      ).toMatchObject({ effectivePercentRemaining: 20 });
+    });
+
     it("marks a full 5-hour bucket as not started without inventing a reset", () => {
       const result = normalizeAgyQuotaSummary(
         fixture("quota-summary-unstarted-5h.json"),
