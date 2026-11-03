@@ -64,6 +64,20 @@ delete process.env.QUOTA_AXI_SNAPSHOT;
 // A host that exports its Claude profile list would otherwise turn every
 // Claude read into several lanes; profile tests opt in themselves.
 delete process.env.QUOTA_AXI_CLAUDE_PROFILES;
+// A host that exports a Claude OAuth token or a GitHub token or host would make
+// the Claude and Copilot credential sources select that environment value
+// instead of the stores the tests set up; the tests that exercise those
+// variables set their own.
+for (const name of [
+  "CLAUDE_CODE_OAUTH_TOKEN",
+  "COPILOT_GITHUB_TOKEN",
+  "GH_TOKEN",
+  "GITHUB_TOKEN",
+  "COPILOT_GH_HOST",
+  "GH_HOST",
+]) {
+  delete process.env[name];
+}
 // Theme tests inject the OS probe and opt in themselves; never inherit a
 // system-theme request that would read the developer's appearance settings.
 delete process.env.QUOTA_AXI_THEME;
