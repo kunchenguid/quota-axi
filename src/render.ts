@@ -161,6 +161,7 @@ function quotaBlocks(response: QuotaAxiResponse): ProviderBlocks {
       ...providerAttention(provider, measured, scopeAttention.length),
     );
     blocks.attention.push(...shareRows(provider));
+    blocks.attention.push(...notStartedRows(provider));
     blocks.attention.push(...jobRows(provider));
     blocks.attention.push(...scopeAttention);
   }
@@ -231,6 +232,26 @@ function shareRows(provider: ProviderQuota): AttentionRow[] {
       scope: "all",
       kind: "share",
       detail: shareDetail(window),
+      remedy: NONE,
+    }));
+}
+
+/**
+ * A rolling window that is full with no running reset is reported as not
+ * started rather than as a measured reset, so an agent never reads its
+ * placeholder countdown as pace evidence.
+ */
+function notStartedRows(provider: ProviderQuota): AttentionRow[] {
+  const scopes = provider.quotaSemantics?.effectiveAvailability ?? [];
+  return provider.windows
+    .filter((window) => window.started === false)
+    .map((window) => ({
+      ...providerColumns(provider),
+      scope:
+        scopes.find((scope) => scope.boundedBy.includes(window.id))?.scope ??
+        "all",
+      kind: "window_not_started",
+      detail: `${window.id} started=false: full, no running reset yet`,
       remedy: NONE,
     }));
 }
@@ -450,6 +471,8 @@ function bindingReset(
 ): string {
   for (const id of scope.limitingWindowIds ?? []) {
     const window = windows.find((candidate) => candidate.id === id);
+    // An unstarted window has no reset to report; a tied started bound does.
+    if (window?.started === false) continue;
     const reset = window?.resetsAt ?? window?.resetText;
     if (reset) return reset;
   }
@@ -471,6 +494,11 @@ function auditBlocks(response: QuotaAxiResponse): string[] {
     relationships: provider.quotaSemantics?.status ?? UNKNOWN,
     refreshedAt: provider.state.refreshedAt ?? NONE,
   }));
+  // `started` only exists for providers that report an unstarted rolling
+  // window, so the column appears only when some window carries it.
+  const showStarted = response.providers.some((provider) =>
+    provider.windows.some((window) => window.started !== undefined),
+  );
   const windows = response.providers.flatMap((provider) =>
     provider.windows.map((window) => ({
       ...providerColumns(provider),
@@ -478,6 +506,7 @@ function auditBlocks(response: QuotaAxiResponse): string[] {
       label: window.label,
       percentRemaining: window.percentRemaining ?? UNKNOWN,
       resetsAt: window.resetsAt ?? window.resetText ?? UNKNOWN,
+      ...(showStarted ? { started: window.started ?? UNKNOWN } : {}),
       pace: window.pace?.status ?? UNKNOWN,
       reserve: window.pace?.reservePercentPoints ?? UNKNOWN,
       burnMultiple: window.pace?.burnMultiple ?? UNKNOWN,

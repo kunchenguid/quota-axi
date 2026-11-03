@@ -1285,6 +1285,7 @@ function normalizeCachedWindow(raw: unknown): QuotaWindow | undefined {
   assignString(result, "startsAt", data.startsAt);
   assignString(result, "resetsAt", data.resetsAt);
   assignString(result, "resetText", data.resetText);
+  if (data.started === false) result.started = false;
   assignNumber(result, "windowSeconds", data.windowSeconds);
   assignNumber(result, "spentUsd", data.spentUsd);
   assignNumber(result, "limitUsd", data.limitUsd);
