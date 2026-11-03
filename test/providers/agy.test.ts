@@ -1101,8 +1101,8 @@ exec node "$0-cli.js" "$@"
     expect(fetched.state.status).toBe("fresh");
     expect(fetched.windows.map(({ id }) => id)).toEqual([
       "gemini_weekly",
+      "gemini_argon_weekly",
       "claude_gpt_weekly",
-      "argon_weekly",
     ]);
 
     const result = withQuotaSemantics(fetched, nowIso);
@@ -1124,7 +1124,7 @@ exec node "$0-cli.js" "$@"
       },
       {
         scope: "argon",
-        boundedBy: ["argon_weekly"],
+        boundedBy: ["gemini_argon_weekly"],
         effectivePercentRemaining: 78,
       },
     ]);
@@ -1141,9 +1141,9 @@ exec node "$0-cli.js" "$@"
       expect(ids).toEqual([
         "gemini_5h",
         "gemini_weekly",
+        "gemini_argon_weekly",
         "claude_gpt_5h",
         "claude_gpt_weekly",
-        "argon_weekly",
       ]);
       expect(ids?.filter((id) => id === "gemini_weekly")).toHaveLength(1);
       const provider = withQuotaSemantics(
@@ -1163,8 +1163,8 @@ exec node "$0-cli.js" "$@"
       ]);
       expect(scopes.find(({ scope }) => scope === "argon")).toMatchObject({
         effectivePercentRemaining: 38,
-        boundedBy: ["argon_weekly"],
-        limitingWindowIds: ["argon_weekly"],
+        boundedBy: ["gemini_argon_weekly"],
+        limitingWindowIds: ["gemini_argon_weekly"],
       });
       expect(scopes.find(({ scope }) => scope === "claude_gpt")).toMatchObject({
         effectivePercentRemaining: 46,
@@ -1172,15 +1172,19 @@ exec node "$0-cli.js" "$@"
       });
     });
 
-    it("bounds the Argon scope by an argon_5h window and keeps semantics known", () => {
+    it("bounds the Argon scope by a gemini_argon_5h window and keeps semantics known", () => {
       const provider = withQuotaSemantics(
         {
           provider: "agy",
           label: "Antigravity",
           state: { status: "fresh", refreshedAt: nowIso },
           windows: [
-            { id: "argon_5h", label: "Argon 5h", percentRemaining: 20 },
-            { id: "argon_weekly", label: "Argon weekly", percentRemaining: 70 },
+            { id: "gemini_argon_5h", label: "Argon 5h", percentRemaining: 20 },
+            {
+              id: "gemini_argon_weekly",
+              label: "Argon weekly",
+              percentRemaining: 70,
+            },
           ],
         } as ProviderQuota,
         nowIso,

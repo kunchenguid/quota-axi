@@ -999,7 +999,7 @@ function agySemantics(
     ({ id }) => id === "claude_gpt_5h" || id === "claude_gpt_weekly",
   );
   const argon = windows.filter(
-    ({ id }) => id === "argon_5h" || id === "argon_weekly",
+    ({ id }) => id === "gemini_argon_5h" || id === "gemini_argon_weekly",
   );
   const resolved = new Set([...gemini, ...claudeGpt, ...argon]);
   const unresolved = windows.filter((window) => !resolved.has(window));

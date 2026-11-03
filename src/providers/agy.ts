@@ -851,7 +851,7 @@ function agyWindowGroup(
   // Argon is its own quota on paid Pro plans, so it must not share the
   // `gemini_*` window ids or the Gemini bound.
   if (normalized.includes("gemini") && normalized.includes("argon")) {
-    return { id: "argon", label: "Gemini 4 Argon", sortRank: 2 };
+    return { id: "gemini_argon", label: "Gemini 4 Argon", sortRank: 2 };
   }
   if (normalized.includes("gemini")) {
     return { id: "gemini", label: "Gemini", sortRank: 0 };
