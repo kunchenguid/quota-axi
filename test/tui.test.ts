@@ -1398,6 +1398,7 @@ describe("color handling", () => {
     ["devin", [20, 130, 160]],
     ["muse", [90, 80, 210]],
     ["higgsfield", [200, 80, 20]],
+    ["bob", [15, 98, 254]],
   ] as const)("uses a Latte accent for %s", (provider, rgb) => {
     const response: QuotaAxiResponse = {
       ...fixtureResponse(),

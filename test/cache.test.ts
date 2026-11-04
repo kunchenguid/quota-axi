@@ -12,6 +12,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   deleteCachedProvider,
   readCachedClaudeProvider,
+  readCachedBobProvider,
   readCachedCommandCodeProvider,
   readCachedCodexProvider,
   readCachedKimiProvider,
@@ -34,6 +35,11 @@ import {
   commandCodeCacheContextId,
   publishCommandCodeReadingContextId,
 } from "../src/providers/commandcode-cache-context.js";
+import {
+  bobCacheContextId,
+  clearBobReadingContextId,
+  publishBobReadingContextId,
+} from "../src/providers/bob-cache-context.js";
 import { staleFromCache } from "../src/providers/common.js";
 import { withQuotaSemantics } from "../src/interpretation.js";
 import { createKimiCodeCliCredentialSource } from "../src/providers/kimi-code-cli-credential.js";
@@ -67,6 +73,7 @@ afterEach(() => {
   tempDir = undefined;
   clearCommandCodeReadingContextId();
   clearDevinReadingContextId();
+  clearBobReadingContextId();
 });
 
 describe("quota cache", () => {
@@ -1077,6 +1084,36 @@ oauth_host = "https://auth.kimi.ai"
     expect(readCachedProvider("devin")?.windows[0].percentUsed).toBe(40);
   });
 
+  it("reuses a Bob snapshot only for the source and key that wrote it", () => {
+    useTempCache();
+    const source = "env:BOB_API_KEY";
+    const contextId = bobCacheContextId(source, "synthetic-bob-cache-key");
+    const rotatedId = bobCacheContextId(source, "synthetic-bob-rotated-key");
+    publishBobReadingContextId(contextId);
+    writeCachedProviders([quota("bob", 40)]);
+
+    clearBobReadingContextId();
+    writeCachedProviders([quota("bob", 5)]);
+
+    expect(readCachedBobProvider(contextId)?.windows[0].percentUsed).toBe(40);
+    expect(readCachedBobProvider(rotatedId)).toBeUndefined();
+    expect(readCachedProvider("bob")?.windows[0].percentUsed).toBe(40);
+  });
+
+  it("clears a Bob snapshot after an identified no-window report", () => {
+    useTempCache();
+    const contextId = bobCacheContextId(
+      "env:BOB_API_KEY",
+      "synthetic-bob-cache-key",
+    );
+    publishBobReadingContextId(contextId);
+    writeCachedProviders([quota("bob", 40)]);
+    writeCachedProviders([quotaWithoutWindows("bob")]);
+
+    expect(readCachedBobProvider(contextId)).toBeUndefined();
+    expect(readCachedProvider("bob")).toBeUndefined();
+  });
+
   it("clears a Devin snapshot after an identified no-window report", () => {
     useTempCache();
     const contextId = devinCacheContextId(
@@ -1186,5 +1223,6 @@ function providerLabel(provider: ProviderId): string {
   if (provider === "opencode-go") return "OpenCode Go";
   if (provider === "minimax") return "MiniMax";
   if (provider === "devin") return "Devin";
+  if (provider === "bob") return "Bob";
   return "Kimi";
 }

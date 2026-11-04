@@ -39,6 +39,7 @@ const originalDeepSeekProvider = PROVIDERS.deepseek;
 const originalOpenRouterProvider = PROVIDERS.openrouter;
 const originalElevenLabsProvider = PROVIDERS.elevenlabs;
 const originalDevinProvider = PROVIDERS.devin;
+const originalBobProvider = PROVIDERS.bob;
 const originalMuseProvider = PROVIDERS.muse;
 const originalHiggsfieldProvider = PROVIDERS.higgsfield;
 const originalXdgCacheHome = process.env.XDG_CACHE_HOME;
@@ -73,6 +74,7 @@ afterEach(() => {
   PROVIDERS.openrouter = originalOpenRouterProvider;
   PROVIDERS.elevenlabs = originalElevenLabsProvider;
   PROVIDERS.devin = originalDevinProvider;
+  PROVIDERS.bob = originalBobProvider;
   PROVIDERS.muse = originalMuseProvider;
   PROVIDERS.higgsfield = originalHiggsfieldProvider;
   vi.unstubAllGlobals();
@@ -117,6 +119,7 @@ describe("CLI flag parsing", () => {
       "devin",
       "muse",
       "higgsfield",
+      "bob",
     ]);
   });
 
@@ -193,6 +196,7 @@ describe("CLI flag parsing", () => {
           "devin",
           "muse",
           "higgsfield",
+          "bob",
         ],
         json: true,
         full: true,
@@ -1496,12 +1500,12 @@ describe("human report folding for providers that are not set up", () => {
     expect(output.trimEnd().split("\n").slice(-3)).toEqual([
       "  ○ not set up  cursor · copilot · grok · kimi · zai · agy · alibaba · opencode-go · commandcode",
       "                minimax · mimo · deepseek · openrouter · elevenlabs · devin · muse · higgsfield",
-      "                quota-axi auth shows where each is read",
+      "                bob   quota-axi auth shows where each is read",
     ]);
     expect(output).not.toMatch(/╭─ ○ (agy|alibaba|commandcode) /);
 
     expect(output).toMatch(
-      /· 1 live · 0 stale · 1 needs attention · 17 not set up\n/,
+      /· 1 live · 0 stale · 1 needs attention · 18 not set up\n/,
     );
     expect(output).toContain("╭─ ● codex ");
     expect(output).toContain("╭─ ○ claude ");
@@ -1514,7 +1518,7 @@ describe("human report folding for providers that are not set up", () => {
     stubFoldFleet();
     const output = await capture(["--tui", "--once", "--all"]);
 
-    expect(output).toContain("  ○ not set up · 17\n");
+    expect(output).toContain("  ○ not set up · 18\n");
     expect(output).toContain("╭─ ○ copilot ");
     expect(output).toContain("╭─ ○ elevenlabs ");
     expect(output).toContain("╭─ ○ higgsfield ");
@@ -1580,7 +1584,7 @@ describe("human report folding for providers that are not set up", () => {
 
       process.stdin.emit("data", Buffer.from("a"));
       await settle("a hide not set up");
-      expect(lastFrame()).toContain("  ○ not set up · 17");
+      expect(lastFrame()).toContain("  ○ not set up · 18");
       expect(lastFrame()).toContain("╭─ ○ zai ");
 
       process.stdin.emit("data", Buffer.from("q"));
@@ -1895,6 +1899,51 @@ describe("new provider public quota output", () => {
     expect(process.exitCode).toBe(1);
   });
 
+  it("publishes the Bob budget in TOON and JSON without the key or account names", async () => {
+    useTempCache();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-05-27T00:00:00.000Z"));
+    const key = "synthetic-bob-cli-key";
+    process.env.BOB_API_KEY = key;
+    const body = readFileSync(
+      "test/fixtures/bob/profile-pro-plus.json",
+      "utf8",
+    );
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        return new Response(body, {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }),
+    );
+
+    try {
+      const toon = await capture(["--provider", "bob"]);
+      expect(toonRows(toon, "quota").map((row) => row.slice(0, 3))).toEqual([
+        ["bob", "all_models", "75"],
+      ]);
+
+      const full = await capture(["--provider", "bob", "--json", "--full"]);
+      const json = JSON.parse(full) as QuotaAxiResponse;
+      expect(json.providers[0]?.windows[0]).toMatchObject({
+        id: "monthly_budget",
+        usedCredits: 45,
+        limitCredits: 180,
+        creditUnit: "bobcoins",
+      });
+      expect(json.providers[0]?.account).toBeUndefined();
+      for (const output of [toon, full]) {
+        expect(output).not.toContain(key);
+        expect(output).not.toContain("Fixture");
+        expect(output).not.toContain("fixture-");
+      }
+    } finally {
+      delete process.env.BOB_API_KEY;
+    }
+  });
+
   it("publishes Devin included quota in TOON and JSON without the session token", async () => {
     useTempCache();
     vi.useFakeTimers({ toFake: ["Date"] });
@@ -2205,6 +2254,7 @@ describe("default TOON decision blocks", () => {
     PROVIDERS.devin = providerWithQuota(freshDevinQuota());
     PROVIDERS.muse = providerWithQuota(emptyFreshQuota("muse", "Muse"));
     PROVIDERS.higgsfield = providerWithQuota(freshHiggsfieldQuota());
+    PROVIDERS.bob = providerWithQuota(freshBobQuota());
 
     const output = await capture([]);
     const named = new Set([
@@ -2215,6 +2265,7 @@ describe("default TOON decision blocks", () => {
     expect([...named].sort()).toEqual([
       "agy",
       "alibaba",
+      "bob",
       "claude",
       "codex",
       "commandcode",
@@ -3929,6 +3980,37 @@ function freshDevinQuota(): ProviderQuota {
       authStatus: "usable",
       refreshedAt: "2026-09-22T12:00:00.000Z",
       sourcesTried: ["env:WINDSURF_API_KEY"],
+    },
+  };
+}
+
+function freshBobQuota(): ProviderQuota {
+  return {
+    provider: "bob",
+    label: "Bob",
+    source: "api",
+    plan: "pro plus plan",
+    windows: [
+      {
+        id: "monthly_budget",
+        label: "month",
+        kind: "monthly",
+        percentUsed: 25,
+        percentRemaining: 75,
+        startsAt: "2026-06-12T00:00:00.000Z",
+        resetsAt: "2026-07-12T00:00:00.000Z",
+        limitCredits: 180,
+        usedCredits: 45,
+        remainingCredits: 135,
+        creditUnit: "bobcoins",
+      },
+    ],
+    state: {
+      status: "fresh",
+      stale: false,
+      authStatus: "usable",
+      refreshedAt: "2026-07-06T18:10:00Z",
+      sourcesTried: ["env:BOB_API_KEY"],
     },
   };
 }

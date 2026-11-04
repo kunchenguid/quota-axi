@@ -234,11 +234,44 @@ export class KeyEndpointError extends Error {
   }
 }
 
+export type KeyEndpointOptions = {
+  /** `Authorization` scheme the vendor expects. Defaults to `Bearer`. */
+  authScheme?: string;
+  /** Applied while the body is parsed, so dropped fields never reach an object. */
+  reviver?: (key: string, value: unknown) => unknown;
+  /**
+   * Count a 401/403 as a rejection only when its body is a JSON object. Set this
+   * for a vendor whose edge answers with its own non-JSON denials: those say
+   * nothing about the key, so they are request failures rather than a sign-out.
+   */
+  jsonRejectionOnly?: boolean;
+};
+
+function parseJsonBody(
+  body: Uint8Array,
+  reviver: KeyEndpointOptions["reviver"],
+): unknown {
+  return JSON.parse(
+    new TextDecoder("utf-8", { fatal: true }).decode(body),
+    reviver,
+  );
+}
+
+function isJsonObjectBody(body: Uint8Array): boolean {
+  try {
+    const value = parseJsonBody(body, undefined);
+    return value !== null && typeof value === "object" && !Array.isArray(value);
+  } catch {
+    return false;
+  }
+}
+
 export async function requestKeyEndpoint(
   url: string,
   key: string,
   fetchImplementation: typeof globalThis.fetch,
   deadlineMs: number,
+  options: KeyEndpointOptions = {},
 ): Promise<unknown> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), deadlineMs);
@@ -246,15 +279,25 @@ export async function requestKeyEndpoint(
     const response = await fetchImplementation(url, {
       method: "GET",
       headers: {
-        Authorization: "Bearer " + key,
+        Authorization: (options.authScheme ?? "Bearer") + " " + key,
         Accept: "application/json",
       },
       credentials: "omit",
       redirect: "manual",
       signal: controller.signal,
     });
-    if (response.status === 401 || response.status === 403)
+    if (response.status === 401 || response.status === 403) {
+      if (options.jsonRejectionOnly) {
+        const body = await readBoundedResponseBody(
+          response,
+          controller.signal,
+          (code) => new KeyEndpointError(code),
+        );
+        if (!isJsonObjectBody(body))
+          throw new KeyEndpointError("provider_error:" + response.status);
+      }
       throw new KeyEndpointError("provider_auth_rejected");
+    }
     if (response.status === 429)
       throw new KeyEndpointError(
         "provider_rate_limited",
@@ -268,7 +311,7 @@ export async function requestKeyEndpoint(
       (code) => new KeyEndpointError(code),
     );
     try {
-      return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(body));
+      return parseJsonBody(body, options.reviver);
     } catch {
       throw new KeyEndpointError("invalid_json");
     }

@@ -9,6 +9,7 @@ import {
 } from "./lib/fs.js";
 import { kimiReadingContextId } from "./providers/kimi-cache-context.js";
 import { commandCodeReadingContextId } from "./providers/commandcode-cache-context.js";
+import { bobReadingContextId } from "./providers/bob-cache-context.js";
 import { devinReadingContextId } from "./providers/devin-cache-context.js";
 import { elevenLabsReadingContextId } from "./providers/elevenlabs-cache-context.js";
 import { miniMaxReadingContextId } from "./providers/minimax-cache-context.js";
@@ -72,11 +73,12 @@ const CREDENTIAL_CONTEXT_ID = /^[a-f0-9]{64}$/;
  * a Kimi Code `config.toml` selects the deployment, Command Code's `whoami`
  * identifies the source-plus-account pair, an ElevenLabs API key is itself the
  * account, MiniMax stamps by credential source plus deployment host, a Muse
- * credential is the only local thing naming its subscription, and a Codex slot
- * can be signed in to another ChatGPT account. A snapshot from one such context
- * says nothing about another, so each is stamped on write and checked on stale
- * reuse - strictly for Claude, Kimi, Command Code, MiniMax, ElevenLabs, Devin,
- * and Muse, whose identity a reading always has (and which skip write and clear
+ * credential is the only local thing naming its subscription, a Bob API key is
+ * the only thing naming its account, and a Codex slot can be signed in to
+ * another ChatGPT account. A snapshot from one such context says nothing about
+ * another, so each is stamped on write and checked on stale reuse - strictly
+ * for Claude, Kimi, Command Code, MiniMax, ElevenLabs, Devin, Muse, and Bob,
+ * whose identity a reading always has (and which skip write and clear
  * when that identity is missing). Codex can write an unstamped snapshot, but
  * stale reuse requires a matching stored account id. Z.AI likewise requires an
  * identity, stamped on the reading from the key that actually answered.
@@ -103,6 +105,8 @@ const CREDENTIAL_CONTEXT_ID = /^[a-f0-9]{64}$/;
  * the same kind of digest for the credential that answered, and additionally
  * reuses its own fresh snapshot inside the key-endpoint interval, so that
  * stamp is what keeps a replayed reading on the credential that produced it.
+ * Bob publishes the answering source and a one-way digest of the key, because
+ * the profile fields that could name the account are dropped during parsing.
  */
 const CONTEXT_SCOPED_PROVIDERS: Partial<
   Record<ProviderId, (provider: ProviderQuota) => string | undefined>
@@ -117,6 +121,7 @@ const CONTEXT_SCOPED_PROVIDERS: Partial<
   muse: museReadingContextId,
   copilot: copilotReadingContextId,
   zai: zaiReadingContextId,
+  bob: bobReadingContextId,
 };
 
 export function copilotCacheContextId(host: string): string {
@@ -600,6 +605,17 @@ export function readCachedDevinProvider(
 }
 
 /**
+ * Bob stale quota may only be reused when the cache record proves it was
+ * captured with the same source and API key, so one account's budget can never
+ * stand in for another's.
+ */
+export function readCachedBobProvider(
+  contextId: string,
+): ProviderQuota | undefined {
+  return readCachedProviderInContext("bob", contextId);
+}
+
+/**
  * Muse quota may only be reused when the cache record proves it was captured
  * with the same credential, so one subscription's windows can never stand in
  * for another's.
@@ -937,8 +953,8 @@ function toCacheProvider(provider: ProviderQuota): CachedProvider | undefined {
     (snapshot as SubscriptionStampedQuota)[SUBSCRIPTION_IDENTITY] =
       subscription;
   const contextId = CONTEXT_SCOPED_PROVIDERS[provider.provider]?.(provider);
-  // Claude, Kimi, Command Code, MiniMax, ElevenLabs, Devin, and Muse require a
-  // published identity; Codex stamps are optional at write time, but an unstamped
+  // Claude, Kimi, Command Code, MiniMax, ElevenLabs, Devin, Muse, and Bob require
+  // a published identity; Codex stamps are optional at write time, but an unstamped
   // snapshot cannot be served as stale.
   if (
     provider.provider !== "codex" &&
@@ -954,7 +970,7 @@ function toCacheProvider(provider: ProviderQuota): CachedProvider | undefined {
 
 function missingRequiredContext(provider: ProviderId): boolean {
   // Codex stamps are optional; Claude, Kimi, Command Code, MiniMax,
-  // ElevenLabs, Devin, and Muse must not clear when the current reading has
+  // ElevenLabs, Devin, Muse, and Bob must not clear when the current reading has
   // no published context identity.
   if (provider === "codex") return false;
   const scope = CONTEXT_SCOPED_PROVIDERS[provider];

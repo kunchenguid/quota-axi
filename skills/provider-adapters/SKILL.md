@@ -189,3 +189,16 @@ This reference details the credential sources, endpoint contracts, quota window 
 - **Fresh reuse**: `--max-age` / `QUOTA_AXI_MAX_AGE` never serves a Higgsfield reading; every Higgsfield quota call live-reads the vendor CLI.
 - **Error handling**: A status failure classifies only from the closed sentinel set (`higgsfield_cli_unavailable`, `higgsfield_sign_in_required`, `higgsfield_status_malformed_json`, wrapped `higgsfield_status_failed`); never re-run keyword regexes over wrapped stderr.
 - **Delegated Refresh**: None; `ProviderOptions.refreshCredentials` is ignored.
+
+---
+
+## 17. IBM Bob (`bob`)
+
+- **Credential Sources** (`BOB_SOURCE_ORDER`): `env:BOB_API_KEY`, then the older `env:BOBSHELL_API_KEY`. Two different values send nothing and report `bob_api_key_conflict`. A `BOB_GATEWAY_URL` other than the default origin is a skipped `unsupported_server` attempt. Sign-in stores are not read.
+- **Endpoint**: One read-only `GET https://api.us-east.bob.ibm.com/admin/v1/profile` through `requestKeyEndpoint`, with `Authorization: apikey <key>`. Undocumented: it is the request Bob makes at startup. A host named by a response is never followed.
+- **Quota Windows**: One Bobcoin budget from the single instance's single team. `monthly_budget` bounds `all_models`; with `allow_overage: true` it is `included_monthly`, bounding `included_credits`. `resetsAt` is `refresh_at`, and `startsAt` steps back one calendar month.
+- **Evidence Boundary**: Every fact here comes from Bob's own output, live server responses, or public docs. IBM's license forbids reverse engineering, so nothing learned only from Bob's bundled code belongs in this adapter, its tests, or its docs. A plan outside `OBSERVED_PLAN_IDS` publishes `plan_budget` with no reset, cycle, or bound until a live reading establishes it. SSO, trial, Enterprise, and multi-team behavior stay out until observed.
+- **Degradation**: Any field outside the established shape names the window in `state.untrustedWindowIds`, leaving the scope `partial`. More than one instance or team publishes no window and reports `bob_team_selection_required`; quota-axi never picks one.
+- **Auth Verdicts**: Only a JSON-bodied 401 or 403 is a verdict (`jsonRejectionOnly`). Non-JSON denials from Bob's edge are request failures that keep the cache.
+- **Parsing**: A key allowlist reviver keeps user, team, subscription, and instance identifiers and names out of every object.
+- **Context Scoping**: Snapshots scoped by source plus SHA-256 digest of the API key.
