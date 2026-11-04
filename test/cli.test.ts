@@ -1905,6 +1905,8 @@ describe("new provider public quota output", () => {
     vi.setSystemTime(new Date("2026-05-27T00:00:00.000Z"));
     const key = "synthetic-bob-cli-key";
     process.env.BOB_API_KEY = key;
+    vi.stubEnv("HOME", tempDir!);
+    vi.stubEnv("USERPROFILE", tempDir!);
     const body = readFileSync(
       "test/fixtures/bob/profile-pro-plus.json",
       "utf8",
@@ -1941,6 +1943,7 @@ describe("new provider public quota output", () => {
       }
     } finally {
       delete process.env.BOB_API_KEY;
+      vi.unstubAllEnvs();
     }
   });
 
