@@ -1,11 +1,18 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { writeCachedProviders } from "../../src/cache.js";
 import { withQuotaSemantics } from "../../src/interpretation.js";
 import {
   BOB_API_KEY_SOURCE,
+  BOB_API_ORIGIN,
   BOB_PROFILE_URL,
   BOB_SOURCE_ORDER,
   BOBSHELL_API_KEY_SOURCE,
@@ -408,6 +415,217 @@ describe("Bob key conflict and gateway", () => {
   });
 });
 
+describe("Bob settings gateway", () => {
+  const homes: string[] = [];
+
+  afterEach(() => {
+    for (const home of homes.splice(0)) {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  /** A synthetic home whose `.bob/settings.json` holds exactly `contents`. */
+  function homeWithSettings(contents: string): string {
+    const home = mkdtempSync(join(tmpdir(), "quota-axi-bob-home-"));
+    homes.push(home);
+    mkdirSync(join(home, ".bob"));
+    writeFileSync(join(home, ".bob", "settings.json"), contents);
+    return home;
+  }
+
+  const settings = (gatewayUrl: unknown): string =>
+    JSON.stringify({ gatewayUrl });
+
+  it.each([
+    ["another host", "https://gateway.example.invalid"],
+    ["the default host over http", "http://api.us-east.bob.ibm.com"],
+    ["a path on the default host", "https://api.us-east.bob.ibm.com/other"],
+    ["an unparseable value", "not a url"],
+  ])("sends no key when the setting names %s", async (_label, gateway) => {
+    const request = sequentialFetch([]);
+    const home = homeWithSettings(settings(gateway));
+    const report = await testAdapter({
+      homeDirectory: () => home,
+      fetch: request,
+    }).fetchQuota(OPTIONS);
+
+    expect(request).not.toHaveBeenCalled();
+    expect(report.state).toMatchObject({
+      status: "error",
+      error: "unsupported_server",
+    });
+    expect(report.attempts?.[0]).toEqual({
+      source: BOB_API_KEY_SOURCE,
+      status: "skipped",
+      error: "unsupported_server",
+      credentialPresent: true,
+    });
+  });
+
+  it.each([
+    ["the default host", settings("https://api.us-east.bob.ibm.com")],
+    ["the default host with a slash", settings(`${BOB_API_ORIGIN}/`)],
+    ["a blank value", settings("  ")],
+    ["no gatewayUrl field", JSON.stringify({ theme: "dark" })],
+    ["a gatewayUrl only below the top level", '{"a":{"gatewayUrl":"x"}}'],
+  ])("reads normally when the setting is %s", async (_label, contents) => {
+    const home = homeWithSettings(contents);
+    const report = await testAdapter({
+      homeDirectory: () => home,
+      fetch: sequentialFetch([jsonResponse(PRO_PLUS)]),
+    }).fetchQuota(OPTIONS);
+
+    expect(report.state.status).toBe("fresh");
+  });
+
+  it("treats a missing settings file as no gateway", async () => {
+    const home = homeWithSettings("{}");
+    const report = await testAdapter({
+      homeDirectory: () => join(home, "no-such-home"),
+      fetch: sequentialFetch([jsonResponse(PRO_PLUS)]),
+    }).fetchQuota(OPTIONS);
+
+    expect(report.state.status).toBe("fresh");
+  });
+
+  it.each([
+    ["truncated JSON", '{"gatewayUrl":'],
+    ["a JSON array", "[]"],
+    ["JSON null", "null"],
+    ["a null gatewayUrl", settings(null)],
+    ["a numeric gatewayUrl", settings(1)],
+  ])("sends no key when the file holds %s", async (_label, contents) => {
+    const request = sequentialFetch([]);
+    const home = homeWithSettings(contents);
+    const report = await testAdapter({
+      homeDirectory: () => home,
+      fetch: request,
+    }).fetchQuota(OPTIONS);
+
+    expect(request).not.toHaveBeenCalled();
+    expect(report.state).toMatchObject({
+      status: "error",
+      error: "bob_settings_unreadable",
+    });
+    expect(report.attempts?.[0]).toEqual({
+      source: BOB_API_KEY_SOURCE,
+      status: "skipped",
+      error: "bob_settings_unreadable",
+      credentialPresent: true,
+    });
+  });
+
+  it("sends no key when the settings path cannot be read", async () => {
+    const request = sequentialFetch([]);
+    const home = homeWithSettings("{}");
+    rmSync(join(home, ".bob", "settings.json"));
+    mkdirSync(join(home, ".bob", "settings.json"));
+    const report = await testAdapter({
+      homeDirectory: () => home,
+      fetch: request,
+    }).fetchQuota(OPTIONS);
+
+    expect(request).not.toHaveBeenCalled();
+    expect(report.state.error).toBe("bob_settings_unreadable");
+  });
+
+  it("lets a set BOB_GATEWAY_URL decide without consulting the file", async () => {
+    const home = homeWithSettings("not json");
+    const report = await testAdapter({
+      environment: () => ({
+        BOB_API_KEY: SYNTHETIC_KEY,
+        BOB_GATEWAY_URL: BOB_API_ORIGIN,
+      }),
+      homeDirectory: () => home,
+      fetch: sequentialFetch([jsonResponse(PRO_PLUS)]),
+    }).fetchQuota(OPTIONS);
+
+    expect(report.state.status).toBe("fresh");
+  });
+
+  it("consults the file when BOB_GATEWAY_URL is blank", async () => {
+    const request = sequentialFetch([]);
+    const home = homeWithSettings(settings("https://gateway.example.invalid"));
+    const report = await testAdapter({
+      environment: () => ({ BOB_API_KEY: SYNTHETIC_KEY, BOB_GATEWAY_URL: " " }),
+      homeDirectory: () => home,
+      fetch: request,
+    }).fetchQuota(OPTIONS);
+
+    expect(request).not.toHaveBeenCalled();
+    expect(report.state.error).toBe("unsupported_server");
+  });
+
+  it("stays absent, not blocked, when no key is set", async () => {
+    const home = homeWithSettings("not json");
+    const report = await testAdapter({
+      environment: () => ({}),
+      homeDirectory: () => home,
+    }).fetchQuota(OPTIONS);
+
+    expect(report.state.error).toBe("bob_credential_unavailable");
+  });
+
+  it("inspectAuth reports a blocked key and renders no settings value", async () => {
+    const gateway = "https://private-gateway.example.invalid";
+    const home = homeWithSettings(settings(gateway));
+    const report = await testAdapter({
+      homeDirectory: () => home,
+    }).inspectAuth(OPTIONS);
+
+    expect(report.sources[0]).toMatchObject({
+      status: "skipped",
+      error: "unsupported_server",
+      credentialPresent: true,
+    });
+    expect(JSON.stringify(report)).not.toContain("private-gateway");
+  });
+
+  it("inspectAuth names an unreadable settings file as its own reason", async () => {
+    const home = homeWithSettings("not json");
+    const report = await testAdapter({
+      homeDirectory: () => home,
+    }).inspectAuth(OPTIONS);
+
+    expect(report.sources[0]).toMatchObject({
+      status: "skipped",
+      error: "bob_settings_unreadable",
+      credentialPresent: true,
+    });
+  });
+
+  it("parses only gatewayUrl, so no other setting reaches an object", async () => {
+    const home = homeWithSettings(
+      JSON.stringify({
+        gatewayUrl: "https://private-gateway.example.invalid",
+        mcpServers: {
+          notes: { headers: { Authorization: "Bearer synthetic-mcp-token" } },
+        },
+      }),
+    );
+    const seen: unknown[] = [];
+    const parse = JSON.parse.bind(JSON);
+    const spy = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
+      const value = parse(text, reviver) as unknown;
+      seen.push(value);
+      return value;
+    });
+    let report: ProviderQuota;
+    try {
+      report = await testAdapter({ homeDirectory: () => home }).fetchQuota(
+        OPTIONS,
+      );
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(seen).toEqual([
+      { gatewayUrl: "https://private-gateway.example.invalid" },
+    ]);
+    expect(JSON.stringify(report)).not.toContain("private-gateway");
+  });
+});
+
 describe("Bob auth classification", () => {
   it.each([
     ["HTML 403", 403, "<html>denied</html>"],
@@ -598,7 +816,7 @@ describe("Bob payload normalization", () => {
   });
 
   it.each([[null], ["2026-06-12"], [0], [1_000]])(
-    "resolves no reset from refresh_at %j and invents no cycle",
+    "resolves no reset from refresh_at %j, invents no cycle, and trusts nothing",
     (refreshAt) => {
       const { windows, untrustedWindowIds } = normalizeBobPayload(
         profile({ refresh_at: refreshAt }),
@@ -608,7 +826,7 @@ describe("Bob payload normalization", () => {
       expect(windows[0].percentRemaining).toBe(75);
       expect(windows[0].resetsAt).toBeUndefined();
       expect(windows[0].startsAt).toBeUndefined();
-      expect(untrustedWindowIds).toEqual([]);
+      expect(untrustedWindowIds).toEqual(["monthly_budget"]);
     },
   );
 
@@ -761,6 +979,16 @@ describe("Bob quota semantics", () => {
     ).toBeUndefined();
   });
 
+  it("keeps a reading with no refresh_at partial, with no effective percentage", async () => {
+    const { quotaSemantics } = await semantics(profile({ refresh_at: null }));
+
+    expect(quotaSemantics?.status).toBe("partial");
+    expect(quotaSemantics?.unresolvedWindowIds).toEqual(["monthly_budget"]);
+    expect(
+      quotaSemantics?.effectiveAvailability[0].effectivePercentRemaining,
+    ).toBeUndefined();
+  });
+
   it("publishes no effective availability when the reading has no window", async () => {
     const { quotaSemantics } = await semantics(fixture("profile-no-instances"));
 
@@ -900,6 +1128,7 @@ type AdapterOverrides = Parameters<typeof createBobAdapter>[0];
 function testAdapter(overrides: AdapterOverrides = {}): ProviderAdapter {
   return createBobAdapter({
     environment: () => ({ BOB_API_KEY: SYNTHETIC_KEY }),
+    homeDirectory: () => join(tmpdir(), "quota-axi-bob-no-such-home"),
     fetch: sequentialFetch([]),
     now: () => NOW,
     ...overrides,

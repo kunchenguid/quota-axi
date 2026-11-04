@@ -1,7 +1,10 @@
+import { homedir } from "node:os";
+import { join } from "node:path";
 import {
   deleteCachedProvider as deleteCachedProviderFromDisk,
   readCachedBobProvider as readCachedProviderFromDisk,
 } from "../cache.js";
+import { readJsonFileResult } from "../lib/fs.js";
 import { providerFetch } from "../lib/http.js";
 import { calendarMonthsBefore } from "../lib/time.js";
 import type {
@@ -59,6 +62,7 @@ const CREDIT_UNIT = "bobcoins";
 const API_KEY_SCHEME = "apikey";
 const API_KEY_CONFLICT = "bob_api_key_conflict";
 const UNSUPPORTED_SERVER = "unsupported_server";
+const SETTINGS_UNREADABLE = "bob_settings_unreadable";
 const TEAM_SELECTION_REQUIRED = "bob_team_selection_required";
 
 /**
@@ -91,7 +95,10 @@ const RESPONSE_KEYS = new Set([
 export type BobCredentials = {
   candidates: EnvPiCredentialResolution[];
   /** Set when a present key must not be sent at all. */
-  blocked?: typeof API_KEY_CONFLICT | typeof UNSUPPORTED_SERVER;
+  blocked?:
+    | typeof API_KEY_CONFLICT
+    | typeof UNSUPPORTED_SERVER
+    | typeof SETTINGS_UNREADABLE;
 };
 
 export type NormalizedBobPayload = {
@@ -102,6 +109,7 @@ export type NormalizedBobPayload = {
 
 type BobDependencies = {
   environment: () => Readonly<Record<string, string | undefined>>;
+  homeDirectory: () => string;
   fetch: typeof globalThis.fetch;
   readCachedProvider: typeof readCachedProviderFromDisk;
   deleteCachedProvider: (provider: "bob") => void;
@@ -119,11 +127,12 @@ type BobFailureOptions = {
 
 /**
  * The two key variables plus the gateway check. A key is only ever sent to
- * {@link BOB_API_ORIGIN}: `BOB_GATEWAY_URL` naming anything else means that key
- * belongs to another deployment, so nothing is sent and nothing is read.
+ * {@link BOB_API_ORIGIN}: a gateway naming anything else means that key belongs
+ * to another deployment, so nothing is sent and nothing is read.
  */
 export function resolveBobCredentials(
   environment: Readonly<Record<string, string | undefined>>,
+  home: string,
 ): BobCredentials {
   const candidates: EnvPiCredentialResolution[] = [];
   for (const source of BOB_SOURCE_ORDER) {
@@ -136,13 +145,41 @@ export function resolveBobCredentials(
   if (key?.trim() && legacyKey?.trim() && key !== legacyKey) {
     return { candidates, blocked: API_KEY_CONFLICT };
   }
-  return isSupportedGateway(environment.BOB_GATEWAY_URL)
-    ? { candidates }
-    : { candidates, blocked: UNSUPPORTED_SERVER };
+  const blocked = gatewayBlock(environment.BOB_GATEWAY_URL, home);
+  return blocked ? { candidates, blocked } : { candidates };
 }
 
-function isSupportedGateway(value: string | undefined): boolean {
-  if (!value?.trim()) return true;
+/**
+ * `BOB_GATEWAY_URL`, or when that is unset or blank the top-level `gatewayUrl`
+ * IBM documents for `settings.json`. A file that cannot be read says nothing
+ * about the deployment, so it blocks the key rather than guessing. Other
+ * settings can be secrets such as MCP bearer tokens: the reviver drops them
+ * while the file is parsed, so they never reach an object.
+ */
+function gatewayBlock(
+  gateway: string | undefined,
+  home: string,
+): BobCredentials["blocked"] {
+  if (gateway?.trim()) {
+    return isDefaultGateway(gateway) ? undefined : UNSUPPORTED_SERVER;
+  }
+  const settings = readJsonFileResult(
+    join(home, ".bob", "settings.json"),
+    (name, value) => (name === "" || name === "gatewayUrl" ? value : undefined),
+  );
+  if (settings.status === "missing") return undefined;
+  const parsed =
+    settings.status === "success" ? objectValue(settings.value) : undefined;
+  if (!parsed) return SETTINGS_UNREADABLE;
+  const { gatewayUrl } = parsed;
+  if (gatewayUrl === undefined) return undefined;
+  if (typeof gatewayUrl !== "string") return SETTINGS_UNREADABLE;
+  return !gatewayUrl.trim() || isDefaultGateway(gatewayUrl)
+    ? undefined
+    : UNSUPPORTED_SERVER;
+}
+
+function isDefaultGateway(value: string): boolean {
   try {
     const url = new URL(value.trim());
     return url.origin === BOB_API_ORIGIN && url.pathname === "/";
@@ -156,6 +193,7 @@ export function createBobAdapter(
 ): ProviderAdapter {
   const dependencies: BobDependencies = {
     environment: () => process.env,
+    homeDirectory: homedir,
     fetch: providerFetch,
     readCachedProvider: readCachedProviderFromDisk,
     deleteCachedProvider: () => deleteCachedProviderFromDisk("bob"),
@@ -187,6 +225,7 @@ export const bobAdapter = createBobAdapter();
 function inspectAuth(dependencies: BobDependencies): AuthProviderReport {
   const { candidates, blocked } = resolveBobCredentials(
     dependencies.environment(),
+    dependencies.homeDirectory(),
   );
   const report = inspectEnvPiAuth("bob", candidates);
   const sources = report.sources.map((source): AuthSourceReport => {
@@ -211,6 +250,7 @@ async function acquireBobQuota(
   const attempts: SourceAttempt[] = [];
   const { candidates, blocked } = resolveBobCredentials(
     dependencies.environment(),
+    dependencies.homeDirectory(),
   );
 
   let credentialFailure: ReturnType<typeof keyCredentialFailure> | undefined;
@@ -420,7 +460,7 @@ export function normalizeBobPayload(
     typeof instance.allow_overage === "boolean" &&
     instance.instance_status === "active" &&
     measurable &&
-    !expired;
+    resetsAt !== undefined;
   const untrustedWindowIds = trusted ? [] : [window.id];
   if (used === undefined && limit === undefined) {
     return { ...planFields, windows: [], untrustedWindowIds };

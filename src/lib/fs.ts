@@ -180,9 +180,12 @@ export function readJsonFile(file: string): unknown | undefined {
   return result.status === "success" ? result.value : undefined;
 }
 
-export function readJsonFileResult(file: string): JsonFileReadResult {
+export function readJsonFileResult(
+  file: string,
+  reviver?: (key: string, value: unknown) => unknown,
+): JsonFileReadResult {
   traceInput(file);
-  return readUntracedJsonFileResult(file);
+  return readUntracedJsonFileResult(file, reviver);
 }
 
 /**
@@ -194,7 +197,10 @@ export function readUntracedJsonFile(file: string): unknown | undefined {
   return result.status === "success" ? result.value : undefined;
 }
 
-function readUntracedJsonFileResult(file: string): JsonFileReadResult {
+function readUntracedJsonFileResult(
+  file: string,
+  reviver?: (key: string, value: unknown) => unknown,
+): JsonFileReadResult {
   let text: string;
   try {
     text = readFileSync(file, "utf8");
@@ -203,7 +209,7 @@ function readUntracedJsonFileResult(file: string): JsonFileReadResult {
     return { status: "invalid", error: "file_read_error" };
   }
   try {
-    return { status: "success", value: JSON.parse(text) };
+    return { status: "success", value: JSON.parse(text, reviver) };
   } catch {
     return { status: "invalid", error: "json_parse_error" };
   }

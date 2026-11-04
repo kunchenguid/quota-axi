@@ -804,6 +804,16 @@ describe("credential source contract", { timeout: 30_000 }, () => {
     const source = "env:BOB_API_KEY";
     const legacySource = "env:BOBSHELL_API_KEY";
 
+    // Native home lookups must never reach this machine's real Bob settings.
+    beforeEach(() => {
+      vi.stubEnv("HOME", tempDir);
+      vi.stubEnv("USERPROFILE", tempDir);
+    });
+
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
     function stubRejectingApiKey(): { authorizations: string[] } {
       const authorizations: string[] = [];
       vi.stubGlobal(
