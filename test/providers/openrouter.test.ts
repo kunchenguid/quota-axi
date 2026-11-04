@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  OPENROUTER_CREDITS_URL,
   createOpenRouterAdapter,
   extractOpenRouterCredential,
   normalizeOpenRouterPayload,
@@ -59,7 +60,9 @@ describe("OpenRouter provider", () => {
       }),
     ]);
     expect(JSON.stringify(report)).not.toContain(KEY);
-    expect(request).toHaveBeenCalledOnce();
+    // One read of the key, one of the account balance.
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request.mock.calls[1][0]).toBe(OPENROUTER_CREDITS_URL);
     const init = request.mock.calls[0][1];
     expect(new Headers(init?.headers).get("authorization")).toBe(
       "Bearer " + KEY,
@@ -105,7 +108,7 @@ describe("OpenRouter provider", () => {
       ],
       credits: { remaining: 40, unit: "usd" },
     });
-    expect(request).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenCalledTimes(3);
   });
 
   it("treats a null cap as unlimited and omits the window", async () => {
@@ -333,6 +336,65 @@ describe("OpenRouter provider", () => {
     expect(report).toMatchObject({
       source: "unavailable",
       state: { status: "error", error: "response_too_large" },
+    });
+  });
+
+  it("reports the account balance rather than the key spend cap", async () => {
+    const request = vi.fn(async (url: string) => {
+      if (url === OPENROUTER_CREDITS_URL)
+        return new Response(
+          JSON.stringify({
+            data: { total_credits: 20, total_usage: 20.2 },
+          }),
+          { headers: { "content-type": "application/json" } },
+        );
+      return new Response(
+        JSON.stringify({ data: { limit: 50, limit_remaining: 29.8 } }),
+        { headers: { "content-type": "application/json" } },
+      );
+    });
+
+    const report = await createOpenRouterAdapter({
+      credential: () => ({
+        status: "available",
+        key: KEY,
+        source: "env:OPENROUTER_API_KEY",
+      }),
+      fetch: request,
+      now: () => Date.parse("2026-09-01T00:00:00.000Z"),
+    }).fetchQuota(OPTIONS);
+
+    // The account is overdrawn, so it reads empty; the key still has 29.80 of
+    // its cap left, which is a limit and never the balance.
+    expect(report).toMatchObject({
+      credits: { remaining: 0, unit: "usd" },
+      windows: [expect.objectContaining({ id: "key-limit", limitUsd: 50 })],
+    });
+  });
+
+  it("falls back to the key remaining when the balance read fails", async () => {
+    const request = vi.fn(async (url: string) => {
+      if (url === OPENROUTER_CREDITS_URL)
+        return new Response(null, { status: 500 });
+      return new Response(
+        JSON.stringify({ data: { limit: 50, limit_remaining: 12.5 } }),
+        { headers: { "content-type": "application/json" } },
+      );
+    });
+
+    const report = await createOpenRouterAdapter({
+      credential: () => ({
+        status: "available",
+        key: KEY,
+        source: "env:OPENROUTER_API_KEY",
+      }),
+      fetch: request,
+      now: () => Date.parse("2026-09-01T00:00:00.000Z"),
+    }).fetchQuota(OPTIONS);
+
+    expect(report).toMatchObject({
+      credits: { remaining: 12.5, unit: "usd" },
+      state: { status: "fresh" },
     });
   });
 });
