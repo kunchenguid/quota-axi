@@ -26,6 +26,14 @@ import {
 } from "./env-pi-credential.js";
 
 export const OPENROUTER_KEY_URL = "https://openrouter.ai/api/v1/key";
+/**
+ * The account balance, which is a different reading from the key's spend cap.
+ * `/key` answers `limit`, `limit_remaining` and `usage` for one key: a ceiling
+ * someone set on that key, not the money the account holds. `/credits` answers
+ * `total_credits` and `total_usage` for the account. Reporting `limit_remaining`
+ * as `credits` says a funded-looking key on an empty account still has money.
+ */
+export const OPENROUTER_CREDITS_URL = "https://openrouter.ai/api/v1/credits";
 export const OPENROUTER_PI_SOURCE = "pi:openrouter";
 export const OPENROUTER_ENV_SOURCE = "env:OPENROUTER_API_KEY";
 
@@ -123,6 +131,14 @@ async function fetchQuota(dependencies: Dependencies): Promise<ProviderQuota> {
       const normalized = normalizeOpenRouterPayload(payload);
       attempts.push({ source: resolution.source, status: "success" });
 
+      // The account's own balance, when the endpoint answers. A failure here is
+      // not fatal: the request succeeded and the key cap is still a real limit,
+      // so the report falls back to it rather than losing the provider.
+      const accountCredits = await readAccountCredits(
+        resolution.key,
+        dependencies,
+      );
+
       const windows: QuotaWindow[] = [];
       if (
         !normalized.unlimited &&
@@ -159,9 +175,11 @@ async function fetchQuota(dependencies: Dependencies): Promise<ProviderQuota> {
         windows,
         ...(normalized.unlimited
           ? { credits: { unlimited: true, unit: "usd" } }
-          : normalized.remaining !== undefined
-            ? { credits: { remaining: normalized.remaining, unit: "usd" } }
-            : {}),
+          : accountCredits !== undefined
+            ? { credits: { remaining: accountCredits, unit: "usd" } }
+            : normalized.remaining !== undefined
+              ? { credits: { remaining: normalized.remaining, unit: "usd" } }
+              : {}),
         refreshedAt: new Date(dependencies.now()).toISOString(),
         sourcesTried: sourceNames(attempts),
         attempts,
@@ -220,6 +238,31 @@ async function inspectAuth(
     "openrouter",
     credentialCandidates(dependencies.credential),
   );
+}
+
+/** The account balance: `total_credits` minus `total_usage`, clamped at zero so
+ *  an overdrawn account reads as empty rather than negative. Best effort: an
+ *  absent or unexpected body leaves `undefined`, and the caller falls back to
+ *  the key's remaining cap. */
+async function readAccountCredits(
+  key: string,
+  dependencies: Dependencies,
+): Promise<number | undefined> {
+  try {
+    const payload = await requestKeyEndpoint(
+      OPENROUTER_CREDITS_URL,
+      key,
+      dependencies.fetch,
+      dependencies.deadlineMs,
+    );
+    const data = objectValue(objectValue(payload)?.data);
+    const total = asFiniteNumber(data?.total_credits);
+    const used = asFiniteNumber(data?.total_usage);
+    if (total === undefined || used === undefined) return undefined;
+    return Math.max(0, total - used);
+  } catch {
+    return undefined;
+  }
 }
 
 export function normalizeOpenRouterPayload(
