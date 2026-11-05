@@ -411,9 +411,10 @@ function failureReport(
  * One budget window from a single instance's single team, in Bobcoins.
  *
  * Bob's profile names no cycle start, so a monthly cycle is stepped back from
- * `refresh_at` by one calendar month. Anything that cannot be read as that
- * established shape stays in `untrustedWindowIds`: the figures the vendor did
- * supply are kept, and no effective bound is claimed from them.
+ * `refresh_at` by one calendar month, and that cycle stands only while `now`
+ * is inside it. Anything that cannot be read as that established shape stays
+ * in `untrustedWindowIds`: the figures the vendor did supply are kept, and no
+ * effective bound is claimed from them.
  *
  * More than one instance or team means the key's budget is ambiguous, and
  * quota-axi must not pick one, so that reading publishes no window at all.
@@ -447,12 +448,9 @@ export function normalizeBobPayload(
   const used = nonnegativeFinite(team.usage);
   const limit = nonnegativeFinite(team.budget_limit);
   const measurable = used !== undefined && limit !== undefined && limit > 0;
-  const refreshAt = observedPlan
-    ? parseUnixSeconds(instance.refresh_at)
+  const cycle = observedPlan
+    ? currentCycle(parseUnixSeconds(instance.refresh_at), now)
     : undefined;
-  const expired = refreshAt !== undefined && Date.parse(refreshAt) <= now;
-  const resetsAt = expired ? undefined : refreshAt;
-  const startsAt = resetsAt ? calendarMonthsBefore(resetsAt, 1) : undefined;
 
   const window = budgetWindow(observedPlan, instance.allow_overage);
   const trusted =
@@ -460,7 +458,7 @@ export function normalizeBobPayload(
     typeof instance.allow_overage === "boolean" &&
     instance.instance_status === "active" &&
     measurable &&
-    resetsAt !== undefined;
+    cycle !== undefined;
   const untrustedWindowIds = trusted ? [] : [window.id];
   if (used === undefined && limit === undefined) {
     return { ...planFields, windows: [], untrustedWindowIds };
@@ -477,8 +475,7 @@ export function normalizeBobPayload(
         ...(percentUsed !== undefined
           ? { percentUsed, percentRemaining: 100 - percentUsed }
           : {}),
-        ...(startsAt ? { startsAt } : {}),
-        ...(resetsAt ? { resetsAt } : {}),
+        ...cycle,
         ...(limit !== undefined ? { limitCredits: limit } : {}),
         ...(used !== undefined ? { usedCredits: used } : {}),
         ...(measurable ? { remainingCredits: Math.max(0, limit - used) } : {}),
@@ -503,6 +500,16 @@ function budgetWindow(
   return allowOverage === true
     ? { id: "included_monthly", label: "month", kind: "monthly" }
     : { id: "monthly_budget", label: "month", kind: "monthly" };
+}
+
+function currentCycle(
+  resetsAt: string | undefined,
+  now: number,
+): Pick<QuotaWindow, "startsAt" | "resetsAt"> | undefined {
+  const startsAt = resetsAt && calendarMonthsBefore(resetsAt, 1);
+  return startsAt && Date.parse(startsAt) <= now && now < Date.parse(resetsAt)
+    ? { startsAt, resetsAt }
+    : undefined;
 }
 
 function parseUnixSeconds(value: unknown): string | undefined {
