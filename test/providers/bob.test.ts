@@ -815,7 +815,15 @@ describe("Bob payload normalization", () => {
     expect(untrustedWindowIds).toEqual(["monthly_budget"]);
   });
 
-  it.each([[null], ["2026-06-12"], [0], [1_000]])(
+  it.each([
+    [null],
+    ["2026-06-12"],
+    [0],
+    [1_000],
+    [1_790_000_000],
+    [1_781_222_400_000],
+    [9_999_999_999],
+  ])(
     "resolves no reset from refresh_at %j, invents no cycle, and trusts nothing",
     (refreshAt) => {
       const { windows, untrustedWindowIds } = normalizeBobPayload(
@@ -829,6 +837,21 @@ describe("Bob payload normalization", () => {
       expect(untrustedWindowIds).toEqual(["monthly_budget"]);
     },
   );
+
+  it("trusts refresh_at from the first moment of its derived cycle, not before", () => {
+    const cycleStart = Date.parse(CYCLE_START);
+    const opening = normalizeBobPayload(PRO_PLUS, cycleStart);
+    const early = normalizeBobPayload(PRO_PLUS, cycleStart - 1);
+
+    expect(opening.windows[0]).toMatchObject({
+      startsAt: CYCLE_START,
+      resetsAt: RESET,
+    });
+    expect(opening.untrustedWindowIds).toEqual([]);
+    expect(early.windows[0].resetsAt).toBeUndefined();
+    expect(early.windows[0].startsAt).toBeUndefined();
+    expect(early.untrustedWindowIds).toEqual(["monthly_budget"]);
+  });
 
   it("steps a month-end reset back by a calendar month, never a day count", () => {
     const { windows } = normalizeBobPayload(
