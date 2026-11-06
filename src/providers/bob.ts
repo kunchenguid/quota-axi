@@ -121,6 +121,7 @@ type BobFailureOptions = {
   status?: ProviderStatus;
   staleEligible?: boolean;
   definitiveAuth?: boolean;
+  retiresCache?: boolean;
   authUsable?: boolean;
   retryAfter?: string;
 };
@@ -358,13 +359,13 @@ function failureReport(
   attempts: SourceAttempt[],
   dependencies: BobDependencies,
 ): ProviderQuota {
-  if (failure.definitiveAuth && cacheContextId) {
+  if ((failure.definitiveAuth || failure.retiresCache) && cacheContextId) {
     try {
       if (dependencies.readCachedProvider(cacheContextId)) {
         dependencies.deleteCachedProvider("bob");
       }
     } catch {
-      // The current auth failure is still definitive even if the cache is not writable.
+      // The current failure still stands even if the cache is not writable.
     }
   }
 
@@ -542,6 +543,7 @@ function teamSelectionFailure(): BobFailure {
   return new BobFailure(TEAM_SELECTION_REQUIRED, {
     status: "unavailable",
     authUsable: true,
+    retiresCache: true,
   });
 }
 
@@ -572,6 +574,7 @@ class BobFailure extends Error {
   readonly status: ProviderStatus;
   readonly staleEligible: boolean;
   readonly definitiveAuth: boolean;
+  readonly retiresCache: boolean;
   readonly authUsable: boolean;
   readonly retryAfter?: string;
 
@@ -582,6 +585,7 @@ class BobFailure extends Error {
     this.status = options.status ?? "error";
     this.staleEligible = options.staleEligible === true;
     this.definitiveAuth = options.definitiveAuth === true;
+    this.retiresCache = options.retiresCache === true;
     this.authUsable = options.authUsable === true;
     this.retryAfter = options.retryAfter;
   }
