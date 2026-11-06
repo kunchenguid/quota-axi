@@ -57,6 +57,7 @@ const saved = Object.fromEntries(
     "PI_CODING_AGENT_DIR",
     "QUOTA_AXI_SNAPSHOT",
     "QUOTA_AXI_MAX_AGE",
+    "BOB_API_KEY",
   ].map((name) => [name, process.env[name]]),
 );
 let root: string;
@@ -365,6 +366,86 @@ describe("fresh reuse", () => {
 
     expect(usageCalls).toBe(2);
     expect(selected.state.reused).toBeUndefined();
+  });
+
+  it("reads Bob again once its settings name another deployment", async () => {
+    process.env.BOB_API_KEY = "synthetic-bob-key";
+    const profile = vi.fn(async () =>
+      Response.json({
+        instances: [
+          {
+            plan_id: "ibm_bob_pro_plus_plan",
+            plan_name: "pro plus plan",
+            refresh_at: Date.parse("2026-10-12T00:00:00Z") / 1000,
+            allow_overage: false,
+            instance_status: "active",
+            is_internal: false,
+            teams: [{ usage: 45, budget_limit: 180 }],
+          },
+        ],
+      }),
+    );
+    vi.stubGlobal("fetch", profile);
+    const readBob = async () =>
+      (
+        JSON.parse(
+          await quotaCommand(["--provider", "bob", "--json"], undefined),
+        ) as QuotaAxiResponse
+      ).providers[0]!;
+
+    await readBob();
+    expect((await readBob()).state.reused).toBe(true);
+    expect(profile).toHaveBeenCalledTimes(1);
+
+    mkdirSync(join(root, ".bob"));
+    writeFileSync(
+      join(root, ".bob", "settings.json"),
+      JSON.stringify({ gatewayUrl: "https://gateway.example.invalid" }),
+    );
+    const blocked = await readBob();
+
+    expect(profile).toHaveBeenCalledTimes(1);
+    expect(blocked.state.reused).toBeUndefined();
+    expect(blocked.state.error).toBe("unsupported_server");
+  });
+
+  it("never reuses a Bob budget once a later read finds several teams", async () => {
+    process.env.BOB_API_KEY = "synthetic-bob-key";
+    const team = { usage: 45, budget_limit: 180 };
+    const instance = {
+      plan_id: "ibm_bob_pro_plus_plan",
+      plan_name: "pro plus plan",
+      refresh_at: Date.parse("2026-10-12T00:00:00Z") / 1000,
+      allow_overage: false,
+      instance_status: "active",
+      is_internal: false,
+    };
+    let teams = [team];
+    const profile = vi.fn(async () =>
+      Response.json({ instances: [{ ...instance, teams }] }),
+    );
+    vi.stubGlobal("fetch", profile);
+    const readBob = async (...extra: string[]) =>
+      (
+        JSON.parse(
+          await quotaCommand(
+            ["--provider", "bob", "--json", ...extra],
+            undefined,
+          ),
+        ) as QuotaAxiResponse
+      ).providers[0]!;
+
+    expect((await readBob()).windows).not.toEqual([]);
+    teams = [team, team];
+    advance(120);
+    expect((await readBob()).state.error).toBe("bob_team_selection_required");
+
+    const again = await readBob("--max-age", "10m");
+
+    expect(profile).toHaveBeenCalledTimes(3);
+    expect(again.windows).toEqual([]);
+    expect(again.state.reused).toBeUndefined();
+    expect(again.state.error).toBe("bob_team_selection_required");
   });
 
   it("never reuses a reading once one of its windows has reached its reset", async () => {

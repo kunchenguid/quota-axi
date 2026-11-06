@@ -1,0 +1,38 @@
+{
+  "user_id": "fixture-user",
+  "instances": [
+    {
+      "subscription_id": "fixture-subscription",
+      "instance_id": "fixture-instance",
+      "instance_name": "Fixture Instance",
+      "instance_status": "active",
+      "region": "us-east",
+      "region_domain": "fixture.invalid",
+      "refresh_at": 1781222400,
+      "expires_at": null,
+      "plan_id": "ibm_bob_pro_plus_plan",
+      "plan_name": "pro plus plan",
+      "plan_overage_support": true,
+      "allow_overage": false,
+      "overage_limit": null,
+      "ssm_subscription_id": "fixture-ssm",
+      "role": "bob-admin",
+      "user_id": "fixture-user",
+      "teams": [
+        {
+          "id": "fixture-team",
+          "name": "Fixture Team Name",
+          "usage": 45,
+          "budget_limit": 180
+        }
+      ],
+      "addons": [
+        {
+          "id": "fixture-addon",
+          "name": "Fixture Addon"
+        }
+      ],
+      "is_internal": false
+    }
+  ]
+}

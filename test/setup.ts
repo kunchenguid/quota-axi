@@ -73,3 +73,9 @@ delete process.env.QUOTA_AXI_THEME;
 // CLI login store is already unreachable because XDG_CONFIG_HOME is sandboxed
 // above. Tests that exercise Muse set their own credential environment.
 delete process.env.META_API_KEY;
+
+// No test may send this machine's exported Bob key to the profile endpoint.
+// Tests that exercise Bob set their own credential environment.
+delete process.env.BOB_API_KEY;
+delete process.env.BOBSHELL_API_KEY;
+delete process.env.BOB_GATEWAY_URL;
