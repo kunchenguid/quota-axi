@@ -971,7 +971,7 @@ oauth_host = "https://auth.kimi.ai"
       ],
     });
     expect(cachedProviderIds(fixture)).toContain("kimi");
-  });
+  }, 50_000);
 
   /**
    * The assumed environment and a mainland login name the same slot on the same

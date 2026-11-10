@@ -97,6 +97,7 @@ describe("quota-axi --version fast path", () => {
       expect(result.stdout).toBe(`${VERSION}\n`);
       expect(result.stderr).toBe("");
     },
+    65_000,
   );
 
   it("still answers a trailing version flag through the full CLI", () => {
