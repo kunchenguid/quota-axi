@@ -1364,8 +1364,6 @@ export function normalizeClaudeProfile(
 const CLAUDE_ORGANIZATION_PLANS = new Map([
   ["claude_pro", "pro"],
   ["claude_max", "max"],
-  ["claude_team", "team"],
-  ["claude_enterprise", "enterprise"],
 ]);
 
 /**

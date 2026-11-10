@@ -126,8 +126,8 @@ describe("Claude OAuth profile parsing", () => {
 
     expect(plan("claude_pro")).toBe("pro");
     expect(plan("claude_max")).toBe("max");
-    expect(plan("claude_team")).toBe("team");
-    expect(plan("claude_enterprise")).toBe("enterprise");
+    expect(plan("claude_team")).toBeUndefined();
+    expect(plan("claude_enterprise")).toBeUndefined();
     expect(plan("claude_future_tier")).toBeUndefined();
     expect(plan("constructor")).toBeUndefined();
     expect(plan(7)).toBeUndefined();
