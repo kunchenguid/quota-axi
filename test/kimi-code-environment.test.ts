@@ -26,7 +26,7 @@ afterEach(() => {
   temporaryDirectories = [];
 });
 
-describe("Kimi Code environment resolution", { timeout: 30_000 }, () => {
+describe("Kimi Code environment resolution", () => {
   it("reads the credential and endpoint of a global (.ai) login", () => {
     const fixture = isolatedFixture();
     writeConfig(

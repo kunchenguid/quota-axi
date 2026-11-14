@@ -90,7 +90,7 @@ describe("configured monthly limit", () => {
   it("publishes the unspent share over the UTC month", () => {
     expect(monthlyLimitWindow(25, 100, currentSpendMonth(NOW))).toEqual({
       id: "monthly_limit",
-      label: "configured monthly limit",
+      label: "my cap",
       kind: "monthly",
       percentUsed: 25,
       percentRemaining: 75,
@@ -213,7 +213,7 @@ describe("Anthropic API spend", () => {
     expect(report.windows).toEqual([
       {
         id: "monthly_limit",
-        label: "configured monthly limit",
+        label: "my cap",
         kind: "monthly",
         percentUsed: 11.74,
         percentRemaining: 88.26,
@@ -578,7 +578,11 @@ describe("API spend in the human report", () => {
       { timeZone: "UTC" },
     );
     expect(output).toContain("75%");
-    expect(output).toContain("configured monthly limit");
     expect(output).toContain("$25.00 of $100.00 spent");
+    // The limit is named in full in both the headline and the window row:
+    // the fixed-width card never cuts it short with an ellipsis.
+    expect(output).toMatch(/75% my cap\s/);
+    expect(output).toMatch(/│\s+my cap\s+\S/);
+    expect(output).not.toContain("…");
   });
 });

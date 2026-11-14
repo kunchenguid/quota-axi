@@ -23,10 +23,7 @@ afterEach(() => {
   temporaryDirectories = [];
 });
 
-// Each case spawns the built CLI, which needs more than the 5s default under load.
-const SUITE = { timeout: 30_000 };
-
-describe("Kimi CLI credential inspection is read-only", SUITE, () => {
+describe("Kimi CLI credential inspection is read-only", () => {
   it("does not create Pi auth state while inspecting auth in an empty home", () => {
     const fixture = isolatedFixture();
 

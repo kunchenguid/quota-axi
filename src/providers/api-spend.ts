@@ -108,8 +108,9 @@ export function parseSpendLimit(value: string | undefined): SpendLimit {
 /**
  * The user's configured monthly limit as a window over the current UTC month.
  * The limit is the user's number, not the vendor's, so the window is labeled
- * as configured. Only spend at or over the limit reads 0 remaining: a sliver
- * below it never rounds down to exhaustion.
+ * "my cap", short enough for the --tui window row and headline columns. Only
+ * spend at or over the limit reads 0 remaining: a sliver below it never rounds
+ * down to exhaustion.
  */
 export function monthlyLimitWindow(
   spentUsd: number,
@@ -122,7 +123,7 @@ export function monthlyLimitWindow(
       : Math.max(0.01, roundPercent(100 - (spentUsd / limitUsd) * 100));
   return {
     id: MONTHLY_LIMIT_WINDOW_ID,
-    label: "configured monthly limit",
+    label: "my cap",
     kind: "monthly",
     percentUsed: roundPercent(100 - percentRemaining),
     percentRemaining,
