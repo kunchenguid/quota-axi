@@ -261,9 +261,9 @@ type CodexAccountContext =
 /** One `QUOTA_AXI_PI_PROFILES` directory, read as its own Codex lane. */
 type PiProfileLane = {
   agentDir: string;
+  /** Also the lane's cache slot, even when it is the only lane. */
   accountKey: string;
   broker: PiCodexCredentialBroker;
-  cacheKey?: string;
 };
 
 async function discoverCodexAccounts(
@@ -339,7 +339,6 @@ async function discoverCodexAccounts(
     for (const lane of piLanes) {
       lane.account.cacheKey = lane.account.piProviderId;
     }
-    for (const lane of profileLanes) lane.cacheKey = lane.accountKey;
   }
 
   // Lanes are read once per collection and reconciled on the vendor account
@@ -431,6 +430,7 @@ async function discoverCodexAccounts(
   for (const lane of profileLanes) {
     accounts.push({
       accountKey: lane.accountKey,
+      keepKeyWhenAlone: true,
       locator: {
         kind: "pi-agent-dir",
         path: lane.agentDir,
@@ -554,7 +554,7 @@ function piProfileAccount(
     extraPiProviderIds: ids.slice(1),
     broker: lane.broker,
     named: true,
-    ...(lane.cacheKey ? { cacheKey: lane.cacheKey } : {}),
+    cacheKey: lane.accountKey,
   };
 }
 
@@ -733,6 +733,16 @@ async function fetchPiAccountQuota(
       storedAccountIds.get(answeringProviderId),
     );
   }
+  // Only a credential this read actually sent may approve or retire a saved
+  // reading; an untried sibling's account says nothing about this failure.
+  const triedAccountIds = providerIds.flatMap((id) => {
+    const accountId = storedAccountIds.get(id);
+    const tried = piSelection.results.some(
+      (result) =>
+        result.source === piCodexSource(id) && result.outcome !== "not_tried",
+    );
+    return accountId !== undefined && tried ? [accountId] : [];
+  });
   const piResolution = lastResolution;
   const finalError =
     piSelection.outcome === "transient"
@@ -754,7 +764,7 @@ async function fetchPiAccountQuota(
     attempts,
     source,
     account.cacheKey,
-    [...storedAccountIds.values()],
+    triedAccountIds,
     codexCredentialKey(source) ?? CODEX_HOME_ACCOUNT_KEY,
   );
 }

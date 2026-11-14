@@ -185,6 +185,58 @@ describe("QUOTA_AXI_PI_PROFILES", () => {
     );
   });
 
+  it("keeps the key, locator, and own cache slot when a listed directory is the only lane", async () => {
+    const solo = piDir("pi-solo", {
+      "openai-codex": codexEntry("solo-token", "acct-solo"),
+    });
+    seats.set("solo-token", { account: "acct-solo", used: 30 });
+    listProfiles(solo);
+
+    const [row] = await readCodex("--full");
+
+    expect(row).toMatchObject({
+      accountKey: expect.stringMatching(/^pi-profile:[0-9a-f]{24}$/),
+      accountLocator: { kind: "pi-agent-dir", path: solo },
+      windows: [{ percentUsed: 30 }],
+    });
+    // The legacy keyless slot stays empty; the lane wrote its own slot.
+    const { readCachedProvider } = await import("../../src/cache.js");
+    expect(readCachedProvider("codex")).toBeUndefined();
+    expect(readCachedProvider("codex", row!.accountKey)).toBeDefined();
+  });
+
+  it("never serves an untried sibling account's saved windows", async () => {
+    const dir = piDir("pi-pair", {
+      "openai-codex": codexEntry("a-token", "acct-a"),
+      "openai-codex-work": codexEntry("b-token", "acct-b"),
+    });
+    listProfiles(dir);
+    // First read: A is rejected, B answers and is cached in the lane's slot.
+    seats.set("b-token", { account: "acct-b", used: 80 });
+    const [first] = await readCodex("--full");
+    expect(first).toMatchObject({
+      account: { accountId: "acct-b" },
+      windows: [{ percentUsed: 80 }],
+    });
+
+    // Second read: A fails transiently, so B is never sent.
+    seats.set("a-token", { account: "acct-a", used: 5 });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const bearer = new Headers(init?.headers).get("authorization");
+        return bearer === "Bearer a-token"
+          ? new Response("unavailable", { status: 503 })
+          : vendor(input, init);
+      }),
+    );
+    const [second] = await readCodex("--full");
+
+    expect(second?.windows).toEqual([]);
+    expect(second?.state.stale).toBe(false);
+    expect(second?.account?.accountId).not.toBe("acct-b");
+  });
+
   it("keeps a listed directory without a Codex login visible as its own lane", async () => {
     writeNativeCodex("native-token", "acct-native");
     seats.set("native-token", { account: "acct-native", used: 10 });

@@ -302,6 +302,8 @@ export type ProviderAccount = {
   accountKey: string;
   /** Exact local selector evidence, published on the lane's row by `--full`. */
   locator?: AccountLocator;
+  /** Keep `accountKey` and `locator` even when this is the only lane. */
+  keepKeyWhenAlone?: boolean;
   /**
    * Resolves undefined when the lane establishes no distinct account. A
    * reading that covers credential keys folded into this lane names them in
