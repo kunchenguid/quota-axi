@@ -781,7 +781,8 @@ function excludeFromFreshReuse(provider: ProviderId): boolean {
   // Muse Keychain and Higgsfield CLI logins are not traced files, and the
   // Higgsfield status payload we already fetch has no stable non-email
   // account discriminator, so --max-age must never serve another seat's
-  // credits or jobs as fresh.
+  // credits or jobs as fresh. Ollama balance has no established account/team
+  // binding, so it is excluded from fresh reuse as well.
   return (
     provider === "muse" || provider === "higgsfield" || provider === "ollama"
   );
