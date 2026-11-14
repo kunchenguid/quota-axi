@@ -41,6 +41,7 @@ const originalElevenLabsProvider = PROVIDERS.elevenlabs;
 const originalDevinProvider = PROVIDERS.devin;
 const originalMuseProvider = PROVIDERS.muse;
 const originalHiggsfieldProvider = PROVIDERS.higgsfield;
+const originalAnthropicApiProvider = PROVIDERS["anthropic-api"];
 const originalXdgCacheHome = process.env.XDG_CACHE_HOME;
 const originalClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
 const originalCodexHome = process.env.CODEX_HOME;
@@ -75,6 +76,7 @@ afterEach(() => {
   PROVIDERS.devin = originalDevinProvider;
   PROVIDERS.muse = originalMuseProvider;
   PROVIDERS.higgsfield = originalHiggsfieldProvider;
+  PROVIDERS["anthropic-api"] = originalAnthropicApiProvider;
   vi.unstubAllGlobals();
   if (originalXdgCacheHome === undefined) delete process.env.XDG_CACHE_HOME;
   else process.env.XDG_CACHE_HOME = originalXdgCacheHome;
@@ -117,6 +119,7 @@ describe("CLI flag parsing", () => {
       "devin",
       "muse",
       "higgsfield",
+      "anthropic-api",
     ]);
   });
 
@@ -193,6 +196,7 @@ describe("CLI flag parsing", () => {
           "devin",
           "muse",
           "higgsfield",
+          "anthropic-api",
         ],
         json: true,
         full: true,
@@ -1496,12 +1500,12 @@ describe("human report folding for providers that are not set up", () => {
     expect(output.trimEnd().split("\n").slice(-3)).toEqual([
       "  ○ not set up  cursor · copilot · grok · kimi · zai · agy · alibaba · opencode-go · commandcode",
       "                minimax · mimo · deepseek · openrouter · elevenlabs · devin · muse · higgsfield",
-      "                quota-axi auth shows where each is read",
+      "                anthropic-api   quota-axi auth shows where each is read",
     ]);
     expect(output).not.toMatch(/╭─ ○ (agy|alibaba|commandcode) /);
 
     expect(output).toMatch(
-      /· 1 live · 0 stale · 1 needs attention · 17 not set up\n/,
+      /· 1 live · 0 stale · 1 needs attention · 18 not set up\n/,
     );
     expect(output).toContain("╭─ ● codex ");
     expect(output).toContain("╭─ ○ claude ");
@@ -1514,7 +1518,7 @@ describe("human report folding for providers that are not set up", () => {
     stubFoldFleet();
     const output = await capture(["--tui", "--once", "--all"]);
 
-    expect(output).toContain("  ○ not set up · 17\n");
+    expect(output).toContain("  ○ not set up · 18\n");
     expect(output).toContain("╭─ ○ copilot ");
     expect(output).toContain("╭─ ○ elevenlabs ");
     expect(output).toContain("╭─ ○ higgsfield ");
@@ -1580,7 +1584,7 @@ describe("human report folding for providers that are not set up", () => {
 
       process.stdin.emit("data", Buffer.from("a"));
       await settle("a hide not set up");
-      expect(lastFrame()).toContain("  ○ not set up · 17");
+      expect(lastFrame()).toContain("  ○ not set up · 18");
       expect(lastFrame()).toContain("╭─ ○ zai ");
 
       process.stdin.emit("data", Buffer.from("q"));
@@ -2205,6 +2209,7 @@ describe("default TOON decision blocks", () => {
     PROVIDERS.devin = providerWithQuota(freshDevinQuota());
     PROVIDERS.muse = providerWithQuota(emptyFreshQuota("muse", "Muse"));
     PROVIDERS.higgsfield = providerWithQuota(freshHiggsfieldQuota());
+    PROVIDERS["anthropic-api"] = providerWithQuota(freshSpendQuota());
 
     const output = await capture([]);
     const named = new Set([
@@ -2215,6 +2220,7 @@ describe("default TOON decision blocks", () => {
     expect([...named].sort()).toEqual([
       "agy",
       "alibaba",
+      "anthropic-api",
       "claude",
       "codex",
       "commandcode",
@@ -3202,6 +3208,19 @@ function emptyFreshQuota(
     source: "api",
     windows: [],
     state: { status: "fresh", stale: false },
+  };
+}
+
+function freshSpendQuota(): ProviderQuota {
+  return {
+    ...emptyFreshQuota("anthropic-api", "Anthropic API"),
+    spend: {
+      currency: "USD",
+      spentUsd: 12.34,
+      periodStart: "2026-10-14T00:00:00.000Z",
+      periodEnd: "2026-11-08T00:00:00.000Z",
+      buckets: 25,
+    },
   };
 }
 

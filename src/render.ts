@@ -68,8 +68,26 @@ type AttentionRow = {
   remedy: string;
 };
 
+/**
+ * Sparse: one row per API-spend provider that reported spend. `spentUsd` is the
+ * vendor's own figure for `[periodStart, periodEnd)`. `limitUsd` is the user's
+ * configured monthly limit or `none`; the remaining share it implies is a
+ * `quota[]` row, never computed here.
+ */
+type SpendRow = {
+  provider: ProviderId;
+  accountKey?: string;
+  periodStart: string;
+  periodEnd: string;
+  spentUsd: number;
+  limitUsd: number | string;
+  buckets: number;
+  reportedLag: string;
+};
+
 type ProviderBlocks = {
   quota: QuotaRow[];
+  spend: SpendRow[];
   exhaustion: ExhaustionRow[];
   attention: AttentionRow[];
 };
@@ -98,7 +116,7 @@ export function renderQuotaToon(
             (provider) => !omit.has(provider.provider),
           ),
         };
-  const { quota, exhaustion, attention } = quotaBlocks(shown);
+  const { quota, spend, exhaustion, attention } = quotaBlocks(shown);
   const blocks = [
     encode({
       bin: collapseHome(binPath),
@@ -107,6 +125,7 @@ export function renderQuotaToon(
       generatedAt: response.generatedAt,
     }),
     encode({ quota }),
+    ...(spend.length > 0 ? [encode({ spend })] : []),
     encode({ exhaustion }),
     encode({ attention }),
   ];
@@ -118,15 +137,33 @@ export function renderQuotaToon(
 
 /**
  * Contract invariant: every provider this function is given appears at least
- * once, in `quota[]` or `attention[]`, and never in metric order. Default
- * TOON omission of not-set-up providers happens before this runs.
+ * once, in `quota[]` or `attention[]`, and never in metric order; a
+ * `spend[]` row never stands in for either. Default TOON omission of not-set-up providers happens before this runs.
  */
 function quotaBlocks(response: QuotaAxiResponse): ProviderBlocks {
-  const blocks: ProviderBlocks = { quota: [], exhaustion: [], attention: [] };
+  const blocks: ProviderBlocks = {
+    quota: [],
+    spend: [],
+    exhaustion: [],
+    attention: [],
+  };
   for (const provider of response.providers) {
     const scopes = provider.quotaSemantics?.effectiveAvailability ?? [];
     const scopeAttention: AttentionRow[] = [];
     let measured = false;
+    if (provider.spend) {
+      blocks.spend.push({
+        ...providerColumns(provider),
+        periodStart: provider.spend.periodStart,
+        periodEnd: provider.spend.periodEnd,
+        spentUsd: provider.spend.spentUsd,
+        limitUsd:
+          provider.windows.find(({ id }) => id === "monthly_limit")?.limitUsd ??
+          NONE,
+        buckets: provider.spend.buckets,
+        reportedLag: provider.spend.reportedLag ?? NONE,
+      });
+    }
 
     for (const scope of scopes) {
       if (scope.effectivePercentRemaining === undefined) {

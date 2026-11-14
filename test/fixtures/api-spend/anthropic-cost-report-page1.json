@@ -1,0 +1,43 @@
+{
+  "data": [
+    {
+      "starting_at": "2026-10-14T00:00:00Z",
+      "ending_at": "2026-10-15T00:00:00Z",
+      "results": [
+        {
+          "amount": "123.78912",
+          "context_window": null,
+          "cost_type": "tokens",
+          "currency": "USD",
+          "description": "Claude Opus 5.5 Usage - Input Tokens",
+          "inference_geo": null,
+          "model": "claude-opus-5-5",
+          "service_tier": "standard",
+          "speed": null,
+          "token_type": "uncached_input_tokens",
+          "workspace_id": null
+        },
+        {
+          "amount": "50.2",
+          "context_window": null,
+          "cost_type": "web_search",
+          "currency": "USD",
+          "description": "Web Search Usage",
+          "inference_geo": null,
+          "model": null,
+          "service_tier": null,
+          "speed": null,
+          "token_type": null,
+          "workspace_id": null
+        }
+      ]
+    },
+    {
+      "starting_at": "2026-10-15T00:00:00Z",
+      "ending_at": "2026-10-16T00:00:00Z",
+      "results": []
+    }
+  ],
+  "has_more": true,
+  "next_page": "page_MjAyNi0xMC0xNlQwMDowMDowMFo="
+}

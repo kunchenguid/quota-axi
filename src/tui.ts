@@ -139,6 +139,7 @@ const MOCHA: Palette = {
     devin: { rgb: [126, 196, 224], ansi16: "96", bold: true },
     muse: { rgb: [0, 132, 255], ansi16: "94", bold: true },
     higgsfield: { rgb: [255, 176, 122], ansi16: "93", bold: true },
+    "anthropic-api": { rgb: [235, 160, 172], ansi16: "91", bold: true },
   },
   styles: {
     dim: { rgb: [127, 132, 156], ansi16: "90" },
@@ -188,6 +189,7 @@ const LATTE: Palette = {
     devin: { rgb: [20, 130, 160], ansi16: "96", bold: true },
     muse: { rgb: [90, 80, 210], ansi16: "94", bold: true },
     higgsfield: { rgb: [200, 80, 20], ansi16: "93", bold: true },
+    "anthropic-api": { rgb: [210, 15, 57], ansi16: "91", bold: true },
   },
   styles: {
     dim: { rgb: [124, 127, 147], ansi16: "90" },
@@ -492,13 +494,19 @@ function buildLiveCard(
   ];
 
   const headline = pickHeadlineAvailability(provider);
-  const creditsLine = creditsOnlyHeadline(provider, stale, border);
+  const spendLines = spendHeadline(provider, stale, border);
+  const creditsLine =
+    provider.windows.length === 0
+      ? (spendLines ?? creditsOnlyHeadline(provider, stale, border))
+      : creditsOnlyHeadline(provider, stale, border);
   if (creditsLine) {
     lines.push(...creditsLine);
   } else if (hasWhollyUnknownWindowRelationships(provider)) {
     lines.push(...windowsOnlyHeadline(stale, border));
   } else {
     lines.push(...effectiveHeadline(provider, headline, stale, show, border));
+    // A configured limit draws the bar; the spend figure still states itself.
+    if (spendLines) lines.push(interior([], border), ...spendLines);
   }
 
   if (provider.windows.length > 0) {
@@ -608,6 +616,38 @@ function effectiveHeadline(
     ),
   );
   return lines;
+}
+
+/**
+ * An API-spend card states the vendor-reported figure and the days it covers.
+ * Without a configured limit there is no bar.
+ */
+function spendHeadline(
+  provider: ProviderQuota,
+  stale: boolean,
+  border: CardBorder,
+): Line[] | undefined {
+  const spend = provider.spend;
+  if (!spend) return undefined;
+  const limitUsd = provider.windows.find(
+    ({ id }) => id === "monthly_limit",
+  )?.limitUsd;
+  const amount =
+    limitUsd === undefined
+      ? `$${spend.spentUsd.toFixed(2)} spent`
+      : `$${spend.spentUsd.toFixed(2)} of $${limitUsd.toFixed(2)} spent`;
+  const lastDay = new Date(Date.parse(spend.periodEnd) - 86_400_000);
+  const period = `${spend.periodStart.slice(0, 10)} to ${lastDay.toISOString().slice(0, 10)} UTC`;
+  return [
+    interior(
+      [
+        { text: "   " },
+        { text: stale ? `stale · ${amount}` : amount, style: "dimBold" },
+      ],
+      border,
+    ),
+    interior([{ text: "   " }, { text: period, style: "dim" }], border),
+  ];
 }
 
 /**

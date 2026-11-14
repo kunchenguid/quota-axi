@@ -768,8 +768,11 @@ function reuseStampsFor(
 
 function isCacheExcluded(provider: ProviderQuota): boolean {
   return (
-    (provider.provider === "claude" || provider.provider === "copilot") &&
-    provider.source === "cli"
+    // A stale spend figure would misreport the account, so API spend is never
+    // cached, even when a configured monthly limit gives it a window.
+    provider.provider === "anthropic-api" ||
+    ((provider.provider === "claude" || provider.provider === "copilot") &&
+      provider.source === "cli")
   );
 }
 

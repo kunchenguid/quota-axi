@@ -29,6 +29,7 @@ metadata:
       - devin
       - muse
       - higgsfield
+      - anthropic-api
       - cli
     category: observability
 ---

@@ -1,0 +1,18 @@
+{
+  "data": [
+    {
+      "starting_at": "2026-10-16T00:00:00Z",
+      "ending_at": "2026-10-17T00:00:00Z",
+      "results": [
+        {
+          "amount": "1000",
+          "currency": "USD",
+          "description": null,
+          "workspace_id": null
+        }
+      ]
+    }
+  ],
+  "has_more": false,
+  "next_page": null
+}
