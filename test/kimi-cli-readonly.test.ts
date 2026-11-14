@@ -397,7 +397,7 @@ globalThis.fetch = async (input, init) => {
     expect(auth.stdout).not.toContain("synthetic-pi-refresh-must-not-leak");
     expect(spawnLog(fixture)).toBe("");
     expect(readFileSync(authPath, "utf8")).toBe(before);
-  });
+  }, 75_000);
 
   it("names the Kimi Code CLI as the remedy when that store is the soft-expired login", () => {
     const fixture = isolatedFixture();

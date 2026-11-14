@@ -309,7 +309,21 @@ function providerStateRows(
       remedy: NONE,
     });
   }
-  if (measured) return rows;
+  if (measured) {
+    // Purchased Ollama credits are a separate balance, not evidence for the
+    // measured included-credit scope. Keep both visible without summing them.
+    const credits =
+      provider.provider === "ollama" ? creditBalance(provider) : undefined;
+    if (credits)
+      rows.push({
+        ...providerColumns(provider),
+        scope: "all",
+        kind: "credits",
+        detail: credits,
+        remedy: NONE,
+      });
+    return rows;
+  }
 
   const authStatus = provider.state.authStatus;
   const suffix = authStatus ? ` (auth ${authStatus})` : "";
@@ -352,7 +366,7 @@ function creditBalance(provider: ProviderQuota): string | undefined {
   if (!credits) return undefined;
   if (credits.unlimited) return "credits unlimited";
   if (credits.remaining === undefined) return undefined;
-  return `remaining ${credits.remaining} ${credits.unit ?? "credits"}`;
+  return `${provider.provider === "ollama" ? "purchased " : ""}remaining ${credits.remaining} ${credits.unit ?? "credits"}`;
 }
 
 function primaryProviderRow(provider: ProviderQuota): AttentionRow | undefined {

@@ -17,7 +17,26 @@ const profileOnlyOptions: ProviderOptions = {
 const quota: QuotaAxiResponse = {
   generatedAt: "2026-08-05T12:00:00.000Z",
   schemaVersion: 5,
-  providers: [],
+  providers: [
+    {
+      provider: "ollama",
+      windows: [
+        {
+          id: "included_month",
+          label: "Included monthly credits",
+          kind: "monthly",
+          limitUsd: 100,
+          spentUsd: 27.5,
+          percentRemaining: 72.5,
+          percentUsed: 27.5,
+          startsAt: "2026-10-01T00:00:00Z",
+          resetsAt: "2026-11-01T00:00:00Z",
+        },
+      ],
+      credits: { remaining: 12.5, unit: "usd" },
+      state: { status: "fresh", stale: false },
+    },
+  ],
 };
 
 const model: ModelQuotaRecord = {

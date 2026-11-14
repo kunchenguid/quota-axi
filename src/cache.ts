@@ -433,6 +433,7 @@ export function readSnapshotProviders(
   provider: ProviderId,
   now: number = Date.now(),
 ): ProviderQuota[] | "expired" | undefined {
+  if (provider === "ollama") return undefined;
   const records = readCacheProviders(file).filter(
     (record) => record.snapshot.provider === provider,
   );
@@ -479,6 +480,8 @@ export function readCachedProvider(
   provider: ProviderId,
   accountKey?: string,
 ): ProviderQuota | undefined {
+  // Ollama balance does not establish account/team binding yet.
+  if (provider === "ollama") return undefined;
   return readCachedRecord(provider, accountKey)?.snapshot;
 }
 
@@ -768,8 +771,9 @@ function reuseStampsFor(
 
 function isCacheExcluded(provider: ProviderQuota): boolean {
   return (
-    (provider.provider === "claude" || provider.provider === "copilot") &&
-    provider.source === "cli"
+    provider.provider === "ollama" ||
+    ((provider.provider === "claude" || provider.provider === "copilot") &&
+      provider.source === "cli")
   );
 }
 
@@ -778,7 +782,9 @@ function excludeFromFreshReuse(provider: ProviderId): boolean {
   // Higgsfield status payload we already fetch has no stable non-email
   // account discriminator, so --max-age must never serve another seat's
   // credits or jobs as fresh.
-  return provider === "muse" || provider === "higgsfield";
+  return (
+    provider === "muse" || provider === "higgsfield" || provider === "ollama"
+  );
 }
 
 function cacheIdentity(provider: ProviderQuota): string {
@@ -843,7 +849,7 @@ export function deleteCachedProvider(
   provider: ProviderId,
   accountKey?: string,
 ): void {
-  if (!existsSync(cacheFilePath())) return;
+  if (provider === "ollama" || !existsSync(cacheFilePath())) return;
   withCacheWriteLock(() => {
     const existing = readCacheProviders();
     const remaining = existing.filter((item) =>

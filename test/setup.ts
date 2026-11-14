@@ -73,3 +73,5 @@ delete process.env.QUOTA_AXI_THEME;
 // CLI login store is already unreachable because XDG_CONFIG_HOME is sandboxed
 // above. Tests that exercise Muse set their own credential environment.
 delete process.env.META_API_KEY;
+// Ollama tests supply synthetic keys only; never inherit a real account key.
+delete process.env.OLLAMA_API_KEY;

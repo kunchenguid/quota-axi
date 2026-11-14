@@ -497,7 +497,10 @@ async function readProvider(
   maxAgeSeconds: number,
   markCached: () => void,
 ): Promise<ProviderQuota[]> {
-  if (!(maxAgeSeconds > 0)) return tracedReadings(provider, options);
+  // No account/team binding is established for Ollama balance, so even an
+  // explicit --max-age must not reuse quota or create a cache/fetch lock.
+  if (provider === "ollama" || !(maxAgeSeconds > 0))
+    return tracedReadings(provider, options);
   const reused = reusableReadings(provider, maxAgeSeconds);
   if (reused) return reused;
   const turn = await takeFetchTurn(fetchLockPathFor(provider), () =>

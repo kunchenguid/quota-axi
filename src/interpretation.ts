@@ -45,6 +45,9 @@ export function withQuotaSemantics(
   if (provider.provider === "agy") {
     provider = markAgyStaleIfExpiredReset(provider, Date.parse(generatedAt));
   }
+  if (provider.provider === "ollama") {
+    provider = revalidateOllamaWindows(provider, Date.parse(generatedAt));
+  }
   const windows = provider.windows.map((window) => ({
     ...window,
     pace: computeWindowPace(window, generatedAt, {
@@ -59,6 +62,35 @@ export function withQuotaSemantics(
     quotaSemantics: provider.state.stale
       ? staleSemantics(semantics)
       : semantics,
+  };
+}
+
+function revalidateOllamaWindows(
+  provider: ProviderQuota,
+  generatedAtMs: number,
+): ProviderQuota {
+  const expiredIds = new Set(
+    provider.windows
+      .filter(({ resetsAt }) => {
+        if (!resetsAt) return false;
+        const resetAt = Date.parse(resetsAt);
+        return Number.isFinite(resetAt) && resetAt <= generatedAtMs;
+      })
+      .map(({ id }) => id),
+  );
+  if (expiredIds.size === 0) return provider;
+  return {
+    ...provider,
+    windows: provider.windows.filter(({ id }) => !expiredIds.has(id)),
+    state: {
+      ...provider.state,
+      untrustedWindowIds: [
+        ...new Set([
+          ...(provider.state.untrustedWindowIds ?? []),
+          ...expiredIds,
+        ]),
+      ],
+    },
   };
 }
 
@@ -196,7 +228,44 @@ function semanticsFor(
       );
     case "higgsfield":
       return higgsfieldSemantics(provider.windows, generatedAt);
+    case "ollama":
+      return ollamaSemantics(provider, generatedAt);
   }
+}
+
+/** Modern included credits have a bound; legacy conjunction is unestablished. */
+function ollamaSemantics(
+  provider: ProviderQuota,
+  generatedAt: string,
+): QuotaSemantics {
+  const monthly = provider.windows.filter(({ id }) => id === "included_month");
+  const untrusted = provider.state.untrustedWindowIds ?? [];
+  const description =
+    "Ollama's monthly window bounds included_credits only. Purchased USD credits are separate; purchased credits or automatic billing may serve past included exhaustion, so full-service model headroom is unknown. Legacy session and weekly relationships and cycle durations are unestablished; no combined bound is inferred.";
+  if (monthly.length > 0) {
+    if (untrusted.length > 0)
+      return {
+        status: "partial",
+        description,
+        effectiveAvailability: [
+          unresolvedAvailability("included_credits", monthly, untrusted),
+        ],
+        unresolvedWindowIds: untrusted,
+      };
+    return knownSemantics(
+      [availability("included_credits", monthly, generatedAt)],
+      description,
+    );
+  }
+  const semantics = unknownSemantics(provider.windows, description);
+  const unresolved = [
+    ...new Set([...provider.windows.map(({ id }) => id), ...untrusted]),
+  ];
+  return {
+    ...semantics,
+    ...(untrusted.length > 0 ? { status: "partial" as const } : {}),
+    unresolvedWindowIds: unresolved,
+  };
 }
 
 /**
@@ -827,7 +896,9 @@ function unresolvedAvailability(
   unresolvedWindowIds: string[],
 ): EffectiveAvailability {
   const boundedBy = windows.map(({ id }) => id);
-  const unmeasurableWindowIds = [...boundedBy, ...unresolvedWindowIds];
+  const unmeasurableWindowIds = [
+    ...new Set([...boundedBy, ...unresolvedWindowIds]),
+  ];
   return {
     scope,
     status: "unknown",
