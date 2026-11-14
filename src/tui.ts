@@ -652,7 +652,7 @@ function creditsOnlyHeadline(
         ? undefined
         : `${provider.provider === "ollama" ? "purchased " : ""}${credits.remaining} ${credits.unit ?? "credits"} remaining`;
   if (amount === undefined) return undefined;
-  return [
+  const lines: Line[] = [
     interior(
       [
         { text: "   " },
@@ -664,6 +664,15 @@ function creditsOnlyHeadline(
       border,
     ),
   ];
+  if (provider.provider === "ollama") {
+    lines.push(
+      interior(
+        [{ text: "   included headroom unknown", style: "dim" }],
+        border,
+      ),
+    );
+  }
+  return lines;
 }
 
 /**

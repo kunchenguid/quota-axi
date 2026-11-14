@@ -221,6 +221,30 @@ describe("registered Ollama CLI/TUI and first-release cache boundary", () => {
     expect(tui).toContain("no combined bound");
     expect(tui).toContain("purchased 0 usd remaining");
   });
+  it.each(["modern", "legacy"] as const)(
+    "renders unknown included headroom beside purchased credits after %s expiry",
+    async (family) => {
+      const payload = JSON.parse(
+        JSON.stringify(family === "modern" ? modern : legacy),
+      );
+      if (family === "modern") {
+        payload.included.period.until = "2026-10-09T11:59:59Z";
+      } else {
+        payload.included.session.resets_at = "2026-10-09T11:59:59Z";
+        payload.included.weekly.resets_at = "2026-10-09T11:59:59Z";
+      }
+      requests.mockImplementation(
+        async () => new Response(JSON.stringify(payload)),
+      );
+      const tui = await capture(["--provider", "ollama", "--tui", "--once"]);
+      expect(tui).toContain(
+        family === "modern"
+          ? "purchased 12.5 usd remaining"
+          : "purchased 0 usd remaining",
+      );
+      expect(tui).toContain("included headroom unknown");
+    },
+  );
   it("local auth is network-free and missing env folds only in an unscoped human report", async () => {
     const auth = await authCommand(
       ["--provider", "ollama", "--json"],
