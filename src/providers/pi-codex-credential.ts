@@ -9,6 +9,12 @@ export const PI_CODEX_BUILTIN_ID = "openai-codex";
 const AUTH_FILE_LIMIT_BYTES = 64 * 1024;
 const PI_CODEX_PROVIDER_ID = /^openai-codex(?:-[a-z0-9]+(?:-[a-z0-9]+)*)?$/;
 const PI_CODEX_SOURCE = /^pi:openai-codex(?:-[a-z0-9]+(?:-[a-z0-9]+)*)?$/;
+/**
+ * Pi's "Sign in with ChatGPT" provider (`openai`, plus suffixed siblings). Its
+ * OAuth token is scoped to api.openai.com token sharing, and the ChatGPT usage
+ * endpoints reject it, so it is recognized only to say it cannot be measured.
+ */
+const PI_CHATGPT_SIGN_IN_ID = /^openai(?:-[a-z0-9]+(?:-[a-z0-9]+)*)?$/;
 const MINIMUM_MILLISECOND_EPOCH = 1_000_000_000_000;
 
 export type PiCodexCredentials = {
@@ -48,6 +54,11 @@ export type PiCodexCredentialBroker = {
   resolveEntry(providerId: string): Promise<PiCodexCredentialResolution>;
   inspectEntry(providerId: string): Promise<PiCodexCredentialInspection>;
   listProviderIds(): Promise<string[]>;
+  /**
+   * Pi "Sign in with ChatGPT" OAuth entries (`openai`, `openai-*`, never
+   * `openai-codex*`), in lexical order. Only the entry's `type` is read.
+   */
+  listChatgptSignInIds(): Promise<string[]>;
 };
 
 export function isPiCodexProviderId(value: string): boolean {
@@ -86,6 +97,7 @@ export function createPiCodexCredentialBroker(
     resolveEntry: (providerId) => resolveCredential(dependencies, providerId),
     inspectEntry: (providerId) => inspectCredential(dependencies, providerId),
     listProviderIds: () => listProviderIds(dependencies),
+    listChatgptSignInIds: () => listChatgptSignInIds(dependencies),
   };
 }
 
@@ -168,6 +180,29 @@ async function listProviderIds(
   const parsed = await readAuthObject(dependencies);
   if (parsed.status !== "ok") return [];
   return piCodexProviderIds(parsed.value);
+}
+
+async function listChatgptSignInIds(
+  dependencies: BrokerDependencies,
+): Promise<string[]> {
+  const parsed = await readAuthObject(dependencies);
+  if (parsed.status !== "ok") return [];
+  return Object.keys(parsed.value)
+    .filter(
+      (id) =>
+        PI_CHATGPT_SIGN_IN_ID.test(id) &&
+        !isPiCodexProviderId(id) &&
+        oauthEntry(parsed.value, id),
+    )
+    .sort((left, right) => left.localeCompare(right));
+}
+
+function oauthEntry(parsed: Record<string, unknown>, id: string): boolean {
+  const classified = classifyPiAuthEntry(parsed, id);
+  return (
+    classified.status === "present" &&
+    stringValue(classified.entry.type)?.toLowerCase() === "oauth"
+  );
 }
 
 function piCodexProviderIds(parsed: Record<string, unknown>): string[] {

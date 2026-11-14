@@ -727,12 +727,17 @@ describe("Codex credential-state reporting", () => {
         { source: "pi:openai-codex", status: "success" },
       ],
     });
-    expect(fetchMock).toHaveBeenCalledOnce();
-    const request = fetchMock.mock.calls[0][1] as RequestInit;
-    expect(request.headers).toMatchObject({
-      authorization: "Bearer pi-fixture-access-token",
-      "ChatGPT-Account-Id": "acct-pi-fixture",
-    });
+    // The usage read, then the reset-credits side read with the same credential.
+    expect(fetchMock.mock.calls.map((call) => String(call[0]))).toEqual([
+      "https://chatgpt.com/backend-api/wham/usage",
+      "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits",
+    ]);
+    for (const call of fetchMock.mock.calls) {
+      expect((call[1] as RequestInit).headers).toMatchObject({
+        authorization: "Bearer pi-fixture-access-token",
+        "ChatGPT-Account-Id": "acct-pi-fixture",
+      });
+    }
     expect(JSON.stringify({ auth, result })).not.toContain(
       "pi-fixture-access-token",
     );
@@ -763,10 +768,10 @@ describe("Codex credential-state reporting", () => {
     expect(result.state.status).toBe("fresh");
     expect(result.windows).toHaveLength(1);
     expect(result.windows[0]?.id).toBe("spend_control");
-    expect(fetchMock).toHaveBeenCalledOnce();
-    expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
+    expect(fetchMock.mock.calls.map((call) => String(call[0]))).toEqual([
       "https://chatgpt.com/backend-api/wham/usage",
-    );
+      "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits",
+    ]);
   });
 
   it("preserves native Codex auth-file precedence over Pi OAuth", async () => {
@@ -787,7 +792,10 @@ describe("Codex credential-state reporting", () => {
     expect(result.source).toBe("oauth");
     expect(result.state.sourcesTried).toEqual(["oauth"]);
     expect(result.attempts).toEqual([{ source: "oauth", status: "success" }]);
-    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock.mock.calls.map((call) => String(call[0]))).toEqual([
+      "https://chatgpt.com/backend-api/wham/usage",
+      "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits",
+    ]);
     expect(fetchMock.mock.calls[0][1]?.headers).toMatchObject({
       authorization: `Bearer ${nativeToken}`,
       "ChatGPT-Account-Id": "acct-native",
@@ -815,7 +823,11 @@ describe("Codex credential-state reporting", () => {
       refreshCredentials: false,
     });
 
-    expect(fetchMock).toHaveBeenCalledTimes(3);
+    // Both native usage endpoints reject; Pi answers, then its reset side read.
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(String(fetchMock.mock.calls[3]?.[0])).toBe(
+      "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits",
+    );
     expect(result.source).toBe("pi:openai-codex");
     expect(result.attempts).toEqual([
       { source: "oauth", status: "failed", error: "Codex sign-in required" },
@@ -1404,7 +1416,9 @@ describe("Codex credential-state reporting", () => {
       const requests: Array<Record<string, string>> = [];
       vi.stubGlobal(
         "fetch",
-        vi.fn(async (_url: unknown, init?: RequestInit) => {
+        vi.fn(async (url: unknown, init?: RequestInit) => {
+          if (String(url).endsWith("/rate-limit-reset-credits"))
+            return new Response("{}", { status: 404 });
           requests.push(init?.headers as Record<string, string>);
           const accountId = (init?.headers as Record<string, string>)[
             "ChatGPT-Account-Id"
@@ -1556,7 +1570,9 @@ describe("Codex credential-state reporting", () => {
       const bearers: string[] = [];
       vi.stubGlobal(
         "fetch",
-        vi.fn(async (_url: unknown, init?: RequestInit) => {
+        vi.fn(async (url: unknown, init?: RequestInit) => {
+          if (String(url).endsWith("/rate-limit-reset-credits"))
+            return new Response("{}", { status: 404 });
           bearers.push(new Headers(init?.headers).get("authorization") ?? "");
           return successfulUsageResponse();
         }),

@@ -524,6 +524,21 @@ function buildLiveCard(
     }
   }
 
+  if (provider.resetsAvailable) {
+    lines.push(interior([], border));
+    lines.push(
+      interior(
+        [
+          {
+            text: `   manual resets available ${provider.resetsAvailable}`,
+            style: "dim",
+          },
+        ],
+        border,
+      ),
+    );
+  }
+
   for (const note of cardNotes(provider, generatedAtMs)) {
     lines.push(
       interior(

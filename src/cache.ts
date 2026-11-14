@@ -920,6 +920,7 @@ function toCacheProvider(provider: ProviderQuota): CachedProvider | undefined {
       plan: provider.plan,
       windows: provider.windows,
       credits: provider.credits,
+      resetsAvailable: provider.resetsAvailable,
       jobs: provider.jobs,
       state: {
         status: provider.state.status,
@@ -1109,6 +1110,13 @@ function normalizeCachedProvider(
   if (untrustedWindowIds)
     snapshot.state.untrustedWindowIds = untrustedWindowIds;
   if (credits) snapshot.credits = credits;
+  const resetsAvailable = numberValue(data.resetsAvailable);
+  if (
+    resetsAvailable !== undefined &&
+    Number.isSafeInteger(resetsAvailable) &&
+    resetsAvailable >= 0
+  )
+    snapshot.resetsAvailable = resetsAvailable;
   const subscription = stringValue(data.subscription);
   if (subscription && CREDENTIAL_CONTEXT_ID.test(subscription))
     (snapshot as SubscriptionStampedQuota)[SUBSCRIPTION_IDENTITY] =
