@@ -195,7 +195,7 @@ $ quota-axi --provider claude --json
 $ quota-axi auth
 bin: ~/.npm/_npx/.../quota-axi
 description: Inspect local quota auth sources without printing secret values
-auth[42]{provider,source,path,status,error}:
+auth[43]{provider,source,path,status,error}:
   claude,oauth-file,~/.claude/.credentials.json,available,none
   claude,keychain,none,skipped,keychain_prompt_required
   codex,auth-json,~/.codex/auth.json,available,none
@@ -239,6 +239,7 @@ auth[42]{provider,source,path,status,error}:
   muse,muse:auth.json,~/.config/muse/auth.json,missing,none
   muse,cli-keychain,Keychain ai.meta.dev.credentials,skipped,keychain_prompt_required
   muse,env:META_API_KEY,META_API_KEY,missing,none
+  ollama,env:OLLAMA_API_KEY,none,missing,none
 help[1]:
   Run `quota-axi --allow-keychain-prompt auth` to permit native secure-store access
 ```
