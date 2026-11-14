@@ -227,6 +227,42 @@ describe("QUOTA_AXI_PI_PROFILES", () => {
     ]);
   });
 
+  it("reads the selected Pi directory as a listed lane when it holds only the openai sign-in", async () => {
+    const selected = piDir("pi-agent", {
+      openai: { type: "oauth", access: "sign-in-token" },
+    });
+    const other = piDir("pi-other", {
+      "openai-codex": codexEntry("other-token", "acct-other"),
+    });
+    seats.set("other-token", { account: "acct-other", used: 60 });
+    listProfiles(selected, other);
+
+    const providers = await readCodex("--full");
+
+    expect(providers.map((row) => row.accountLocator?.path)).toEqual([
+      selected,
+      other,
+    ]);
+    expect(providers[0]).toMatchObject({
+      source: "unavailable",
+      state: {
+        status: "unavailable",
+        error: "Pi openai OAuth token cannot read ChatGPT usage",
+      },
+      attempts: [
+        {
+          source: "pi:openai",
+          status: "skipped",
+          error: "unsupported_credential_type",
+          credentialPresent: true,
+        },
+      ],
+    });
+    expect(requests.map((request) => request.bearer)).not.toContain(
+      "sign-in-token",
+    );
+  });
+
   it("rejects a relative entry before any credential is read", async () => {
     vi.stubEnv(
       "QUOTA_AXI_PI_PROFILES",

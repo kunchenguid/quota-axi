@@ -10,11 +10,11 @@ const AUTH_FILE_LIMIT_BYTES = 64 * 1024;
 const PI_CODEX_PROVIDER_ID = /^openai-codex(?:-[a-z0-9]+(?:-[a-z0-9]+)*)?$/;
 const PI_CODEX_SOURCE = /^pi:openai-codex(?:-[a-z0-9]+(?:-[a-z0-9]+)*)?$/;
 /**
- * Pi's "Sign in with ChatGPT" provider (`openai`, plus suffixed siblings). Its
+ * Pi's "Sign in with ChatGPT" provider id (`openai`). Its
  * OAuth token is scoped to api.openai.com token sharing, and the ChatGPT usage
  * endpoints reject it, so it is recognized only to say it cannot be measured.
  */
-const PI_CHATGPT_SIGN_IN_ID = /^openai(?:-[a-z0-9]+(?:-[a-z0-9]+)*)?$/;
+const PI_CHATGPT_SIGN_IN_ID = "openai";
 const MINIMUM_MILLISECOND_EPOCH = 1_000_000_000_000;
 
 export type PiCodexCredentials = {
@@ -55,8 +55,8 @@ export type PiCodexCredentialBroker = {
   inspectEntry(providerId: string): Promise<PiCodexCredentialInspection>;
   listProviderIds(): Promise<string[]>;
   /**
-   * Pi "Sign in with ChatGPT" OAuth entries (`openai`, `openai-*`, never
-   * `openai-codex*`), in lexical order. Only the entry's `type` is read.
+   * Pi's "Sign in with ChatGPT" OAuth entry (`openai`), when present. Only
+   * the entry's `type` is read.
    */
   listChatgptSignInIds(): Promise<string[]>;
 };
@@ -187,14 +187,9 @@ async function listChatgptSignInIds(
 ): Promise<string[]> {
   const parsed = await readAuthObject(dependencies);
   if (parsed.status !== "ok") return [];
-  return Object.keys(parsed.value)
-    .filter(
-      (id) =>
-        PI_CHATGPT_SIGN_IN_ID.test(id) &&
-        !isPiCodexProviderId(id) &&
-        oauthEntry(parsed.value, id),
-    )
-    .sort((left, right) => left.localeCompare(right));
+  return oauthEntry(parsed.value, PI_CHATGPT_SIGN_IN_ID)
+    ? [PI_CHATGPT_SIGN_IN_ID]
+    : [];
 }
 
 function oauthEntry(parsed: Record<string, unknown>, id: string): boolean {

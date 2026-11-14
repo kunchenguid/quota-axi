@@ -110,10 +110,7 @@ describe("Pi Codex credential broker", () => {
     });
     const broker = brokerFor(fixture);
 
-    await expect(broker.listChatgptSignInIds()).resolves.toEqual([
-      "openai",
-      "openai-work",
-    ]);
+    await expect(broker.listChatgptSignInIds()).resolves.toEqual(["openai"]);
     await expect(broker.listProviderIds()).resolves.toEqual(["openai-codex"]);
   });
 

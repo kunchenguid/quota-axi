@@ -270,7 +270,7 @@ async function discoverCodexAccounts(
   dependencies: CodexDependencies,
 ): Promise<ProviderAccount[] | undefined> {
   const ids = await listPiCodexProviderIds(dependencies.piCodexBroker);
-  const profileLanes = listedPiProfileLanes(dependencies);
+  const profileLanes = listedPiProfileLanes(dependencies, ids.length > 0);
   if (
     profileLanes.length === 0 &&
     (ids.length === 0 || (ids.length === 1 && ids[0] === PI_CODEX_BUILTIN_ID))
@@ -445,16 +445,21 @@ async function discoverCodexAccounts(
 
 /**
  * The directories `QUOTA_AXI_PI_PROFILES` names, each once, in order. A
- * directory that is the Pi store this process already reads is left out: its
- * entries are already its own lanes. Relative entries fail the command before
+ * directory that is the Pi store this process already reads is left out only
+ * when that store has Codex entries, which are already its own lanes. Relative entries fail the command before
  * discovery runs, so they are never read here.
  */
 function listedPiProfileLanes(
   dependencies: CodexDependencies,
+  selectedStoreHasCodexLanes: boolean,
 ): PiProfileLane[] {
   const listed = piListedProfiles();
   if (!listed) return [];
-  const seen = new Set([directoryIdentity(resolvePiAgentDirectory())]);
+  const seen = new Set(
+    selectedStoreHasCodexLanes
+      ? [directoryIdentity(resolvePiAgentDirectory())]
+      : [],
+  );
   const lanes: PiProfileLane[] = [];
   for (const agentDir of listed.dirs) {
     const identity = directoryIdentity(agentDir);
