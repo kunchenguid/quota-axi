@@ -1,4 +1,4 @@
-import type { ProviderAdapter, ProviderSpend } from "../types.js";
+import type { ProviderAdapter } from "../types.js";
 import {
   type ApiSpendSpec,
   createApiSpendAdapter,
@@ -9,8 +9,6 @@ import {
 
 export const ANTHROPIC_COST_URL =
   "https://api.anthropic.com/v1/organizations/cost_report";
-export const ANTHROPIC_ORGANIZATION_URL =
-  "https://api.anthropic.com/v1/organizations/me";
 export const ANTHROPIC_ADMIN_KEY_ENV = "ANTHROPIC_ADMIN_KEY";
 export const ANTHROPIC_API_LIMIT_ENV = "QUOTA_AXI_ANTHROPIC_API_LIMIT_USD";
 
@@ -47,22 +45,6 @@ export function parseAnthropicCostPage(raw: unknown): SpendPage {
   };
 }
 
-/** `GET /v1/organizations/me` states `{ id, type: "organization", name }`. */
-export function parseAnthropicOrganization(
-  raw: unknown,
-): ProviderSpend["organization"] {
-  const root = objectValue(raw);
-  if (
-    !root ||
-    root.type !== "organization" ||
-    typeof root.id !== "string" ||
-    root.id.trim() === ""
-  )
-    throw new Error("invalid_payload");
-  const name = typeof root.name === "string" ? root.name.trim() : "";
-  return { id: root.id, ...(name ? { name } : {}) };
-}
-
 export const ANTHROPIC_API_SPEC: ApiSpendSpec = {
   id: "anthropic-api",
   label: "Anthropic API",
@@ -78,13 +60,11 @@ export const ANTHROPIC_API_SPEC: ApiSpendSpec = {
     if (page) url.searchParams.set("page", page);
     return url.toString();
   },
-  identityUrl: ANTHROPIC_ORGANIZATION_URL,
   headers: (key) => ({
     "x-api-key": key,
     "anthropic-version": ANTHROPIC_VERSION,
   }),
   parsePage: parseAnthropicCostPage,
-  parseIdentity: parseAnthropicOrganization,
 };
 
 export const anthropicApiAdapter: ProviderAdapter =

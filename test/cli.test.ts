@@ -2214,7 +2214,6 @@ describe("default TOON decision blocks", () => {
     const output = await capture([]);
     const named = new Set([
       ...toonRows(output, "quota").map((row) => row[0]),
-      ...toonRows(output, "spend").map((row) => row[0]),
       ...toonRows(output, "attention").map((row) => row[0]),
     ]);
 
@@ -3221,7 +3220,6 @@ function freshSpendQuota(): ProviderQuota {
       periodStart: "2026-10-14T00:00:00.000Z",
       periodEnd: "2026-11-08T00:00:00.000Z",
       buckets: 25,
-      organization: { id: "org-synthetic", name: "Synthetic Organization" },
     },
   };
 }

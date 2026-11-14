@@ -420,8 +420,6 @@ export type ProviderSpend = {
   buckets: number;
   /** Data delay in the vendor's own words; omitted when the vendor states none. */
   reportedLag?: string;
-  /** The organization the figure belongs to, as the vendor's own identity endpoint states it. */
-  organization: { id: string; name?: string };
 };
 
 export type QuotaAxiResponse = {

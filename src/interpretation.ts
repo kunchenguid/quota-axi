@@ -216,10 +216,18 @@ function anthropicApiSemantics(
   const unresolved = provider.windows.filter(
     ({ id }) => id !== "monthly_limit",
   );
+  if (provider.spend !== undefined && provider.windows.length === 0) {
+    return {
+      status: "unknown",
+      description: `${provider.label ?? provider.provider} reports spend, not a limit, so no effective remaining percentage exists unless QUOTA_AXI_ANTHROPIC_API_LIMIT_USD configures one.`,
+      effectiveAvailability: [],
+      unresolvedWindowIds: [],
+    };
+  }
   if (limit.length === 0 || unresolved.length > 0) {
     return unknownSemantics(
       provider.windows,
-      `${provider.label ?? provider.provider} reports spend, not a limit, so no effective remaining percentage exists unless QUOTA_AXI_ANTHROPIC_API_LIMIT_USD configures one.`,
+      `${provider.label ?? provider.provider} has quota windows quota-axi does not resolve, so no effective remaining percentage can be computed.`,
     );
   }
   return knownSemantics(

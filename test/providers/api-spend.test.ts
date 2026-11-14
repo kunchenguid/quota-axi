@@ -13,7 +13,6 @@ import {
 import {
   ANTHROPIC_API_SPEC,
   parseAnthropicCostPage,
-  parseAnthropicOrganization,
 } from "../../src/providers/anthropic-api.js";
 import { createApiSpendAdapter } from "../../src/providers/api-spend.js";
 
@@ -34,15 +33,10 @@ function json(body: unknown, init: ResponseInit = {}): Response {
   });
 }
 
-/** Answers the organization lookup and then each cost-report page in order. */
+/** Answers each cost-report page in order. */
 function vendor(pages: unknown[] = []) {
   const queue = [...pages];
-  return vi.fn(async (input: string | URL | Request) => {
-    if (String(input).includes("/v1/organizations/me")) {
-      return json(fixture("anthropic-organization-me.json"));
-    }
-    return json(queue.shift());
-  });
+  return vi.fn(async () => json(queue.shift()));
 }
 
 function adapter(
@@ -139,7 +133,7 @@ describe("Anthropic API spend", () => {
       provider: "anthropic-api",
       source: "api",
       windows: [],
-      state: { status: "fresh", stale: false },
+      state: { status: "fresh", stale: false, authStatus: "usable" },
       spend: {
         currency: "USD",
         spentUsd: 11.739891,
@@ -147,21 +141,15 @@ describe("Anthropic API spend", () => {
         periodEnd: "2026-11-08T00:00:00.000Z",
         buckets: 3,
         reportedLag: "typically within 5 minutes",
-        organization: {
-          id: "00000000-0000-4000-8000-000000000001",
-          name: "Synthetic Organization",
-        },
       },
       attempts: [{ source: "env:ANTHROPIC_ADMIN_KEY", status: "success" }],
     });
+    expect(report.spend).not.toHaveProperty("organization");
     expect(JSON.stringify(report)).not.toContain(KEY);
 
-    expect(request).toHaveBeenCalledTimes(3);
+    expect(request).toHaveBeenCalledTimes(2);
     const calls = request.mock.calls as unknown as [string, RequestInit][];
-    // The identity lookup comes first and uses the same explicit key.
-    expect(calls[0][0]).toBe("https://api.anthropic.com/v1/organizations/me");
-    expect(new Headers(calls[0][1].headers).get("x-api-key")).toBe(KEY);
-    const first = new URL(calls[1][0]);
+    const first = new URL(calls[0][0]);
     expect(first.origin + first.pathname).toBe(
       "https://api.anthropic.com/v1/organizations/cost_report",
     );
@@ -173,10 +161,10 @@ describe("Anthropic API spend", () => {
     );
     expect(first.searchParams.get("bucket_width")).toBe("1d");
     expect(first.searchParams.get("page")).toBeNull();
-    expect(new URL(calls[2][0]).searchParams.get("page")).toBe(
+    expect(new URL(calls[1][0]).searchParams.get("page")).toBe(
       "page_MjAyNi0xMC0xNlQwMDowMDowMFo=",
     );
-    const headers = new Headers(calls[1][1].headers);
+    const headers = new Headers(calls[0][1].headers);
     expect(headers.get("x-api-key")).toBe(KEY);
     expect(headers.get("anthropic-version")).toBeTruthy();
     expect(headers.get("authorization")).toBeNull();
@@ -304,9 +292,39 @@ describe("Anthropic API spend", () => {
       ANTHROPIC_ADMIN_KEY: KEY,
     }).fetchQuota(OPTIONS);
     expect(report.windows).toEqual([]);
-    expect(
-      withQuotaSemantics(report, new Date(NOW).toISOString()).quotaSemantics,
-    ).toMatchObject({ status: "unknown", effectiveAvailability: [] });
+    const semantics = withQuotaSemantics(
+      report,
+      new Date(NOW).toISOString(),
+    ).quotaSemantics;
+    expect(semantics).toMatchObject({
+      status: "unknown",
+      effectiveAvailability: [],
+      unresolvedWindowIds: [],
+    });
+    expect(semantics?.description).toContain(
+      "QUOTA_AXI_ANTHROPIC_API_LIMIT_USD",
+    );
+  });
+
+  it("does not suggest configuring a limit on a failed read that has one", async () => {
+    const request = vi.fn(async () => new Response(null, { status: 401 }));
+    const report = await adapter(ANTHROPIC_API_SPEC, request as never, {
+      ANTHROPIC_ADMIN_KEY: KEY,
+      QUOTA_AXI_ANTHROPIC_API_LIMIT_USD: "100",
+    }).fetchQuota(OPTIONS);
+    expect(report.state.error).toBe("provider_auth_rejected");
+    const semantics = withQuotaSemantics(
+      report,
+      new Date(NOW).toISOString(),
+    ).quotaSemantics;
+    expect(semantics).toMatchObject({
+      status: "unknown",
+      effectiveAvailability: [],
+    });
+    expect(semantics?.description).not.toContain("reports spend");
+    expect(semantics?.description).not.toContain(
+      "QUOTA_AXI_ANTHROPIC_API_LIMIT_USD",
+    );
   });
 
   it("refuses an unusable limit before any request", async () => {
@@ -367,34 +385,6 @@ describe("Anthropic API spend", () => {
     });
   });
 
-  it("fails instead of reporting a figure whose organization is unknown", async () => {
-    for (const body of [{}, { id: "", type: "organization" }, { id: "x" }]) {
-      const request = vi.fn(async () => json(body));
-      const report = await adapter(ANTHROPIC_API_SPEC, request as never, {
-        ANTHROPIC_ADMIN_KEY: KEY,
-      }).fetchQuota(OPTIONS);
-      expect(request).toHaveBeenCalledTimes(1);
-      expect(report.spend).toBeUndefined();
-      expect(report.state).toMatchObject({
-        status: "error",
-        error: "invalid_payload",
-      });
-    }
-  });
-
-  it("omits an organization name the vendor did not state", () => {
-    expect(
-      parseAnthropicOrganization({ id: "org-1", type: "organization" }),
-    ).toEqual({ id: "org-1" });
-    expect(
-      parseAnthropicOrganization({
-        id: "org-1",
-        type: "organization",
-        name: "  ",
-      }),
-    ).toEqual({ id: "org-1" });
-  });
-
   it("reports an empty-but-bucketed period as exactly zero", () => {
     const page = parseAnthropicCostPage({
       data: [{ results: [] }],
@@ -430,11 +420,8 @@ describe("API spend end to end", () => {
   }
 
   function stubVendors(): ReturnType<typeof vi.fn> {
-    const request = vi.fn(async (input: string | URL | Request) => {
-      if (String(input).includes("/v1/organizations/me")) {
-        return json(fixture("anthropic-organization-me.json"));
-      }
-      return json({
+    const request = vi.fn(async () =>
+      json({
         data: [
           {
             starting_at: "2026-10-14T00:00:00Z",
@@ -444,13 +431,13 @@ describe("API spend end to end", () => {
         ],
         has_more: false,
         next_page: null,
-      });
-    });
+      }),
+    );
     vi.stubGlobal("fetch", request);
     return request;
   }
 
-  it("prints a spend[] block in TOON and no no_quota row", async () => {
+  it("prints a spend[] block in TOON and keeps the no_quota row", async () => {
     vi.useFakeTimers({ toFake: ["Date"], now: NOW });
     process.env.ANTHROPIC_ADMIN_KEY = KEY;
     stubVendors();
@@ -458,14 +445,15 @@ describe("API spend end to end", () => {
     const output = await run(["--provider", "anthropic-api"]);
 
     expect(output).toContain(
-      "spend[1]{provider,periodStart,periodEnd,spentUsd,limitUsd,buckets,reportedLag,organizationId,organization}:",
+      "spend[1]{provider,periodStart,periodEnd,spentUsd,limitUsd,buckets,reportedLag}:",
     );
     expect(output).toContain(
-      'anthropic-api,"2026-11-01T00:00:00.000Z","2026-11-08T00:00:00.000Z",123.45,none,1,typically within 5 minutes,00000000-0000-4000-8000-000000000001,Synthetic Organization',
+      'anthropic-api,"2026-11-01T00:00:00.000Z","2026-11-08T00:00:00.000Z",123.45,none,1,typically within 5 minutes',
     );
     expect(output).toContain("quota[0]:");
-    expect(output).toContain("attention[0]:");
-    expect(output).not.toContain("no_quota");
+    expect(output).toContain(
+      "anthropic-api,all,no_quota,no measurable scope (auth usable),none",
+    );
     expect(output).not.toContain(KEY);
   });
 
@@ -486,13 +474,10 @@ describe("API spend end to end", () => {
         spentUsd: 123.45,
         periodStart: "2026-11-01T00:00:00.000Z",
         periodEnd: "2026-11-08T00:00:00.000Z",
-        organization: {
-          id: "00000000-0000-4000-8000-000000000001",
-          name: "Synthetic Organization",
-        },
       },
-      state: { status: "fresh" },
+      state: { status: "fresh", authStatus: "usable" },
     });
+    expect(report.providers[0].spend).not.toHaveProperty("organization");
   });
 
   it("states a missing key in attention[] and prints no spend block", async () => {
@@ -548,7 +533,6 @@ describe("API spend in the human report", () => {
           periodStart: "2026-10-14T00:00:00.000Z",
           periodEnd: "2026-11-08T00:00:00.000Z",
           buckets: 25,
-          organization: { id: "org-synthetic", name: "Synthetic Organization" },
         },
         state: { status: "fresh", stale: false },
       },
@@ -563,8 +547,7 @@ describe("API spend in the human report", () => {
       { timeZone: "UTC" },
     );
     expect(output).toContain("$123.46 spent");
-    expect(output).toContain("2026-10-14 to 2026-11-08 UTC");
-    expect(output).toContain("Synthetic Organization");
+    expect(output).toContain("2026-10-14 to 2026-11-07 UTC");
   });
 
   it("draws the configured limit as a bar and still states the spend", () => {
@@ -581,7 +564,6 @@ describe("API spend in the human report", () => {
           periodStart: "2026-11-01T00:00:00.000Z",
           periodEnd: "2026-11-08T00:00:00.000Z",
           buckets: 7,
-          organization: { id: "org-synthetic", name: "Synthetic Organization" },
         },
         state: { status: "fresh", stale: false },
       },
@@ -598,6 +580,5 @@ describe("API spend in the human report", () => {
     expect(output).toContain("75%");
     expect(output).toContain("configured monthly limit");
     expect(output).toContain("$25.00 of $100.00 spent");
-    expect(output).toContain("Synthetic Organization");
   });
 });

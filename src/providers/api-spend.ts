@@ -49,11 +49,8 @@ export type ApiSpendSpec = {
   /** Vendor-stated data delay, omitted when the vendor states none. */
   reportedLag?: string;
   url: (period: SpendPeriod, page: string | undefined) => string;
-  /** The vendor's identity endpoint for the organization the key belongs to. */
-  identityUrl: string;
   headers: (key: string) => Record<string, string>;
   parsePage: (raw: unknown) => SpendPage;
-  parseIdentity: (raw: unknown) => ProviderSpend["organization"];
 };
 
 type Dependencies = {
@@ -221,7 +218,7 @@ async function fetchSpend(
       month.period,
     );
     attempts.push({ source: resolution.source, status: "success" });
-    return successProvider({
+    const provider = successProvider({
       provider: spec.id,
       label: spec.label,
       source: "api",
@@ -234,6 +231,7 @@ async function fetchSpend(
       sourcesTried: sourceNames(attempts),
       attempts,
     });
+    return { ...provider, state: { ...provider.state, authStatus: "usable" } };
   } catch (error) {
     const code = errorCode(error);
     attempts.push({ source: resolution.source, status: "failed", error: code });
@@ -256,18 +254,6 @@ async function readSpend(
   key: string,
   period: SpendPeriod,
 ): Promise<ProviderSpend> {
-  // The figure is only useful against the right budget, so the organization is
-  // read first and a report that cannot name it is a failed read, not a
-  // figure of unknown ownership.
-  const organization = spec.parseIdentity(
-    await requestKeyEndpoint(
-      spec.identityUrl,
-      key,
-      dependencies.fetch,
-      dependencies.deadlineMs,
-      spec.headers,
-    ),
-  );
   let spentUsd = 0;
   let buckets = 0;
   let page: string | undefined;
@@ -292,7 +278,6 @@ async function readSpend(
         periodStart: period.start.toISOString(),
         periodEnd: period.end.toISOString(),
         buckets,
-        organization,
         ...(spec.reportedLag ? { reportedLag: spec.reportedLag } : {}),
       };
     }

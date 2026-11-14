@@ -619,8 +619,8 @@ function effectiveHeadline(
 }
 
 /**
- * An API-spend card states the vendor-reported figure, period, and
- * organization. Without a configured limit there is no bar.
+ * An API-spend card states the vendor-reported figure and the days it covers.
+ * Without a configured limit there is no bar.
  */
 function spendHeadline(
   provider: ProviderQuota,
@@ -636,7 +636,8 @@ function spendHeadline(
     limitUsd === undefined
       ? `$${spend.spentUsd.toFixed(2)} spent`
       : `$${spend.spentUsd.toFixed(2)} of $${limitUsd.toFixed(2)} spent`;
-  const period = `${spend.periodStart.slice(0, 10)} to ${spend.periodEnd.slice(0, 10)} UTC`;
+  const lastDay = new Date(Date.parse(spend.periodEnd) - 86_400_000);
+  const period = `${spend.periodStart.slice(0, 10)} to ${lastDay.toISOString().slice(0, 10)} UTC`;
   return [
     interior(
       [
@@ -646,16 +647,6 @@ function spendHeadline(
       border,
     ),
     interior([{ text: "   " }, { text: period, style: "dim" }], border),
-    interior(
-      [
-        { text: "   " },
-        {
-          text: spend.organization.name ?? spend.organization.id,
-          style: "dim",
-        },
-      ],
-      border,
-    ),
   ];
 }
 

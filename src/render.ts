@@ -83,8 +83,6 @@ type SpendRow = {
   limitUsd: number | string;
   buckets: number;
   reportedLag: string;
-  organizationId: string;
-  organization: string;
 };
 
 type ProviderBlocks = {
@@ -139,8 +137,8 @@ export function renderQuotaToon(
 
 /**
  * Contract invariant: every provider this function is given appears at least
- * once, in `quota[]` or `attention[]`, and never in metric order. Default
- * TOON omission of not-set-up providers happens before this runs.
+ * once, in `quota[]` or `attention[]`, and never in metric order; a
+ * `spend[]` row never stands in for either. Default TOON omission of not-set-up providers happens before this runs.
  */
 function quotaBlocks(response: QuotaAxiResponse): ProviderBlocks {
   const blocks: ProviderBlocks = {
@@ -152,8 +150,7 @@ function quotaBlocks(response: QuotaAxiResponse): ProviderBlocks {
   for (const provider of response.providers) {
     const scopes = provider.quotaSemantics?.effectiveAvailability ?? [];
     const scopeAttention: AttentionRow[] = [];
-    // A reported spend figure names the provider, so it needs no `no_quota` row.
-    let measured = provider.spend !== undefined;
+    let measured = false;
     if (provider.spend) {
       blocks.spend.push({
         ...providerColumns(provider),
@@ -165,8 +162,6 @@ function quotaBlocks(response: QuotaAxiResponse): ProviderBlocks {
           NONE,
         buckets: provider.spend.buckets,
         reportedLag: provider.spend.reportedLag ?? NONE,
-        organizationId: provider.spend.organization.id,
-        organization: provider.spend.organization.name ?? NONE,
       });
     }
 
