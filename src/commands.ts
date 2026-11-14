@@ -21,6 +21,7 @@ import {
   claudeListedProfiles,
 } from "./lib/claude-profile.js";
 import { takeFetchTurn } from "./lib/fetch-lock.js";
+import { PI_PROFILES_ENV, piListedProfiles } from "./lib/pi-agent-dir.js";
 import { withInputTrace } from "./lib/input-trace.js";
 import { withQuotaSemantics } from "./interpretation.js";
 import { createModelsResponse, MODEL_CATALOG_PROVIDER_IDS } from "./models.js";
@@ -446,6 +447,7 @@ export async function fetchQuota(
   }
   if (!snapshot && !claudeSwapEnabled())
     validateClaudeProfiles(providers, options);
+  if (!snapshot) validatePiProfiles(providers, options);
   const writesCache = options.credentialMode !== "profile-only" && !snapshot;
   // Providers a lock holder already cached, so the report-wide write below
   // does not stamp them a second time
@@ -599,6 +601,7 @@ async function inspectAuth(
   options: ProviderOptions,
 ): Promise<AuthProviderReport[]> {
   validateClaudeProfiles(providers, options);
+  validatePiProfiles(providers, options);
   const reports = (
     await Promise.all(
       providers.map((provider) =>
@@ -636,6 +639,28 @@ function validateClaudeProfiles(
     "VALIDATION_ERROR",
     [
       `List each Claude config directory as an absolute path, exactly as CLAUDE_CONFIG_DIR would name it, separated by "${delimiter}"`,
+    ],
+  );
+}
+
+/**
+ * A relative `QUOTA_AXI_PI_PROFILES` entry fails the read, like a relative
+ * `QUOTA_AXI_CLAUDE_PROFILES` entry, instead of reading a directory relative to
+ * wherever the command happened to run. `--profile-only` ignores the variable.
+ */
+function validatePiProfiles(
+  providers: ProviderId[],
+  options: ProviderOptions,
+): void {
+  if (!providers.includes("codex") || options.credentialMode === "profile-only")
+    return;
+  const [invalid] = piListedProfiles()?.invalid ?? [];
+  if (invalid === undefined) return;
+  throw new AxiError(
+    `${PI_PROFILES_ENV} entry ${JSON.stringify(invalid)} is not an absolute path`,
+    "VALIDATION_ERROR",
+    [
+      `List each Pi agent directory as an absolute path, as PI_CODING_AGENT_DIR would name it, separated by "${delimiter}"`,
     ],
   );
 }

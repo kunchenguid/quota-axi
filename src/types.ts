@@ -285,7 +285,7 @@ export type DegradedSource = {
  * verified user identity. Published only by `--full`.
  */
 export type AccountLocator = {
-  /** Which kind of selector `path` is, such as `config-dir`. */
+  /** Which kind of selector `path` is, such as `config-dir` or `pi-agent-dir`. */
   kind: string;
   path: string;
   /** The exact secure-store service the lane reads, where one applies. */
@@ -302,6 +302,8 @@ export type ProviderAccount = {
   accountKey: string;
   /** Exact local selector evidence, published on the lane's row by `--full`. */
   locator?: AccountLocator;
+  /** Keep `accountKey` and `locator` even when this is the only lane. */
+  keepKeyWhenAlone?: boolean;
   /**
    * Resolves undefined when the lane establishes no distinct account. A
    * reading that covers credential keys folded into this lane names them in
@@ -346,6 +348,12 @@ export type ProviderQuota = {
     unlimited?: boolean;
     unit?: "usd" | "cny" | "credits";
   };
+  /**
+   * Manual rate-limit resets the account can still redeem, as the vendor's
+   * own count states it (Codex `wham/rate-limit-reset-credits`). Absent when
+   * the vendor did not supply one. Restored on cache reuse like `credits`.
+   */
+  resetsAvailable?: number;
   /**
    * PHI-safe job-outcome sample from a vendor list command. Counts only;
    * never prompts, URLs, ids, or account identity. Restored on cache reuse

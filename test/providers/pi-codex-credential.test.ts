@@ -99,6 +99,21 @@ describe("Pi Codex credential broker", () => {
     expect(JSON.stringify(work)).not.toContain("fixture-work-access-token");
   });
 
+  it("lists Pi ChatGPT sign-in OAuth ids apart from Codex ids", async () => {
+    const fixture = authFixture({
+      openai: { type: "oauth", access: "fixture-sign-in-access-token" },
+      "openai-work": { type: "OAuth", access: "fixture-work-sign-in-token" },
+      "openai-platform": { type: "api_key", key: "fixture-api-key" },
+      "openai-codex": oauthEntry(),
+      "openai-bad": "not-an-object",
+      "openai-Upper": { type: "oauth" },
+    });
+    const broker = brokerFor(fixture);
+
+    await expect(broker.listChatgptSignInIds()).resolves.toEqual(["openai"]);
+    await expect(broker.listProviderIds()).resolves.toEqual(["openai-codex"]);
+  });
+
   it("treats a work-only store as present under its own key, not missing", async () => {
     const fixture = authFixture({
       "openai-codex-work": oauthEntry({

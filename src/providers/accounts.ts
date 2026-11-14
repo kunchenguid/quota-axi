@@ -81,9 +81,9 @@ export async function fetchAccountQuotas(
     if (report) readings.push({ account, report });
   }
   for (const { account, report } of readings) {
-    if (accounts.length > 1) {
+    if (accounts.length > 1 || account.keepKeyWhenAlone) {
       report.accountKey = account.accountKey;
-      // A sole lane keeps the legacy keyless shape, so it names no locator.
+      // A sole lane keeps the legacy keyless shape unless it opts out.
       if (account.locator) report.accountLocator = { ...account.locator };
     }
     report.accountKeys = coveredAccountKeys(
@@ -132,7 +132,7 @@ export async function inspectAccountAuth(
       };
     }
     reports.push(
-      accounts.length === 1
+      accounts.length === 1 && !account.keepKeyWhenAlone
         ? report
         : {
             ...report,

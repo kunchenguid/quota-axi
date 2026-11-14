@@ -1,5 +1,7 @@
+import { createHash } from "node:crypto";
+import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import {
   retireCodexAccount,
@@ -10,6 +12,10 @@ import {
 } from "../cache.js";
 import { readJsonFileResult, type JsonFileReadResult } from "../lib/fs.js";
 import { providerFetch } from "../lib/http.js";
+import {
+  piListedProfiles,
+  resolvePiAgentDirectory,
+} from "../lib/pi-agent-dir.js";
 import { findCommandPath, terminateChild } from "../lib/process.js";
 import { redactSecret } from "../lib/secret.js";
 import {
@@ -55,6 +61,10 @@ const ENDPOINTS = [
   "https://chatgpt.com/backend-api/wham/usage",
   "https://chatgpt.com/backend-api/codex/usage",
 ];
+/** Manual rate-limit reset credits the account holds, read with the same credential. */
+const RESET_CREDITS_ENDPOINT =
+  "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits";
+const RESET_CREDITS_TIMEOUT_MS = 5_000;
 const API_TIMEOUT_MS = 15_000;
 const CLI_TIMEOUT_MS = 15_000;
 const RPC_TIMEOUT_MS = 8_000;
@@ -62,6 +72,12 @@ const CODEX_BINARY_ENV = "QUOTA_AXI_CODEX_BINARY";
 const PI_CODEX_CREDENTIAL_SOURCE = piCodexSource(PI_CODEX_BUILTIN_ID);
 const CODEX_SIGN_IN_REQUIRED = "Codex sign-in required";
 const CODEX_ACCESS_TOKEN_EXPIRED = "Codex access token expired";
+/**
+ * Pi's "Sign in with ChatGPT" (`openai`) token is scoped to api.openai.com
+ * token sharing; the ChatGPT usage endpoints reject it, so it measures nothing.
+ */
+const PI_CHATGPT_SIGN_IN_UNSUPPORTED =
+  "Pi openai OAuth token cannot read ChatGPT usage";
 
 type CodexBinaryState =
   | { status: "available"; path: string }
@@ -108,6 +124,7 @@ type NormalizedCodexQuota = {
   account?: ProviderQuota["account"];
   windows: QuotaWindow[];
   credits?: ProviderQuota["credits"];
+  resetsAvailable?: number;
   refreshedAt: string;
 };
 
@@ -123,10 +140,16 @@ type RawWindow = {
 
 type CodexDependencies = {
   piCodexBroker: PiCodexCredentialBroker;
+  /** The broker for one `QUOTA_AXI_PI_PROFILES` directory. */
+  piCodexBrokerFor: (agentDir: string) => PiCodexCredentialBroker;
 };
 
 const defaultCodexDependencies: CodexDependencies = {
   piCodexBroker: createPiCodexCredentialBroker(),
+  piCodexBrokerFor: (agentDir) =>
+    createPiCodexCredentialBroker({
+      environment: { ...process.env, PI_CODING_AGENT_DIR: agentDir },
+    }),
 };
 
 export function createCodexAdapter(
@@ -229,15 +252,28 @@ type CodexAccountContext =
       piProviderId: string;
       cacheKey?: string;
       extraPiProviderIds?: string[];
+      /** A listed Pi directory's own store; the selected store when absent. */
+      broker?: PiCodexCredentialBroker;
+      /** The user named this store, so a missing entry is a missing login. */
+      named?: boolean;
     };
+
+/** One `QUOTA_AXI_PI_PROFILES` directory, read as its own Codex lane. */
+type PiProfileLane = {
+  agentDir: string;
+  /** Also the lane's cache slot, even when it is the only lane. */
+  accountKey: string;
+  broker: PiCodexCredentialBroker;
+};
 
 async function discoverCodexAccounts(
   dependencies: CodexDependencies,
 ): Promise<ProviderAccount[] | undefined> {
-  const ids = await listPiCodexProviderIds(dependencies);
+  const ids = await listPiCodexProviderIds(dependencies.piCodexBroker);
+  const profileLanes = listedPiProfileLanes(dependencies, ids.length > 0);
   if (
-    ids.length === 0 ||
-    (ids.length === 1 && ids[0] === PI_CODEX_BUILTIN_ID)
+    profileLanes.length === 0 &&
+    (ids.length === 0 || (ids.length === 1 && ids[0] === PI_CODEX_BUILTIN_ID))
   ) {
     return undefined;
   }
@@ -265,7 +301,10 @@ async function discoverCodexAccounts(
   }[] = [];
   const piLaneByAccountId = new Map<string, (typeof piLanes)[number]>();
   for (const piProviderId of ids) {
-    const resolution = await resolvePiEntry(dependencies, piProviderId);
+    const resolution = await resolvePiEntry(
+      dependencies.piCodexBroker,
+      piProviderId,
+    );
     const storedAccountId = resolvedAccountId(resolution);
     if (storedAccountId !== undefined) {
       if (
@@ -295,7 +334,7 @@ async function discoverCodexAccounts(
     }
   }
 
-  if ((hasNativeLane ? 1 : 0) + piLanes.length > 1) {
+  if ((hasNativeLane ? 1 : 0) + piLanes.length + profileLanes.length > 1) {
     nativeAccount.cacheKey = CODEX_HOME_ACCOUNT_KEY;
     for (const lane of piLanes) {
       lane.account.cacheKey = lane.account.piProviderId;
@@ -388,7 +427,152 @@ async function discoverCodexAccounts(
         inspectAuthWithDependencies(dependencies, lane.account),
     });
   }
+  for (const lane of profileLanes) {
+    accounts.push({
+      accountKey: lane.accountKey,
+      keepKeyWhenAlone: true,
+      locator: {
+        kind: "pi-agent-dir",
+        path: lane.agentDir,
+        delegateEligible: false,
+      },
+      fetchQuota: (options) => fetchPiProfileQuota(dependencies, lane, options),
+      inspectAuth: () => inspectPiProfileAuth(dependencies, lane),
+    });
+  }
   return accounts.length > 0 ? accounts : undefined;
+}
+
+/**
+ * The directories `QUOTA_AXI_PI_PROFILES` names, each once, in order. A
+ * directory that is the Pi store this process already reads is left out only
+ * when that store has Codex entries, which are already its own lanes. Relative entries fail the command before
+ * discovery runs, so they are never read here.
+ */
+function listedPiProfileLanes(
+  dependencies: CodexDependencies,
+  selectedStoreHasCodexLanes: boolean,
+): PiProfileLane[] {
+  const listed = piListedProfiles();
+  if (!listed) return [];
+  const seen = new Set(
+    selectedStoreHasCodexLanes
+      ? [directoryIdentity(resolvePiAgentDirectory())]
+      : [],
+  );
+  const lanes: PiProfileLane[] = [];
+  for (const agentDir of listed.dirs) {
+    const identity = directoryIdentity(agentDir);
+    if (seen.has(identity)) continue;
+    seen.add(identity);
+    lanes.push({
+      agentDir,
+      accountKey: piProfileAccountKey(identity),
+      broker: dependencies.piCodexBrokerFor(agentDir),
+    });
+  }
+  return lanes;
+}
+
+function directoryIdentity(dir: string): string {
+  try {
+    return realpathSync(dir);
+  } catch {
+    return resolve(dir);
+  }
+}
+
+/**
+ * `pi-profile:` plus a one-way digest of the directory's real path: stable
+ * across runs and listing order, and it carries no path, token, or email.
+ */
+function piProfileAccountKey(identity: string): string {
+  const digest = createHash("sha256")
+    .update(JSON.stringify(["pi-agent-dir-v1", identity]))
+    .digest("hex");
+  return `pi-profile:${digest.slice(0, 24)}`;
+}
+
+/**
+ * One listed Pi directory's reading. Its `openai-codex` entries are the
+ * credentials, folded the same way sibling entries in one store are. A
+ * directory holding only Pi's "Sign in with ChatGPT" (`openai`) login reports
+ * that it cannot be measured: present, unavailable, never a sign-out. The row
+ * covers only this lane's key, so it never claims the selected store's ids.
+ */
+async function fetchPiProfileQuota(
+  dependencies: CodexDependencies,
+  lane: PiProfileLane,
+  options: ProviderOptions,
+): Promise<ProviderQuota> {
+  const ids = await listPiCodexProviderIds(lane.broker);
+  if (ids.length === 0) {
+    const signIns = await listChatgptSignInIds(lane.broker);
+    if (signIns.length > 0) {
+      return {
+        ...chatgptSignInOnlyReport(signIns),
+        accountKeys: [lane.accountKey],
+      };
+    }
+  }
+  const report = await fetchQuotaWithDependencies(
+    dependencies,
+    options,
+    piProfileAccount(lane, ids),
+  );
+  return { ...report, accountKeys: [lane.accountKey] };
+}
+
+async function inspectPiProfileAuth(
+  dependencies: CodexDependencies,
+  lane: PiProfileLane,
+): Promise<AuthProviderReport> {
+  const ids = await listPiCodexProviderIds(lane.broker);
+  const report = await inspectAuthWithDependencies(
+    dependencies,
+    piProfileAccount(lane, ids),
+  );
+  const path = report.sources[0]?.path;
+  for (const id of await listChatgptSignInIds(lane.broker)) {
+    report.sources.push({
+      source: `pi:${id}`,
+      ...(path ? { path } : {}),
+      status: "invalid",
+      error: "unsupported_credential_type",
+    });
+  }
+  return report;
+}
+
+function piProfileAccount(
+  lane: PiProfileLane,
+  ids: readonly string[],
+): Extract<CodexAccountContext, { kind: "pi" }> {
+  return {
+    kind: "pi",
+    piProviderId: ids[0] ?? PI_CODEX_BUILTIN_ID,
+    extraPiProviderIds: ids.slice(1),
+    broker: lane.broker,
+    named: true,
+    cacheKey: lane.accountKey,
+  };
+}
+
+function chatgptSignInOnlyReport(ids: readonly string[]): ProviderQuota {
+  const attempts: SourceAttempt[] = ids.map((id) => ({
+    source: `pi:${id}`,
+    status: "skipped",
+    error: "unsupported_credential_type",
+    credentialPresent: true,
+  }));
+  return failedProvider({
+    provider: "codex",
+    label: "Codex",
+    status: "unavailable",
+    error: PI_CHATGPT_SIGN_IN_UNSUPPORTED,
+    sourcesTried: sourceNames(attempts),
+    attempts,
+  });
 }
 
 function laneIdentity(
@@ -441,32 +625,42 @@ function resolvedAccountId(
 }
 
 async function listPiCodexProviderIds(
-  dependencies: CodexDependencies,
+  broker: PiCodexCredentialBroker,
 ): Promise<string[]> {
   try {
-    return await dependencies.piCodexBroker.listProviderIds();
+    return await broker.listProviderIds();
+  } catch {
+    return [];
+  }
+}
+
+async function listChatgptSignInIds(
+  broker: PiCodexCredentialBroker,
+): Promise<string[]> {
+  try {
+    return await broker.listChatgptSignInIds();
   } catch {
     return [];
   }
 }
 
 async function resolvePiEntry(
-  dependencies: CodexDependencies,
+  broker: PiCodexCredentialBroker,
   providerId: string,
 ): Promise<PiCodexCredentialResolution> {
   try {
-    return await dependencies.piCodexBroker.resolveEntry(providerId);
+    return await broker.resolveEntry(providerId);
   } catch {
     return { status: "error" };
   }
 }
 
 async function inspectPiEntry(
-  dependencies: CodexDependencies,
+  broker: PiCodexCredentialBroker,
   providerId: string,
 ): Promise<PiCodexCredentialInspection> {
   try {
-    return await dependencies.piCodexBroker.inspectEntry(providerId);
+    return await broker.inspectEntry(providerId);
   } catch {
     return {
       path: "",
@@ -487,10 +681,11 @@ async function fetchPiAccountQuota(
     account.piProviderId,
     ...(account.extraPiProviderIds ?? []),
   ];
+  const broker = account.broker ?? dependencies.piCodexBroker;
   let lastResolution: PiCodexCredentialResolution | undefined;
   for (const piProviderId of providerIds) {
     const source = piCodexSource(piProviderId);
-    const piResolution = await resolvePiEntry(dependencies, piProviderId);
+    const piResolution = await resolvePiEntry(broker, piProviderId);
     lastResolution = piResolution;
     const storedAccountId = resolvedAccountId(piResolution);
     if (storedAccountId) storedAccountIds.set(piProviderId, storedAccountId);
@@ -538,6 +733,16 @@ async function fetchPiAccountQuota(
       storedAccountIds.get(answeringProviderId),
     );
   }
+  // Only a credential this read actually sent may approve or retire a saved
+  // reading; an untried sibling's account says nothing about this failure.
+  const triedAccountIds = providerIds.flatMap((id) => {
+    const accountId = storedAccountIds.get(id);
+    const tried = piSelection.results.some(
+      (result) =>
+        result.source === piCodexSource(id) && result.outcome !== "not_tried",
+    );
+    return accountId !== undefined && tried ? [accountId] : [];
+  });
   const piResolution = lastResolution;
   const finalError =
     piSelection.outcome === "transient"
@@ -550,7 +755,7 @@ async function fetchPiAccountQuota(
           ? "Codex Pi credential resolution failed"
           : piResolution?.status === "expired"
             ? "Pi Codex access token expired"
-            : piResolution?.status === "missing"
+            : piResolution?.status === "missing" && !account.named
               ? "Codex quota unavailable"
               : CODEX_SIGN_IN_REQUIRED;
   return codexFailureReport(
@@ -559,7 +764,7 @@ async function fetchPiAccountQuota(
     attempts,
     source,
     account.cacheKey,
-    [...storedAccountIds.values()],
+    triedAccountIds,
     codexCredentialKey(source) ?? CODEX_HOME_ACCOUNT_KEY,
   );
 }
@@ -865,6 +1070,8 @@ function codexSuccessReport(
     sourcesTried: sourceNames(attempts),
     attempts,
   });
+  if (quota.resetsAvailable !== undefined)
+    report.resetsAvailable = quota.resetsAvailable;
   stampCodexStoredAccountId(
     report,
     storedAccountId ?? quota.account?.accountId,
@@ -966,10 +1173,11 @@ async function inspectAuthWithDependencies(
   account?: CodexAccountContext,
 ): Promise<AuthProviderReport> {
   if (account?.kind === "pi") {
+    const broker = account.broker ?? dependencies.piCodexBroker;
     let piSource: AuthSourceReport;
     try {
       piSource = piInspectionSource(
-        await inspectPiEntry(dependencies, account.piProviderId),
+        await inspectPiEntry(broker, account.piProviderId),
         piCodexSource(account.piProviderId),
       );
     } catch {
@@ -984,7 +1192,7 @@ async function inspectAuthWithDependencies(
       try {
         sources.push(
           piInspectionSource(
-            await inspectPiEntry(dependencies, extraId),
+            await inspectPiEntry(broker, extraId),
             piCodexSource(extraId),
           ),
         );
@@ -1555,13 +1763,9 @@ function extractCredentialState(
   };
 }
 
-async function fetchOauthUsage(credentials: CodexCredentials): Promise<{
-  plan?: string;
-  account?: ProviderQuota["account"];
-  windows: QuotaWindow[];
-  credits?: ProviderQuota["credits"];
-  refreshedAt: string;
-}> {
+async function fetchOauthUsage(
+  credentials: CodexCredentials,
+): Promise<NormalizedCodexQuota> {
   let rejected = false;
   let lastError: unknown;
   for (const endpoint of ENDPOINTS) {
@@ -1591,7 +1795,12 @@ async function fetchOauthUsage(credentials: CodexCredentials): Promise<{
         continue;
       }
       const quota = normalizeCodexUsage(await response.json());
-      if (quota) return quota;
+      if (quota) {
+        const resetsAvailable = await fetchResetsAvailable(credentials);
+        return resetsAvailable === undefined
+          ? quota
+          : { ...quota, resetsAvailable };
+      }
       lastError = new Error("Codex quota unavailable");
     } catch (error) {
       if (error instanceof RateLimitError) throw error;
@@ -1603,6 +1812,43 @@ async function fetchOauthUsage(credentials: CodexCredentials): Promise<{
   if (lastError) throw lastError;
   if (rejected) throw new CodexAuthRejectedError(CODEX_SIGN_IN_REQUIRED);
   throw new Error("Codex quota unavailable");
+}
+
+/**
+ * How many manual rate-limit reset credits the account can still redeem, as
+ * the vendor's `available_count` states it. A side read: any failure leaves
+ * the count unknown and never changes the quota reading it accompanies.
+ */
+async function fetchResetsAvailable(
+  credentials: CodexCredentials,
+): Promise<number | undefined> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), RESET_CREDITS_TIMEOUT_MS);
+  try {
+    const headers: Record<string, string> = {
+      authorization: `Bearer ${credentials.accessToken}`,
+      accept: "application/json",
+    };
+    if (credentials.accountId)
+      headers["ChatGPT-Account-Id"] = credentials.accountId;
+    const response = await providerFetch(RESET_CREDITS_ENDPOINT, {
+      headers,
+      signal: controller.signal,
+    });
+    if (!response.ok) return undefined;
+    return normalizeResetsAvailable(await response.json());
+  } catch {
+    return undefined;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export function normalizeResetsAvailable(raw: unknown): number | undefined {
+  const count = objectValue(raw)?.available_count;
+  return typeof count === "number" && Number.isSafeInteger(count) && count >= 0
+    ? count
+    : undefined;
 }
 
 async function probeCodexCli(): Promise<{

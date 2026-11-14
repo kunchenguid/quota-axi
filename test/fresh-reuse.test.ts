@@ -703,7 +703,10 @@ describe("reuse across account lanes", () => {
     codexCalls = 0;
     vi.stubGlobal(
       "fetch",
-      vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        // Count usage reads; the reset-credits side read is not a lane read.
+        if (String(input).endsWith("/rate-limit-reset-credits"))
+          return new Response("{}", { status: 404 });
         codexCalls++;
         const account = new Headers(init?.headers).get("ChatGPT-Account-Id");
         const used = account ? usage[account] : undefined;

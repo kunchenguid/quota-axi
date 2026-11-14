@@ -162,6 +162,7 @@ function quotaBlocks(response: QuotaAxiResponse): ProviderBlocks {
     );
     blocks.attention.push(...shareRows(provider));
     blocks.attention.push(...jobRows(provider));
+    blocks.attention.push(...resetRows(provider));
     blocks.attention.push(...scopeAttention);
   }
   return blocks;
@@ -244,6 +245,25 @@ function jobRows(provider: ProviderQuota): AttentionRow[] {
       scope: "all",
       kind: "jobs",
       detail: `sampled ${jobs.sampled}${DETAIL_SEPARATOR}completed ${jobs.completed}${DETAIL_SEPARATOR}failed ${jobs.failed}${DETAIL_SEPARATOR}other ${jobs.other}`,
+      remedy: NONE,
+    },
+  ];
+}
+
+/**
+ * A manual reset the account can redeem is capacity an agent cannot see in
+ * the windows, so a positive count is named; zero adds nothing to act on and
+ * stays in JSON only.
+ */
+function resetRows(provider: ProviderQuota): AttentionRow[] {
+  const available = provider.resetsAvailable;
+  if (!available) return [];
+  return [
+    {
+      ...providerColumns(provider),
+      scope: "all",
+      kind: "resets",
+      detail: `available ${available}`,
       remedy: NONE,
     },
   ];
