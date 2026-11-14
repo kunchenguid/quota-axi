@@ -283,6 +283,34 @@ describe("Anthropic API spend", () => {
     }
   });
 
+  it("does not read spend a sliver below the limit as exhausted", async () => {
+    // 9999.99996 cents is $99.9999996: below a $100 limit, though it rounds
+    // to $100 at the published microdollar precision.
+    const request = vendor([
+      {
+        data: [
+          {
+            starting_at: "2026-11-01T00:00:00Z",
+            ending_at: "2026-11-02T00:00:00Z",
+            results: [{ amount: "9999.99996", currency: "USD" }],
+          },
+        ],
+        has_more: false,
+        next_page: null,
+      },
+    ]);
+    const report = await adapter(ANTHROPIC_API_SPEC, request as never, {
+      ANTHROPIC_ADMIN_KEY: KEY,
+      QUOTA_AXI_ANTHROPIC_API_LIMIT_USD: "100",
+    }).fetchQuota(OPTIONS);
+
+    expect(report.windows[0]?.percentRemaining).toBeGreaterThan(0);
+    const scope = withQuotaSemantics(report, new Date(NOW).toISOString())
+      .quotaSemantics?.effectiveAvailability[0];
+    expect(scope?.effectivePercentRemaining).toBeGreaterThan(0);
+    expect(scope?.runway?.status).not.toBe("exhausted_now");
+  });
+
   it("keeps spend without a limit unmeasured", async () => {
     const request = vendor([
       fixture("anthropic-cost-report-page1.json"),

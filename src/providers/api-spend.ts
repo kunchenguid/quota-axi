@@ -110,7 +110,8 @@ export function parseSpendLimit(value: string | undefined): SpendLimit {
  * The limit is the user's number, not the vendor's, so the window is labeled
  * "my cap", short enough for the --tui window row and headline columns. Only
  * spend at or over the limit reads 0 remaining: a sliver below it never rounds
- * down to exhaustion.
+ * down to exhaustion. `spentUsd` is the unrounded sum, so the comparison uses
+ * full precision; only the published figure is rounded.
  */
 export function monthlyLimitWindow(
   spentUsd: number,
@@ -129,13 +130,18 @@ export function monthlyLimitWindow(
     percentRemaining,
     startsAt: month.period.start.toISOString(),
     resetsAt: month.resetsAt.toISOString(),
-    spentUsd,
+    spentUsd: roundUsd(spentUsd),
     limitUsd,
   };
 }
 
 function roundPercent(value: number): number {
   return Math.round(value * 100) / 100;
+}
+
+/** Rounds away binary-float dust from summing decimal amounts, for display. */
+function roundUsd(value: number): number {
+  return Math.round(value * 1e6) / 1e6;
 }
 
 export function createApiSpendAdapter(
@@ -227,7 +233,7 @@ async function fetchSpend(
         limit.status === "set"
           ? [monthlyLimitWindow(spend.spentUsd, limit.limitUsd, month)]
           : [],
-      spend,
+      spend: { ...spend, spentUsd: roundUsd(spend.spentUsd) },
       refreshedAt: new Date(nowMs).toISOString(),
       sourcesTried: sourceNames(attempts),
       attempts,
@@ -274,8 +280,8 @@ async function readSpend(
       if (buckets === 0) throw new Error("spend_no_buckets");
       return {
         currency: "USD",
-        // Round away binary-float dust from summing decimal amounts.
-        spentUsd: Math.round(spentUsd * 1e6) / 1e6,
+        // Unrounded: the limit compares at full precision; callers round.
+        spentUsd,
         periodStart: period.start.toISOString(),
         periodEnd: period.end.toISOString(),
         buckets,
