@@ -196,7 +196,36 @@ function semanticsFor(
       );
     case "higgsfield":
       return higgsfieldSemantics(provider.windows, generatedAt);
+    case "anthropic-api":
+      return anthropicApiSemantics(provider, generatedAt);
   }
+}
+
+/**
+ * The Admin API reports spend, not a limit: Anthropic does not expose a Console
+ * organization's monthly spend limit to it. The only bound is the user's own
+ * opt-in `monthly_limit` window, which meters all API spend of the
+ * organization, so it bounds every model. Without it the spend is a raw figure
+ * and no effective remaining percentage exists.
+ */
+function anthropicApiSemantics(
+  provider: ProviderQuota,
+  generatedAt: string,
+): QuotaSemantics {
+  const limit = provider.windows.filter(({ id }) => id === "monthly_limit");
+  const unresolved = provider.windows.filter(
+    ({ id }) => id !== "monthly_limit",
+  );
+  if (limit.length === 0 || unresolved.length > 0) {
+    return unknownSemantics(
+      provider.windows,
+      `${provider.label ?? provider.provider} reports spend, not a limit, so no effective remaining percentage exists unless QUOTA_AXI_ANTHROPIC_API_LIMIT_USD configures one.`,
+    );
+  }
+  return knownSemantics(
+    [availability("all_models", limit, generatedAt)],
+    `${provider.label ?? provider.provider} effective remaining is the share of the user-configured monthly USD limit (QUOTA_AXI_ANTHROPIC_API_LIMIT_USD) not yet spent this UTC month, as the Admin API cost report states the spend. The limit is the user's number, not one Anthropic reported.`,
+  );
 }
 
 /**

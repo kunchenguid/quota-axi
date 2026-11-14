@@ -239,6 +239,8 @@ export async function requestKeyEndpoint(
   key: string,
   fetchImplementation: typeof globalThis.fetch,
   deadlineMs: number,
+  /** Replaces the default bearer authorization for vendors with their own header. */
+  credentialHeaders?: (key: string) => Record<string, string>,
 ): Promise<unknown> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), deadlineMs);
@@ -246,7 +248,9 @@ export async function requestKeyEndpoint(
     const response = await fetchImplementation(url, {
       method: "GET",
       headers: {
-        Authorization: "Bearer " + key,
+        ...(credentialHeaders
+          ? credentialHeaders(key)
+          : { Authorization: "Bearer " + key }),
         Accept: "application/json",
       },
       credentials: "omit",

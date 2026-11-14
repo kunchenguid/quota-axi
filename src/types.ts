@@ -17,7 +17,8 @@ export type ProviderId =
   | "elevenlabs"
   | "devin"
   | "muse"
-  | "higgsfield";
+  | "higgsfield"
+  | "anthropic-api";
 
 export const PROVIDER_IDS = [
   "claude",
@@ -39,6 +40,7 @@ export const PROVIDER_IDS = [
   "devin",
   "muse",
   "higgsfield",
+  "anthropic-api",
 ] as const satisfies readonly ProviderId[];
 
 export type ProviderSource =
@@ -357,6 +359,13 @@ export type ProviderQuota = {
     failed: number;
     other: number;
   };
+  /**
+   * Provider-reported API spend for the current UTC month to date. Present only
+   * on the pay-as-you-go API providers. The figure itself carries no limit; an
+   * opt-in configured limit is published as a separate `monthly_limit` window.
+   * Never cached, because a stale spend figure would misreport the account.
+   */
+  spend?: ProviderSpend;
   state: {
     status: ProviderStatus;
     stale: boolean;
@@ -394,6 +403,25 @@ export type ProviderQuota = {
    * Applied at serialization from `providerPresence`, never by an adapter.
    */
   notSetUp?: true;
+};
+
+/**
+ * Spend the vendor's own cost report states for `[periodStart, periodEnd)`:
+ * the first day of the current UTC month through the end of the current UTC
+ * day, whose bucket can still be accruing. quota-axi sums only what the vendor
+ * reported.
+ */
+export type ProviderSpend = {
+  currency: "USD";
+  spentUsd: number;
+  periodStart: string;
+  periodEnd: string;
+  /** How many daily buckets the vendor returned for the period. */
+  buckets: number;
+  /** Data delay in the vendor's own words; omitted when the vendor states none. */
+  reportedLag?: string;
+  /** The organization the figure belongs to, as the vendor's own identity endpoint states it. */
+  organization: { id: string; name?: string };
 };
 
 export type QuotaAxiResponse = {
