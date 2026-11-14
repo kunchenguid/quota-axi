@@ -21,7 +21,7 @@ afterEach(() => {
   temporaryDirectories = [];
 });
 
-describe("built Codex CLI weekly window", () => {
+describe("built Codex CLI weekly window", { timeout: 30_000 }, () => {
   it("renders a primary-only seven-day app-server window as weekly in TOON and JSON", () => {
     const root = mkdtempSync(join(tmpdir(), "quota-axi-codex-weekly-"));
     temporaryDirectories.push(root);
