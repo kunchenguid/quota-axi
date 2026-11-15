@@ -424,7 +424,8 @@ export function isSnapshotFile(file: string): boolean {
 
 /**
  * Every reading of `provider` in a snapshot file supplied for tests and
- * fixtures, in file order. `undefined` when the file names no such provider;
+ * fixtures, in file order. `undefined` when the file names no such provider or
+ * the provider is ineligible under the README's Snapshot fixtures policy;
  * `"expired"` when a window's own reset has already passed, because a number
  * that has stopped being true is never served (#257), not even from a stub.
  */
