@@ -424,7 +424,8 @@ export function isSnapshotFile(file: string): boolean {
 
 /**
  * Every reading of `provider` in a snapshot file supplied for tests and
- * fixtures, in file order. `undefined` when the file names no such provider;
+ * fixtures, in file order. `undefined` when the file names no such provider or
+ * the provider is ineligible under the README's Snapshot fixtures policy;
  * `"expired"` when a window's own reset has already passed, because a number
  * that has stopped being true is never served (#257), not even from a stub.
  */
@@ -433,6 +434,7 @@ export function readSnapshotProviders(
   provider: ProviderId,
   now: number = Date.now(),
 ): ProviderQuota[] | "expired" | undefined {
+  if (provider === "ollama") return undefined;
   const records = readCacheProviders(file).filter(
     (record) => record.snapshot.provider === provider,
   );
@@ -479,6 +481,8 @@ export function readCachedProvider(
   provider: ProviderId,
   accountKey?: string,
 ): ProviderQuota | undefined {
+  // Ollama balance does not establish account/team binding yet.
+  if (provider === "ollama") return undefined;
   return readCachedRecord(provider, accountKey)?.snapshot;
 }
 
@@ -768,8 +772,9 @@ function reuseStampsFor(
 
 function isCacheExcluded(provider: ProviderQuota): boolean {
   return (
-    (provider.provider === "claude" || provider.provider === "copilot") &&
-    provider.source === "cli"
+    provider.provider === "ollama" ||
+    ((provider.provider === "claude" || provider.provider === "copilot") &&
+      provider.source === "cli")
   );
 }
 
@@ -777,8 +782,11 @@ function excludeFromFreshReuse(provider: ProviderId): boolean {
   // Muse Keychain and Higgsfield CLI logins are not traced files, and the
   // Higgsfield status payload we already fetch has no stable non-email
   // account discriminator, so --max-age must never serve another seat's
-  // credits or jobs as fresh.
-  return provider === "muse" || provider === "higgsfield";
+  // credits or jobs as fresh. Ollama balance has no established account/team
+  // binding, so it is excluded from fresh reuse as well.
+  return (
+    provider === "muse" || provider === "higgsfield" || provider === "ollama"
+  );
 }
 
 function cacheIdentity(provider: ProviderQuota): string {
@@ -843,7 +851,7 @@ export function deleteCachedProvider(
   provider: ProviderId,
   accountKey?: string,
 ): void {
-  if (!existsSync(cacheFilePath())) return;
+  if (provider === "ollama" || !existsSync(cacheFilePath())) return;
   withCacheWriteLock(() => {
     const existing = readCacheProviders();
     const remaining = existing.filter((item) =>

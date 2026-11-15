@@ -139,6 +139,7 @@ const MOCHA: Palette = {
     devin: { rgb: [126, 196, 224], ansi16: "96", bold: true },
     muse: { rgb: [0, 132, 255], ansi16: "94", bold: true },
     higgsfield: { rgb: [255, 176, 122], ansi16: "93", bold: true },
+    ollama: { rgb: [220, 220, 220], ansi16: "90", bold: true },
   },
   styles: {
     dim: { rgb: [127, 132, 156], ansi16: "90" },
@@ -188,6 +189,7 @@ const LATTE: Palette = {
     devin: { rgb: [20, 130, 160], ansi16: "96", bold: true },
     muse: { rgb: [90, 80, 210], ansi16: "94", bold: true },
     higgsfield: { rgb: [200, 80, 20], ansi16: "93", bold: true },
+    ollama: { rgb: [70, 70, 70], ansi16: "90", bold: true },
   },
   styles: {
     dim: { rgb: [124, 127, 147], ansi16: "90" },
@@ -513,6 +515,25 @@ function buildLiveCard(
     }
   }
 
+  if (
+    provider.provider === "ollama" &&
+    provider.windows.length > 0 &&
+    provider.credits?.remaining !== undefined
+  ) {
+    lines.push(interior([], border));
+    lines.push(
+      interior(
+        [
+          {
+            text: `   purchased ${provider.credits.remaining} usd remaining`,
+            style: "dim",
+          },
+        ],
+        border,
+      ),
+    );
+  }
+
   const jobs = provider.jobs;
   if (jobs) {
     lines.push(interior([], border));
@@ -629,9 +650,9 @@ function creditsOnlyHeadline(
       ? "unlimited"
       : credits.remaining === undefined
         ? undefined
-        : `${credits.remaining} ${credits.unit ?? "credits"} remaining`;
+        : `${provider.provider === "ollama" ? "purchased " : ""}${credits.remaining} ${credits.unit ?? "credits"} remaining`;
   if (amount === undefined) return undefined;
-  return [
+  const lines: Line[] = [
     interior(
       [
         { text: "   " },
@@ -643,6 +664,15 @@ function creditsOnlyHeadline(
       border,
     ),
   ];
+  if (provider.provider === "ollama") {
+    lines.push(
+      interior(
+        [{ text: "   included headroom unknown", style: "dim" }],
+        border,
+      ),
+    );
+  }
+  return lines;
 }
 
 /**

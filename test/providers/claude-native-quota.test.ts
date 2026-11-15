@@ -841,15 +841,15 @@ setInterval(() => {}, 1000);
 `,
         { mode: 0o700 },
       );
+      // Exercise the shipped launcher without spending readiness time on TSX.
+      // The normal pnpm test path builds this artifact before running Vitest.
       const moduleUrl = new URL(
-        "../../src/providers/claude-native-quota.ts",
+        "../../dist/src/providers/claude-native-quota.js",
         import.meta.url,
       ).href;
       const runner = spawn(
         process.execPath,
         [
-          "--import",
-          "tsx",
           "--input-type=module",
           "-e",
           `

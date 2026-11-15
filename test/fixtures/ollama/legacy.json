@@ -1,0 +1,13 @@
+{
+  "included": {
+    "session": {
+      "remaining_percent": 75,
+      "resets_at": "2026-10-09T20:00:00Z"
+    },
+    "weekly": {
+      "remaining_percent": 60,
+      "resets_at": "2026-10-12T00:00:00Z"
+    }
+  },
+  "purchased": { "balance_usd": 0 }
+}

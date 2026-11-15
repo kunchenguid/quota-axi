@@ -425,9 +425,10 @@ function validateClaudeInference(flags: QuotaFlags): void {
 /**
  * Read every provider and refresh the cache, unless the read is profile-only,
  * which never touches cached quota, or comes from a supplied snapshot. A
- * snapshot answers for every provider; otherwise a provider whose last
- * successful reading is younger than `maxAgeSeconds` and was taken under this
- * process's credential selection is served from the cache, and every other
+ * snapshot never consults credentials or vendors; eligibility follows the
+ * README's Snapshot fixtures policy. Otherwise a cache-eligible provider whose
+ * last successful reading is younger than `maxAgeSeconds` and was taken under
+ * this process's credential selection is served from the cache, and every other
  * provider asks its vendor.
  */
 export async function fetchQuota(
@@ -497,7 +498,10 @@ async function readProvider(
   maxAgeSeconds: number,
   markCached: () => void,
 ): Promise<ProviderQuota[]> {
-  if (!(maxAgeSeconds > 0)) return tracedReadings(provider, options);
+  // No account/team binding is established for Ollama balance, so even an
+  // explicit --max-age must not reuse quota or create a cache/fetch lock.
+  if (provider === "ollama" || !(maxAgeSeconds > 0))
+    return tracedReadings(provider, options);
   const reused = reusableReadings(provider, maxAgeSeconds);
   if (reused) return reused;
   const turn = await takeFetchTurn(fetchLockPathFor(provider), () =>

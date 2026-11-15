@@ -829,6 +829,41 @@ describe("cards for providers with no combinable bound", () => {
     expect(emptyTrack).toHaveLength(0);
   });
 
+  it("marks expired Ollama included headroom unknown beside purchased credits", () => {
+    const ollama = withQuotaSemantics(
+      {
+        provider: "ollama",
+        label: "Ollama Cloud",
+        source: "api",
+        windows: [
+          {
+            id: "included_month",
+            label: "Included monthly credits",
+            kind: "monthly",
+            percentUsed: 27.5,
+            percentRemaining: 72.5,
+            resetsAt: "2026-08-06T23:21:14.000Z",
+          },
+        ],
+        credits: { remaining: 12.5, unit: "usd" },
+        state: {
+          status: "fresh",
+          stale: false,
+          refreshedAt: GENERATED_AT,
+          sourcesTried: ["env:OLLAMA_API_KEY"],
+        },
+      },
+      GENERATED_AT,
+    );
+    const lines = renderQuotaTui(
+      { generatedAt: GENERATED_AT, schemaVersion: 5, providers: [ollama] },
+      { timeZone: "America/Los_Angeles" },
+    ).split("\n");
+
+    expect(findLine(lines, "purchased 12.5 usd remaining")).toBeDefined();
+    expect(findLine(lines, "included headroom unknown")).toBeDefined();
+  });
+
   it("renders Cursor's jointly bounded card with its effective bar", () => {
     const cursor = withQuotaSemantics(
       {
@@ -1398,6 +1433,7 @@ describe("color handling", () => {
     ["devin", [20, 130, 160]],
     ["muse", [90, 80, 210]],
     ["higgsfield", [200, 80, 20]],
+    ["ollama", [70, 70, 70]],
   ] as const)("uses a Latte accent for %s", (provider, rgb) => {
     const response: QuotaAxiResponse = {
       ...fixtureResponse(),

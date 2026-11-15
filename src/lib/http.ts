@@ -149,17 +149,25 @@ export async function readBoundedResponseBody(
     /^\d+$/.test(declared) &&
     Number(declared) > PROVIDER_RESPONSE_LIMIT_BYTES
   ) {
-    await response.body?.cancel().catch(() => undefined);
+    void response.body?.cancel().catch(() => undefined);
     throw fail("response_too_large");
   }
   if (!response.body) throw fail("response_size_unverifiable");
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
   let length = 0;
+  let onAbort: () => void = () => undefined;
+  const aborted = new Promise<never>((_, reject) => {
+    onAbort = () => {
+      reject(fail("provider_timeout"));
+      void reader.cancel().catch(() => undefined);
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
   try {
     while (true) {
       if (signal.aborted) throw fail("provider_timeout");
-      const result = await reader.read();
+      const result = await Promise.race([reader.read(), aborted]);
       if (result.done) break;
       length += result.value.byteLength;
       if (length > PROVIDER_RESPONSE_LIMIT_BYTES)
@@ -167,6 +175,7 @@ export async function readBoundedResponseBody(
       chunks.push(result.value);
     }
   } finally {
+    signal.removeEventListener("abort", onAbort);
     void reader.cancel().catch(() => undefined);
     reader.releaseLock();
   }
