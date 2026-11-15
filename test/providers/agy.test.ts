@@ -26,6 +26,7 @@ import {
   fetchQuota,
   fetchQuotaWithRuntime,
   inspectAuthWithRuntime,
+  isSyntheticFullAgyUsage,
   normalizeAgyPrintUsage,
   normalizeAgyQuotaSummary,
   normalizeAgyUserStatus,
@@ -202,6 +203,86 @@ describe("Antigravity quota parsing", () => {
       percentRemaining: 50,
     });
     expect(result?.windows[0]?.windowSeconds).toBe(604_800);
+  });
+
+  it("rejects the cold-start placeholder that reports every bucket at exactly 100% with no vendor copy", () => {
+    const raw = fixture("cli-quota-synthetic-full.json");
+    // Fixture resets are now+5h / now+7d at this instant (matches CLI cold start).
+    const nowMs = Date.parse("2026-11-15T12:25:50.000Z");
+    expect(isSyntheticFullAgyUsage(raw, nowMs)).toBe(true);
+    // normalize uses Date.now(); pin the clock for the reject path via the
+    // exported detector above, and assert normalize still drops pure fixtures
+    // when run "at" that moment by checking the detector alone here plus a
+    // live near-full case below that must stay measured.
+    expect(isSyntheticFullAgyUsage(raw, nowMs + 600_000)).toBe(false);
+  });
+
+  it("omits percent from a cold-start exact-full bucket whose reset is only now+window", () => {
+    const nowMs = Date.now();
+    const result = normalizeAgyQuotaSummary({
+      groups: [
+        {
+          name: "Gemini Models",
+          buckets: [
+            {
+              id: "gemini-weekly",
+              window: "weekly",
+              remaining_fraction: 1,
+              reset_time: new Date(nowMs + 604_800_000).toISOString(),
+            },
+            {
+              id: "gemini-5h",
+              window: "5h",
+              remaining_fraction: 0.5,
+              description: "You have used half of your 5-hour limit.",
+              reset_time: new Date(nowMs + 18_000_000).toISOString(),
+            },
+          ],
+        },
+      ],
+    });
+    expect(result?.windows).toHaveLength(2);
+    const weekly = result?.windows.find((window) => window.id === "gemini_weekly");
+    const fiveHour = result?.windows.find((window) => window.id === "gemini_5h");
+    expect(weekly?.percentRemaining).toBeUndefined();
+    expect(weekly?.resetsAt).toBeDefined();
+    expect(fiveHour).toMatchObject({ percentRemaining: 50 });
+  });
+
+  it("keeps a live near-full reading that carries vendor limit copy", () => {
+    const raw = {
+      status: "SUCCESS",
+      command: {
+        name: "usage",
+        data: {
+          groups: [
+            {
+              name: "Gemini Models",
+              buckets: [
+                {
+                  id: "gemini-weekly",
+                  window: "weekly",
+                  remaining_fraction: 0.99999,
+                  description:
+                    "You have used some of your weekly limit, it will fully refresh in 6 days.",
+                  reset_time: "2026-11-22T12:00:00Z",
+                },
+                {
+                  id: "gemini-5h",
+                  window: "5h",
+                  remaining_fraction: 0.9999,
+                  description:
+                    "You have used some of your 5-hour limit, it will fully refresh in 4 hours.",
+                  reset_time: "2026-11-15T17:00:00Z",
+                },
+              ],
+            },
+          ],
+        },
+      },
+    };
+    expect(isSyntheticFullAgyUsage(raw)).toBe(false);
+    expect(normalizeAgyPrintUsage(raw)?.windows).toHaveLength(2);
   });
 
   it("normalizes the agy CLI /quota print envelope", () => {
@@ -712,7 +793,7 @@ describe("Antigravity provider", () => {
     expect(commands.at(-1)).toMatchObject({
       command: "/Users/test/.local/bin/agy",
       args: ["-p", "/quota", "--output-format", "json"],
-      timeoutMs: 15_000,
+      timeoutMs: 30_000,
     });
     expect(
       commands.at(-1)?.path?.split(delimiter).slice(1).join(delimiter),
@@ -1180,6 +1261,7 @@ function runtimeWith(options: {
         options.agyPath ?? (options.cliQuota !== undefined ? "agy" : undefined)
       );
     },
+    cliQuotaPrimePauseMs: 0,
     async execFileText(command, args, timeoutMs, execOptions) {
       options.onExec?.(command, args, timeoutMs, execOptions);
       if (command === "ps") {

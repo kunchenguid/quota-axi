@@ -3,6 +3,7 @@ import * as http from "node:http";
 import * as https from "node:https";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import {
   deleteCachedProvider,
   readCachedProvider,
@@ -47,7 +48,9 @@ const UNLEASH_PATH =
 const PROCESS_TIMEOUT_MS = 5_000;
 const PORT_TIMEOUT_MS = 2_000;
 const REQUEST_TIMEOUT_MS = 3_000;
-const CLI_QUOTA_TIMEOUT_MS = 15_000;
+const CLI_QUOTA_TIMEOUT_MS = 30_000;
+/** Pause between a priming /quota and the reading that quota-axi keeps. */
+const CLI_QUOTA_PRIME_PAUSE_MS = 2_000;
 const PROBE_BUDGET_MS = 10_000;
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 const FIVE_HOURS_SECONDS = 18_000;
@@ -76,6 +79,8 @@ export type AgyConnectionEndpoint = {
 
 export type AgyProbeRuntime = {
   findCommandPath(command: string): Promise<string | undefined>;
+  /** Override the prime→read pause (tests set 0). */
+  cliQuotaPrimePauseMs?: number;
   execFileText(
     command: string,
     args: string[],
@@ -271,32 +276,56 @@ async function fetchCliQuota(runtime: AgyProbeRuntime): Promise<{
     throw new AgyUnavailableError(AGY_CLI_NOT_INSTALLED);
   }
 
-  let text: string;
   let openerGuard: Awaited<ReturnType<typeof createOpenerGuard>> | undefined;
   try {
     openerGuard = await createOpenerGuard();
-    text = await runtime.execFileText(
+    // The CLI starts retrieveUserQuotaSummary in the background and often
+    // answers the first /quota from a placeholder (every remaining_fraction
+    // exactly 1, no bucket descriptions) while that RPC is still in flight
+    // and then cancels it. A short prime + pause lets a live summary land.
+    try {
+      await runtime.execFileText(
+        commandPath,
+        ["-p", "/quota", "--output-format", "json"],
+        CLI_QUOTA_TIMEOUT_MS,
+        { env: openerGuard.env },
+      );
+    } catch {
+      // Prime failures are fine; the second call is the one we keep.
+    }
+    await sleep(runtime.cliQuotaPrimePauseMs ?? CLI_QUOTA_PRIME_PAUSE_MS);
+    const text = await runtime.execFileText(
       commandPath,
       ["-p", "/quota", "--output-format", "json"],
       CLI_QUOTA_TIMEOUT_MS,
       { env: openerGuard.env },
     );
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      throw new AgyMalformedResponseError("agy /quota returned invalid JSON");
+    }
+    const summary = normalizeAgyPrintUsage(parsed);
+    if (!summary || summary.windows.length === 0) {
+      throw new AgyMalformedResponseError(
+        isSyntheticFullAgyUsage(parsed)
+          ? "agy /quota returned a placeholder full-quota reading (quota API did not finish)"
+          : "agy /quota quota summary malformed",
+      );
+    }
+    return summary;
   } catch (error) {
+    if (
+      error instanceof AgyMalformedResponseError ||
+      error instanceof AgyUnavailableError
+    ) {
+      throw error;
+    }
     throw sanitizeCliError(error);
   } finally {
     await openerGuard?.dispose();
   }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    throw new AgyMalformedResponseError("agy /quota returned invalid JSON");
-  }
-  const summary = normalizeAgyPrintUsage(parsed);
-  if (!summary || summary.windows.length === 0) {
-    throw new AgyMalformedResponseError("agy /quota quota summary malformed");
-  }
-  return summary;
 }
 
 async function createOpenerGuard(): Promise<{
@@ -382,7 +411,66 @@ export function normalizeAgyPrintUsage(raw: unknown):
     name !== "/quota"
   )
     return undefined;
-  return normalizeAgyQuotaSummary(objectValue(command?.data));
+  const data = objectValue(command?.data);
+  // Fail closed on the cold-start placeholder: exact remaining_fraction 1 on
+  // every bucket and no vendor description means the live summary RPC did not
+  // finish (CLI logs: retrieveUserQuotaSummary context canceled). Reporting
+  // that as 100% available is a data-correctness bug.
+  if (isSyntheticFullAgyUsage(raw)) return undefined;
+  return normalizeAgyQuotaSummary(data);
+}
+
+/**
+ * True when every reported bucket is exactly full and carries no vendor
+ * description. That shape is what `agy -p /quota` emits while
+ * retrieveUserQuotaSummary is still in flight / canceled; a live full reading
+ * usually includes copy such as "You have used some of your weekly limit".
+ */
+export function isSyntheticFullAgyUsage(
+  raw: unknown,
+  nowMs: number = Date.now(),
+): boolean {
+  const root = objectValue(raw);
+  const command = objectValue(root?.command);
+  const data = objectValue(command?.data) ?? root;
+  const groups = arrayValue(data?.groups);
+  if (groups.length === 0) return false;
+  let buckets = 0;
+  for (const groupRaw of groups) {
+    const group = objectValue(groupRaw);
+    if (!group) continue;
+    for (const bucketRaw of arrayValue(group.buckets)) {
+      const bucket = objectValue(bucketRaw);
+      if (!bucket) continue;
+      if (booleanValue(bucket.disabled) === true) continue;
+      buckets += 1;
+      if (stringValue(bucket.description)) return false;
+      const remaining = remainingFraction(bucket);
+      if (remaining === undefined || remaining !== 1) return false;
+      const kind = agyWindowKind(bucket);
+      const resetsAt =
+        parseEpochOrIso(bucket.resetTime) ?? parseEpochOrIso(bucket.reset_time);
+      if (!isFreshAlignedReset(resetsAt, kind.windowSeconds, nowMs)) {
+        return false;
+      }
+    }
+  }
+  return buckets >= 2;
+}
+
+/** True when reset ≈ now + windowSeconds (CLI invents that while the RPC races). */
+function isFreshAlignedReset(
+  resetsAt: string | undefined,
+  windowSeconds: number | undefined,
+  nowMs: number,
+): boolean {
+  if (!resetsAt || windowSeconds === undefined || windowSeconds <= 0) {
+    return false;
+  }
+  const resetMs = Date.parse(resetsAt);
+  if (!Number.isFinite(resetMs)) return false;
+  const deltaMs = Math.abs(resetMs - (nowMs + windowSeconds * 1000));
+  return deltaMs <= 120_000;
 }
 
 export function normalizeAgyUserStatus(raw: unknown):
@@ -756,7 +844,20 @@ function normalizeQuotaSummaryBucket(
     result.windowSeconds = windowKind.windowSeconds;
   }
   const remaining = remainingFraction(bucket);
-  if (remaining !== undefined) {
+  // Exact remaining_fraction 1, no vendor description, and a reset that is
+  // simply "now + window length" is the CLI's cold-start placeholder while
+  // retrieveUserQuotaSummary is still in flight or was canceled. A real
+  // full bucket either carries copy or a cycle reset that is not aligned
+  // to the moment of the read. Do not publish the placeholder as 100%.
+  const placeholderFull =
+    remaining === 1 &&
+    !stringValue(bucket.description) &&
+    isFreshAlignedReset(
+      result.resetsAt,
+      windowKind.windowSeconds,
+      Date.now(),
+    );
+  if (remaining !== undefined && !placeholderFull) {
     const percentUsed = clampPercent((1 - clampFraction(remaining)) * 100);
     result.percentUsed = percentUsed;
     result.percentRemaining = percentRemaining(percentUsed);
