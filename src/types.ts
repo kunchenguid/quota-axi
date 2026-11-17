@@ -333,6 +333,14 @@ export type ProviderQuota = {
   /** Report provenance. Omitted from default `--json`; see `--full`. */
   source?: ProviderSource;
   plan?: string;
+  /** Vendor-reported manual reset inventory, not immediate redeemability. Never cached. */
+  resetsAvailable?: number;
+  /** Normalized remaining grants. Omitted from default output; see `--full`. Never cached. */
+  resetGrants?: {
+    kind: "fable" | "session" | "weekly" | "full" | "unknown";
+    remaining: number;
+    expiresAt?: string;
+  }[];
   account?: {
     email?: string;
     organization?: string;

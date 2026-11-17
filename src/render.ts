@@ -280,6 +280,15 @@ function providerStateRows(
   const rows: AttentionRow[] = [];
   const primary = primaryProviderRow(provider);
   if (primary) rows.push(primary);
+  if (provider.resetsAvailable !== undefined && provider.resetsAvailable > 0) {
+    rows.push({
+      ...providerColumns(provider),
+      scope: "all",
+      kind: "resets",
+      detail: `available ${provider.resetsAvailable}`,
+      remedy: NONE,
+    });
+  }
   if (provider.state.reused) {
     rows.push({
       ...providerColumns(provider),
@@ -527,12 +536,21 @@ function auditBlocks(response: QuotaAxiResponse): string[] {
   const attempts = response.providers.flatMap((provider) =>
     (provider.attempts ?? []).map((attempt) => attemptRow(provider, attempt)),
   );
+  const resetGrants = response.providers.flatMap((provider) =>
+    (provider.resetGrants ?? []).map((grant) => ({
+      ...providerColumns(provider),
+      kind: grant.kind,
+      remaining: grant.remaining,
+      expiresAt: grant.expiresAt ?? UNKNOWN,
+    })),
+  );
   return [
     encode({ providers }),
     encode({ windows }),
     encode({ scopeAudit }),
     encode({ accounts }),
     encode({ attempts }),
+    ...(resetGrants.length > 0 ? [encode({ resetGrants })] : []),
   ];
 }
 
@@ -660,6 +678,7 @@ export function quotaJsonReport(
       ...provider,
       label: undefined,
       source: undefined,
+      resetGrants: undefined,
       windows: provider.windows.map(demotedWindow),
       ...(provider.quotaSemantics
         ? { quotaSemantics: demotedSemantics(provider.quotaSemantics) }

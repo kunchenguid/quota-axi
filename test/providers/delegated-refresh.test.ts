@@ -55,7 +55,8 @@ function withUnlistableProcesses(): void {
   processTable.current = { status: "unavailable" };
 }
 
-const USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
+const USAGE_URL =
+  "https://api.anthropic.com/api/oauth/usage?cedar_ember=1&skip_spend=1";
 const PROFILE_URL = "https://api.anthropic.com/api/oauth/profile";
 const CLAUDE_LOGIN_KEYCHAIN = `    "/fixture/login.keychain-db"\n`;
 const CLAUDE_KEYCHAIN_METADATA = `keychain: "/fixture/login.keychain-db"
