@@ -48,9 +48,14 @@ export function annotateQuotaAdvice(
     });
   });
   const help = providers.flatMap(providerHelpLines);
+  // Version the observed reset extension, including a known zero inventory.
+  // An omitted extension preserves the existing account-mode schema and bytes.
+  const hasResetInventory = providers.some(
+    (provider) => provider.resetsAvailable !== undefined,
+  );
   return {
     generatedAt: response.generatedAt,
-    schemaVersion: providers.some((provider) => provider.accountKey) ? 6 : 5,
+    schemaVersion: hasResetInventory ? (expanded ? 8 : 7) : expanded ? 6 : 5,
     providers,
     ...(help.length > 0 ? { help } : {}),
   };

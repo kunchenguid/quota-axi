@@ -136,7 +136,7 @@ async function reusedAfter(
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: string | URL | Request) =>
-      String(input).endsWith("/api/oauth/usage")
+      String(input).endsWith("/api/oauth/usage?cedar_ember=1&skip_spend=1")
         ? new Response(
             JSON.stringify({
               limits: [

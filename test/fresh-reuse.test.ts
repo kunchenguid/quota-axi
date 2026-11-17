@@ -94,7 +94,7 @@ beforeEach(() => {
           status: 200,
         });
       }
-      if (url.endsWith("/api/oauth/usage")) {
+      if (url.endsWith("/api/oauth/usage?cedar_ember=1&skip_spend=1")) {
         usageCalls++;
         locksDuringUsage = existsSync(locksDir())
           ? readdirSync(locksDir())

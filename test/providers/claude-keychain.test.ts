@@ -292,7 +292,9 @@ describe("Claude macOS Keychain discovery", () => {
     expect(
       vi
         .mocked(fetch)
-        .mock.calls.filter(([url]) => String(url).endsWith("/api/oauth/usage")),
+        .mock.calls.filter(([url]) =>
+          String(url).endsWith("/api/oauth/usage?cedar_ember=1&skip_spend=1"),
+        ),
     ).toHaveLength(1);
   });
 

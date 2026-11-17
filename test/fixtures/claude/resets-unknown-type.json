@@ -1,0 +1,41 @@
+{
+  "five_hour": {
+    "utilization": 18,
+    "resets_at": "2026-11-17T12:00:00Z"
+  },
+  "seven_day": {
+    "utilization": 36,
+    "resets_at": "2026-11-20T16:00:00Z"
+  },
+  "cedar_ember": {
+    "eligible": true,
+    "ineligible_reason": null,
+    "at_limit": false,
+    "exhausted": [],
+    "grants": [
+      {
+        "id": "fixture-weekly",
+        "label": "Weekly reset",
+        "resets_total": 1,
+        "resets_left": 1,
+        "starts_at": "2026-11-01T00:00:00Z",
+        "ends_at": "2026-12-10T22:00:00Z",
+        "clears": ["seven_day"],
+        "paused": false,
+        "usable_now": true,
+        "use_requires_limit": false,
+        "percent_used": {},
+        "blocking": [],
+        "type": "future-vendor-type",
+        "gives_back_weekly": false,
+        "unavailable_reason": null
+      }
+    ],
+    "next_grant_id": "fixture-weekly",
+    "weekly_resets_at": "2026-11-20T16:00:00Z",
+    "cooldown_until": null,
+    "event_props": {
+      "private_event": "must-not-publish"
+    }
+  }
+}

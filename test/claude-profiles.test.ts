@@ -156,7 +156,7 @@ function response(text: string): {
 
 function bearers(): string[] {
   return (vi.mocked(fetch).mock.calls as unknown as [string, RequestInit][])
-    .filter(([url]) => url.endsWith("/usage"))
+    .filter(([url]) => new URL(url).pathname.endsWith("/usage"))
     .map(([, init]) =>
       new Headers(init.headers).get("authorization")!.replace("Bearer ", ""),
     );
