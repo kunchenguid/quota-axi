@@ -27,6 +27,15 @@ const shapes = [
   "unknown-type",
   "malformed",
 ] as const;
+const outputModes = [
+  { mode: "TOON", flags: [] },
+  { mode: "full TOON", flags: ["--full"] },
+  { mode: "JSON", flags: ["--json"] },
+  { mode: "full JSON", flags: ["--json", "--full"] },
+];
+const jsonModes = outputModes
+  .filter(({ flags }) => flags.includes("--json"))
+  .map((mode) => ({ ...mode, full: mode.flags.includes("--full") }));
 
 function fixture(name: (typeof shapes)[number]): Record<string, unknown> {
   return JSON.parse(
@@ -195,6 +204,8 @@ describe("built public Claude CLI with a rejecting mock transport", () => {
     shape: (typeof shapes)[number],
     flags: string[] = [],
     profileOnly = true,
+    expanded = false,
+    siblingShape: (typeof shapes)[number] = shape,
   ) => {
     const root = mkdtempSync(join(tmpdir(), "quota-claude-resets-"));
     directories.push(root);
@@ -205,6 +216,15 @@ describe("built public Claude CLI with a rejecting mock transport", () => {
       JSON.stringify({ claudeAiOauth: { accessToken: "fixture-only" } }),
       { mode: 0o600 },
     );
+    const sibling = join(root, "sibling");
+    if (expanded) {
+      mkdirSync(sibling);
+      writeFileSync(
+        join(sibling, ".credentials.json"),
+        JSON.stringify({ claudeAiOauth: { accessToken: "fixture-sibling" } }),
+        { mode: 0o600 },
+      );
+    }
     const log = join(root, "requests.jsonl");
     const result = spawnSync(
       process.execPath,
@@ -214,7 +234,9 @@ describe("built public Claude CLI with a rejecting mock transport", () => {
         resolve("dist/bin/quota-axi.js"),
         "--provider",
         "claude",
-        ...(profileOnly ? ["--profile-only"] : ["--no-credential-refresh"]),
+        ...(profileOnly && !expanded
+          ? ["--profile-only"]
+          : ["--no-credential-refresh"]),
         ...flags,
       ],
       {
@@ -228,7 +250,12 @@ describe("built public Claude CLI with a rejecting mock transport", () => {
           XDG_CACHE_HOME: join(root, "cache"),
           XDG_DATA_HOME: join(root, "data"),
           CLAUDE_CONFIG_DIR: profile,
+          ...(expanded ? { QUOTA_AXI_CLAUDE_PROFILES: sibling } : {}),
           RESET_USAGE_FIXTURE: join(fixtures, `resets-${shape}.json`),
+          RESET_SIBLING_USAGE_FIXTURE: join(
+            fixtures,
+            `resets-${siblingShape}.json`,
+          ),
           RESET_REQUEST_LOG: log,
         },
       },
@@ -241,14 +268,16 @@ describe("built public Claude CLI with a rejecting mock transport", () => {
         .trim()
         .split("\n")
         .map((line) => JSON.parse(line) as unknown),
-    ).toEqual([
-      {
-        method: "GET",
-        url: "https://api.anthropic.com/api/oauth/usage?cedar_ember=1&skip_spend=1",
-      },
-      { method: "GET", url: "https://api.anthropic.com/api/oauth/profile" },
-    ]);
-    if (!profileOnly)
+    ).toEqual(
+      Array.from({ length: expanded ? 2 : 1 }, () => [
+        {
+          method: "GET",
+          url: "https://api.anthropic.com/api/oauth/usage?cedar_ember=1&skip_spend=1",
+        },
+        { method: "GET", url: "https://api.anthropic.com/api/oauth/profile" },
+      ]).flat(),
+    );
+    if (!profileOnly || expanded)
       expect(
         readFileSync(join(root, "cache", "quota-axi", "quotas.json"), "utf8"),
       ).not.toMatch(/resetsAvailable|resetGrants|fixture-fable|private_event/);
@@ -258,41 +287,51 @@ describe("built public Claude CLI with a rejecting mock transport", () => {
     );
   };
 
-  it.each(shapes)(
-    "snapshots %s through TOON and JSON, including full output",
-    (shape) => {
-      for (const flags of [[], ["--full"], ["--json"], ["--json", "--full"]]) {
-        const output = run(shape, flags);
-        if (shape === "missing" || shape === "two-grants")
-          expect(output).toMatchSnapshot(
-            `${shape} ${flags.join(" ") || "TOON"}`,
-          );
-      }
+  it.each(
+    shapes.flatMap((shape) => outputModes.map((mode) => ({ shape, ...mode }))),
+  )("renders $shape in $mode", ({ shape, flags }) => {
+    const output = run(shape, flags);
+    if (shape === "missing" || shape === "two-grants")
+      expect(output).toMatchSnapshot();
+  });
+
+  it.each(
+    (["ineligible", "malformed"] as const).flatMap((shape) =>
+      outputModes.map((mode) => ({
+        shape,
+        ...mode,
+      })),
+    ),
+  )(
+    "preserves before/after output byte-for-byte for $shape in $mode",
+    ({ shape, flags }) => {
+      expect(run(shape, flags)).toBe(run("missing", flags));
     },
   );
 
-  it.each(["ineligible", "malformed"] as const)(
-    "preserves before/after output byte-for-byte for %s",
-    (shape) => {
-      for (const flags of [[], ["--full"], ["--json"], ["--json", "--full"]])
-        expect(run(shape, flags)).toBe(run("missing", flags));
-    },
-  );
-
-  it("publishes the same count in compact JSON and normalized details with --full", () => {
+  it("publishes the count in compact JSON", () => {
     const compact = JSON.parse(
       run("two-grants", ["--json"]),
     ) as QuotaAxiResponse;
+    expect(compact.providers[0]?.resetsAvailable).toBe(2);
+    expect(compact.providers[0]).not.toHaveProperty("resetGrants");
+  });
+
+  it("publishes normalized grant details in full JSON", () => {
     const full = JSON.parse(
       run("two-grants", ["--json", "--full"]),
     ) as QuotaAxiResponse;
-    expect(compact.providers[0]?.resetsAvailable).toBe(2);
-    expect(compact.providers[0]).not.toHaveProperty("resetGrants");
     expect(full.providers[0]?.resetGrants).toHaveLength(2);
     expect(JSON.stringify(full)).not.toMatch(
       /fixture-fable|fixture-weekly|event_props|private_event|percent_used|fixture-only/,
     );
+  });
+
+  it("names the available inventory in compact TOON", () => {
     expect(run("two-grants")).toContain("claude,all,resets,available 2,none");
+  });
+
+  it("renders an unknown grant kind in full TOON", () => {
     expect(run("unknown-type", ["--full"])).toContain(
       'claude,unknown,1,"2026-12-10T22:00:00Z"',
     );
@@ -317,6 +356,78 @@ describe("built public Claude CLI with a rejecting mock transport", () => {
       resetsAvailable: 0,
       resetGrants: [],
     });
+  });
+
+  it("omits an empty inventory attention row in compact TOON", () => {
     expect(run("empty")).not.toContain(",resets,");
   });
+
+  it.each(
+    shapes.flatMap((shape) =>
+      [false, true].flatMap((expanded) =>
+        jsonModes.map((mode) => ({ shape, expanded, ...mode })),
+      ),
+    ),
+  )(
+    "versions $shape inventory with expanded=$expanded in $mode",
+    ({ shape, expanded, flags, full }) => {
+      const count =
+        shape === "two-grants"
+          ? 2
+          : shape === "empty"
+            ? 0
+            : shape === "unknown-type"
+              ? 1
+              : undefined;
+      const output = JSON.parse(
+        run(shape, flags, false, expanded),
+      ) as QuotaAxiResponse;
+      expect(output.schemaVersion).toBe(
+        count === undefined ? (expanded ? 6 : 5) : expanded ? 8 : 7,
+      );
+      expect(output.providers).toHaveLength(expanded ? 2 : 1);
+      for (const provider of output.providers) {
+        expect(provider.state.status).toBe("fresh");
+        expect(provider.accountKey !== undefined).toBe(expanded);
+        if (count === undefined) {
+          expect(provider).not.toHaveProperty("resetsAvailable");
+          expect(provider).not.toHaveProperty("resetGrants");
+        } else {
+          expect(provider.resetsAvailable).toBe(count);
+          if (full)
+            expect(provider.resetGrants).toHaveLength(
+              shape === "two-grants" ? 2 : count === 0 ? 0 : 1,
+            );
+          else expect(provider).not.toHaveProperty("resetGrants");
+        }
+      }
+    },
+  );
+
+  it.each(
+    (["two-grants", "empty"] as const).flatMap((shape) =>
+      (
+        [
+          ["missing", shape],
+          [shape, "missing"],
+        ] as const
+      ).flatMap(([selected, sibling]) =>
+        jsonModes.map((mode) => ({ selected, sibling, ...mode })),
+      ),
+    ),
+  )(
+    "versions mixed selected=$selected sibling=$sibling inventory in $mode",
+    ({ selected, sibling, flags }) => {
+      const output = JSON.parse(
+        run(selected, flags, false, true, sibling),
+      ) as QuotaAxiResponse;
+      expect(output.schemaVersion).toBe(8);
+      expect(output.providers).toHaveLength(2);
+      expect(
+        output.providers.filter(
+          (provider) => provider.resetsAvailable !== undefined,
+        ),
+      ).toHaveLength(1);
+    },
+  );
 });

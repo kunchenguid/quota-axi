@@ -406,7 +406,8 @@ export type ProviderQuota = {
 
 export type QuotaAxiResponse = {
   generatedAt: string;
-  schemaVersion: 5 | 6;
+  /** 5/6 without reset inventory; 7/8 with it. Even versions are account-expanded. */
+  schemaVersion: 5 | 6 | 7 | 8;
   providers: ProviderQuota[];
   help?: string[];
 };

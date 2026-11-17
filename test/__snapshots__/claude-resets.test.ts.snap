@@ -1,6 +1,82 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`built public Claude CLI with a rejecting mock transport > snapshots missing through TOON and JSON, including full output > missing --full 1`] = `
+exports[`built public Claude CLI with a rejecting mock transport > renders 'missing' in 'JSON' 1`] = `
+"{
+  "generatedAt": "2026-11-17T09:00:00.000Z",
+  "schemaVersion": 5,
+  "providers": [
+    {
+      "provider": "claude",
+      "windows": [
+        {
+          "id": "five_hour",
+          "label": "session",
+          "kind": "session",
+          "resetsAt": "2026-11-17T12:00:00Z",
+          "percentRemaining": 82,
+          "pace": {
+            "status": "behind",
+            "reservePercentPoints": 22,
+            "burnMultiple": 0.45
+          }
+        },
+        {
+          "id": "seven_day",
+          "label": "week",
+          "kind": "weekly",
+          "resetsAt": "2026-11-20T16:00:00Z",
+          "percentRemaining": 64,
+          "pace": {
+            "status": "behind",
+            "reservePercentPoints": 16.9762,
+            "burnMultiple": 0.6796
+          }
+        }
+      ],
+      "state": {
+        "status": "fresh",
+        "stale": false
+      },
+      "quotaSemantics": {
+        "status": "known",
+        "effectiveAvailability": [
+          {
+            "scope": "all_models",
+            "status": "known",
+            "effectivePercentRemaining": 64,
+            "boundedBy": [
+              "five_hour",
+              "seven_day"
+            ],
+            "limitingWindowIds": [
+              "seven_day"
+            ],
+            "pace": {
+              "status": "behind",
+              "worstReservePercentPoints": 16.9762,
+              "worstReserveWindowId": "seven_day"
+            },
+            "runway": {
+              "status": "through_reset",
+              "projectionConfidence": "established"
+            },
+            "selection": {
+              "status": "known",
+              "spendPriority": 0.6882
+            }
+          }
+        ]
+      },
+      "accountKeys": [
+        "default"
+      ]
+    }
+  ]
+}
+"
+`;
+
+exports[`built public Claude CLI with a rejecting mock transport > renders 'missing' in 'TOON' 1`] = `
 "bin: quota-axi
 description: Report local agent-provider quota windows for routing-aware agents
 generatedAt: "2026-11-17T09:00:00.000Z"
@@ -8,24 +84,12 @@ quota[1]{provider,scope,effectivePercentRemaining,spendPriority,runway,confidenc
   claude,all_models,64,0.6882,through_reset,established,seven_day,"2026-11-20T16:00:00Z"
 exhaustion[0]:
 attention[0]:
-providers[1]{provider,plan,source,status,authStatus,relationships,refreshedAt}:
-  claude,unknown,oauth,fresh,unknown,known,"2026-11-17T09:00:00.000Z"
-windows[2]{provider,id,label,percentRemaining,resetsAt,pace,reserve,burnMultiple,timeRemainingPercent,elapsedPercent,cycleSeconds,projectedExhaustedAt,confidence}:
-  claude,five_hour,session,82,"2026-11-17T12:00:00Z",behind,22,0.45,60,40,18000,"2026-11-17T18:06:40.000Z",established
-  claude,seven_day,week,64,"2026-11-20T16:00:00Z",behind,16.9762,0.6796,47.0238,52.9762,604800,"2026-11-23T23:13:20.000Z",established
-scopeAudit[1]{provider,scope,boundedBy,relationships,pace,aheadWindowIds,behindWindowIds,onPaceWindowIds,unknownWindowIds,worstReserve,worstReserveWindowId}:
-  claude,all_models,five_hour + seven_day,known,behind,none,five_hour + seven_day,none,none,16.9762,seven_day
-accounts[1]{provider,email,organization,accountId,identityStatus}:
-  claude,hidden,none,fixture-account,verified
-attempts[2]{provider,source,status,error}:
-  claude,oauth-file,success,none
-  claude,oauth-profile,success,none
 help[1]:
   Run \`quota-axi --full\` for windows, pace, reserve, and account evidence
 "
 `;
 
-exports[`built public Claude CLI with a rejecting mock transport > snapshots missing through TOON and JSON, including full output > missing --json --full 1`] = `
+exports[`built public Claude CLI with a rejecting mock transport > renders 'missing' in 'full JSON' 1`] = `
 "{
   "generatedAt": "2026-11-17T09:00:00.000Z",
   "schemaVersion": 5,
@@ -143,10 +207,35 @@ exports[`built public Claude CLI with a rejecting mock transport > snapshots mis
 "
 `;
 
-exports[`built public Claude CLI with a rejecting mock transport > snapshots missing through TOON and JSON, including full output > missing --json 1`] = `
+exports[`built public Claude CLI with a rejecting mock transport > renders 'missing' in 'full TOON' 1`] = `
+"bin: quota-axi
+description: Report local agent-provider quota windows for routing-aware agents
+generatedAt: "2026-11-17T09:00:00.000Z"
+quota[1]{provider,scope,effectivePercentRemaining,spendPriority,runway,confidence,limitedBy,resetsAt}:
+  claude,all_models,64,0.6882,through_reset,established,seven_day,"2026-11-20T16:00:00Z"
+exhaustion[0]:
+attention[0]:
+providers[1]{provider,plan,source,status,authStatus,relationships,refreshedAt}:
+  claude,unknown,oauth,fresh,unknown,known,"2026-11-17T09:00:00.000Z"
+windows[2]{provider,id,label,percentRemaining,resetsAt,pace,reserve,burnMultiple,timeRemainingPercent,elapsedPercent,cycleSeconds,projectedExhaustedAt,confidence}:
+  claude,five_hour,session,82,"2026-11-17T12:00:00Z",behind,22,0.45,60,40,18000,"2026-11-17T18:06:40.000Z",established
+  claude,seven_day,week,64,"2026-11-20T16:00:00Z",behind,16.9762,0.6796,47.0238,52.9762,604800,"2026-11-23T23:13:20.000Z",established
+scopeAudit[1]{provider,scope,boundedBy,relationships,pace,aheadWindowIds,behindWindowIds,onPaceWindowIds,unknownWindowIds,worstReserve,worstReserveWindowId}:
+  claude,all_models,five_hour + seven_day,known,behind,none,five_hour + seven_day,none,none,16.9762,seven_day
+accounts[1]{provider,email,organization,accountId,identityStatus}:
+  claude,hidden,none,fixture-account,verified
+attempts[2]{provider,source,status,error}:
+  claude,oauth-file,success,none
+  claude,oauth-profile,success,none
+help[1]:
+  Run \`quota-axi --full\` for windows, pace, reserve, and account evidence
+"
+`;
+
+exports[`built public Claude CLI with a rejecting mock transport > renders 'two-grants' in 'JSON' 1`] = `
 "{
   "generatedAt": "2026-11-17T09:00:00.000Z",
-  "schemaVersion": 5,
+  "schemaVersion": 7,
   "providers": [
     {
       "provider": "claude",
@@ -176,6 +265,7 @@ exports[`built public Claude CLI with a rejecting mock transport > snapshots mis
           }
         }
       ],
+      "resetsAvailable": 2,
       "state": {
         "status": "fresh",
         "stale": false
@@ -219,20 +309,7 @@ exports[`built public Claude CLI with a rejecting mock transport > snapshots mis
 "
 `;
 
-exports[`built public Claude CLI with a rejecting mock transport > snapshots missing through TOON and JSON, including full output > missing TOON 1`] = `
-"bin: quota-axi
-description: Report local agent-provider quota windows for routing-aware agents
-generatedAt: "2026-11-17T09:00:00.000Z"
-quota[1]{provider,scope,effectivePercentRemaining,spendPriority,runway,confidence,limitedBy,resetsAt}:
-  claude,all_models,64,0.6882,through_reset,established,seven_day,"2026-11-20T16:00:00Z"
-exhaustion[0]:
-attention[0]:
-help[1]:
-  Run \`quota-axi --full\` for windows, pace, reserve, and account evidence
-"
-`;
-
-exports[`built public Claude CLI with a rejecting mock transport > snapshots two-grants through TOON and JSON, including full output > two-grants --full 1`] = `
+exports[`built public Claude CLI with a rejecting mock transport > renders 'two-grants' in 'TOON' 1`] = `
 "bin: quota-axi
 description: Report local agent-provider quota windows for routing-aware agents
 generatedAt: "2026-11-17T09:00:00.000Z"
@@ -241,30 +318,15 @@ quota[1]{provider,scope,effectivePercentRemaining,spendPriority,runway,confidenc
 exhaustion[0]:
 attention[1]{provider,scope,kind,detail,remedy}:
   claude,all,resets,available 2,none
-providers[1]{provider,plan,source,status,authStatus,relationships,refreshedAt}:
-  claude,unknown,oauth,fresh,unknown,known,"2026-11-17T09:00:00.000Z"
-windows[2]{provider,id,label,percentRemaining,resetsAt,pace,reserve,burnMultiple,timeRemainingPercent,elapsedPercent,cycleSeconds,projectedExhaustedAt,confidence}:
-  claude,five_hour,session,82,"2026-11-17T12:00:00Z",behind,22,0.45,60,40,18000,"2026-11-17T18:06:40.000Z",established
-  claude,seven_day,week,64,"2026-11-20T16:00:00Z",behind,16.9762,0.6796,47.0238,52.9762,604800,"2026-11-23T23:13:20.000Z",established
-scopeAudit[1]{provider,scope,boundedBy,relationships,pace,aheadWindowIds,behindWindowIds,onPaceWindowIds,unknownWindowIds,worstReserve,worstReserveWindowId}:
-  claude,all_models,five_hour + seven_day,known,behind,none,five_hour + seven_day,none,none,16.9762,seven_day
-accounts[1]{provider,email,organization,accountId,identityStatus}:
-  claude,hidden,none,fixture-account,verified
-attempts[2]{provider,source,status,error}:
-  claude,oauth-file,success,none
-  claude,oauth-profile,success,none
-resetGrants[2]{provider,kind,remaining,expiresAt}:
-  claude,fable,1,"2027-03-09T07:59:00Z"
-  claude,weekly,1,"2026-12-10T22:00:00Z"
 help[1]:
   Run \`quota-axi --full\` for windows, pace, reserve, and account evidence
 "
 `;
 
-exports[`built public Claude CLI with a rejecting mock transport > snapshots two-grants through TOON and JSON, including full output > two-grants --json --full 1`] = `
+exports[`built public Claude CLI with a rejecting mock transport > renders 'two-grants' in 'full JSON' 1`] = `
 "{
   "generatedAt": "2026-11-17T09:00:00.000Z",
-  "schemaVersion": 5,
+  "schemaVersion": 7,
   "providers": [
     {
       "provider": "claude",
@@ -392,84 +454,7 @@ exports[`built public Claude CLI with a rejecting mock transport > snapshots two
 "
 `;
 
-exports[`built public Claude CLI with a rejecting mock transport > snapshots two-grants through TOON and JSON, including full output > two-grants --json 1`] = `
-"{
-  "generatedAt": "2026-11-17T09:00:00.000Z",
-  "schemaVersion": 5,
-  "providers": [
-    {
-      "provider": "claude",
-      "windows": [
-        {
-          "id": "five_hour",
-          "label": "session",
-          "kind": "session",
-          "resetsAt": "2026-11-17T12:00:00Z",
-          "percentRemaining": 82,
-          "pace": {
-            "status": "behind",
-            "reservePercentPoints": 22,
-            "burnMultiple": 0.45
-          }
-        },
-        {
-          "id": "seven_day",
-          "label": "week",
-          "kind": "weekly",
-          "resetsAt": "2026-11-20T16:00:00Z",
-          "percentRemaining": 64,
-          "pace": {
-            "status": "behind",
-            "reservePercentPoints": 16.9762,
-            "burnMultiple": 0.6796
-          }
-        }
-      ],
-      "resetsAvailable": 2,
-      "state": {
-        "status": "fresh",
-        "stale": false
-      },
-      "quotaSemantics": {
-        "status": "known",
-        "effectiveAvailability": [
-          {
-            "scope": "all_models",
-            "status": "known",
-            "effectivePercentRemaining": 64,
-            "boundedBy": [
-              "five_hour",
-              "seven_day"
-            ],
-            "limitingWindowIds": [
-              "seven_day"
-            ],
-            "pace": {
-              "status": "behind",
-              "worstReservePercentPoints": 16.9762,
-              "worstReserveWindowId": "seven_day"
-            },
-            "runway": {
-              "status": "through_reset",
-              "projectionConfidence": "established"
-            },
-            "selection": {
-              "status": "known",
-              "spendPriority": 0.6882
-            }
-          }
-        ]
-      },
-      "accountKeys": [
-        "default"
-      ]
-    }
-  ]
-}
-"
-`;
-
-exports[`built public Claude CLI with a rejecting mock transport > snapshots two-grants through TOON and JSON, including full output > two-grants TOON 1`] = `
+exports[`built public Claude CLI with a rejecting mock transport > renders 'two-grants' in 'full TOON' 1`] = `
 "bin: quota-axi
 description: Report local agent-provider quota windows for routing-aware agents
 generatedAt: "2026-11-17T09:00:00.000Z"
@@ -478,6 +463,21 @@ quota[1]{provider,scope,effectivePercentRemaining,spendPriority,runway,confidenc
 exhaustion[0]:
 attention[1]{provider,scope,kind,detail,remedy}:
   claude,all,resets,available 2,none
+providers[1]{provider,plan,source,status,authStatus,relationships,refreshedAt}:
+  claude,unknown,oauth,fresh,unknown,known,"2026-11-17T09:00:00.000Z"
+windows[2]{provider,id,label,percentRemaining,resetsAt,pace,reserve,burnMultiple,timeRemainingPercent,elapsedPercent,cycleSeconds,projectedExhaustedAt,confidence}:
+  claude,five_hour,session,82,"2026-11-17T12:00:00Z",behind,22,0.45,60,40,18000,"2026-11-17T18:06:40.000Z",established
+  claude,seven_day,week,64,"2026-11-20T16:00:00Z",behind,16.9762,0.6796,47.0238,52.9762,604800,"2026-11-23T23:13:20.000Z",established
+scopeAudit[1]{provider,scope,boundedBy,relationships,pace,aheadWindowIds,behindWindowIds,onPaceWindowIds,unknownWindowIds,worstReserve,worstReserveWindowId}:
+  claude,all_models,five_hour + seven_day,known,behind,none,five_hour + seven_day,none,none,16.9762,seven_day
+accounts[1]{provider,email,organization,accountId,identityStatus}:
+  claude,hidden,none,fixture-account,verified
+attempts[2]{provider,source,status,error}:
+  claude,oauth-file,success,none
+  claude,oauth-profile,success,none
+resetGrants[2]{provider,kind,remaining,expiresAt}:
+  claude,fable,1,"2027-03-09T07:59:00Z"
+  claude,weekly,1,"2026-12-10T22:00:00Z"
 help[1]:
   Run \`quota-axi --full\` for windows, pace, reserve, and account evidence
 "
