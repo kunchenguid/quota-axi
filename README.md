@@ -478,7 +478,7 @@ A proven sign-out retires only cached Codex snapshots whose stored account ident
 
 ### Claude profiles
 
-Claude account lanes are opt-in. When `QUOTA_AXI_CLAUDE_SWAP` is not enabled and `QUOTA_AXI_CLAUDE_PROFILES` is absent, blank, or lists no entry, Claude reads only the profile this process selects, and the report, its schema, and the cache slot it uses are exactly what they are without these features: one keyless lane, quota schema 5 (7 when reset inventory is present), `accountKeys: ["default"]`. quota-axi never searches the home directory for other Claude profiles.
+Claude account lanes are opt-in. When `QUOTA_AXI_CLAUDE_SWAP` is not enabled and `QUOTA_AXI_CLAUDE_PROFILES` is absent, blank, or lists no entry, Claude reads only the profile this process selects, and the report, its schema, and the cache slot it uses are exactly what they are without these features: one keyless lane, the single-account [quota schema](#normalized-schema-contract), `accountKeys: ["default"]`. quota-axi never searches the home directory for other Claude profiles.
 
 ```sh
 QUOTA_AXI_CLAUDE_PROFILES="$HOME/.claude-work:$HOME/.claude-team" quota-axi --provider claude --json
@@ -535,11 +535,11 @@ Codex still discovers and folds its own native and Pi lanes as described above; 
 
 ### Account keys and compatibility
 
-When a provider expands to multiple accounts, the report uses quota `schemaVersion: 6`, or `8` when reset inventory is present (auth and models use version 2).
+When a provider expands to multiple accounts, the report uses the account-expanded versions in the [normalized schema contract](#normalized-schema-contract).
 Every provider record then has an `accountKey`; providers still using one selected account use the literal `default`.
-Every quota-axi output quota row, in quota schemas 5 through 8 alike, has `accountKeys`: the credential keys that one row covers, own `accountKey` first, then any keys folded into it in the order the provider recorded them. The exported `ProviderQuota.accountKeys` type remains optional so package consumers can construct reports without it; quota-axi output sets it on every quota row.
+Every quota-axi output quota row has `accountKeys`: the credential keys that one row covers, own `accountKey` first, then any keys folded into it in the order the provider recorded them. The exported `ProviderQuota.accountKeys` type remains optional so package consumers can construct reports without it; quota-axi output sets it on every quota row.
 A row covering one credential lists just its own key. A consumer that holds a credential key binds the row whose `accountKeys` contains that key. Matching `accountKey` alone misses a key that was folded into another row.
-A provider without account discovery lists `accountKeys: ["default"]`, the same literal as its account-expanded `accountKey` filler. A discovering provider that stays on one row, such as two Pi keys for one account with no native login, keeps schema 5 (7 with reset inventory) and no `accountKey`, and its `accountKeys` starts with that lane's key.
+A provider without account discovery lists `accountKeys: ["default"]`, the same literal as its account-expanded `accountKey` filler. A discovering provider that stays on one row, such as two Pi keys for one account with no native login, keeps the single-account schema and no `accountKey`, and its `accountKeys` starts with that lane's key.
 Membership mirrors quota-axi's own grouping exactly: every key the provider grouped into the row, and no other. That grouping relies on stored account identity when no fresh live reading confirms it, so a fold is published as applied even when a later live reading names a different account.
 `accountKeys` is a quota JSON field. Auth still lists each discovered lane on its own, because a fold that depends on the quota reading has not happened there. TOON does not add a column: its flat blocks already name the published lane by `accountKey`, and the membership list is the JSON account row's join field.
 The shared account collector puts each discovered lane's key first; an adapter adds folded keys to its quota reading's `ProviderQuota.accountKeys`, including keys learned during the read. Codex and, when `QUOTA_AXI_CLAUDE_PROFILES` or `QUOTA_AXI_CLAUDE_SWAP` opts in, Claude are the adapters that discover accounts today; other providers report `default`. The list itself is not cached; Codex reconstructs a stale row's originating key from the cached credential source.
@@ -555,9 +555,9 @@ A key the report cannot publish (malformed or repeated) costs only its own lane:
 The provider normally falls back to its single selected account only when no usable lane remains; a source-owned failure lane, such as enabled claude-swap being unavailable, keeps that source's failure instead.
 `--full` adds the vendor identity the usage endpoint supplied, when any.
 
-If no provider expands, existing fields retain their shape and order, while quota JSON adds `accountKeys`: quota schema 5 (7 with reset inventory), auth/models schema 1, and no account column.
+If no provider expands, existing fields retain their shape and order, while quota JSON adds `accountKeys`: single-account schema versions and no account column.
 A sole discovered Pi sibling uses that legacy representation.
-Expansion follows the lanes discovered rather than the rows published, so when a native login and a Pi sibling turn out to be one account the single surviving row still carries its key and the report stays account-expanded (schema 6, or 8 with reset inventory).
+Expansion follows the lanes discovered rather than the rows published, so when a native login and a Pi sibling turn out to be one account the single surviving row still carries its key and the report stays account-expanded.
 Consumers must honor the schema version; a legacy keyless row means the single selected lane, and keys must never be inferred from row position.
 
 Account collection is shared in `src/providers/accounts.ts`.
@@ -567,7 +567,7 @@ Other adapters retain their existing source-selection behavior.
 
 ## Output Model
 
-The `quota` command's `--json` emits `schemaVersion: 5`, or `6` when a provider expands to multiple accounts. When any published provider includes normalized reset inventory, the corresponding versions are `7` and `8`. Compact and full JSON use the same version.
+The `quota` command's `--json` uses the versions defined in the [normalized schema contract](#normalized-schema-contract). Compact and full JSON use the same version.
 
 ### Normalized schema contract
 

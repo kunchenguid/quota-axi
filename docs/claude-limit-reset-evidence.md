@@ -41,24 +41,17 @@ work started. The pending Codex contributions
 [banked resets](https://github.com/kunchenguid/quota-axi/pull/292) both proposed
 `resetsAvailable`, so Claude uses that name too.
 
-The normalized count sums nonnegative integer `resets_left` values. This is an
-implementation choice to describe the supplied inventory, not a claim that every
-remaining reset can be redeemed immediately. It does not reinterpret `paused`,
-`usable_now`, limit requirements or cooldowns as a different count, and it does not
-change quota windows or selection signals.
+The count describes stock rather than immediate redeemability, so transient
+redemption conditions do not reduce it. A compact count meets the dashboard's
+inventory need without exposing raw account or event data. Normalized grant
+details in `--full` support inspection of kind and expiry without publishing the
+full grant. An explicit unknown type is not guessed from familiar cleared windows.
 
-Compact JSON carries the count, including a valid zero. Compact TOON names only a
-positive count in an attention row. `--full` adds positive-remaining grant details
-with only `kind`, `remaining`, and optional `expiresAt` from `ends_at`. Unknown
-types display as `unknown`. Grant identifiers, labels, event properties, and raw
-grant payloads are omitted. Inventory is never cached.
-
-Reports containing normalized inventory use quota schema 7 (single account) or 8
-(account-expanded), including zero inventory. Missing, ineligible, and malformed
-blocks retain schemas 5/6 and the previous output bytes. Compact and full JSON
-agree; auth/models/cache versions and TOON format are unchanged by that version
-decision. The [README schema contract](../README.md#normalized-schema-contract)
-defines the complete mapping.
+The [README Claude provider notes](../README.md#provider-notes) own the output,
+normalization, omission, and cache rules. The
+[README schema contract](../README.md#normalized-schema-contract) owns version
+selection, including valid zero inventory and compatibility when inventory is
+omitted.
 
 ## Synthetic validation
 
