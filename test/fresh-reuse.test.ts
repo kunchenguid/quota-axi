@@ -409,6 +409,77 @@ describe("fresh reuse", () => {
     expect(blocked.state.error).toBe("unsupported_server");
   });
 
+  it("reads Bob again after Bob renews the stored sign-in, and never reuses another owner's budget", async () => {
+    const writeLogin = (userId: string, token: string): void => {
+      mkdirSync(join(root, ".bob", "settings"), { recursive: true });
+      writeFileSync(
+        join(root, ".bob", "settings", "auth-secrets.json"),
+        JSON.stringify({
+          "bob.auth.tokens-https://api.us-east.bob.ibm.com": JSON.stringify({
+            token,
+            refreshToken: "synthetic-bob-refresh",
+            userId,
+            expiresAt: Date.parse("2026-09-23T13:00:00Z") / 1000,
+          }),
+        }),
+      );
+    };
+    const profile = vi.fn(async (_url: unknown, init?: RequestInit) =>
+      Response.json({
+        instances: [
+          {
+            plan_id: "ibm_bob_pro_plus_plan",
+            plan_name: "pro plus plan",
+            refresh_at: Date.parse("2026-10-12T00:00:00Z") / 1000,
+            allow_overage: false,
+            instance_status: "active",
+            is_internal: false,
+            teams: [
+              {
+                usage: new Headers(init?.headers)
+                  .get("authorization")
+                  ?.includes("second")
+                  ? 90
+                  : 45,
+                budget_limit: 180,
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    vi.stubGlobal("fetch", profile);
+    const readBob = async () =>
+      (
+        JSON.parse(
+          await quotaCommand(["--provider", "bob", "--json"], undefined),
+        ) as QuotaAxiResponse
+      ).providers[0]!;
+
+    writeLogin("synthetic-user-one", "synthetic-token-first");
+    expect((await readBob()).windows[0]?.usedCredits).toBe(45);
+    expect((await readBob()).state.reused).toBe(true);
+    expect(profile).toHaveBeenCalledTimes(1);
+
+    // Bob rewrites the file when it renews the token: another traced state.
+    writeFileSync(
+      join(root, ".bob", "settings", "auth-secrets.json"),
+      readFileSync(
+        join(root, ".bob", "settings", "auth-secrets.json"),
+        "utf8",
+      ) + "\n",
+    );
+    expect((await readBob()).state.reused).toBeUndefined();
+    expect(profile).toHaveBeenCalledTimes(2);
+
+    // Another sign-in is another owner: its reading is its own.
+    writeLogin("synthetic-user-two", "synthetic-token-second");
+    const other = await readBob();
+    expect(other.state.reused).toBeUndefined();
+    expect(other.windows[0]?.usedCredits).toBe(90);
+    expect(profile).toHaveBeenCalledTimes(3);
+  });
+
   it("never reuses a Bob budget once a later read finds several teams", async () => {
     process.env.BOB_API_KEY = "synthetic-bob-key";
     const team = { usage: 45, budget_limit: 180 };

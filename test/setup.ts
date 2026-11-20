@@ -79,3 +79,14 @@ delete process.env.META_API_KEY;
 delete process.env.BOB_API_KEY;
 delete process.env.BOBSHELL_API_KEY;
 delete process.env.BOB_GATEWAY_URL;
+
+// No test may read this machine's real Bob browser sign-in, a credential file
+// under the home directory that the provider reads when no key is set. Point
+// the home lookup at a path that never exists; tests that need a home build
+// their own.
+const sandboxHome = join(
+  tmpdir(),
+  `quota-axi-test-no-home-${process.pid}-${randomUUID()}`,
+);
+process.env.HOME = sandboxHome;
+process.env.USERPROFILE = sandboxHome;

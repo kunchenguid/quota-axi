@@ -21,6 +21,11 @@ import {
   clearBobReadingContextId,
   publishBobReadingContextId,
 } from "./bob-cache-context.js";
+import {
+  type BobLoginResolution,
+  bobLoginCacheContextId,
+  resolveBobLogin,
+} from "./bob-login.js";
 import { sourceNames, staleFromCache } from "./common.js";
 import {
   type EnvPiCredentialResolution,
@@ -41,10 +46,12 @@ export const BOB_API_KEY_SOURCE = "env:BOB_API_KEY";
 export const BOBSHELL_API_KEY_SOURCE = "env:BOBSHELL_API_KEY";
 
 /**
- * Ownership-stability order. `BOB_API_KEY` is the variable Bob documents, and
- * Bob's own startup error names `BOBSHELL_API_KEY` as the one to retire. Bob
- * refuses to start when the two differ, so a different pair is reported as a
- * conflict instead of quota-axi picking an account for the user.
+ * Ownership-stability order of the environment keys. `BOB_API_KEY` is the
+ * variable Bob documents, and Bob's own startup error names `BOBSHELL_API_KEY`
+ * as the one to retire. Bob refuses to start when the two differ, so a
+ * different pair is reported as a conflict instead of quota-axi picking an
+ * account for the user. Bob's stored browser sign-in ({@link BOB_LOGIN_SOURCE})
+ * ranks after both: it is read only when no environment key is usable.
  */
 export const BOB_SOURCE_ORDER = [
   BOB_API_KEY_SOURCE,
@@ -60,9 +67,11 @@ const LABEL = "Bob";
 const OPERATION_DEADLINE_MS = 15_000;
 const CREDIT_UNIT = "bobcoins";
 const API_KEY_SCHEME = "apikey";
+const LOGIN_SCHEME = "Bearer";
 const API_KEY_CONFLICT = "bob_api_key_conflict";
 const UNSUPPORTED_SERVER = "unsupported_server";
 const SETTINGS_UNREADABLE = "bob_settings_unreadable";
+const LOGIN_EXPIRED = "bob_login_expired";
 const TEAM_SELECTION_REQUIRED = "bob_team_selection_required";
 
 /**
@@ -229,6 +238,10 @@ function inspectAuth(dependencies: BobDependencies): AuthProviderReport {
     dependencies.homeDirectory(),
   );
   const report = inspectEnvPiAuth("bob", candidates);
+  const environment = dependencies.environment();
+  const home = dependencies.homeDirectory();
+  const login = resolveBobLogin(home, BOB_API_ORIGIN, dependencies.now());
+  const loginBlocked = blocked ?? loginBlock(login, environment, home);
   const sources = report.sources.map((source): AuthSourceReport => {
     const path = ENV_VARS[source.source as keyof typeof ENV_VARS];
     return blocked && source.status !== "missing"
@@ -241,7 +254,43 @@ function inspectAuth(dependencies: BobDependencies): AuthProviderReport {
         }
       : { ...source, path };
   });
+  sources.push(loginSourceReport(login, loginBlocked));
   return { ...report, sources };
+}
+
+function loginSourceReport(
+  login: BobLoginResolution,
+  blocked: BobCredentials["blocked"],
+): AuthSourceReport {
+  const { source, path } = login;
+  if (login.status === "missing") return { source, path, status: "missing" };
+  if (blocked) {
+    return {
+      source,
+      path,
+      status: "skipped",
+      error: blocked,
+      credentialPresent: true,
+    };
+  }
+  if (login.status === "available") {
+    return login.expired
+      ? {
+          source,
+          path,
+          status: "expired",
+          error: LOGIN_EXPIRED,
+          credentialPresent: true,
+        }
+      : { source, path, status: "available" };
+  }
+  return {
+    source,
+    path,
+    status: login.status,
+    error: keyCredentialFailure("bob", login).error,
+    credentialPresent: true,
+  };
 }
 
 async function acquireBobQuota(
@@ -255,6 +304,7 @@ async function acquireBobQuota(
   );
 
   let credentialFailure: ReturnType<typeof keyCredentialFailure> | undefined;
+  let rejectedKeyReport: ProviderQuota | undefined;
   for (const resolution of candidates) {
     if (blocked && resolution.status !== "missing") {
       attempts.push({
@@ -266,7 +316,21 @@ async function acquireBobQuota(
       continue;
     }
     if (resolution.status === "available") {
-      return readProfile(resolution, attempts, dependencies);
+      const report = await readProfile(
+        {
+          key: resolution.key,
+          source: resolution.source,
+          scheme: API_KEY_SCHEME,
+          cacheContextId: bobCacheContextId(resolution.source, resolution.key),
+        },
+        attempts,
+        dependencies,
+      );
+      // Only a definitive rejection of the key hands over to the stored
+      // sign-in; any other outcome is the key's own answer.
+      if (report.state.authStatus !== "unusable") return report;
+      rejectedKeyReport = report;
+      break;
     }
     const failure = keyCredentialFailure("bob", resolution);
     attempts.push({
@@ -286,6 +350,54 @@ async function acquireBobQuota(
       dependencies,
     );
   }
+
+  // No environment key is usable, so Bob's own stored browser sign-in is next.
+  const environment = dependencies.environment();
+  const home = dependencies.homeDirectory();
+  const login = resolveBobLogin(home, BOB_API_ORIGIN, dependencies.now());
+  const loginBlocked = loginBlock(login, environment, home);
+  if (loginBlocked) {
+    attempts.push({
+      source: login.source,
+      status: "skipped",
+      error: loginBlocked,
+      credentialPresent: true,
+    });
+    return (
+      withSourcesTried(rejectedKeyReport, attempts) ??
+      failureReport(
+        new BobFailure(loginBlocked),
+        undefined,
+        attempts,
+        dependencies,
+      )
+    );
+  }
+  if (login.status === "available") {
+    return readProfile(
+      {
+        key: login.token,
+        source: login.source,
+        scheme: LOGIN_SCHEME,
+        cacheContextId: bobLoginCacheContextId(login.source, login.identity),
+        expired: login.expired,
+      },
+      attempts,
+      dependencies,
+    );
+  }
+  const loginFailure = keyCredentialFailure("bob", login);
+  attempts.push({
+    source: login.source,
+    status: login.status === "missing" ? "skipped" : "failed",
+    error: loginFailure.error,
+    ...(login.status === "missing" ? {} : { credentialPresent: true }),
+  });
+  if (rejectedKeyReport) {
+    return withSourcesTried(rejectedKeyReport, attempts) as ProviderQuota;
+  }
+  credentialFailure = preferCredentialFailure(credentialFailure, loginFailure);
+
   const failure = credentialFailure ?? {
     status: "auth_required" as const,
     error: "bob_credential_unavailable",
@@ -293,7 +405,7 @@ async function acquireBobQuota(
   return failureReport(
     new BobFailure(failure.error, {
       status: failure.status,
-      definitiveAuth: true,
+      definitiveAuth: failure.status === "auth_required",
     }),
     undefined,
     attempts,
@@ -301,15 +413,48 @@ async function acquireBobQuota(
   );
 }
 
+/** The key's own rejection, now also naming the sources tried after it. */
+function withSourcesTried(
+  report: ProviderQuota | undefined,
+  attempts: SourceAttempt[],
+): ProviderQuota | undefined {
+  if (report) report.state.sourcesTried = sourceNames(attempts);
+  return report;
+}
+
+/**
+ * The deployment check for a present stored sign-in, the same one a key gets: a
+ * login is no more welcome at another gateway than a key is. An absent file
+ * says nothing about the deployment, so it blocks nothing.
+ */
+function loginBlock(
+  login: BobLoginResolution,
+  environment: Readonly<Record<string, string | undefined>>,
+  home: string,
+): BobCredentials["blocked"] {
+  return login.status === "missing"
+    ? undefined
+    : gatewayBlock(environment.BOB_GATEWAY_URL, home);
+}
+
+type BobProfileRequest = {
+  /** The key or bearer token. It goes to {@link BOB_PROFILE_URL} and nowhere else. */
+  key: string;
+  source: string;
+  scheme: typeof API_KEY_SCHEME | typeof LOGIN_SCHEME;
+  /** Who this credential belongs to, known before the request is made. */
+  cacheContextId: string;
+  /** The stored expiry has passed; only the endpoint's own verdict is final. */
+  expired?: boolean;
+};
+
 async function readProfile(
-  credential: Extract<EnvPiCredentialResolution, { status: "available" }>,
+  { key, source, scheme, cacheContextId, expired }: BobProfileRequest,
   attempts: SourceAttempt[],
   dependencies: BobDependencies,
 ): Promise<ProviderQuota> {
-  const { key, source } = credential;
-  // The key is the account here, so its identity is known before the request
+  // The credential names its owner, so its identity is known before the request
   // and a failed read can still serve exactly its own cached snapshot.
-  const cacheContextId = bobCacheContextId(source, key);
   publishBobReadingContextId(cacheContextId);
   try {
     const payload = await requestKeyEndpoint(
@@ -318,7 +463,7 @@ async function readProfile(
       dependencies.fetch,
       dependencies.deadlineMs,
       {
-        authScheme: API_KEY_SCHEME,
+        authScheme: scheme,
         jsonRejectionOnly: true,
         reviver: (name, value) =>
           name === "" || /^\d+$/.test(name) || RESPONSE_KEYS.has(name)
@@ -347,7 +492,16 @@ async function readProfile(
       attempts,
     };
   } catch (error) {
-    const failure = asBobFailure(error);
+    const rejected = asBobFailure(error);
+    // A token past its stored expiry that the endpoint rejects is expired, not
+    // merely refused: the same verdict, named for what it is.
+    const failure =
+      expired && rejected.definitiveAuth
+        ? new BobFailure(LOGIN_EXPIRED, {
+            status: "auth_required",
+            definitiveAuth: true,
+          })
+        : rejected;
     attempts.push({ source, status: "failed", error: failure.code });
     return failureReport(failure, cacheContextId, attempts, dependencies);
   }

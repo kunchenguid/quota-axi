@@ -4,10 +4,12 @@ import { createHash } from "node:crypto";
  * The cache identity the Bob reading this process produced belongs to, or
  * `undefined` when nothing has claimed one yet.
  *
- * Bob is keyed by one API key, and only that key names the account: the profile
- * fields that could identify it are dropped while the response is parsed. The
- * cache writer reads this stamp rather than deriving an identity for itself, so
- * a snapshot is reused only for the key that actually produced it.
+ * Bob is keyed by one credential, an API key or the stored browser sign-in's
+ * owner (see `bobLoginCacheContextId`), and only that credential names the
+ * account: the profile fields that could identify it are dropped while the
+ * response is parsed. The cache writer reads this stamp rather than deriving an
+ * identity for itself, so a snapshot is reused only for the credential that
+ * actually produced it.
  */
 let readingContextId: string | undefined;
 

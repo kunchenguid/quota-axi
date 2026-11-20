@@ -795,7 +795,7 @@ describe("credential source contract", { timeout: 30_000 }, () => {
   });
 
   /**
-   * Bob has two key variables and no stored expiry. Unset or blank is absence;
+   * Bob has two key variables, which carry no expiry. Unset or blank is absence;
    * a non-blank value that is not a usable secret, or two different values, is
    * a credential that exists and is never sent. A usable key goes out under
    * Bob's own `apikey` scheme, never as a bearer.
@@ -884,6 +884,72 @@ describe("credential source contract", { timeout: 30_000 }, () => {
 
       expect(api.authorizations).toEqual(["apikey bob-probe-fixture"]);
       expect(result.state.status).toBe("auth_required");
+    });
+
+    /**
+     * Bob's browser sign-in is a stored bearer with an advisory expiry, read only
+     * when no key variable is usable or the key was definitively rejected.
+     */
+    function writeLogin(expiresAt: number): void {
+      mkdirSync(join(tempDir, ".bob", "settings"), { recursive: true });
+      writeFileSync(
+        join(tempDir, ".bob", "settings", "auth-secrets.json"),
+        JSON.stringify({
+          "bob.auth.tokens-https://api.us-east.bob.ibm.com": JSON.stringify({
+            token: "bob-login-fixture",
+            refreshToken: "bob-refresh-fixture",
+            userId: "bob-user-fixture",
+            expiresAt,
+          }),
+        }),
+      );
+    }
+
+    it("probes a stored sign-in as a bearer and marks the source", async () => {
+      writeLogin(Date.now() / 1000 + 3600);
+      const api = stubRejectingApiKey();
+
+      const result = await readQuota("bob");
+
+      expect(api.authorizations).toEqual(["Bearer bob-login-fixture"]);
+      expect(result.state.status).toBe("auth_required");
+      expect(attemptsFor(result, "file:bob-auth")).toEqual([
+        {
+          source: "file:bob-auth",
+          status: "failed",
+          error: "provider_auth_rejected",
+        },
+      ]);
+    });
+
+    it("probes an expired stored sign-in and names the rejection", async () => {
+      writeLogin(Date.now() / 1000 - 5);
+      const api = stubRejectingApiKey();
+
+      const result = await readQuota("bob");
+
+      expect(api.authorizations).toEqual(["Bearer bob-login-fixture"]);
+      expect(result.state.error).toBe("bob_login_expired");
+      expect(attemptsFor(result, "file:bob-auth")).toEqual([
+        {
+          source: "file:bob-auth",
+          status: "failed",
+          error: "bob_login_expired",
+        },
+      ]);
+    });
+
+    it("tries a stored sign-in only after the key is rejected", async () => {
+      writeLogin(Date.now() / 1000 + 3600);
+      process.env.BOB_API_KEY = "bob-probe-fixture";
+      const api = stubRejectingApiKey();
+
+      await readQuota("bob");
+
+      expect(api.authorizations).toEqual([
+        "apikey bob-probe-fixture",
+        "Bearer bob-login-fixture",
+      ]);
     });
   });
 

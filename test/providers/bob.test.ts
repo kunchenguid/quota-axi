@@ -11,6 +11,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { writeCachedProviders } from "../../src/cache.js";
 import { withQuotaSemantics } from "../../src/interpretation.js";
 import {
+  BOB_LOGIN_SOURCE,
+  bobLoginCacheContextId,
+} from "../../src/providers/bob-login.js";
+import {
   BOB_API_KEY_SOURCE,
   BOB_API_ORIGIN,
   BOB_PROFILE_URL,
@@ -395,6 +399,11 @@ describe("Bob key conflict and gateway", () => {
           path: "BOBSHELL_API_KEY",
           status: "available",
         },
+        {
+          source: BOB_LOGIN_SOURCE,
+          path: expect.stringMatching(/auth-secrets\.json$/) as string,
+          status: "missing",
+        },
       ],
     });
   });
@@ -410,6 +419,7 @@ describe("Bob key conflict and gateway", () => {
     expect(report.sources.map(({ status, error }) => [status, error])).toEqual([
       ["skipped", "bob_api_key_conflict"],
       ["skipped", "bob_api_key_conflict"],
+      ["missing", undefined],
     ]);
     expect(JSON.stringify(report)).not.toContain("synthetic-bob-key");
   });
@@ -705,6 +715,714 @@ describe("Bob auth classification", () => {
       status: "error",
       error: "invalid_json",
     });
+  });
+});
+
+/**
+ * Bob's browser sign-in, stored by Bob itself in `~/.bob/settings/auth-secrets.json`.
+ * Every value here is synthetic. The entry is a JSON string under a per-gateway
+ * key, holding a bearer token, a refresh token, the user id, and an expiry in
+ * seconds; quota-axi may send the token and may never exchange or keep the
+ * refresh token.
+ */
+describe("Bob stored sign-in", () => {
+  const LOGIN_TOKEN = "synthetic-bob-login-token-317";
+  const LOGIN_REFRESH = "synthetic-bob-refresh-token-552";
+  const LOGIN_USER = "synthetic-bob-user-204";
+  const OTHER_USER = "synthetic-bob-user-771";
+  const TELEMETRY = "synthetic-bob-telemetry-session-640";
+  const ENTRY_KEY = `bob.auth.tokens-${BOB_API_ORIGIN}`;
+  const SECRETS = [LOGIN_TOKEN, LOGIN_REFRESH, LOGIN_USER, TELEMETRY];
+  const NOW_SECONDS = NOW / 1000;
+  const homes: string[] = [];
+
+  afterEach(() => {
+    for (const home of homes.splice(0)) {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  type Entry = Record<string, unknown>;
+  const entry = (overrides: Entry = {}): Entry => ({
+    token: LOGIN_TOKEN,
+    refreshToken: LOGIN_REFRESH,
+    userId: LOGIN_USER,
+    expiresAt: NOW_SECONDS + 3600,
+    ...overrides,
+  });
+
+  /** A synthetic home whose Bob secrets file holds `value` under the gateway key. */
+  function homeWithLogin(value: unknown = entry()): string {
+    return homeWithSecrets({
+      "bob.telemetry.sessionId": TELEMETRY,
+      [ENTRY_KEY]: typeof value === "string" ? value : JSON.stringify(value),
+    });
+  }
+
+  function homeWithSecrets(contents: unknown, raw = false): string {
+    const home = mkdtempSync(join(tmpdir(), "quota-axi-bob-login-"));
+    homes.push(home);
+    mkdirSync(join(home, ".bob", "settings"), { recursive: true });
+    writeFileSync(
+      join(home, ".bob", "settings", "auth-secrets.json"),
+      raw ? (contents as string) : JSON.stringify(contents),
+    );
+    return home;
+  }
+
+  const noKey = (): Record<string, string> => ({});
+
+  function loginAdapter(home: string, overrides: AdapterOverrides = {}) {
+    return testAdapter({
+      environment: noKey,
+      homeDirectory: () => home,
+      ...overrides,
+    });
+  }
+
+  function expectNoSecret(value: unknown): void {
+    const text = typeof value === "string" ? value : JSON.stringify(value);
+    for (const secret of SECRETS) expect(text).not.toContain(secret);
+  }
+
+  it("reads the stored token as a bearer when no key is set", async () => {
+    const request = sequentialFetch([jsonResponse(PRO_PLUS)]);
+    const report = await loginAdapter(homeWithLogin(), {
+      fetch: request,
+    }).fetchQuota(OPTIONS);
+
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(
+      new Headers(request.mock.calls[0][1]?.headers).get("authorization"),
+    ).toBe(`Bearer ${LOGIN_TOKEN}`);
+    expect(report.state.status).toBe("fresh");
+    expect(report.state.authStatus).toBe("usable");
+    expect(report.windows).toEqual([MONTHLY_BUDGET]);
+    expect(report.attempts).toEqual([
+      {
+        source: BOB_API_KEY_SOURCE,
+        status: "skipped",
+        error: "bob_credential_unavailable",
+      },
+      {
+        source: BOBSHELL_API_KEY_SOURCE,
+        status: "skipped",
+        error: "bob_credential_unavailable",
+      },
+      { source: BOB_LOGIN_SOURCE, status: "success" },
+    ]);
+    expect(report.state.sourcesTried).toEqual([
+      BOB_API_KEY_SOURCE,
+      BOBSHELL_API_KEY_SOURCE,
+      BOB_LOGIN_SOURCE,
+    ]);
+    expectNoSecret(report);
+  });
+
+  it("ranks an environment key above the stored sign-in and never opens the file", async () => {
+    const request = sequentialFetch([jsonResponse(PRO_PLUS)]);
+    // Unparseable on purpose: a reader that touched it would report a failure.
+    const home = homeWithSecrets("{ not json", true);
+    const report = await testAdapter({
+      homeDirectory: () => home,
+      fetch: request,
+    }).fetchQuota(OPTIONS);
+
+    expect(
+      new Headers(request.mock.calls[0][1]?.headers).get("authorization"),
+    ).toBe(`apikey ${SYNTHETIC_KEY}`);
+    expect(report.state.status).toBe("fresh");
+    expect(report.attempts).toEqual([
+      { source: BOB_API_KEY_SOURCE, status: "success" },
+    ]);
+  });
+
+  it("falls back to the stored sign-in when the environment key is not a literal", async () => {
+    const request = sequentialFetch([jsonResponse(PRO_PLUS)]);
+    const report = await loginAdapter(homeWithLogin(), {
+      environment: () => ({ BOB_API_KEY: "$BOB_KEY_REFERENCE" }),
+      fetch: request,
+    }).fetchQuota(OPTIONS);
+
+    expect(
+      new Headers(request.mock.calls[0][1]?.headers).get("authorization"),
+    ).toBe(`Bearer ${LOGIN_TOKEN}`);
+    expect(report.state.status).toBe("fresh");
+    expect(report.attempts).toEqual([
+      {
+        source: BOB_API_KEY_SOURCE,
+        status: "failed",
+        error: "bob_credential_invalid",
+        credentialPresent: true,
+      },
+      {
+        source: BOBSHELL_API_KEY_SOURCE,
+        status: "skipped",
+        error: "bob_credential_unavailable",
+      },
+      { source: BOB_LOGIN_SOURCE, status: "success" },
+    ]);
+  });
+
+  // A stored expiry is advisory: only the endpoint can say a token is dead, so
+  // the token is probed in its declared position and the answer decides.
+  it.each([
+    ["past its expiry", NOW_SECONDS - 1],
+    ["at its expiry", NOW_SECONDS],
+  ])(
+    "probes a token %s and reports the endpoint's rejection as expired",
+    async (_label, expiresAt) => {
+      const request = sequentialFetch([jsonResponse(REJECTED_BODY, 401)]);
+      const report = await loginAdapter(homeWithLogin(entry({ expiresAt })), {
+        fetch: request,
+      }).fetchQuota(OPTIONS);
+
+      expect(request).toHaveBeenCalledTimes(1);
+      expect(report.state).toMatchObject({
+        status: "auth_required",
+        authStatus: "unusable",
+        error: "bob_login_expired",
+      });
+      expect(report.windows).toEqual([]);
+      expect(report.attempts).toContainEqual({
+        source: BOB_LOGIN_SOURCE,
+        status: "failed",
+        error: "bob_login_expired",
+      });
+      expectNoSecret(report);
+    },
+  );
+
+  it("reads quota with a token past its stored expiry that the endpoint still accepts", async () => {
+    const report = await loginAdapter(
+      homeWithLogin(entry({ expiresAt: NOW_SECONDS - 5 })),
+      { fetch: sequentialFetch([jsonResponse(PRO_PLUS)]) },
+    ).fetchQuota(OPTIONS);
+
+    expect(report.state.status).toBe("fresh");
+    expect(report.windows).toEqual([MONTHLY_BUDGET]);
+  });
+
+  it("gives no auth verdict, and keeps the cache, when an expired token meets a server failure", async () => {
+    const { restore } = useCacheDir();
+    try {
+      seedCachedLogin(LOGIN_USER);
+      const deleteCachedProvider = vi.fn();
+      const report = await loginAdapter(
+        homeWithLogin(entry({ expiresAt: NOW_SECONDS - 5 })),
+        {
+          fetch: sequentialFetch([new Response("down", { status: 503 })]),
+          deleteCachedProvider,
+        },
+      ).fetchQuota(OPTIONS);
+
+      expect(report.state.status).toBe("stale");
+      expect(report.state.authStatus).toBeUndefined();
+      expect(deleteCachedProvider).not.toHaveBeenCalled();
+    } finally {
+      restore();
+    }
+  });
+
+  it("names an expired token even when an earlier key variable was unusable", async () => {
+    const report = await loginAdapter(
+      homeWithLogin(entry({ expiresAt: NOW_SECONDS - 5 })),
+      {
+        environment: () => ({ BOB_API_KEY: "$BOB_KEY_REFERENCE" }),
+        fetch: sequentialFetch([jsonResponse(REJECTED_BODY, 401)]),
+      },
+    ).fetchQuota(OPTIONS);
+
+    expect(report.state.error).toBe("bob_login_expired");
+    expect(
+      report.attempts?.map(({ source, status }) => [source, status]),
+    ).toEqual([
+      [BOB_API_KEY_SOURCE, "failed"],
+      [BOBSHELL_API_KEY_SOURCE, "skipped"],
+      [BOB_LOGIN_SOURCE, "failed"],
+    ]);
+  });
+
+  it("sends the token while it is still valid", async () => {
+    const request = sequentialFetch([jsonResponse(PRO_PLUS)]);
+    const report = await loginAdapter(
+      homeWithLogin(entry({ expiresAt: NOW_SECONDS + 1 })),
+      { fetch: request },
+    ).fetchQuota(OPTIONS);
+
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(report.state.status).toBe("fresh");
+  });
+
+  it("does not sign out the environment key because the stored sign-in expired", async () => {
+    const request = sequentialFetch([jsonResponse(PRO_PLUS)]);
+    const report = await loginAdapter(
+      homeWithLogin(entry({ expiresAt: NOW_SECONDS - 10 })),
+      {
+        environment: () => ({ BOB_API_KEY: SYNTHETIC_KEY }),
+        fetch: request,
+      },
+    ).fetchQuota(OPTIONS);
+
+    expect(report.state.status).toBe("fresh");
+    expect(report.state.authStatus).toBe("usable");
+  });
+
+  it("retires only the cache of the owner whose expired token the endpoint rejects", async () => {
+    const { restore } = useCacheDir();
+    try {
+      const home = homeWithLogin(entry({ expiresAt: NOW_SECONDS - 10 }));
+      seedCachedLogin(LOGIN_USER);
+      const deleteCachedProvider = vi.fn();
+      await loginAdapter(home, {
+        fetch: sequentialFetch([jsonResponse(REJECTED_BODY, 401)]),
+        deleteCachedProvider,
+      }).fetchQuota(OPTIONS);
+      expect(deleteCachedProvider).toHaveBeenCalledWith("bob");
+
+      deleteCachedProvider.mockClear();
+      seedCachedLogin(OTHER_USER);
+      await loginAdapter(home, {
+        fetch: sequentialFetch([jsonResponse(REJECTED_BODY, 401)]),
+        deleteCachedProvider,
+      }).fetchQuota(OPTIONS);
+      expect(deleteCachedProvider).not.toHaveBeenCalled();
+    } finally {
+      restore();
+    }
+  });
+
+  it("reports an absent file as a skipped source, not a sign-out", async () => {
+    const request = sequentialFetch([]);
+    const report = await loginAdapter(
+      join(tmpdir(), "quota-axi-bob-no-such-home"),
+      { fetch: request },
+    ).fetchQuota(OPTIONS);
+
+    expect(request).not.toHaveBeenCalled();
+    expect(report.state.error).toBe("bob_credential_unavailable");
+    expect(report.attempts).toContainEqual({
+      source: BOB_LOGIN_SOURCE,
+      status: "skipped",
+      error: "bob_credential_unavailable",
+    });
+  });
+
+  it("treats a file with no entry for this gateway as no sign-in", async () => {
+    const home = homeWithSecrets({
+      "bob.auth.tokens-https://gateway.example.invalid":
+        JSON.stringify(entry()),
+    });
+    const request = sequentialFetch([]);
+    const report = await loginAdapter(home, { fetch: request }).fetchQuota(
+      OPTIONS,
+    );
+
+    expect(request).not.toHaveBeenCalled();
+    expect(report.state.error).toBe("bob_credential_unavailable");
+    expect(report.attempts?.at(-1)).toMatchObject({
+      source: BOB_LOGIN_SOURCE,
+      status: "skipped",
+    });
+  });
+
+  it("sends nothing when the file cannot be read", async () => {
+    const home = mkdtempSync(join(tmpdir(), "quota-axi-bob-login-"));
+    homes.push(home);
+    // A directory where the file belongs: present, but not readable as a file.
+    mkdirSync(join(home, ".bob", "settings", "auth-secrets.json"), {
+      recursive: true,
+    });
+    const request = sequentialFetch([]);
+    const report = await loginAdapter(home, { fetch: request }).fetchQuota(
+      OPTIONS,
+    );
+
+    expect(request).not.toHaveBeenCalled();
+    expect(report.state).toMatchObject({
+      status: "error",
+      error: "bob_credential_resolution_failed",
+    });
+    // An operational failure, never a sign-out.
+    expect(report.state.authStatus).toBeUndefined();
+    expect(report.attempts?.at(-1)).toEqual({
+      source: BOB_LOGIN_SOURCE,
+      status: "failed",
+      error: "bob_credential_resolution_failed",
+      credentialPresent: true,
+    });
+  });
+
+  it.each([
+    ["truncated JSON", () => homeWithSecrets('{"bob.auth', true)],
+    ["a JSON array", () => homeWithSecrets([])],
+  ])(
+    "reports a file holding %s as an operational failure, not a sign-out",
+    async (_label, makeHome) => {
+      const request = sequentialFetch([]);
+      const report = await loginAdapter(makeHome(), {
+        fetch: request,
+      }).fetchQuota(OPTIONS);
+
+      expect(request).not.toHaveBeenCalled();
+      expect(report.state).toMatchObject({
+        status: "error",
+        error: "bob_credential_resolution_failed",
+      });
+      expect(report.state.authStatus).toBeUndefined();
+    },
+  );
+
+  it.each([
+    ["a non-string entry", () => homeWithSecrets({ [ENTRY_KEY]: entry() })],
+    ["an entry that is not JSON", () => homeWithLogin("not json")],
+    ["an entry that is an array", () => homeWithLogin("[]")],
+    [
+      "an entry with no token",
+      () => homeWithLogin(entry({ token: undefined })),
+    ],
+    ["a blank token", () => homeWithLogin(entry({ token: "  " }))],
+    [
+      "a token that is a reference",
+      () => homeWithLogin(entry({ token: "$BOB_TOKEN" })),
+    ],
+    [
+      "a token with a control byte",
+      () => homeWithLogin(entry({ token: "synthetic-\u0007-token" })),
+    ],
+    ["no user id", () => homeWithLogin(entry({ userId: undefined }))],
+    ["a numeric user id", () => homeWithLogin(entry({ userId: 7 }))],
+    ["a string expiry", () => homeWithLogin(entry({ expiresAt: "soon" }))],
+    ["a zero expiry", () => homeWithLogin(entry({ expiresAt: 0 }))],
+  ])("sends nothing when the file holds %s", async (_label, makeHome) => {
+    const request = sequentialFetch([]);
+    const report = await loginAdapter(makeHome(), {
+      fetch: request,
+    }).fetchQuota(OPTIONS);
+
+    expect(request).not.toHaveBeenCalled();
+    expect(report.state).toMatchObject({
+      status: "auth_required",
+      error: "bob_credential_invalid",
+    });
+    expect(report.attempts?.at(-1)).toEqual({
+      source: BOB_LOGIN_SOURCE,
+      status: "failed",
+      error: "bob_credential_invalid",
+      credentialPresent: true,
+    });
+    expectNoSecret(report);
+  });
+
+  it("reads a sign-in that carries no refresh token", async () => {
+    const request = sequentialFetch([jsonResponse(PRO_PLUS)]);
+    const report = await loginAdapter(
+      homeWithLogin(entry({ refreshToken: undefined })),
+      { fetch: request },
+    ).fetchQuota(OPTIONS);
+
+    expect(report.state.status).toBe("fresh");
+  });
+
+  it.each([
+    ["another host", "https://gateway.example.invalid"],
+    ["a path on the default host", "https://api.us-east.bob.ibm.com/other"],
+  ])("sends no token to %s named by the environment", async (_l, gateway) => {
+    const request = sequentialFetch([]);
+    const report = await loginAdapter(homeWithLogin(), {
+      environment: () => ({ BOB_GATEWAY_URL: gateway }),
+      fetch: request,
+    }).fetchQuota(OPTIONS);
+
+    expect(request).not.toHaveBeenCalled();
+    expect(report.state).toMatchObject({
+      status: "error",
+      error: "unsupported_server",
+    });
+    expect(report.attempts?.at(-1)).toEqual({
+      source: BOB_LOGIN_SOURCE,
+      status: "skipped",
+      error: "unsupported_server",
+      credentialPresent: true,
+    });
+    expectNoSecret(report);
+  });
+
+  it("sends no token when the settings file names another gateway", async () => {
+    const home = homeWithLogin();
+    writeFileSync(
+      join(home, ".bob", "settings.json"),
+      JSON.stringify({ gatewayUrl: "https://gateway.example.invalid" }),
+    );
+    const request = sequentialFetch([]);
+    const report = await loginAdapter(home, { fetch: request }).fetchQuota(
+      OPTIONS,
+    );
+
+    expect(request).not.toHaveBeenCalled();
+    expect(report.state.error).toBe("unsupported_server");
+  });
+
+  it("treats a JSON 401 as a sign-out of this owner and retires only that cache", async () => {
+    const { restore } = useCacheDir();
+    try {
+      const home = homeWithLogin();
+      seedCachedLogin(LOGIN_USER);
+      const deleteCachedProvider = vi.fn();
+      const report = await loginAdapter(home, {
+        fetch: sequentialFetch([jsonResponse(REJECTED_BODY, 401)]),
+        deleteCachedProvider,
+      }).fetchQuota(OPTIONS);
+
+      expect(report.state).toMatchObject({
+        status: "auth_required",
+        authStatus: "unusable",
+        error: "provider_auth_rejected",
+      });
+      expect(deleteCachedProvider).toHaveBeenCalledWith("bob");
+      expectNoSecret(report);
+    } finally {
+      restore();
+    }
+  });
+
+  it("keeps the cache when the edge answers 401 with a non-JSON denial", async () => {
+    const { restore } = useCacheDir();
+    try {
+      seedCachedLogin(LOGIN_USER);
+      const deleteCachedProvider = vi.fn();
+      const report = await loginAdapter(homeWithLogin(), {
+        fetch: sequentialFetch([new Response("denied", { status: 401 })]),
+        deleteCachedProvider,
+      }).fetchQuota(OPTIONS);
+
+      expect(report.state.status).toBe("stale");
+      expect(deleteCachedProvider).not.toHaveBeenCalled();
+    } finally {
+      restore();
+    }
+  });
+
+  it("serves a stale budget across Bob's own token renewal for the same owner", async () => {
+    const { restore } = useCacheDir();
+    try {
+      seedCachedLogin(LOGIN_USER);
+      const renewed = homeWithLogin(
+        entry({ token: "synthetic-renewed-token" }),
+      );
+      const report = await loginAdapter(renewed, {
+        fetch: sequentialFetch([new Response("down", { status: 503 })]),
+      }).fetchQuota(OPTIONS);
+
+      expect(report.state).toMatchObject({ status: "stale", stale: true });
+      expect(report.windows).toEqual([MONTHLY_BUDGET]);
+    } finally {
+      restore();
+    }
+  });
+
+  it("never serves one owner's stale budget to another sign-in", async () => {
+    const { restore } = useCacheDir();
+    try {
+      seedCachedLogin(LOGIN_USER);
+      const report = await loginAdapter(
+        homeWithLogin(entry({ userId: OTHER_USER })),
+        { fetch: sequentialFetch([new Response("down", { status: 503 })]) },
+      ).fetchQuota(OPTIONS);
+
+      expect(report.state.status).toBe("error");
+      expect(report.windows).toEqual([]);
+    } finally {
+      restore();
+    }
+  });
+
+  it("never serves a stale budget from a key to a sign-in, or the reverse", async () => {
+    const { restore } = useCacheDir();
+    try {
+      seedCachedBob(SYNTHETIC_KEY);
+      const report = await loginAdapter(homeWithLogin(), {
+        fetch: sequentialFetch([new Response("down", { status: 503 })]),
+      }).fetchQuota(OPTIONS);
+
+      expect(report.state.status).toBe("error");
+      expect(report.windows).toEqual([]);
+    } finally {
+      restore();
+    }
+  });
+
+  it("gives each owner its own opaque identity and leaks neither id nor token", () => {
+    const one = bobLoginCacheContextId(BOB_LOGIN_SOURCE, LOGIN_USER);
+    const other = bobLoginCacheContextId(BOB_LOGIN_SOURCE, OTHER_USER);
+
+    expect(one).toMatch(/^[a-f0-9]{64}$/);
+    expect(one).not.toBe(other);
+    expect(one).not.toContain(LOGIN_USER);
+    expect(one).not.toBe(bobCacheContextId(BOB_LOGIN_SOURCE, LOGIN_USER));
+  });
+
+  it("keeps the token, refresh token, user id and every other stored value out of the report and the cache", async () => {
+    const { cacheDir, restore } = useCacheDir();
+    try {
+      const report = await loginAdapter(homeWithLogin(), {
+        fetch: sequentialFetch([jsonResponse(PRO_PLUS)]),
+      }).fetchQuota(OPTIONS);
+      writeCachedProviders([report]);
+
+      const cached = readFileSync(
+        join(cacheDir, "quota-axi", "quotas.json"),
+        "utf8",
+      );
+      expectNoSecret(report);
+      expectNoSecret(cached);
+    } finally {
+      restore();
+    }
+  });
+
+  it("keeps the refresh token and the other stored values out of every parsed object", async () => {
+    const seen: unknown[] = [];
+    const parse = JSON.parse.bind(JSON);
+    const spy = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
+      const value = parse(text, reviver) as unknown;
+      if (typeof value === "object" && value !== null) seen.push(value);
+      return value;
+    });
+    try {
+      await loginAdapter(homeWithLogin(), {
+        fetch: sequentialFetch([jsonResponse(PRO_PLUS)]),
+      }).fetchQuota(OPTIONS);
+    } finally {
+      spy.mockRestore();
+    }
+
+    // Bob stores the entry as a JSON string inside the file, so the file's own
+    // parse can only carry that string, whole, as one value. The entry's parse
+    // is where the refresh token is dropped.
+    const store = seen.filter((value) => ENTRY_KEY in (value as object));
+    const entries = seen.filter((value) => "token" in (value as object));
+    expect(store).toHaveLength(1);
+    expect(Object.keys(store[0] as object)).toEqual([ENTRY_KEY]);
+    expect(entries).toHaveLength(1);
+    expect(Object.keys(entries[0] as object).sort()).toEqual([
+      "expiresAt",
+      "token",
+      "userId",
+    ]);
+    expect(JSON.stringify(entries)).not.toContain(LOGIN_REFRESH);
+    expect(JSON.stringify(seen)).not.toContain(TELEMETRY);
+  });
+
+  it("never sends the refresh token anywhere", async () => {
+    const request = sequentialFetch([jsonResponse(PRO_PLUS)]);
+    await loginAdapter(homeWithLogin(), { fetch: request }).fetchQuota(OPTIONS);
+
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(request.mock.calls)).not.toContain(LOGIN_REFRESH);
+  });
+
+  it("inspectAuth reports each state of the sign-in without a value", async () => {
+    const statuses = async (home: string) => {
+      const report = await loginAdapter(home).inspectAuth(OPTIONS);
+      expectNoSecret(report);
+      return report.sources.at(-1);
+    };
+
+    expect(await statuses(homeWithLogin())).toEqual({
+      source: BOB_LOGIN_SOURCE,
+      path: expect.stringMatching(/auth-secrets\.json$/) as string,
+      status: "available",
+    });
+    expect(
+      await statuses(homeWithLogin(entry({ expiresAt: NOW_SECONDS - 1 }))),
+    ).toMatchObject({
+      status: "expired",
+      error: "bob_login_expired",
+      credentialPresent: true,
+    });
+    expect(await statuses(homeWithLogin("not json"))).toMatchObject({
+      status: "invalid",
+      error: "bob_credential_invalid",
+    });
+    expect(await statuses(homeWithSecrets("{ torn", true))).toMatchObject({
+      status: "error",
+      error: "bob_credential_resolution_failed",
+    });
+  });
+
+  it("inspectAuth reports a sign-in at another gateway as skipped", async () => {
+    const report = await loginAdapter(homeWithLogin(), {
+      environment: () => ({
+        BOB_GATEWAY_URL: "https://gateway.example.invalid",
+      }),
+    }).inspectAuth(OPTIONS);
+
+    expect(report.sources.at(-1)).toMatchObject({
+      source: BOB_LOGIN_SOURCE,
+      status: "skipped",
+      error: "unsupported_server",
+      credentialPresent: true,
+    });
+  });
+
+  it("hands over to the stored sign-in only after the key is definitively rejected", async () => {
+    const request = sequentialFetch([
+      jsonResponse(REJECTED_BODY, 401),
+      jsonResponse(PRO_PLUS),
+    ]);
+    const report = await loginAdapter(homeWithLogin(), {
+      environment: () => ({ BOB_API_KEY: SYNTHETIC_KEY }),
+      fetch: request,
+    }).fetchQuota(OPTIONS);
+
+    expect(
+      request.mock.calls.map(([, init]) =>
+        new Headers(init?.headers).get("authorization"),
+      ),
+    ).toEqual([`apikey ${SYNTHETIC_KEY}`, `Bearer ${LOGIN_TOKEN}`]);
+    expect(report.state.status).toBe("fresh");
+    expect(report.attempts).toEqual([
+      {
+        source: BOB_API_KEY_SOURCE,
+        status: "failed",
+        error: "provider_auth_rejected",
+      },
+      { source: BOB_LOGIN_SOURCE, status: "success" },
+    ]);
+  });
+
+  it("keeps the key's own rejection when no stored sign-in can answer", async () => {
+    const request = sequentialFetch([jsonResponse(REJECTED_BODY, 401)]);
+    const report = await loginAdapter(
+      join(tmpdir(), "quota-axi-bob-no-such-home"),
+      {
+        environment: () => ({ BOB_API_KEY: SYNTHETIC_KEY }),
+        fetch: request,
+      },
+    ).fetchQuota(OPTIONS);
+
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(report.state).toMatchObject({
+      status: "auth_required",
+      authStatus: "unusable",
+      error: "provider_auth_rejected",
+    });
+    expect(report.state.sourcesTried).toEqual([
+      BOB_API_KEY_SOURCE,
+      BOB_LOGIN_SOURCE,
+    ]);
+  });
+
+  it("does not hand over to the stored sign-in when the key meets a server failure", async () => {
+    const request = sequentialFetch([new Response("down", { status: 503 })]);
+    const report = await loginAdapter(homeWithLogin(), {
+      environment: () => ({ BOB_API_KEY: SYNTHETIC_KEY }),
+      fetch: request,
+    }).fetchQuota(OPTIONS);
+
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(report.state.error).toBe("provider_error:503");
   });
 });
 
@@ -1204,6 +1922,25 @@ function seedCachedBob(key: string, untrustedWindowIds?: string[]): void {
         refreshedAt: new Date(NOW - 60_000).toISOString(),
         ...(untrustedWindowIds ? { untrustedWindowIds } : {}),
         sourcesTried: [BOB_API_KEY_SOURCE],
+      },
+    },
+  ]);
+}
+
+function seedCachedLogin(userId: string): void {
+  publishBobReadingContextId(bobLoginCacheContextId(BOB_LOGIN_SOURCE, userId));
+  writeCachedProviders([
+    {
+      provider: "bob",
+      label: "Bob",
+      source: "api",
+      plan: "pro plus plan",
+      windows: [MONTHLY_BUDGET],
+      state: {
+        status: "fresh",
+        stale: false,
+        refreshedAt: new Date(NOW - 60_000).toISOString(),
+        sourcesTried: [BOB_LOGIN_SOURCE],
       },
     },
   ]);

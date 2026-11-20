@@ -73,8 +73,8 @@ const CREDENTIAL_CONTEXT_ID = /^[a-f0-9]{64}$/;
  * a Kimi Code `config.toml` selects the deployment, Command Code's `whoami`
  * identifies the source-plus-account pair, an ElevenLabs API key is itself the
  * account, MiniMax stamps by credential source plus deployment host, a Muse
- * credential is the only local thing naming its subscription, a Bob API key is
- * the only thing naming its account, and a Codex slot can be signed in to
+ * credential is the only local thing naming its subscription, a Bob API key or
+ * stored sign-in owner is the only thing naming its account, and a Codex slot can be signed in to
  * another ChatGPT account. A snapshot from one such context says nothing about
  * another, so each is stamped on write and checked on stale reuse - strictly
  * for Claude, Kimi, Command Code, MiniMax, ElevenLabs, Devin, Muse, and Bob,
@@ -105,7 +105,8 @@ const CREDENTIAL_CONTEXT_ID = /^[a-f0-9]{64}$/;
  * the same kind of digest for the credential that answered, and additionally
  * reuses its own fresh snapshot inside the key-endpoint interval, so that
  * stamp is what keeps a replayed reading on the credential that produced it.
- * Bob publishes the answering source and a one-way digest of the key, because
+ * Bob publishes the answering source and a one-way digest of the key (or of the
+ * stored sign-in's owner), because
  * the profile fields that could name the account are dropped during parsing.
  */
 const CONTEXT_SCOPED_PROVIDERS: Partial<
@@ -606,7 +607,7 @@ export function readCachedDevinProvider(
 
 /**
  * Bob stale quota may only be reused when the cache record proves it was
- * captured with the same source and API key, so one account's budget can never
+ * captured with the same source and credential (API key or sign-in owner), so one account's budget can never
  * stand in for another's.
  */
 export function readCachedBobProvider(
