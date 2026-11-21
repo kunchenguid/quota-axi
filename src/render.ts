@@ -23,6 +23,66 @@ const ID_SEPARATOR = " + ";
 /** Kept out of `,` so a detail never forces TOON string quoting on its own. */
 const DETAIL_SEPARATOR = " · ";
 
+/**
+ * Percent-remaining is rounded only at this output boundary, so default TOON,
+ * `--full`, and `--json` agree. Two decimal places; the value stays a number,
+ * so trailing zeros drop (`48`, not `48.00`). A positive remainder that would
+ * round to 0 is published as 0.01, and a partial allowance that would round
+ * to 100 is published as 99.99. Exact 0 and exact 100 stay exact. Ranking
+ * scores, runway, and seconds stay as computed.
+ */
+function roundPercentRemaining(value: number | undefined): number | undefined {
+  if (value === undefined || !Number.isFinite(value)) return value;
+  const rounded = Number(value.toFixed(2));
+  if (value > 0 && rounded === 0) return 0.01;
+  if (value < 100 && rounded === 100) return 99.99;
+  return rounded;
+}
+
+function roundWindowPercentRemaining(window: QuotaWindow): QuotaWindow {
+  const percentRemaining = roundPercentRemaining(window.percentRemaining);
+  if (percentRemaining === undefined) return { ...window };
+  return { ...window, percentRemaining };
+}
+
+function roundScopePercentRemaining(
+  scope: EffectiveAvailability,
+): EffectiveAvailability {
+  const effectivePercentRemaining = roundPercentRemaining(
+    scope.effectivePercentRemaining,
+  );
+  if (effectivePercentRemaining === undefined) return { ...scope };
+  return { ...scope, effectivePercentRemaining };
+}
+
+function roundProviderPercentRemaining(provider: ProviderQuota): ProviderQuota {
+  const semantics = provider.quotaSemantics;
+  return {
+    ...provider,
+    windows: provider.windows.map(roundWindowPercentRemaining),
+    ...(semantics
+      ? {
+          quotaSemantics: {
+            ...semantics,
+            effectiveAvailability: semantics.effectiveAvailability.map(
+              roundScopePercentRemaining,
+            ),
+          },
+        }
+      : {}),
+  };
+}
+
+/** Copy of the report, with percent-remaining fields rounded for publication. */
+function withRoundedPercentRemaining(
+  response: QuotaAxiResponse,
+): QuotaAxiResponse {
+  return {
+    ...response,
+    providers: response.providers.map(roundProviderPercentRemaining),
+  };
+}
+
 export function renderHelp(lines: string[]): string {
   return `help[${lines.length}]:\n${lines.map((line) => `  ${line}`).join("\n")}`;
 }
@@ -89,7 +149,7 @@ export function renderQuotaToon(
   omitProviderIds: readonly ProviderId[] = [],
 ): string {
   const omit = new Set(full ? [] : omitProviderIds);
-  const shown =
+  const shown = withRoundedPercentRemaining(
     omit.size === 0
       ? response
       : {
@@ -97,7 +157,8 @@ export function renderQuotaToon(
           providers: response.providers.filter(
             (provider) => !omit.has(provider.provider),
           ),
-        };
+        },
+  );
   const { quota, exhaustion, attention } = quotaBlocks(shown);
   const blocks = [
     encode({
@@ -111,7 +172,7 @@ export function renderQuotaToon(
     encode({ attention }),
   ];
 
-  if (full) blocks.push(...auditBlocks(response));
+  if (full) blocks.push(...auditBlocks(shown));
   blocks.push(renderHelp(quotaHelpLines(response, omit.size)));
   return blocks.filter(Boolean).join("\n");
 }
@@ -653,27 +714,29 @@ export function quotaJsonReport(
   laneAbsent: readonly boolean[] = [],
 ): QuotaAxiResponse {
   const redacted = redactedResponse(markNotSetUp(response, laneAbsent), full);
-  if (full) return redacted;
-  return {
-    ...redacted,
-    providers: redacted.providers.map((provider) => ({
-      ...provider,
-      label: undefined,
-      source: undefined,
-      windows: provider.windows.map(demotedWindow),
-      ...(provider.quotaSemantics
-        ? { quotaSemantics: demotedSemantics(provider.quotaSemantics) }
-        : {}),
-      state: {
-        ...provider.state,
-        // A reused reading's age is load-bearing, so its fetch time stays.
-        refreshedAt: provider.state.reused
-          ? provider.state.refreshedAt
-          : undefined,
-        sourcesTried: undefined,
-      },
-    })),
-  };
+  const reported = full
+    ? redacted
+    : {
+        ...redacted,
+        providers: redacted.providers.map((provider) => ({
+          ...provider,
+          label: undefined,
+          source: undefined,
+          windows: provider.windows.map(demotedWindow),
+          ...(provider.quotaSemantics
+            ? { quotaSemantics: demotedSemantics(provider.quotaSemantics) }
+            : {}),
+          state: {
+            ...provider.state,
+            // A reused reading's age is load-bearing, so its fetch time stays.
+            refreshedAt: provider.state.reused
+              ? provider.state.refreshedAt
+              : undefined,
+            sourcesTried: undefined,
+          },
+        })),
+      };
+  return withRoundedPercentRemaining(reported);
 }
 
 /**
