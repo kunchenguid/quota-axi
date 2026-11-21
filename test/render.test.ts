@@ -208,4 +208,70 @@ describe("percent-remaining output rounding", () => {
       expect(JSON.stringify(source)).toBe(before);
     },
   );
+
+  it("does not publish a positive remainder as 0 or a partial allowance as 100", () => {
+    const source = edgeResponse();
+    const before = JSON.stringify(source);
+    const toon = renderQuotaToon(source, "quota-axi", false);
+    const full = renderQuotaToon(source, "quota-axi", true);
+
+    expect(toon).toContain("codex,tiny,0.01,");
+    expect(toon).toContain("codex,almost,99.99,");
+    expect(toon).toContain("codex,spent,0,");
+    expect(toon).toContain("codex,full,100,");
+    expect(toon).not.toContain("codex,tiny,0,");
+    expect(toon).not.toContain("codex,almost,100,");
+    expect(full).toContain("codex,tiny,tiny,0.01,");
+    expect(full).toContain("codex,almost,almost,99.99,");
+    expect(full).toContain("codex,spent,spent,0,");
+    expect(full).toContain("codex,full,full,100,");
+    expect(JSON.stringify(source)).toBe(before);
+
+    for (const reportFull of [false, true]) {
+      const json = quotaJsonReport(source, reportFull);
+      expect(
+        json.providers[0]?.windows.map((window) => window.percentRemaining),
+      ).toEqual([0.01, 99.99, 0, 100]);
+      expect(
+        json.providers[0]?.quotaSemantics?.effectiveAvailability.map(
+          (scope) => scope.effectivePercentRemaining,
+        ),
+      ).toEqual([0.01, 99.99, 0, 100]);
+      expect(JSON.stringify(json)).not.toMatch(/"(?:0\.01|99\.99|0|100)"/);
+    }
+  });
 });
+
+function edgeResponse(): QuotaAxiResponse {
+  const windows = [
+    { id: "tiny", percentRemaining: 0.004 },
+    { id: "almost", percentRemaining: 99.996 },
+    { id: "spent", percentRemaining: 0 },
+    { id: "full", percentRemaining: 100 },
+  ] as const;
+  return {
+    generatedAt: GENERATED_AT,
+    schemaVersion: 5,
+    providers: [
+      {
+        provider: "codex",
+        windows: windows.map((window) => ({
+          id: window.id,
+          label: window.id,
+          kind: "weekly",
+          percentRemaining: window.percentRemaining,
+        })),
+        quotaSemantics: {
+          status: "known",
+          effectiveAvailability: windows.map((window) => ({
+            scope: window.id,
+            status: "known",
+            effectivePercentRemaining: window.percentRemaining,
+            boundedBy: [window.id],
+          })),
+        },
+        state: { status: "fresh", stale: false },
+      },
+    ],
+  };
+}

@@ -26,19 +26,23 @@ const DETAIL_SEPARATOR = " · ";
 /**
  * Percent-remaining is rounded only at this output boundary, so default TOON,
  * `--full`, and `--json` agree. Two decimal places; the value stays a number,
- * so trailing zeros drop (`48`, not `48.00`). Ranking scores, runway, and
- * seconds stay as computed.
+ * so trailing zeros drop (`48`, not `48.00`). A positive remainder that would
+ * round to 0 is published as 0.01, and a partial allowance that would round
+ * to 100 is published as 99.99. Exact 0 and exact 100 stay exact. Ranking
+ * scores, runway, and seconds stay as computed.
  */
 function roundPercentRemaining(value: number | undefined): number | undefined {
   if (value === undefined || !Number.isFinite(value)) return value;
-  return Number(value.toFixed(2));
+  const rounded = Number(value.toFixed(2));
+  if (value > 0 && rounded === 0) return 0.01;
+  if (value < 100 && rounded === 100) return 99.99;
+  return rounded;
 }
 
 function roundWindowPercentRemaining(window: QuotaWindow): QuotaWindow {
   const percentRemaining = roundPercentRemaining(window.percentRemaining);
-  return percentRemaining === window.percentRemaining
-    ? window
-    : { ...window, percentRemaining };
+  if (percentRemaining === undefined) return { ...window };
+  return { ...window, percentRemaining };
 }
 
 function roundScopePercentRemaining(
@@ -47,44 +51,36 @@ function roundScopePercentRemaining(
   const effectivePercentRemaining = roundPercentRemaining(
     scope.effectivePercentRemaining,
   );
-  return effectivePercentRemaining === scope.effectivePercentRemaining
-    ? scope
-    : { ...scope, effectivePercentRemaining };
+  if (effectivePercentRemaining === undefined) return { ...scope };
+  return { ...scope, effectivePercentRemaining };
 }
 
 function roundProviderPercentRemaining(provider: ProviderQuota): ProviderQuota {
-  const windows = provider.windows.map(roundWindowPercentRemaining);
   const semantics = provider.quotaSemantics;
-  const effectiveAvailability = semantics?.effectiveAvailability.map(
-    roundScopePercentRemaining,
-  );
-  const windowsChanged = windows.some(
-    (window, index) => window !== provider.windows[index],
-  );
-  const scopesChanged =
-    effectiveAvailability?.some(
-      (scope, index) => scope !== semantics?.effectiveAvailability[index],
-    ) ?? false;
-  if (!windowsChanged && !scopesChanged) return provider;
   return {
     ...provider,
-    windows,
-    ...(semantics && effectiveAvailability
-      ? { quotaSemantics: { ...semantics, effectiveAvailability } }
+    windows: provider.windows.map(roundWindowPercentRemaining),
+    ...(semantics
+      ? {
+          quotaSemantics: {
+            ...semantics,
+            effectiveAvailability: semantics.effectiveAvailability.map(
+              roundScopePercentRemaining,
+            ),
+          },
+        }
       : {}),
   };
 }
 
-/** Same report, with percent-remaining fields rounded for publication. */
+/** Copy of the report, with percent-remaining fields rounded for publication. */
 function withRoundedPercentRemaining(
   response: QuotaAxiResponse,
 ): QuotaAxiResponse {
-  const providers = response.providers.map(roundProviderPercentRemaining);
-  return providers.every(
-    (provider, index) => provider === response.providers[index],
-  )
-    ? response
-    : { ...response, providers };
+  return {
+    ...response,
+    providers: response.providers.map(roundProviderPercentRemaining),
+  };
 }
 
 export function renderHelp(lines: string[]): string {
