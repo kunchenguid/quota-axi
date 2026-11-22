@@ -393,7 +393,10 @@ async function acquireBobQuota(
     error: loginFailure.error,
     ...(login.status === "missing" ? {} : { credentialPresent: true }),
   });
-  if (rejectedKeyReport) {
+  // A stored sign-in that could not be read was never checked, so a rejected
+  // key cannot speak for it: its read failure is the answer, with no sign-in
+  // verdict, and the key's rejection stays in the key's own attempt.
+  if (rejectedKeyReport && login.status !== "error") {
     return withSourcesTried(rejectedKeyReport, attempts) as ProviderQuota;
   }
   credentialFailure = preferCredentialFailure(credentialFailure, loginFailure);

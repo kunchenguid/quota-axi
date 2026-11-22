@@ -1414,6 +1414,58 @@ describe("Bob stored sign-in", () => {
     ]);
   });
 
+  it.each([
+    [
+      "cannot be read",
+      () => {
+        const home = mkdtempSync(join(tmpdir(), "quota-axi-bob-login-"));
+        homes.push(home);
+        // A directory where the file belongs: present, but not readable.
+        mkdirSync(join(home, ".bob", "settings", "auth-secrets.json"), {
+          recursive: true,
+        });
+        return home;
+      },
+    ],
+    ["holds truncated JSON", () => homeWithSecrets('{"bob.auth', true)],
+  ])(
+    "does not read signed out when the key is rejected and the stored sign-in file %s",
+    async (_label, makeHome) => {
+      const request = sequentialFetch([jsonResponse(REJECTED_BODY, 401)]);
+      const report = await loginAdapter(makeHome(), {
+        environment: () => ({ BOB_API_KEY: SYNTHETIC_KEY }),
+        fetch: request,
+      }).fetchQuota(OPTIONS);
+
+      expect(request).toHaveBeenCalledTimes(1);
+      // The stored sign-in was never checked, so the report carries its read
+      // failure and no sign-in verdict.
+      expect(report.state).toMatchObject({
+        status: "error",
+        error: "bob_credential_resolution_failed",
+      });
+      expect(report.state.authStatus).toBeUndefined();
+      // The key's rejection stays in its own attempt.
+      expect(report.attempts).toEqual([
+        {
+          source: BOB_API_KEY_SOURCE,
+          status: "failed",
+          error: "provider_auth_rejected",
+        },
+        {
+          source: BOB_LOGIN_SOURCE,
+          status: "failed",
+          error: "bob_credential_resolution_failed",
+          credentialPresent: true,
+        },
+      ]);
+      expect(report.state.sourcesTried).toEqual([
+        BOB_API_KEY_SOURCE,
+        BOB_LOGIN_SOURCE,
+      ]);
+    },
+  );
+
   it("does not hand over to the stored sign-in when the key meets a server failure", async () => {
     const request = sequentialFetch([new Response("down", { status: 503 })]);
     const report = await loginAdapter(homeWithLogin(), {
