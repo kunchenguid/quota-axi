@@ -621,6 +621,71 @@ describe("quota cache", () => {
     },
   );
 
+  it.each([false, true])(
+    "expires live Antigravity reuse but keeps snapshot diagnostics (named group: %s)",
+    (grouped) => {
+      useTempCache();
+      const reset = "2026-07-06T18:10:30Z";
+      const diagnostic = {
+        id: "model:sonnet",
+        label: "Sonnet",
+        kind: "model" as const,
+        resetsAt: "2026-07-06T19:00:00Z",
+      };
+      const reading: ProviderQuota = {
+        ...quota("agy", 0),
+        source: "cli-rpc",
+        windows: [
+          {
+            id: "model:flash",
+            label: "Flash",
+            kind: "model",
+            resetsAt: reset,
+            percentRemaining: 40,
+          },
+          diagnostic,
+        ],
+        ...(grouped
+          ? {
+              [AGY_GROUPS]: [
+                {
+                  id: "gemini_argon",
+                  name: "Gemini 4 Argon",
+                  models: { status: "unknown" as const },
+                  buckets: [],
+                },
+              ],
+            }
+          : {}),
+      };
+      stampReadingInputs(reading, tracedInputs());
+      writeCachedProviders([reading], reading.state.refreshedAt);
+      const now = Date.parse(reset) - 1;
+      const live = readReusableProviders("agy", 90, now)?.[0];
+      const snapshot = readSnapshotProviders(cacheFilePath(), "agy", now);
+      if (!live || !Array.isArray(snapshot) || !snapshot[0])
+        throw new Error("Expected both reads before reset");
+      const published = withQuotaSemantics(live, reset);
+      expect(published).toMatchObject({
+        windows: [],
+        state: { status: "unavailable", error: "cache_expired" },
+      });
+      expect(published.state.reused).toBeUndefined();
+      if (grouped)
+        expect(published.quotaSemantics?.effectiveAvailability).toMatchObject([
+          { scope: "gemini_argon", status: "unknown" },
+        ]);
+      const explicit = {
+        ...snapshot[0],
+        state: { ...snapshot[0].state, sourcesTried: ["snapshot"] },
+      };
+      expect(withQuotaSemantics(explicit, reset)).toMatchObject({
+        windows: [diagnostic],
+        state: { status: "fresh", reused: true },
+      });
+    },
+  );
+
   it("reports model-only Antigravity reuse expired when the last reset passes", () => {
     useTempCache();
     const firstReset = "2026-07-06T18:10:30Z";

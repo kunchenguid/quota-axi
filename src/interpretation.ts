@@ -1,6 +1,6 @@
 import { degradedSources } from "./lib/source-attempts.js";
 import { agyStaleQuotaAt } from "./providers/agy.js";
-import { failedProvider } from "./providers/common.js";
+import { failedProvider, hasCurrentPercentage } from "./providers/common.js";
 import {
   computeEffectiveRunway,
   computeWindowPace,
@@ -38,26 +38,31 @@ export function withQuotaSemantics(
           );
         });
   const expiredIds = new Set(expired.map(({ id }) => id));
-  const activeWindows =
+  let activeWindows =
     provider.state.reused && expiredIds.size > 0
       ? provider.windows.filter(({ id }) => !expiredIds.has(id))
       : provider.windows;
-  if (
-    agyReportTime !== undefined &&
-    provider.state.reused &&
-    activeWindows.length === 0 &&
-    !provider[AGY_GROUPS]?.length
-  ) {
+  if (agyReportTime !== undefined && provider.state.reused) {
     const sourcesTried = provider.state.sourcesTried ?? [];
-    provider = failedProvider({
-      provider: "agy",
-      label: "Antigravity",
-      status: "unavailable",
-      error: sourcesTried.includes("snapshot")
-        ? "snapshot_expired"
-        : "cache_expired",
-      sourcesTried,
-    });
+    const snapshot = sourcesTried.includes("snapshot");
+    const groups = provider[AGY_GROUPS];
+    if (
+      snapshot
+        ? activeWindows.length === 0 && !groups?.length
+        : !hasCurrentPercentage(activeWindows, agyReportTime)
+    ) {
+      provider = {
+        ...failedProvider({
+          provider: "agy",
+          label: "Antigravity",
+          status: "unavailable",
+          error: snapshot ? "snapshot_expired" : "cache_expired",
+          sourcesTried,
+        }),
+        ...(groups ? { [AGY_GROUPS]: groups } : {}),
+      };
+      activeWindows = provider.windows;
+    }
   }
   const windows = activeWindows.map((window) => ({
     ...window,
@@ -1032,9 +1037,14 @@ function agySemantics(
     );
     const boundedBy = bounds.map(({ id }) => id);
     for (const id of boundedBy) scopedBoundIds.add(id);
-    const unmeasurableWindowIds = expiredBoundIds.filter((id) =>
-      windowIds.has(id),
-    );
+    const unmeasurableWindowIds = [
+      ...new Set([
+        ...expiredBoundIds.filter((id) => windowIds.has(id)),
+        ...buckets.flatMap(({ unmeasuredBoundId }) =>
+          unmeasuredBoundId ? [unmeasuredBoundId] : [],
+        ),
+      ]),
+    ];
     const entry: EffectiveAvailability =
       unmeasurableWindowIds.length > 0
         ? {

@@ -1364,8 +1364,13 @@ function normalizeCachedAgyGroups(raw: unknown): AgyQuotaGroup[] | undefined {
       const bucket = objectValue(value);
       const id = stringValue(bucket?.id);
       const windowId = stringValue(bucket?.windowId);
+      const unmeasuredBoundId = stringValue(bucket?.unmeasuredBoundId);
       if (!id) return undefined;
-      buckets.push({ id, ...(windowId ? { windowId } : {}) });
+      buckets.push({
+        id,
+        ...(windowId ? { windowId } : {}),
+        ...(unmeasuredBoundId ? { unmeasuredBoundId } : {}),
+      });
     }
     groups.push({ id, name, models, buckets });
   }

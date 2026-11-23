@@ -250,7 +250,7 @@ export type AgyQuotaGroup = {
   id: string;
   name: string;
   models: QuotaModelList;
-  buckets: { id: string; windowId?: string }[];
+  buckets: { id: string; windowId?: string; unmeasuredBoundId?: string }[];
 };
 
 export type EffectiveAvailability = {

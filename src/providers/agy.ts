@@ -842,8 +842,18 @@ function normalizeQuotaSummaryGroup(
       stringValue(bucket.bucket_id) ??
       stringValue(bucket.id);
     if (!id) return [];
+    if (booleanValue(bucket.disabled)) return [{ id }];
     const window = normalizeQuotaSummaryBucket(identity, bucket, id, nowMs);
-    if (!window) return [{ id }];
+    if (
+      window.percentUsed === undefined &&
+      !window.resetsAt &&
+      !window.resetText
+    )
+      return [
+        window.kind === "unknown"
+          ? { id }
+          : { id, unmeasuredBoundId: window.id },
+      ];
     windows.push(window);
     return [{ id, windowId: window.id }];
   });
@@ -916,8 +926,7 @@ function normalizeQuotaSummaryBucket(
   bucket: Record<string, unknown>,
   bucketId: string,
   nowMs: number,
-): QuotaWindow | undefined {
-  if (booleanValue(bucket.disabled)) return undefined;
+): QuotaWindow {
   const windowKind = agyWindowKind(bucket);
   const result: QuotaWindow = {
     id:
@@ -934,8 +943,6 @@ function normalizeQuotaSummaryBucket(
     result.windowSeconds = windowKind.windowSeconds;
   }
   applyAgyUsage(result, remainingFraction(bucket), nowMs);
-  if (result.percentUsed === undefined && !result.resetsAt && !result.resetText)
-    return undefined;
   return result;
 }
 

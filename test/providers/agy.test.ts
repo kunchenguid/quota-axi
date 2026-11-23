@@ -780,6 +780,69 @@ describe("Antigravity quota parsing", () => {
       },
     );
 
+    it.each(["cli", "cli-rpc"] as const)(
+      "does not infer Argon headroom from its weekly allowance alone in %s",
+      async (source) => {
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(NOW_MS);
+        const weekly = { bucketId: "weekly", remainingFraction: 0.9 };
+        const groups = [
+          { name: "Gemini 4 Argon", buckets: [{ bucketId: "5h" }, weekly] },
+          {
+            name: "Gemini Models",
+            buckets: [{ bucketId: "5h", disabled: true }, weekly],
+          },
+        ];
+        const reading = await fetchQuotaWithRuntime(
+          runtimeWith(
+            source === "cli"
+              ? {
+                  cliQuota: JSON.stringify({
+                    command: { name: "quota", data: { groups } },
+                  }),
+                }
+              : {
+                  cliQuota: "{}",
+                  ps: "123 /Users/test/.local/bin/agy\n",
+                  lsof: lsofFor(123, 64440),
+                  responses: {
+                    "https:64440:/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary":
+                      { groups },
+                  },
+                },
+          ),
+        );
+        expect(reading.source).toBe(source);
+        writeCachedProviders([reading]);
+        const cached = readCachedProvider("agy");
+        const snapshot = readSnapshotProviders(cacheFilePath(), "agy", NOW_MS);
+        if (!cached || !Array.isArray(snapshot) || !snapshot[0])
+          throw new Error("Expected saved quota");
+        const generatedAt = new Date(NOW_MS).toISOString();
+        for (const saved of [reading, cached, snapshot[0]]) {
+          const report = annotateQuotaAdvice({
+            generatedAt,
+            providers: [withQuotaSemantics(saved, generatedAt)],
+          });
+          const scopes = quotaJsonReport(report, true).providers[0]
+            ?.quotaSemantics?.effectiveAvailability;
+          expect(scopes).toMatchObject([
+            {
+              scope: "gemini_argon",
+              status: "unknown",
+              boundedBy: ["gemini_argon_weekly"],
+              selection: {
+                status: "unknown",
+                unmeasurableWindowIds: ["gemini_argon_5h"],
+              },
+            },
+            { scope: "gemini", status: "known", effectivePercentRemaining: 90 },
+          ]);
+          expect(scopes?.[0]?.effectivePercentRemaining).toBeUndefined();
+        }
+      },
+    );
+
     it.each(
       ["CLI", "user status", "model configs", "later port"].flatMap((path) =>
         ["disabled", "reset only", "expired"].map(
