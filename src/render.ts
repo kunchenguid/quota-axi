@@ -768,9 +768,10 @@ function modelsColumn(
   models: NonNullable<EffectiveAvailability["models"]>,
 ): string {
   if (models.status !== "known") return UNKNOWN;
-  const labels = joinIds(models.labels) ?? UNKNOWN;
-  const ids = joinIds(models.ids);
-  return ids ? `${labels}${DETAIL_SEPARATOR}${ids}` : labels;
+  const members = models.ids?.length
+    ? [...models.ids, ...(models.unmatchedLabels ?? [])]
+    : models.labels;
+  return joinIds([...new Set(members)]) ?? UNKNOWN;
 }
 
 function demotedSemantics(semantics: QuotaSemantics): QuotaSemantics {

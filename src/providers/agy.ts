@@ -66,6 +66,17 @@ type AgyModelCatalogEntry = { id: string; label: string };
 
 export type AgyQuotaWindow = QuotaWindow & { models?: QuotaModelList };
 
+export const AGY_STALE_GROUP_MODELS = Symbol("agyStaleGroupModels");
+export type AgyProviderQuota = ProviderQuota & {
+  [AGY_STALE_GROUP_MODELS]?: ReadonlyMap<string, QuotaModelList>;
+};
+
+export function agyGroupScope(windowId: string): string | undefined {
+  return /^([^:]+|group:[^:]+)(?:_(?:5h|weekly)|:bucket:[^:]+)$/.exec(
+    windowId,
+  )?.[1];
+}
+
 export type AgyNormalizeOptions = {
   /** Read time, in epoch milliseconds. Defaults to the current time. */
   nowMs?: number;
@@ -218,7 +229,13 @@ export async function fetchQuotaWithRuntime(
     const stale = cached
       ? staleFromCache(cached, finalError, sourceNames(attempts), attempts)
       : undefined;
-    if (stale) return stale;
+    if (cached && stale) {
+      const report: AgyProviderQuota = {
+        ...stale,
+        [AGY_STALE_GROUP_MODELS]: cachedGroupModels(cached.windows),
+      };
+      return report;
+    }
   } else if (isDefinitiveAuthFailure(finalFailure)) {
     try {
       deleteCachedProvider("agy");
@@ -235,6 +252,18 @@ export async function fetchQuotaWithRuntime(
     sourcesTried: sourceNames(attempts),
     attempts,
   });
+}
+
+function cachedGroupModels(
+  windows: AgyQuotaWindow[],
+): Map<string, QuotaModelList> {
+  const groups = new Map<string, QuotaModelList>();
+  for (const { id, models } of windows) {
+    const scope = agyGroupScope(id);
+    if (scope && !groups.has(scope))
+      groups.set(scope, models ?? { status: "unknown" });
+  }
+  return groups;
 }
 
 export async function inspectAuth(
@@ -408,12 +437,16 @@ async function resolveGroupModels(
   const catalog = await readModelCatalog(runtime, commandPath);
   if (!catalog) return;
   for (const models of modelLists) {
-    const ids = [
-      ...new Set(
-        models.labels.flatMap((label) => matchModelIds(label, catalog)),
-      ),
-    ];
-    if (ids.length > 0) models.ids = ids;
+    const ids = new Set<string>();
+    const unmatchedLabels: string[] = [];
+    for (const label of models.labels) {
+      const matches = matchModelIds(label, catalog);
+      if (matches.length === 0) unmatchedLabels.push(label);
+      else for (const id of matches) ids.add(id);
+    }
+    if (ids.size === 0) continue;
+    models.ids = [...ids];
+    if (unmatchedLabels.length > 0) models.unmatchedLabels = unmatchedLabels;
   }
 }
 
@@ -868,11 +901,14 @@ function matchModelIds(
 ): string[] {
   const wanted = label.toLowerCase();
   return catalog
-    .filter(({ label }) => {
+    .filter(({ id, label }) => {
       const candidate = label.toLowerCase();
+      if (candidate === wanted) return true;
+      const effort = /\s*\((low|medium|high|xhigh)\)$/.exec(candidate);
       return (
-        candidate === wanted ||
-        candidate.replace(/\s*\((?:low|medium|high|xhigh)\)\s*$/, "") === wanted
+        effort !== null &&
+        candidate.slice(0, effort.index) === wanted &&
+        id.endsWith(`-${effort[1]}`)
       );
     })
     .map(({ id }) => id);

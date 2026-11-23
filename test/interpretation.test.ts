@@ -1566,8 +1566,9 @@ describe("per-scope selection signal", () => {
   it("renders agy scope models once and separates pace from reset evidence", () => {
     const models = {
       status: "known" as const,
-      labels: ["Gemini 4 Neon"],
+      labels: ["Gemini 4 Neon", "Gemini 4 Hydrogen"],
       ids: ["gemini-4-neon-medium"],
+      unmatchedLabels: ["Gemini 4 Hydrogen"],
     };
     const session = {
       ...window("gemini_5h", "session", 100, {
@@ -1576,12 +1577,17 @@ describe("per-scope selection signal", () => {
       }),
       models,
     };
+    const claude = {
+      ...window("claude_gpt_weekly", "weekly", 80),
+      models: { status: "known" as const, labels: ["Claude Sonnet"] },
+    };
     const agy = provider("agy", [
       session,
       window("gemini_weekly", "weekly", 100, {
         windowSeconds: WEEK_SECONDS,
         notStarted: true,
       }),
+      claude,
       window("model:fallback", "model", 50),
     ]);
     for (const stale of [false, true]) {
@@ -1609,10 +1615,12 @@ describe("per-scope selection signal", () => {
         );
       for (const full of [false, true]) {
         const toon = renderQuotaToon(report, "quota-axi", full);
-        expect(toon).toContain("scopeModels[1]{provider,scope,models}");
+        expect(toon).toContain("scopeModels[2]{provider,scope,models}");
         expect(toon).toContain(
-          "agy,gemini,Gemini 4 Neon · gemini-4-neon-medium",
+          "agy,gemini,gemini-4-neon-medium + Gemini 4 Hydrogen",
         );
+        expect(toon).toContain("agy,claude_gpt,Claude Sonnet");
+        expect(toon).not.toContain("Gemini 4 Neon");
         expect(toon.match(/gemini-4-neon-medium/g)).toHaveLength(1);
         const publicProvider = quotaJsonReport(report, full).providers[0]!;
         for (const publicWindow of publicProvider.windows) {

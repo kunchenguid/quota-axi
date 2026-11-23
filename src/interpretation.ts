@@ -1,5 +1,10 @@
 import { degradedSources } from "./lib/source-attempts.js";
-import type { AgyQuotaWindow } from "./providers/agy.js";
+import {
+  AGY_STALE_GROUP_MODELS,
+  agyGroupScope,
+  type AgyProviderQuota,
+  type AgyQuotaWindow,
+} from "./providers/agy.js";
 import {
   computeEffectiveRunway,
   computeWindowPace,
@@ -136,11 +141,7 @@ function semanticsFor(
         `quota-axi does not know whether ${provider.label ?? provider.provider}'s reported windows are independent or jointly bounding, so it does not claim an effective remaining percentage.`,
       );
     case "agy":
-      return agySemantics(
-        provider.windows,
-        provider.state.untrustedWindowIds ?? [],
-        generatedAt,
-      );
+      return agySemantics(provider, generatedAt);
     case "alibaba":
       return alibabaSemantics(provider.windows, generatedAt);
     case "opencode-go":
@@ -976,22 +977,22 @@ function partialSemantics(
   };
 }
 
-const AGY_WINDOW_ID = /^([^:]+|group:[^:]+)(?:_(?:5h|weekly)|:bucket:[^:]+)$/;
-
 /**
  * One scope per agy group: the group's weekly and 5-hour windows jointly bound
  * it. Any group agy names becomes its own scope. A passed reset makes its own
  * scope unknown and leaves the other scopes alone.
  */
 function agySemantics(
-  windows: QuotaWindow[],
-  untrustedWindowIds: string[],
+  provider: AgyProviderQuota,
   generatedAt: string,
 ): QuotaSemantics {
+  const cachedModels = provider[AGY_STALE_GROUP_MODELS];
+  const untrustedWindowIds = provider.state.untrustedWindowIds ?? [];
   const scopes = new Map<string, AgyQuotaWindow[]>();
+  for (const scope of cachedModels?.keys() ?? []) scopes.set(scope, []);
   const unresolved: QuotaWindow[] = [];
-  for (const window of windows) {
-    const scope = AGY_WINDOW_ID.exec(window.id)?.[1];
+  for (const window of provider.windows) {
+    const scope = agyGroupScope(window.id);
     if (scope === undefined) {
       unresolved.push(window);
       continue;
@@ -1020,7 +1021,9 @@ function agySemantics(
             selection: { status: "unknown", unmeasurableWindowIds },
           }
         : availability(scope, bounds, generatedAt);
-    const models = scopeWindows.find((window) => window.models)?.models;
+    const models =
+      scopeWindows.find((window) => window.models)?.models ??
+      cachedModels?.get(scope);
     effectiveAvailability.push({
       ...entry,
       models: models ?? { status: "unknown" },

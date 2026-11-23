@@ -236,7 +236,12 @@ export type QuotaWindow = {
  * model catalog could be read. `unknown` means the vendor named no models.
  */
 export type QuotaModelList =
-  | { status: "known"; labels: string[]; ids?: string[] }
+  | {
+      status: "known";
+      labels: string[];
+      ids?: string[];
+      unmatchedLabels?: string[];
+    }
   | { status: "unknown" };
 
 export type EffectiveAvailability = {

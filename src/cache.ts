@@ -1315,7 +1315,16 @@ function normalizeCachedModelList(raw: unknown): AgyQuotaWindow["models"] {
   const labels = stringArrayValue(data.labels);
   if (!labels?.length) return undefined;
   const ids = stringArrayValue(data.ids);
-  return ids ? { status: "known", labels, ids } : { status: "known", labels };
+  if (!ids?.length) return { status: "known", labels };
+  const unmatchedLabels = stringArrayValue(data.unmatchedLabels)?.filter(
+    (label) => labels.includes(label),
+  );
+  return {
+    status: "known",
+    labels,
+    ids,
+    ...(unmatchedLabels?.length ? { unmatchedLabels } : {}),
+  };
 }
 
 // Kimi snapshots cached before `shareOf` existed store `month_code` with only
