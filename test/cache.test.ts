@@ -571,32 +571,68 @@ describe("quota cache", () => {
     expect(file.providers[0]).not.toHaveProperty("reuse");
   });
 
-  it("reports model-only Antigravity snapshots expired when the last reset passes", () => {
+  it("reports model-only Antigravity reuse expired when the last reset passes", () => {
     useTempCache();
     const firstReset = "2026-07-06T18:10:30Z";
     const lastReset = "2026-07-06T18:10:31Z";
-    writeCachedProviders([
-      {
-        ...quota("agy", 0),
-        source: "cli-rpc",
-        windows: [
-          {
-            id: "model:flash",
-            label: "Flash",
-            kind: "model",
-            resetsAt: firstReset,
-            percentRemaining: 100,
-          },
-          {
-            id: "model:sonnet",
-            label: "Sonnet",
-            kind: "model",
-            resetsAt: lastReset,
-            percentRemaining: 50,
-          },
-        ],
+    const modelOnly: ProviderQuota = {
+      ...quota("agy", 0),
+      source: "cli-rpc",
+      state: {
+        status: "fresh",
+        stale: false,
+        refreshedAt: "2026-07-06T18:10:00Z",
+        sourcesTried: ["loopback"],
       },
+      windows: [
+        {
+          id: "model:flash",
+          label: "Flash",
+          kind: "model",
+          resetsAt: firstReset,
+          percentRemaining: 100,
+        },
+        {
+          id: "model:sonnet",
+          label: "Sonnet",
+          kind: "model",
+          resetsAt: lastReset,
+          percentRemaining: 50,
+        },
+      ],
+    };
+    stampReadingInputs(modelOnly, tracedInputs());
+    writeCachedProviders([modelOnly], modelOnly.state.refreshedAt);
+    const live = readReusableProviders(
+      "agy",
+      90,
+      Date.parse(firstReset) - 1,
+    )?.[0];
+    if (!live) throw new Error("Expected live reuse before either reset");
+    const partial = withQuotaSemantics(live, firstReset);
+    expect(partial.state).toMatchObject({ status: "fresh", reused: true });
+    expect(partial.windows).toMatchObject([
+      { id: "model:sonnet", percentRemaining: 50 },
     ]);
+    const expiredLive = withQuotaSemantics(live, lastReset);
+    expect(expiredLive).toMatchObject({
+      source: "unavailable",
+      windows: [],
+      state: {
+        status: "unavailable",
+        stale: false,
+        error: "cache_expired",
+        sourcesTried: ["loopback"],
+      },
+    });
+    expect(expiredLive.state.reused).toBeUndefined();
+    const report = annotateQuotaAdvice({
+      generatedAt: lastReset,
+      providers: [expiredLive],
+    });
+    const toon = renderQuotaToon(report, "quota-axi", false);
+    expect(toon).toContain("agy,all,unavailable,cache_expired,");
+    expect(toon).not.toContain("agy,all,reused,");
     const file = cacheFilePath();
     const admitted = readSnapshotProviders(file, "agy", Date.parse(firstReset));
     if (!Array.isArray(admitted) || !admitted[0])

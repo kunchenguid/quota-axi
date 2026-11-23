@@ -276,9 +276,12 @@ async function reportAgyReading(
 }
 
 function hasAgyMeasurement(reading: AgyQuotaReading): boolean {
-  return reading.windows.some(
-    ({ percentRemaining }) => percentRemaining !== undefined,
-  );
+  const now = Date.now();
+  return reading.windows.some(({ percentRemaining, resetsAt }) => {
+    if (percentRemaining === undefined) return false;
+    const reset = Date.parse(resetsAt ?? "");
+    return Number.isNaN(reset) || reset > now;
+  });
 }
 
 export async function inspectAuth(

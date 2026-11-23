@@ -46,15 +46,17 @@ export function withQuotaSemantics(
     agyReportTime !== undefined &&
     provider.state.reused &&
     activeWindows.length === 0 &&
-    !provider[AGY_GROUPS]?.length &&
-    provider.state.sourcesTried?.includes("snapshot")
+    !provider[AGY_GROUPS]?.length
   ) {
+    const sourcesTried = provider.state.sourcesTried ?? [];
     provider = failedProvider({
       provider: "agy",
       label: "Antigravity",
       status: "unavailable",
-      error: "snapshot_expired",
-      sourcesTried: ["snapshot"],
+      error: sourcesTried.includes("snapshot")
+        ? "snapshot_expired"
+        : "cache_expired",
+      sourcesTried,
     });
   }
   const windows = activeWindows.map((window) => ({

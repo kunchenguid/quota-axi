@@ -767,27 +767,34 @@ describe("Antigravity quota parsing", () => {
       },
     );
 
-    it.each([
-      ["CLI", false],
-      ["user status", false],
-      ["model configs", false],
-      ["later port", false],
-      ["CLI", true],
-      ["user status", true],
-      ["model configs", true],
-      ["later port", true],
-    ] as const)(
-      "uses fallback quota from %s without mixing accounts (reset evidence: %s)",
-      async (path, resetOnly) => {
+    it.each(
+      ["CLI", "user status", "model configs", "later port"].flatMap((path) =>
+        ["disabled", "reset only", "expired"].map(
+          (evidence) => [path, evidence] as const,
+        ),
+      ),
+    )(
+      "uses fallback quota from %s without mixing accounts (bucket: %s)",
+      async (path, evidence) => {
         vi.useFakeTimers({ toFake: ["Date"] });
-        vi.setSystemTime(Date.parse("2026-06-15T09:00:00Z"));
-        const resetTime = "2026-06-19T08:45:39Z";
-        const groups = resetOnly
+        const readAt = "2026-06-15T09:00:00Z";
+        vi.setSystemTime(Date.parse(readAt));
+        const resetTime =
+          evidence === "expired" ? readAt : "2026-06-19T08:45:39Z";
+        const hasReset = evidence !== "disabled";
+        const measurement =
+          evidence === "expired" ? { remainingFraction: 0.5 } : {};
+        const groups = hasReset
           ? [
               {
                 ...disabledArgonGroup,
                 buckets: [
-                  { bucketId: "argon-weekly", window: "weekly", resetTime },
+                  {
+                    bucketId: "argon-weekly",
+                    window: "weekly",
+                    resetTime,
+                    ...measurement,
+                  },
                 ],
               },
             ]
@@ -818,10 +825,13 @@ describe("Antigravity quota parsing", () => {
                     [`https:64440:${rpc}GetUserStatus`]: {
                       email: "other@example.invalid",
                       userTier: { name: "Other plan" },
-                      ...(resetOnly
+                      ...(hasReset
                         ? {
                             clientModelConfigs: [
-                              { label: "Reset only", quotaInfo: { resetTime } },
+                              {
+                                label: "Unmeasurable model",
+                                quotaInfo: { resetTime, ...measurement },
+                              },
                             ],
                           }
                         : {}),
@@ -842,11 +852,11 @@ describe("Antigravity quota parsing", () => {
         });
         const sameEndpoint = path === "user status" || path === "model configs";
         expect(result.windows).toMatchObject([
-          ...(sameEndpoint && resetOnly
+          ...(sameEndpoint && hasReset
             ? [
                 {
                   id: "gemini_argon_weekly",
-                  resetsAt: "2026-06-19T08:45:39.000Z",
+                  resetsAt: new Date(resetTime).toISOString(),
                 },
               ]
             : []),
@@ -862,14 +872,16 @@ describe("Antigravity quota parsing", () => {
                 {
                   scope: "gemini_argon",
                   status: "unknown",
-                  boundedBy: resetOnly ? ["gemini_argon_weekly"] : [],
+                  boundedBy: hasReset ? ["gemini_argon_weekly"] : [],
                   models: { ids: ["gemini-4-argon-high"] },
                 },
               ]
             : [],
         );
-        if (sameEndpoint && resetOnly)
-          expect(result.windows[0]?.percentRemaining).toBeUndefined();
+        if (sameEndpoint && hasReset)
+          expect(result.windows[0]?.percentRemaining).toBe(
+            evidence === "expired" ? 50 : undefined,
+          );
         if (path === "model configs") {
           expect(result.plan).toBeUndefined();
           expect(result.account).toBeUndefined();
@@ -1141,6 +1153,8 @@ describe("Antigravity provider", () => {
   });
 
   it("skips the model catalog when a usable CLI quota names no models", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.parse("2026-09-11T12:00:00Z"));
     const onExec = vi.fn();
     const fetched = await fetchQuotaWithRuntime(
       runtimeWith({
@@ -1491,6 +1505,8 @@ describe("Antigravity provider", () => {
   });
 
   it("prefers agy CLI /quota over loopback when both are available", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.parse("2026-09-11T12:00:00Z"));
     writeCachedProviders([cachedAgyQuota()]);
     const commands: Array<{
       command: string;
@@ -1813,6 +1829,8 @@ exec node "$0-cli.js" "$@"
   });
 
   it("reads agy CLI /quota when loopback is down", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.parse("2026-09-11T12:00:00Z"));
     const commands: Array<{ command: string; args: string[] }> = [];
     const result = await fetchQuotaWithRuntime(
       runtimeWith({
@@ -1916,6 +1934,8 @@ exec node "$0-cli.js" "$@"
 
   it("keeps the Gemini 4 Argon bucket out of the Gemini bound", async () => {
     const nowIso = "2026-10-20T00:00:00.000Z";
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.parse(nowIso));
     const fetched = await fetchQuotaWithRuntime(
       runtimeWith({
         ps: "",
@@ -1953,6 +1973,8 @@ exec node "$0-cli.js" "$@"
 
   it("does not mark the whole reading stale when one limit's reset has passed", async () => {
     const nowIso = "2026-09-15T12:00:00.000Z";
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.parse(nowIso));
     const pastReset = new Date(Date.parse(nowIso) - 60_000).toISOString();
     const quotaData = fixture("cli-quota.json") as {
       command: {
