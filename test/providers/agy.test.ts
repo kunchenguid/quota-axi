@@ -634,7 +634,7 @@ describe("Antigravity quota parsing", () => {
       expect(onExec.mock.calls.map(([, args]) => args[0])).toEqual(["-p"]);
     });
 
-    it("keeps stale Argon membership after its only window expires", async () => {
+    it("drops stale windows at report time without losing group membership", async () => {
       vi.useFakeTimers({ toFake: ["Date"] });
       vi.setSystemTime(NOW_MS);
       const cached = cachedAgyQuota();
@@ -653,7 +653,12 @@ describe("Antigravity quota parsing", () => {
         percentRemaining: 88,
         notStarted: undefined,
         resetsAt: new Date(
-          NOW_MS + (window.id === "gemini_weekly" ? 3_600_000 : -60_000),
+          NOW_MS +
+            (window.id === "gemini_weekly"
+              ? 3_600_000
+              : window.id === "gemini_argon_weekly"
+                ? 1_000
+                : -60_000),
         ).toISOString(),
       }));
       writeCachedProviders([cached]);
@@ -670,17 +675,22 @@ describe("Antigravity quota parsing", () => {
       expect(result.state.status).toBe("stale");
       expect(result.windows).toMatchObject([
         { id: "gemini_weekly", percentRemaining: 88 },
+        { id: "gemini_argon_weekly", percentRemaining: 88 },
       ]);
       expect(onExec.mock.calls.map(([, args]) => args[0])).not.toContain(
         "models",
       );
-      const generatedAt = new Date(NOW_MS).toISOString();
+      vi.setSystemTime(NOW_MS + 2_000);
+      const generatedAt = new Date().toISOString();
       const report = annotateQuotaAdvice({
         generatedAt,
         providers: [withQuotaSemantics(result, generatedAt)],
       });
       const json = quotaJsonReport(report, false).providers[0];
       expect(json?.windows.map(({ id }) => id)).toEqual(["gemini_weekly"]);
+      expect(quotaJsonReport(report, true).providers[0]?.windows).toMatchObject(
+        [{ id: "gemini_weekly", percentRemaining: 88 }],
+      );
       const scopes = json?.quotaSemantics?.effectiveAvailability;
       expect(scopes?.[0]).toMatchObject({
         scope: "gemini",
@@ -718,11 +728,14 @@ describe("Antigravity quota parsing", () => {
           ({ effectivePercentRemaining }) => effectivePercentRemaining,
         ),
       ).toEqual([undefined, undefined, undefined]);
-      const toon = renderQuotaToon(report, "quota-axi", false);
-      expect(toon).toContain("agy,gemini_argon,unknown");
-      expect(toon).toContain(
-        "agy,claude_gpt,claude-opus-5-5-low + Claude Sonnet 5.5 + GPT-OSS 120B",
-      );
+      for (const full of [false, true]) {
+        const toon = renderQuotaToon(report, "quota-axi", full);
+        expect(toon).not.toContain("gemini_argon_weekly");
+        expect(toon).toContain("agy,gemini_argon,unknown");
+        expect(toon).toContain(
+          "agy,claude_gpt,claude-opus-5-5-low + Claude Sonnet 5.5 + GPT-OSS 120B",
+        );
+      }
 
       vi.setSystemTime(NOW_MS + 3_600_000);
       const expired = await fetchQuotaWithRuntime(runtime);
@@ -731,10 +744,10 @@ describe("Antigravity quota parsing", () => {
         stale: false,
       });
       expect(expired.windows).toEqual([]);
-      expect(
-        withQuotaSemantics(expired, new Date().toISOString()).quotaSemantics
-          ?.effectiveAvailability,
-      ).toEqual([]);
+      const expiredAt = new Date().toISOString();
+      const noStaleFallback = withQuotaSemantics(expired, expiredAt);
+      expect(noStaleFallback.quotaSemantics?.effectiveAvailability).toEqual([]);
+      expect(withQuotaSemantics(result, expiredAt)).toEqual(noStaleFallback);
     });
   });
 

@@ -1,7 +1,8 @@
 import { degradedSources } from "./lib/source-attempts.js";
 import {
-  AGY_STALE_GROUP_MODELS,
+  AGY_STALE_READ,
   agyGroupScope,
+  agyQuotaAt,
   type AgyProviderQuota,
   type AgyQuotaWindow,
 } from "./providers/agy.js";
@@ -20,9 +21,13 @@ import type {
 } from "./types.js";
 
 export function withQuotaSemantics(
-  provider: ProviderQuota,
+  reading: ProviderQuota,
   generatedAt: string,
 ): ProviderQuota {
+  const agyReportTime =
+    reading.provider === "agy" ? Date.parse(generatedAt) : undefined;
+  const provider =
+    agyReportTime === undefined ? reading : agyQuotaAt(reading, agyReportTime);
   const windows = provider.windows.map((window) => ({
     ...window,
     pace: computeWindowPace(window, generatedAt, {
@@ -30,11 +35,10 @@ export function withQuotaSemantics(
     }),
   }));
   const state = { ...provider.state, ...supersededSources(provider) };
-  if (provider.provider === "agy") {
-    const generatedAtMs = Date.parse(generatedAt);
+  if (agyReportTime !== undefined) {
     const untrusted = windows
       .filter(
-        ({ resetsAt }) => resetsAt && Date.parse(resetsAt) <= generatedAtMs,
+        ({ resetsAt }) => resetsAt && Date.parse(resetsAt) <= agyReportTime,
       )
       .map(({ id }) => id);
     if (untrusted.length > 0) state.untrustedWindowIds = untrusted;
@@ -986,7 +990,7 @@ function agySemantics(
   provider: AgyProviderQuota,
   generatedAt: string,
 ): QuotaSemantics {
-  const cachedModels = provider[AGY_STALE_GROUP_MODELS];
+  const cachedModels = provider[AGY_STALE_READ]?.groupModels;
   const untrustedWindowIds = provider.state.untrustedWindowIds ?? [];
   const scopes = new Map<string, AgyQuotaWindow[]>();
   for (const scope of cachedModels?.keys() ?? []) scopes.set(scope, []);

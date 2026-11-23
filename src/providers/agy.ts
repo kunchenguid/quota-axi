@@ -31,6 +31,7 @@ import type {
 } from "../types.js";
 import {
   failedProvider,
+  servableStaleWindows,
   sourceNames,
   staleFromCache,
   statusFromError,
@@ -66,10 +67,23 @@ type AgyModelCatalogEntry = { id: string; label: string };
 
 export type AgyQuotaWindow = QuotaWindow & { models?: QuotaModelList };
 
-export const AGY_STALE_GROUP_MODELS = Symbol("agyStaleGroupModels");
+export const AGY_STALE_READ = Symbol("agyStaleRead");
 export type AgyProviderQuota = ProviderQuota & {
-  [AGY_STALE_GROUP_MODELS]?: ReadonlyMap<string, QuotaModelList>;
+  [AGY_STALE_READ]?: {
+    groupModels: ReadonlyMap<string, QuotaModelList>;
+    failure: ProviderQuota;
+  };
 };
+
+export function agyQuotaAt(
+  provider: AgyProviderQuota,
+  now: number,
+): ProviderQuota {
+  const stale = provider[AGY_STALE_READ];
+  if (!stale) return provider;
+  const windows = servableStaleWindows(provider, now);
+  return windows.length > 0 ? { ...provider, windows } : stale.failure;
+}
 
 export function agyGroupScope(windowId: string): string | undefined {
   return /^([^:]+|group:[^:]+)(?:_(?:5h|weekly)|:bucket:[^:]+)$/.exec(
@@ -218,6 +232,15 @@ export async function fetchQuotaWithRuntime(
   }
 
   const finalError = errorMessage(finalFailure);
+  const sourcesTried = sourceNames(attempts);
+  const failure = failedProvider({
+    provider: "agy",
+    label: "Antigravity",
+    status: statusForFailure(finalFailure),
+    error: finalError,
+    sourcesTried,
+    attempts,
+  });
   if (isDefinitelyUninstalled(attempts)) {
     try {
       retireCachedSlot("agy");
@@ -227,12 +250,15 @@ export async function fetchQuotaWithRuntime(
   } else if (staleEligibleFailure(finalFailure)) {
     const cached = readCachedProvider("agy");
     const stale = cached
-      ? staleFromCache(cached, finalError, sourceNames(attempts), attempts)
+      ? staleFromCache(cached, finalError, sourcesTried, attempts)
       : undefined;
     if (cached && stale) {
       const report: AgyProviderQuota = {
         ...stale,
-        [AGY_STALE_GROUP_MODELS]: cachedGroupModels(cached.windows),
+        [AGY_STALE_READ]: {
+          groupModels: cachedGroupModels(cached.windows),
+          failure,
+        },
       };
       return report;
     }
@@ -244,14 +270,7 @@ export async function fetchQuotaWithRuntime(
     }
   }
 
-  return failedProvider({
-    provider: "agy",
-    label: "Antigravity",
-    status: statusForFailure(finalFailure),
-    error: finalError,
-    sourcesTried: sourceNames(attempts),
-    attempts,
-  });
+  return failure;
 }
 
 function cachedGroupModels(
