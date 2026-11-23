@@ -419,15 +419,16 @@ type DiscoveredSurface = {
 };
 
 /**
- * A configured store that holds evidence of a credential but yielded no key:
- * unreadable (no `sqlite3`), or an entry of an unusable shape. It is nobody's
- * lane, so the selected lane carries its evidence.
+ * A surface that holds evidence of a credential but yielded no key: a
+ * configured store that is unreadable (no `sqlite3`) or of an unusable shape,
+ * or a Pi sibling entry of an unusable shape. It is nobody's lane, so the
+ * selected lane carries its evidence.
  */
 type BlockedSurface = {
   sourceName: string;
   source: OpenCodeGoCredentialSource;
   resolution: Exclude<CredentialResolution, { status: "available" }>;
-  /** True when the store precedes every usable credential in priority. */
+  /** True when the surface's evidence belongs on the first lane's row. */
   beforeFirst: boolean;
 };
 
@@ -507,9 +508,10 @@ async function discoverOpenCodeGoAccounts(
  * Every surface holding a usable key, in report order: the configured
  * sources in their own priority order, with Pi sibling entries slotted
  * directly after the last Pi surface so all Pi lanes stay together ahead of
- * the opencode stores. Configured stores that hold a credential but yielded
- * no key come back as `blocked`, in configured order, each marked by whether
- * it precedes every usable credential.
+ * the opencode stores. Every surface that holds a credential but yielded no
+ * usable key - a configured store or a Pi sibling - comes back as `blocked`
+ * in that same order, marked by whether the first lane's row carries its
+ * evidence.
  */
 async function discoverSurfaces(dependencies: Dependencies): Promise<{
   surfaces: DiscoveredSurface[];
@@ -531,11 +533,7 @@ async function discoverSurfaces(dependencies: Dependencies): Promise<{
         surface: { laneKey, sourceName: name, source, key: resolution.key },
       });
       sawUsable = true;
-    } else if (
-      resolution.status === "invalid" ||
-      resolution.status === "skipped" ||
-      resolution.status === "error"
-    ) {
+    } else if (isCredentialEvidence(resolution)) {
       slots.push({
         kind: "blocked",
         blocked: {
@@ -550,19 +548,30 @@ async function discoverSurfaces(dependencies: Dependencies): Promise<{
     }
     if (entryIdFromPiSource(name)) lastPiBoundary = slots.length;
   }
-  const covered = new Set(
-    dependencies.credentialSources.map(({ name }) => name),
-  );
-  for (const entryId of await safePiEntryIds(dependencies)) {
-    const sourceName = piOpenCodeGoSourceName(entryId);
-    if (covered.has(sourceName)) continue;
-    const source = dependencies.piEntrySource(entryId);
-    const resolution = await resolveSafely(source);
-    if (resolution.status !== "available") continue;
-    slots.splice(lastPiBoundary++, 0, {
-      kind: "surface",
-      surface: { laneKey: entryId, sourceName, source, key: resolution.key },
-    });
+  for (const {
+    laneKey,
+    name,
+    source,
+    resolution,
+  } of await resolvePiSiblingSources(dependencies)) {
+    if (resolution.status === "available") {
+      slots.splice(lastPiBoundary++, 0, {
+        kind: "surface",
+        surface: { laneKey, sourceName: name, source, key: resolution.key },
+      });
+    } else if (isCredentialEvidence(resolution)) {
+      // A sibling entry opens no lane of its own, so the first reported lane
+      // carries its evidence the way an unusable built-in entry's is carried.
+      slots.splice(lastPiBoundary++, 0, {
+        kind: "blocked",
+        blocked: {
+          sourceName: name,
+          source,
+          resolution,
+          beforeFirst: true,
+        },
+      });
+    }
   }
   const surfaces: DiscoveredSurface[] = [];
   const blocked: BlockedSurface[] = [];
@@ -580,6 +589,55 @@ async function safePiEntryIds(dependencies: Dependencies): Promise<string[]> {
   } catch {
     return [];
   }
+}
+
+/** A surface that holds a credential but yields no key this tool can read. */
+type UnusableCredential = {
+  status: "invalid" | "error" | "skipped";
+  path: string;
+};
+
+function isCredentialEvidence(
+  resolution: CredentialResolution,
+): resolution is UnusableCredential {
+  return (
+    resolution.status === "invalid" ||
+    resolution.status === "skipped" ||
+    resolution.status === "error"
+  );
+}
+
+type ResolvedPiSibling = {
+  /** The entry id, which names a usable sibling's lane. */
+  laneKey: string;
+  name: string;
+  source: OpenCodeGoCredentialSource;
+  resolution: CredentialResolution;
+};
+
+/**
+ * Every Pi sibling entry auth.json holds for OpenCode Go, resolved. The
+ * built-in `opencode-go` entry is one of the configured sources and arrives
+ * there instead. A `missing` entry is genuine absence; a present one stays
+ * whether or not it yields a usable key, so an unusable entry's evidence
+ * never vanishes. No sibling's value is ever read beyond that classification.
+ */
+async function resolvePiSiblingSources(
+  dependencies: Dependencies,
+): Promise<ResolvedPiSibling[]> {
+  const covered = new Set(
+    dependencies.credentialSources.map(({ name }) => name),
+  );
+  const siblings: ResolvedPiSibling[] = [];
+  for (const entryId of await safePiEntryIds(dependencies)) {
+    const name = piOpenCodeGoSourceName(entryId);
+    if (covered.has(name)) continue;
+    const source = dependencies.piEntrySource(entryId);
+    const resolution = await resolveSafely(source);
+    if (resolution.status === "missing") continue;
+    siblings.push({ laneKey: entryId, name, source, resolution });
+  }
+  return siblings;
 }
 
 /**
@@ -773,6 +831,7 @@ async function selectOpenCodeGoCredential(dependencies: Dependencies): Promise<{
 }> {
   const resolved: ResolvedCredentialSource[] = [];
   const results: CandidateResult[] = [];
+  let selected: CredentialSelection<NormalizedOpenCodeGoPayload> | undefined;
 
   for (const { name, source } of dependencies.credentialSources) {
     const resolution = await resolveSafely(source);
@@ -795,16 +854,23 @@ async function selectOpenCodeGoCredential(dependencies: Dependencies): Promise<{
       selection.outcome === "transient" ||
       selection.outcome === "live_no_quota"
     ) {
-      return {
-        resolved,
-        selection: { ...selection, results },
-      };
+      selected = { ...selection, results };
+      break;
     }
+  }
+
+  // A Pi sibling opens no lane of its own here, but one that holds a
+  // credential this path could not read is still evidence the provider is set
+  // up on this host, so the selected account's row carries it.
+  for (const { name, resolution } of await resolvePiSiblingSources(
+    dependencies,
+  )) {
+    if (isCredentialEvidence(resolution)) resolved.push({ name, resolution });
   }
 
   return {
     resolved,
-    selection: {
+    selection: selected ?? {
       outcome: results.length > 0 ? "all_rejected" : "no_candidates",
       refreshable: false,
       results,
@@ -922,20 +988,18 @@ function transientFailure(code: string): LocalFailure {
 function indeterminateFailureFor(
   resolved: readonly ResolvedCredentialSource[],
 ): LocalFailure | undefined {
-  const fallback = resolved.find(
+  const storeFailure = resolved.find(
     ({ name, resolution }) =>
       (name === OPENCODE_GO_CREDENTIAL_SOURCE ||
         name === OPENCODE_GO_DB_CREDENTIAL_SOURCE) &&
-      (resolution.status === "invalid" ||
-        resolution.status === "error" ||
-        resolution.status === "skipped"),
+      isCredentialEvidence(resolution),
   );
-  const preferred = resolved.find(
+  const piFailure = resolved.find(
     ({ name, resolution }) =>
-      name === PI_OPENCODE_GO_SOURCE &&
-      (resolution.status === "invalid" || resolution.status === "error"),
+      entryIdFromPiSource(name) !== undefined &&
+      isCredentialEvidence(resolution),
   );
-  const failure = fallback ?? preferred;
+  const failure = storeFailure ?? piFailure;
   return failure ? localCredentialFailure(failure.resolution) : undefined;
 }
 
@@ -960,13 +1024,24 @@ function localCredentialFailure(
 async function inspectAuth(
   dependencies: Dependencies,
 ): Promise<AuthProviderReport> {
-  const sources: AuthSourceReport[] = await Promise.all(
-    dependencies.credentialSources.map(async ({ name, source }) => ({
+  const [configured, siblings] = await Promise.all([
+    Promise.all(
+      dependencies.credentialSources.map(async ({ name, source }) => ({
+        source: name,
+        ...authSourceStatus(await inspectSafely(source)),
+      })),
+    ),
+    resolvePiSiblingSources(dependencies),
+  ]);
+  // A present sibling that holds no usable key owns no lane; the selected
+  // account's auth view still names it.
+  const unusable = siblings
+    .filter(({ resolution }) => isCredentialEvidence(resolution))
+    .map(({ name, resolution }) => ({
       source: name,
-      ...authSourceStatus(await inspectSafely(source)),
-    })),
-  );
-  return { provider: "opencode-go", sources };
+      ...authSourceStatus(resolution),
+    }));
+  return { provider: "opencode-go", sources: [...configured, ...unusable] };
 }
 
 async function requestUsage(

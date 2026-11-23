@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { annotateQuotaAdvice } from "../../src/advice.js";
 import { withQuotaSemantics } from "../../src/interpretation.js";
+import { providerPresence } from "../../src/lib/source-attempts.js";
 import {
   fetchAccountQuotas,
   inspectAccountAuth,
@@ -1814,19 +1815,22 @@ describe("OpenCode Go account lanes", () => {
     pi: {
       entryIds?: string[];
       keyFor?: (entryId: string) => string;
+      resolutionFor?: (entryId: string) => CredentialResolution;
     } = {},
   ) {
     return createOpenCodeGoAdapter({
       credentialSources,
       piEntryIds: async () => pi.entryIds ?? [],
       piEntrySource: (entryId) =>
-        fakeSource({
-          status: "available",
-          key: (
-            pi.keyFor ?? ((id) => (id === "opencode-go" ? PI_KEY : WORK_KEY))
-          )(entryId),
-          path: PI_AUTH_PATH,
-        }),
+        fakeSource(
+          pi.resolutionFor?.(entryId) ?? {
+            status: "available",
+            key: (
+              pi.keyFor ?? ((id) => (id === "opencode-go" ? PI_KEY : WORK_KEY))
+            )(entryId),
+            path: PI_AUTH_PATH,
+          },
+        ),
       fetch: fetch as unknown as typeof fetch,
       now: () => Date.parse("2026-08-28T00:00:00Z"),
     });
@@ -2304,6 +2308,154 @@ describe("OpenCode Go account lanes", () => {
       {
         source: PI_OPENCODE_GO_SOURCE,
         error: "opencode_go_credential_invalid",
+      },
+    ]);
+  });
+
+  it("carries an unusable sibling's evidence on the lane row and auth view", async () => {
+    const request = vi.fn(async () => usageResponse());
+    const adapter = () =>
+      laneAdapter(
+        laneSources({
+          [PI_OPENCODE_GO_SOURCE]: { status: "missing", path: PI_AUTH_PATH },
+          [OPENCODE_GO_DB_CREDENTIAL_SOURCE]: {
+            status: "available",
+            key: KEY,
+            path: "/x/opencode.db",
+          },
+          [OPENCODE_GO_CREDENTIAL_SOURCE]: {
+            status: "available",
+            key: AUTH_KEY,
+            path: "/oc/auth.json",
+          },
+        }),
+        request,
+        {
+          entryIds: ["opencode-go", "opencode-go-work"],
+          resolutionFor: () => ({ status: "invalid", path: PI_AUTH_PATH }),
+        },
+      );
+
+    const reports = await fetchAccountQuotas(adapter(), OPTIONS);
+
+    expect(reports.map((report) => report.accountKey)).toEqual([
+      OPENCODE_GO_DB_ACCOUNT_KEY,
+      OPENCODE_GO_AUTH_ACCOUNT_KEY,
+    ]);
+    expect(reports[0]?.attempts).toEqual([
+      {
+        source: "pi:opencode-go-work",
+        status: "skipped",
+        error: "opencode_go_credential_invalid",
+        credentialPresent: true,
+      },
+      { source: OPENCODE_GO_DB_CREDENTIAL_SOURCE, status: "success" },
+    ]);
+    expect(reports[1]?.attempts).toEqual([
+      { source: OPENCODE_GO_CREDENTIAL_SOURCE, status: "success" },
+    ]);
+    expect(
+      withQuotaSemantics(reports[0]!, "2026-08-28T00:00:00.000Z").state
+        .degradedSources,
+    ).toEqual([
+      {
+        source: "pi:opencode-go-work",
+        error: "opencode_go_credential_invalid",
+      },
+    ]);
+    expect(request).toHaveBeenCalledTimes(2);
+
+    const auth = await inspectAccountAuth(adapter(), OPTIONS);
+    expect(auth[0]?.sources).toEqual([
+      {
+        source: OPENCODE_GO_DB_CREDENTIAL_SOURCE,
+        status: "available",
+        path: "/x/opencode.db",
+      },
+      { source: "pi:opencode-go-work", status: "invalid", path: PI_AUTH_PATH },
+    ]);
+    expect(auth[1]?.sources).toEqual([
+      {
+        source: OPENCODE_GO_CREDENTIAL_SOURCE,
+        status: "available",
+        path: "/oc/auth.json",
+      },
+    ]);
+  });
+
+  it("reports a lone unusable sibling as a failed credential, not an absent provider", async () => {
+    const request = vi.fn(async () => usageResponse());
+    const adapter = () =>
+      laneAdapter(
+        laneSources({
+          [PI_OPENCODE_GO_SOURCE]: { status: "missing", path: PI_AUTH_PATH },
+          [OPENCODE_GO_CREDENTIAL_SOURCE]: {
+            status: "missing",
+            path: "/oc/auth.json",
+          },
+        }),
+        request,
+        {
+          entryIds: ["opencode-go-work"],
+          resolutionFor: () => ({ status: "invalid", path: PI_AUTH_PATH }),
+        },
+      );
+
+    const reports = await fetchAccountQuotas(adapter(), OPTIONS);
+
+    expect(reports).toHaveLength(1);
+    expect(reports[0]?.accountKey).toBeUndefined();
+    expect(reports[0]?.state).toMatchObject({
+      status: "error",
+      error: "opencode_go_credential_invalid",
+      sourcesTried: [
+        PI_OPENCODE_GO_SOURCE,
+        OPENCODE_GO_CREDENTIAL_SOURCE,
+        "pi:opencode-go-work",
+      ],
+    });
+    expect(reports[0]?.attempts).toEqual([
+      {
+        source: PI_OPENCODE_GO_SOURCE,
+        status: "skipped",
+        error: "opencode_go_credential_unavailable",
+      },
+      {
+        source: OPENCODE_GO_CREDENTIAL_SOURCE,
+        status: "skipped",
+        error: "opencode_go_credential_unavailable",
+      },
+      {
+        source: "pi:opencode-go-work",
+        status: "skipped",
+        error: "opencode_go_credential_invalid",
+        credentialPresent: true,
+      },
+    ]);
+    expect(providerPresence(reports[0]!)).toBe("attention");
+    expect(request).not.toHaveBeenCalled();
+
+    const auth = await inspectAccountAuth(adapter(), OPTIONS);
+    expect(auth).toEqual([
+      {
+        provider: "opencode-go",
+        sources: [
+          {
+            source: PI_OPENCODE_GO_SOURCE,
+            status: "missing",
+            path: PI_AUTH_PATH,
+          },
+          {
+            source: OPENCODE_GO_CREDENTIAL_SOURCE,
+            status: "missing",
+            path: "/oc/auth.json",
+          },
+          {
+            source: "pi:opencode-go-work",
+            status: "invalid",
+            path: PI_AUTH_PATH,
+          },
+        ],
       },
     ]);
   });
