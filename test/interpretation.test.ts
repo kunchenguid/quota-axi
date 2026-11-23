@@ -1077,6 +1077,31 @@ describe("quota semantics", () => {
     ]);
   });
 
+  it("keeps stale Z.AI diagnostics limited to the recognized bounds", () => {
+    const zai = provider("zai", [
+      zaiSessionWindow(),
+      zaiWeeklyWindow(),
+      zaiToolWindow(),
+      window("limit:3", "unknown", 50),
+    ]);
+    zai.state = {
+      ...zai.state,
+      status: "stale",
+      stale: true,
+      untrustedWindowIds: ["limit:3"],
+    };
+    const bounds = ["five_hour", "weekly"];
+    expect(
+      withQuotaSemantics(zai, GENERATED_AT).quotaSemantics
+        ?.effectiveAvailability[0],
+    ).toMatchObject({
+      scope: "all_models",
+      pace: { status: "unknown", unknownWindowIds: bounds },
+      runway: { status: "unknown", unmeasurableWindowIds: bounds },
+      selection: { status: "unknown", unmeasurableWindowIds: bounds },
+    });
+  });
+
   it("applies Grok shared credits to product windows", () => {
     const result = withQuotaSemantics(
       provider("grok", [
@@ -1600,6 +1625,74 @@ describe("per-scope selection signal", () => {
         ?.effectiveAvailability[0]?.selection,
     ).toEqual({ status: "unknown", unmeasurableWindowIds: ["seven_day"] });
   });
+
+  it.each(["absent", "reset-only", "expired"] as const)(
+    "reports exhaustion only from a current Antigravity zero with a %s sibling",
+    (sibling) => {
+      const future = offsetFromGeneratedAt(3_600);
+      const sessionId = "gemini_5h";
+      const weeklyId = "gemini_weekly";
+      for (const source of ["live", "reuse", "snapshot", "stale"]) {
+        for (const current of [true, false]) {
+          const weekly = window(weeklyId, "weekly", 0, {
+            resetsAt: current ? future : GENERATED_AT,
+          });
+          const session: QuotaWindow = {
+            id: sessionId,
+            label: "Gemini 5-hour",
+            kind: "session",
+            resetsAt: sibling === "expired" ? GENERATED_AT : future,
+          };
+          if (sibling === "expired") session.percentRemaining = 80;
+          const agy = agyProvider(
+            sibling === "absent" ? [weekly] : [weekly, session],
+            { gemini: [weeklyId] },
+          );
+          agy[AGY_GROUPS]![0]!.buckets.push(
+            sibling === "absent"
+              ? { id: "5h", unmeasuredBoundId: sessionId }
+              : { id: "5h", windowId: sessionId },
+          );
+          agy.state = {
+            ...agy.state,
+            reused: source === "reuse" || source === "snapshot",
+            sourcesTried: [source],
+            stale: source === "stale",
+            status: source === "stale" ? "stale" : "fresh",
+          };
+          const report = annotateQuotaAdvice({
+            generatedAt: GENERATED_AT,
+            providers: [withQuotaSemantics(agy, GENERATED_AT)],
+          });
+          const exhausted = current && source !== "stale";
+          for (const full of [false, true]) {
+            const scope = quotaJsonReport(report, full).providers[0]
+              ?.quotaSemantics?.effectiveAvailability[0];
+            expect(scope?.effectivePercentRemaining).toBe(
+              exhausted ? 0 : undefined,
+            );
+            expect(scope?.runway?.status).toBe(
+              exhausted ? "exhausted_now" : "unknown",
+            );
+            expect(scope?.selection).toMatchObject({
+              status: "unknown",
+              unmeasurableWindowIds: expect.arrayContaining([sessionId]),
+            });
+            const toon = renderQuotaToon(report, "quota-axi", full);
+            if (exhausted) {
+              expect(scope?.limitingWindowIds).toEqual([weeklyId]);
+              expect(toon).toContain("agy,gemini,0,unknown,exhausted_now,");
+              expect(toon).toContain(
+                `agy,gemini,0,"${GENERATED_AT}",${weeklyId}`,
+              );
+            } else {
+              expect(toon).toContain("exhaustion[0]:");
+            }
+          }
+        }
+      }
+    },
+  );
 
   it("renders agy scope models once and separates pace from reset evidence", () => {
     const models = {

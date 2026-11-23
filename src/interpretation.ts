@@ -81,7 +81,7 @@ export function withQuotaSemantics(
   return {
     ...withWindows,
     quotaSemantics: provider.state.stale
-      ? staleSemantics(semantics)
+      ? staleSemantics(semantics, provider.provider === "agy")
       : semantics,
   };
 }
@@ -100,24 +100,32 @@ function supersededSources(
   return degraded.length > 0 ? { degradedSources: degraded } : {};
 }
 
-function staleSemantics(semantics: QuotaSemantics): QuotaSemantics {
+function staleSemantics(
+  semantics: QuotaSemantics,
+  preserveMissingBounds: boolean,
+): QuotaSemantics {
   return {
     status: semantics.status === "partial" ? "partial" : "unknown",
     description:
       "The raw quota windows are stale diagnostic data, so effective remaining is unknown until the provider refreshes successfully.",
     effectiveAvailability: semantics.effectiveAvailability.map(
       ({ scope, boundedBy, pace, models, runway, selection }) => {
-        const missing = [
-          ...new Set([
-            ...boundedBy,
-            ...(pace?.unknownWindowIds ?? []),
-            ...(runway?.unmeasurableWindowIds ?? []),
-            ...(selection?.unmeasurableWindowIds ?? []),
-          ]),
-        ];
-        const unmeasurable = missing.length
-          ? { unmeasurableWindowIds: missing }
+        const bounds = preserveMissingBounds
+          ? [
+              ...new Set([
+                ...boundedBy,
+                ...(pace?.unknownWindowIds ?? []),
+                ...(runway?.unmeasurableWindowIds ?? []),
+                ...(selection?.unmeasurableWindowIds ?? []),
+              ]),
+            ]
+          : boundedBy;
+        const unmeasurable = bounds.length
+          ? { unmeasurableWindowIds: bounds }
           : {};
+        const paceIds =
+          (!preserveMissingBounds ? pace?.unknownWindowIds : undefined) ??
+          (bounds.length ? bounds : undefined);
         return {
           scope,
           ...(models ? { models } : {}),
@@ -125,11 +133,11 @@ function staleSemantics(semantics: QuotaSemantics): QuotaSemantics {
           boundedBy,
           runway: { status: "unknown", ...unmeasurable },
           selection: { status: "unknown", ...unmeasurable },
-          ...(pace || missing.length
+          ...(pace || paceIds
             ? {
                 pace: {
                   status: "unknown",
-                  ...(missing.length ? { unknownWindowIds: missing } : {}),
+                  ...(paceIds ? { unknownWindowIds: paceIds } : {}),
                 },
               }
             : {}),
@@ -1036,6 +1044,9 @@ function agySemantics(
     const unmeasurableWindowIds = [
       ...new Set([
         ...expiredBoundIds.filter((id) => windowIds.has(id)),
+        ...bounds
+          .filter(({ percentRemaining }) => percentRemaining === undefined)
+          .map(({ id }) => id),
         ...[
           agyBoundWindowId(scope, "5h"),
           agyBoundWindowId(scope, "weekly"),
@@ -1045,18 +1056,35 @@ function agySemantics(
         ),
       ]),
     ];
-    const entry: EffectiveAvailability =
-      unmeasurableWindowIds.length > 0
+    if (unmeasurableWindowIds.length === 0) {
+      effectiveAvailability.push({
+        ...availability(scope, bounds, generatedAt),
+        models,
+      });
+      continue;
+    }
+    const exhausted = bounds.filter(
+      ({ id, percentRemaining }) =>
+        percentRemaining === 0 && !unmeasurableWindowIds.includes(id),
+    );
+    effectiveAvailability.push({
+      scope,
+      models,
+      boundedBy,
+      pace: summarizeEffectivePace(bounds, unmeasurableWindowIds),
+      selection: { status: "unknown", unmeasurableWindowIds },
+      ...(exhausted.length > 0
         ? {
-            scope,
-            status: "unknown",
-            boundedBy,
-            pace: summarizeEffectivePace(bounds, unmeasurableWindowIds),
-            runway: { status: "unknown", unmeasurableWindowIds },
-            selection: { status: "unknown", unmeasurableWindowIds },
+            status: "known",
+            effectivePercentRemaining: 0,
+            limitingWindowIds: exhausted.map(({ id }) => id),
+            runway: computeEffectiveRunway(exhausted, generatedAt),
           }
-        : availability(scope, bounds, generatedAt);
-    effectiveAvailability.push({ ...entry, models });
+        : {
+            status: "unknown",
+            runway: { status: "unknown", unmeasurableWindowIds },
+          }),
+    });
   }
   const unresolved = provider.windows.filter(
     ({ id }) => !scopedBoundIds.has(id),

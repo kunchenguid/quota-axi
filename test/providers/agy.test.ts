@@ -26,6 +26,7 @@ import {
   writeCachedProviders,
 } from "../../src/cache.js";
 import { cacheFilePath } from "../../src/lib/fs.js";
+import { quotaCommand, SNAPSHOT_ENV } from "../../src/commands.js";
 import { annotateQuotaAdvice } from "../../src/advice.js";
 import { quotaJsonReport, renderQuotaToon } from "../../src/render.js";
 import {
@@ -59,6 +60,7 @@ beforeEach(() => {
 afterEach(async () => {
   vi.restoreAllMocks();
   vi.useRealTimers();
+  vi.unstubAllEnvs();
   await Promise.all(
     servers.splice(0).map((server) => {
       server.closeAllConnections();
@@ -743,16 +745,27 @@ describe("Antigravity quota parsing", () => {
           },
           buckets: [{ id: "argon-weekly" }],
         });
-        const snapshot = readSnapshotProviders(cacheFilePath(), "agy", NOW_MS);
-        if (!Array.isArray(snapshot) || !snapshot[0])
-          throw new Error("Expected an Antigravity snapshot");
-        for (const reading of [fresh, snapshot[0]]) {
-          const generatedAt = new Date(NOW_MS).toISOString();
-          const report = annotateQuotaAdvice({
-            generatedAt,
-            providers: [withQuotaSemantics(reading, generatedAt)],
-          });
-          const json = quotaJsonReport(report, true).providers[0];
+        vi.stubEnv(SNAPSHOT_ENV, cacheFilePath());
+        const args = ["--provider", "agy", "--no-credential-refresh"];
+        const snapshot = JSON.parse(
+          await quotaCommand([...args, "--json", "--full"], undefined),
+        ) as ReturnType<typeof quotaJsonReport>;
+        expect(snapshot.providers[0]?.state).toMatchObject({
+          status: "fresh",
+          reused: true,
+          stale: false,
+          sourcesTried: ["snapshot"],
+        });
+        expect(snapshot.providers[0]?.state.error).toBeUndefined();
+        const generatedAt = new Date(NOW_MS).toISOString();
+        const freshReport = annotateQuotaAdvice({
+          generatedAt,
+          providers: [withQuotaSemantics(fresh, generatedAt)],
+        });
+        for (const json of [
+          quotaJsonReport(freshReport, true).providers[0],
+          snapshot.providers[0],
+        ]) {
           expect(json?.windows.map(({ id }) => id)).toEqual(
             groupOnly ? [] : ["gemini_weekly"],
           );
@@ -771,11 +784,14 @@ describe("Antigravity quota parsing", () => {
             models: { ids: ["gemini-4-argon-high"] },
           });
           expect(argon?.effectivePercentRemaining).toBeUndefined();
-          for (const full of [false, true]) {
-            expect(renderQuotaToon(report, "quota-axi", full)).toContain(
-              "agy,gemini_argon,gemini-4-argon-high",
-            );
-          }
+        }
+        for (const full of [false, true]) {
+          expect(renderQuotaToon(freshReport, "quota-axi", full)).toContain(
+            "agy,gemini_argon,gemini-4-argon-high",
+          );
+          expect(
+            await quotaCommand(full ? [...args, "--full"] : args, undefined),
+          ).toContain("agy,gemini_argon,gemini-4-argon-high");
         }
       },
     );
