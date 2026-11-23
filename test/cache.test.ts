@@ -545,6 +545,86 @@ describe("quota cache", () => {
     expect(readReusableProviders("agy", 90, Date.parse(reset))).toBeUndefined();
   });
 
+  it("keeps Antigravity groups without windows in snapshots but not live reuse", () => {
+    useTempCache();
+    const reading: ProviderQuota = {
+      ...quota("agy", 0),
+      windows: [],
+      [AGY_GROUPS]: [
+        {
+          id: "gemini_argon",
+          name: "Gemini 4 Argon",
+          models: { status: "unknown" },
+          buckets: [{ id: "argon-weekly" }],
+        },
+      ],
+    };
+    stampReadingInputs(reading, tracedInputs());
+    writeCachedProviders([reading], reading.state.refreshedAt);
+    const now = Date.parse("2026-07-06T18:10:30Z");
+    expect(readReusableProviders("agy", 90, now)).toBeUndefined();
+    const snapshot = readSnapshotProviders(cacheFilePath(), "agy", now);
+    expect(snapshot).toMatchObject([{ windows: [], state: { reused: true } }]);
+    const file = JSON.parse(readFileSync(cacheFilePath(), "utf8")) as {
+      providers: Record<string, unknown>[];
+    };
+    expect(file.providers[0]).not.toHaveProperty("reuse");
+  });
+
+  it("reports model-only Antigravity snapshots expired when the last reset passes", () => {
+    useTempCache();
+    const firstReset = "2026-07-06T18:10:30Z";
+    const lastReset = "2026-07-06T18:10:31Z";
+    writeCachedProviders([
+      {
+        ...quota("agy", 0),
+        source: "cli-rpc",
+        windows: [
+          {
+            id: "model:flash",
+            label: "Flash",
+            kind: "model",
+            resetsAt: firstReset,
+            percentRemaining: 100,
+          },
+          {
+            id: "model:sonnet",
+            label: "Sonnet",
+            kind: "model",
+            resetsAt: lastReset,
+            percentRemaining: 50,
+          },
+        ],
+      },
+    ]);
+    const file = cacheFilePath();
+    const admitted = readSnapshotProviders(file, "agy", Date.parse(firstReset));
+    if (!Array.isArray(admitted) || !admitted[0])
+      throw new Error("Expected the Sonnet window to keep the snapshot usable");
+    const reading = {
+      ...admitted[0],
+      state: { ...admitted[0].state, sourcesTried: ["snapshot"] },
+    };
+    expect(withQuotaSemantics(reading, firstReset).windows).toMatchObject([
+      { id: "model:sonnet", percentRemaining: 50 },
+    ]);
+    const expired = withQuotaSemantics(reading, lastReset);
+    expect(expired).toMatchObject({
+      source: "unavailable",
+      windows: [],
+      state: {
+        status: "unavailable",
+        error: "snapshot_expired",
+        stale: false,
+        sourcesTried: ["snapshot"],
+      },
+    });
+    expect(expired.state.reused).toBeUndefined();
+    expect(readSnapshotProviders(file, "agy", Date.parse(lastReset))).toBe(
+      "expired",
+    );
+  });
+
   it("does not serve Higgsfield through --max-age, including after a login switch", () => {
     useTempCache();
     const jobs = { sampled: 4, completed: 2, failed: 1, other: 1 };

@@ -1,5 +1,6 @@
 import { degradedSources } from "./lib/source-attempts.js";
 import { agyStaleQuotaAt } from "./providers/agy.js";
+import { failedProvider } from "./providers/common.js";
 import {
   computeEffectiveRunway,
   computeWindowPace,
@@ -21,7 +22,7 @@ export function withQuotaSemantics(
 ): ProviderQuota {
   const agyReportTime =
     reading.provider === "agy" ? Date.parse(generatedAt) : undefined;
-  const provider =
+  let provider =
     agyReportTime === undefined
       ? reading
       : agyStaleQuotaAt(reading, agyReportTime);
@@ -41,6 +42,21 @@ export function withQuotaSemantics(
     provider.state.reused && expiredIds.size > 0
       ? provider.windows.filter(({ id }) => !expiredIds.has(id))
       : provider.windows;
+  if (
+    agyReportTime !== undefined &&
+    provider.state.reused &&
+    activeWindows.length === 0 &&
+    !provider[AGY_GROUPS]?.length &&
+    provider.state.sourcesTried?.includes("snapshot")
+  ) {
+    provider = failedProvider({
+      provider: "agy",
+      label: "Antigravity",
+      status: "unavailable",
+      error: "snapshot_expired",
+      sourcesTried: ["snapshot"],
+    });
+  }
   const windows = activeWindows.map((window) => ({
     ...window,
     pace: computeWindowPace(window, generatedAt, {
@@ -49,7 +65,7 @@ export function withQuotaSemantics(
   }));
   const state = { ...provider.state, ...supersededSources(provider) };
   if (agyReportTime !== undefined) {
-    if (!provider.state.reused && expiredIds.size > 0)
+    if (!provider.state.reused && windows.length > 0 && expiredIds.size > 0)
       state.untrustedWindowIds = [...expiredIds];
     else delete state.untrustedWindowIds;
   }

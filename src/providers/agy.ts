@@ -174,7 +174,7 @@ export async function fetchQuotaWithRuntime(
   try {
     cli = await fetchCliQuota(runtime);
     attempts[0] = { source: "cli", status: "success" };
-    if (cli.windows.length > 0)
+    if (hasAgyMeasurement(cli))
       return reportAgyReading(runtime, cli, "cli", attempts, cli.commandPath);
   } catch (error) {
     finalFailure = error;
@@ -192,21 +192,8 @@ export async function fetchQuotaWithRuntime(
   try {
     const quota = await fetchLoopbackQuota(runtime);
     attempts[attempts.length - 1] = { source: "loopback", status: "success" };
-    if (cli && quota.windows.length === 0)
-      return reportAgyReading(
-        runtime,
-        withAgyGroups(cli, quota),
-        "cli",
-        attempts,
-        cli.commandPath,
-      );
-    return reportAgyReading(
-      runtime,
-      withAgyGroups(quota, cli),
-      "cli-rpc",
-      attempts,
-      cli?.commandPath,
-    );
+    if (!cli || hasAgyMeasurement(quota))
+      return reportAgyReading(runtime, quota, "cli-rpc", attempts);
   } catch (error) {
     const skipped =
       error instanceof AgyUnavailableError || isMissingCommandError(error);
@@ -288,17 +275,10 @@ async function reportAgyReading(
   });
 }
 
-function withAgyGroups(
-  reading: AgyQuotaReading,
-  supplemental?: AgyQuotaReading,
-): AgyQuotaReading {
-  const groups = reading[AGY_GROUPS] ?? [];
-  const extra = supplemental?.[AGY_GROUPS]?.filter(
-    ({ id }) => !groups.some((group) => group.id === id),
+function hasAgyMeasurement(reading: AgyQuotaReading): boolean {
+  return reading.windows.some(
+    ({ percentRemaining }) => percentRemaining !== undefined,
   );
-  return extra?.length
-    ? { ...reading, [AGY_GROUPS]: [...groups, ...extra] }
-    : reading;
 }
 
 export async function inspectAuth(
@@ -613,19 +593,19 @@ async function fetchLoopbackQuota(
     );
 
   let lastError: unknown;
-  let groupOnly: AgyQuotaReading | undefined;
+  let diagnostic: AgyQuotaReading | undefined;
   for (const endpoint of endpoints) {
     try {
       if (endpoint.requiresUnleashProbe)
         await probeEndpoint(runtime, endpoint, deadline);
       const reading = await fetchEndpointQuota(runtime, endpoint, deadline);
-      if (reading.windows.length > 0) return withAgyGroups(reading, groupOnly);
-      groupOnly = groupOnly ? withAgyGroups(groupOnly, reading) : reading;
+      if (hasAgyMeasurement(reading)) return reading;
+      diagnostic ??= reading;
     } catch (error) {
       lastError = strongerFailure(lastError, error);
     }
   }
-  if (groupOnly) return groupOnly;
+  if (diagnostic) return diagnostic;
 
   throw lastError instanceof Error
     ? lastError
@@ -762,6 +742,7 @@ async function fetchEndpointQuota(
   }
 
   let userStatus: AgyQuotaReading | undefined;
+  let diagnostic: AgyQuotaReading | undefined;
   for (const path of [USER_STATUS_PATH, COMMAND_MODEL_CONFIGS_PATH]) {
     let fallback: AgyQuotaReading | undefined;
     try {
@@ -774,20 +755,21 @@ async function fetchEndpointQuota(
       summaryError = strongerFailure(summaryError, error);
     }
     if (path === USER_STATUS_PATH) userStatus = fallback;
-    if (summary?.windows.length) break;
-    if (fallback?.windows.length) {
-      return withAgyGroups(
-        {
-          ...fallback,
-          plan: fallback.plan ?? userStatus?.plan,
-          account: fallback.account ?? userStatus?.account,
-        },
-        summary,
-      );
+    if (summary && hasAgyMeasurement(summary)) break;
+    if (fallback && hasAgyMeasurement(fallback)) {
+      return summary
+        ? {
+            ...fallback,
+            [AGY_GROUPS]: summary[AGY_GROUPS],
+            windows: [...summary.windows, ...fallback.windows],
+          }
+        : fallback;
     }
+    if (fallback?.windows.length) diagnostic ??= fallback;
   }
   if (summary)
     return { ...summary, plan: userStatus?.plan, account: userStatus?.account };
+  if (diagnostic) return diagnostic;
 
   throw summaryError instanceof Error
     ? summaryError
@@ -921,16 +903,14 @@ function matchModelIds(
   label: string,
   catalog: readonly AgyModelCatalogEntry[],
 ): string[] {
-  const wanted = label.toLowerCase();
   return catalog
-    .filter(({ id, label }) => {
-      const candidate = label.toLowerCase();
-      if (candidate === wanted) return true;
-      const effort = /\s*\((low|medium|high|xhigh)\)$/.exec(candidate);
+    .filter(({ id, label: candidate }) => {
+      if (candidate === label) return true;
+      const effort = /\s*\((low|medium|high|xhigh)\)$/i.exec(candidate);
       return (
         effort !== null &&
-        candidate.slice(0, effort.index) === wanted &&
-        id.endsWith(`-${effort[1]}`)
+        candidate.slice(0, effort.index) === label &&
+        id.endsWith(`-${effort[1].toLowerCase()}`)
       );
     })
     .map(({ id }) => id);

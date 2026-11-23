@@ -253,6 +253,8 @@ describe("Antigravity quota parsing", () => {
       "gemini-4-neon-low\tGemini 4 Neon (Low)",
       "gemini-4-neon-preview\tGemini 4 Neon (Low)",
       "gemini-4-neon-medium-alias-high\tGemini 4 Neon (Medium)",
+      "case-mismatch\tgemini 4 Neon",
+      "case-mismatch-low\tgemini 4 Neon (Low)",
       "gemini-4-argon-medium\tGemini 4 Argon (Medium)",
       "gemini-4-hydrogen-medium\tGemini 4 Hydrogen (Medium)",
       "gemini-pro-orchestrator-neon\tOrchestrator (Neon)",
@@ -693,6 +695,23 @@ describe("Antigravity quota parsing", () => {
                   cliQuota: JSON.stringify({
                     command: { name: "quota", data: { groups } },
                   }),
+                  ...(groupOnly
+                    ? {
+                        ps: "123 /Users/test/.local/bin/agy\n",
+                        lsof: lsofFor(123, 64440),
+                        responses: {
+                          "https:64440:/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary":
+                            {
+                              groups: [
+                                {
+                                  displayName: "Other Account Group",
+                                  buckets: [],
+                                },
+                              ],
+                            },
+                        },
+                      }
+                    : {}),
                 }),
           }),
         );
@@ -724,6 +743,12 @@ describe("Antigravity quota parsing", () => {
           expect(json?.windows.map(({ id }) => id)).toEqual(
             groupOnly ? [] : ["gemini_weekly"],
           );
+          if (groupOnly)
+            expect(
+              json?.quotaSemantics?.effectiveAvailability.map(
+                ({ scope }) => scope,
+              ),
+            ).toEqual(["gemini_argon"]);
           const argon = json?.quotaSemantics?.effectiveAvailability.find(
             ({ scope }) => scope === "gemini_argon",
           );
@@ -742,13 +767,35 @@ describe("Antigravity quota parsing", () => {
       },
     );
 
-    it.each(["CLI", "user status", "model configs", "later port"] as const)(
-      "keeps Argon membership and finds fallback model quota after a group-only %s response",
-      async (path) => {
+    it.each([
+      ["CLI", false],
+      ["user status", false],
+      ["model configs", false],
+      ["later port", false],
+      ["CLI", true],
+      ["user status", true],
+      ["model configs", true],
+      ["later port", true],
+    ] as const)(
+      "uses fallback quota from %s without mixing accounts (reset evidence: %s)",
+      async (path, resetOnly) => {
         vi.useFakeTimers({ toFake: ["Date"] });
         vi.setSystemTime(Date.parse("2026-06-15T09:00:00Z"));
-        const groups = [disabledArgonGroup];
+        const resetTime = "2026-06-19T08:45:39Z";
+        const groups = resetOnly
+          ? [
+              {
+                ...disabledArgonGroup,
+                buckets: [
+                  { bucketId: "argon-weekly", window: "weekly", resetTime },
+                ],
+              },
+            ]
+          : [disabledArgonGroup];
         const rpc = "/exa.language_server_pb.LanguageServerService/";
+        const status = fixture("user-status.json") as {
+          userStatus: { cascadeModelConfigData: unknown };
+        };
         const result = await fetchQuotaWithRuntime(
           runtimeWith({
             cliQuota:
@@ -766,8 +813,26 @@ describe("Antigravity quota parsing", () => {
               [`https:64440:${rpc}RetrieveUserQuotaSummary`]: {
                 groups: path === "CLI" ? [] : groups,
               },
-              [`https:${path === "later port" ? 64441 : 64440}:${rpc}${path === "model configs" ? "GetCommandModelConfigs" : "GetUserStatus"}`]:
-                fixture("user-status.json"),
+              ...(path === "model configs"
+                ? {
+                    [`https:64440:${rpc}GetUserStatus`]: {
+                      email: "other@example.invalid",
+                      userTier: { name: "Other plan" },
+                      ...(resetOnly
+                        ? {
+                            clientModelConfigs: [
+                              { label: "Reset only", quotaInfo: { resetTime } },
+                            ],
+                          }
+                        : {}),
+                    },
+                    [`https:64440:${rpc}GetCommandModelConfigs`]:
+                      status.userStatus.cascadeModelConfigData,
+                  }
+                : {
+                    [`https:${path === "later port" ? 64441 : 64440}:${rpc}GetUserStatus`]:
+                      status,
+                  }),
             },
           }),
         );
@@ -775,21 +840,40 @@ describe("Antigravity quota parsing", () => {
           source: "cli-rpc",
           state: { status: "fresh" },
         });
+        const sameEndpoint = path === "user status" || path === "model configs";
         expect(result.windows).toMatchObject([
+          ...(sameEndpoint && resetOnly
+            ? [
+                {
+                  id: "gemini_argon_weekly",
+                  resetsAt: "2026-06-19T08:45:39.000Z",
+                },
+              ]
+            : []),
           { id: "model:model_fixture_gemini_flash", percentRemaining: 100 },
           { id: "model:model_fixture_claude_sonnet", percentRemaining: 50 },
         ]);
         expect(
           withQuotaSemantics(result, new Date().toISOString()).quotaSemantics
             ?.effectiveAvailability,
-        ).toMatchObject([
-          {
-            scope: "gemini_argon",
-            status: "unknown",
-            boundedBy: [],
-            models: { ids: ["gemini-4-argon-high"] },
-          },
-        ]);
+        ).toMatchObject(
+          sameEndpoint
+            ? [
+                {
+                  scope: "gemini_argon",
+                  status: "unknown",
+                  boundedBy: resetOnly ? ["gemini_argon_weekly"] : [],
+                  models: { ids: ["gemini-4-argon-high"] },
+                },
+              ]
+            : [],
+        );
+        if (sameEndpoint && resetOnly)
+          expect(result.windows[0]?.percentRemaining).toBeUndefined();
+        if (path === "model configs") {
+          expect(result.plan).toBeUndefined();
+          expect(result.account).toBeUndefined();
+        }
       },
     );
 
@@ -1033,7 +1117,7 @@ describe("Antigravity provider", () => {
       runtimeWith({
         cliQuota: "{}",
         cliModels:
-          "gemini-flash-low\tGemini Flash (Low)\ngemini-flash-high\tGemini Flash (High)\ngemini-pro-low\tGemini Pro (Medium)",
+          "gemini-flash-low\tGemini Flash (Low)\ngemini-flash-high\tGemini Flash (High)\ngemini-pro-low\tGemini Pro (Medium)\ncase-mismatch\tgemini Flash\ncase-mismatch-low\tgemini Flash (Low)",
         ps: "123 /Users/test/.local/bin/agy\n",
         lsof: lsofFor(123, 64440),
         responses: {

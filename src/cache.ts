@@ -388,7 +388,10 @@ export function readReusableProviders(
   if (
     !young ||
     !group.every(
-      (record) => hasReusableFormat(record) && hasUnexpiredWindows(record, now),
+      (record) =>
+        record.snapshot.windows.length > 0 &&
+        hasReusableFormat(record) &&
+        hasUnexpiredWindows(record, now),
     )
   )
     return undefined;
@@ -446,7 +449,12 @@ export function readSnapshotProviders(
     !records.every(
       (record) =>
         hasReusableFormat(record) &&
-        (provider === "agy" || hasUnexpiredWindows(record, now)),
+        (provider === "agy"
+          ? Boolean(record.snapshot[AGY_GROUPS]?.length) ||
+            record.snapshot.windows.some((window) =>
+              windowHasNotReset(window, now),
+            )
+          : hasUnexpiredWindows(record, now)),
     )
   )
     return "expired";
@@ -465,9 +473,13 @@ function hasReusableFormat(record: CachedProvider): boolean {
 }
 
 function hasUnexpiredWindows(record: CachedProvider, now: number): boolean {
-  return record.snapshot.windows.every(
-    ({ resetsAt }) => resetsAt === undefined || Date.parse(resetsAt) > now,
+  return record.snapshot.windows.every((window) =>
+    windowHasNotReset(window, now),
   );
+}
+
+function windowHasNotReset({ resetsAt }: QuotaWindow, now: number): boolean {
+  return resetsAt === undefined || Date.parse(resetsAt) > now;
 }
 
 function reusedReading(record: CachedProvider): ProviderQuota {
@@ -758,6 +770,7 @@ function reuseStampsFor(
       !lanes.every(
         (provider) =>
           (provider as TracedQuota)[READING_INPUTS] === inputs &&
+          provider.windows.length > 0 &&
           !isCacheExcluded(provider) &&
           toCacheProvider(provider),
       )
