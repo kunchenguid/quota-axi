@@ -1024,8 +1024,8 @@ function partialSemantics(
 
 /**
  * One scope per agy group: the group's weekly and 5-hour windows jointly bound
- * it. Any group agy names becomes its own scope. A passed reset makes its own
- * scope unknown and leaves the other scopes alone.
+ * it. Any group agy names becomes its own scope. A passed reset leaves that
+ * scope unknown unless another current bound proves exhaustion.
  */
 function agySemantics(
   provider: ProviderQuota,

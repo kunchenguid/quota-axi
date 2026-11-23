@@ -13,12 +13,7 @@ import {
   execFileText,
   type ExecFileTextOptions,
 } from "../lib/process.js";
-import {
-  clampPercent,
-  nowIso,
-  parseEpochOrIso,
-  percentRemaining,
-} from "../lib/time.js";
+import { clampPercent, nowIso, parseEpochOrIso } from "../lib/time.js";
 import { AGY_GROUPS } from "../types.js";
 import type {
   AgyQuotaGroup,
@@ -964,10 +959,11 @@ function applyAgyUsage(
   remaining: number | undefined,
   nowMs?: number,
 ): void {
-  if (remaining === undefined) return;
-  const percentUsed = clampPercent((1 - clampFraction(remaining)) * 100);
-  window.percentUsed = percentUsed;
-  window.percentRemaining = percentRemaining(percentUsed);
+  if (remaining === undefined || remaining < 0 || remaining > 1) return;
+  const roundedUsed = clampPercent((1 - remaining) * 100);
+  window.percentRemaining =
+    roundedUsed === 100 ? remaining * 100 : 100 - roundedUsed;
+  window.percentUsed = 100 - window.percentRemaining;
   if (remaining !== 1 || window.resetsAt === undefined) return;
   const resetMs = Date.parse(window.resetsAt);
   if (
@@ -1341,11 +1337,6 @@ function requestBodyForPath(path: string): Record<string, unknown> {
       locale: "en",
     },
   };
-}
-
-function clampFraction(value: number): number {
-  if (!Number.isFinite(value)) return 0;
-  return Math.min(1, Math.max(0, value));
 }
 
 function objectValue(value: unknown): Record<string, unknown> | undefined {

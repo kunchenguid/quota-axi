@@ -505,17 +505,7 @@ function buildLiveCard(
     lines.push(interior([], border));
     for (const window of provider.windows) {
       lines.push(
-        interior(
-          windowRow(
-            window,
-            generatedAtMs,
-            provider.windows,
-            show,
-            provider.provider === "agy" &&
-              provider.state.untrustedWindowIds?.includes(window.id),
-          ),
-          border,
-        ),
+        interior(windowRow(provider, window, generatedAtMs, show), border),
       );
     }
   }
@@ -563,7 +553,9 @@ function effectiveHeadline(
 
   const verdict = runwayVerdict(headline);
   const percentText =
-    effectivePct === undefined ? undefined : shownPercent(effectivePct, show);
+    effectivePct === undefined
+      ? undefined
+      : shownPercent(provider.provider, effectivePct, show);
   // The remaining view has always read as bare headroom; the flipped view
   // says so, because the same number would otherwise read the other way.
   const direction = show === "used" ? "used · " : "";
@@ -784,15 +776,17 @@ function interior(content: Line, borderStyle: StyleName): Line {
 }
 
 function windowRow(
+  provider: ProviderQuota,
   window: QuotaWindow,
   generatedAtMs: number,
-  windows: QuotaWindow[],
   show: TuiShow,
-  untrusted?: boolean,
 ): Line {
   if (window.shareOf) {
-    return shareWindowRow(window, generatedAtMs, windows);
+    return shareWindowRow(window, generatedAtMs, provider.windows);
   }
+  const untrusted =
+    provider.provider === "agy" &&
+    provider.state.untrustedWindowIds?.includes(window.id);
   const pct = untrusted ? undefined : window.percentRemaining;
   const marker = untrusted ? undefined : window.pace?.timeRemainingPercent;
   const reset = untrusted ? "passed" : resetCountdown(window, generatedAtMs);
@@ -804,7 +798,7 @@ function windowRow(
     {
       text: (pct === undefined
         ? "?"
-        : shownPercent(pct, show, window.percentUsed)
+        : shownPercent(provider.provider, pct, show, window.percentUsed)
       ).padStart(4),
       style: pct === undefined ? "dim" : healthStyle(pct),
     },
@@ -855,10 +849,13 @@ function shareCaption(window: QuotaWindow, windows: QuotaWindow[]): string {
  * figure; an effective headline derives consumption from raw remaining.
  */
 function shownPercent(
+  provider: ProviderQuota["provider"],
   percentRemaining: number,
   show: TuiShow,
   percentUsed = 100 - percentRemaining,
 ): string {
+  if (provider === "agy" && percentRemaining > 0 && percentRemaining <= 0.5)
+    return show === "used" ? ">99%" : "<1%";
   return `${Math.round(show === "used" ? percentUsed : percentRemaining)}%`;
 }
 
