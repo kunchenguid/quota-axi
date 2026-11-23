@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { withQuotaSemantics } from "../src/interpretation.js";
-import { renderQuotaToon } from "../src/render.js";
+import { annotateQuotaAdvice } from "../src/advice.js";
+import { quotaJsonReport, renderQuotaToon } from "../src/render.js";
+import { renderQuotaTui } from "../src/tui.js";
 import {
   SELECTION_SCALAR_KEY,
   type ProviderQuota,
@@ -653,7 +655,7 @@ describe("quota semantics", () => {
     );
     expect(
       renderQuotaToon(
-        { generatedAt: GENERATED_AT, schemaVersion: 5, providers: [result] },
+        { generatedAt: GENERATED_AT, schemaVersion: 7, providers: [result] },
         "quota-axi",
         false,
       ),
@@ -683,7 +685,7 @@ describe("quota semantics", () => {
     );
     expect(
       renderQuotaToon(
-        { generatedAt: GENERATED_AT, schemaVersion: 5, providers: [result] },
+        { generatedAt: GENERATED_AT, schemaVersion: 7, providers: [result] },
         "quota-axi",
         false,
       ),
@@ -720,7 +722,7 @@ describe("quota semantics", () => {
         "spend_control",
       ]);
       const report = renderQuotaToon(
-        { generatedAt: GENERATED_AT, schemaVersion: 5, providers: [result] },
+        { generatedAt: GENERATED_AT, schemaVersion: 7, providers: [result] },
         "quota-axi",
         false,
       );
@@ -1189,18 +1191,17 @@ describe("quota semantics", () => {
       provider("agy", [
         window("gemini_5h", "session", 100),
         window("gemini_weekly", "weekly", 70),
-        window("gemini_unknown", "unknown", 10),
+        window("gemini:bucket:monthly", "unknown", 10),
       ]),
       GENERATED_AT,
     );
     expect(agyUnknownKind.quotaSemantics).toMatchObject({
-      status: "partial",
-      unresolvedWindowIds: ["gemini_unknown"],
+      status: "known",
       effectiveAvailability: [
         expect.objectContaining({
           scope: "gemini",
-          effectivePercentRemaining: 70,
-          boundedBy: ["gemini_5h", "gemini_weekly"],
+          effectivePercentRemaining: 10,
+          boundedBy: ["gemini_5h", "gemini_weekly", "gemini:bucket:monthly"],
         }),
       ],
     });
@@ -1564,33 +1565,98 @@ describe("per-scope selection signal", () => {
       labels: ["Gemini 4 Neon"],
       ids: ["gemini-4-neon-medium"],
     };
+    const session = {
+      ...window("gemini_5h", "session", 100, {
+        windowSeconds: 18_000,
+        notStarted: true,
+      }),
+      models,
+    };
+    const agy = provider("agy", [
+      session,
+      window("gemini_weekly", "weekly", 100, {
+        windowSeconds: WEEK_SECONDS,
+        notStarted: true,
+      }),
+    ]);
+    for (const stale of [false, true]) {
+      const result = withQuotaSemantics(
+        {
+          ...agy,
+          state: { ...agy.state, stale, status: stale ? "stale" : "fresh" },
+        },
+        GENERATED_AT,
+      );
+      const report = annotateQuotaAdvice({
+        generatedAt: GENERATED_AT,
+        providers: [result],
+      });
+      expect(report.schemaVersion).toBe(7);
+      const text = renderQuotaToon(report, "quota-axi", true);
+      expect(text).toContain(
+        stale
+          ? "agy,gemini_5h,gemini_5h,100,unknown,stale,"
+          : "agy,gemini_5h,gemini_5h,100,not_started,not_started,",
+      );
+      expect(text).toContain("gemini-4-neon-medium");
+      for (const full of [false, true]) {
+        const publicProvider = quotaJsonReport(report, full).providers[0]!;
+        for (const publicWindow of publicProvider.windows) {
+          expect(publicWindow).not.toHaveProperty("models");
+        }
+        const scope = publicProvider.quotaSemantics?.effectiveAvailability[0];
+        expect(scope?.models).toEqual(models);
+        expect(scope?.effectivePercentRemaining).toBe(stale ? undefined : 100);
+      }
+    }
+  });
+
+  it("hides passed model resets in default JSON and both TUI views", () => {
     const result = withQuotaSemantics(
       provider("agy", [
-        window("gemini_5h", "session", 100, {
-          windowSeconds: 18_000,
-          notStarted: true,
-          models,
+        window("model:atlas", "model", 24, {
+          label: "Atlas",
+          resetsAt: offsetFromGeneratedAt(-60),
         }),
-        window("gemini_weekly", "weekly", 100, {
-          windowSeconds: WEEK_SECONDS,
-          notStarted: true,
-          models,
+        window("model:beacon", "model", 86, {
+          label: "Beacon",
+          resetsAt: offsetFromGeneratedAt(60),
         }),
       ]),
       GENERATED_AT,
     );
-    const text = renderQuotaToon(
-      { generatedAt: GENERATED_AT, schemaVersion: 5, providers: [result] },
-      "quota-axi",
-      true,
-    );
-    expect(text).toContain(
-      "agy,gemini_5h,gemini_5h,100,not_started,not_started,",
-    );
-    expect(text).toContain("gemini-4-neon-medium");
-    expect(result.quotaSemantics?.effectiveAvailability[0]?.models).toEqual(
-      models,
-    );
+    expect(result.state.untrustedWindowIds).toEqual(["model:atlas"]);
+    const report = annotateQuotaAdvice({
+      generatedAt: GENERATED_AT,
+      providers: [result],
+    });
+    expect(quotaJsonReport(report, false).providers[0]?.windows).toMatchObject([
+      {
+        id: "model:atlas",
+        percentRemaining: undefined,
+        resetsAt: undefined,
+        pace: { reason: "expired_reset" },
+      },
+      { id: "model:beacon", percentRemaining: 86 },
+    ]);
+    expect(
+      quotaJsonReport(report, true).providers[0]?.windows[0],
+    ).toMatchObject({
+      id: "model:atlas",
+      percentRemaining: 24,
+      resetsAt: offsetFromGeneratedAt(-60),
+    });
+    for (const show of ["remaining", "used"] as const) {
+      const output = renderQuotaTui(report, {
+        columns: 80,
+        colorDepth: "none",
+        show,
+      });
+      const atlas = output.split("\n").find((line) => line.includes("atlas"));
+      const beacon = output.split("\n").find((line) => line.includes("beacon"));
+      expect(atlas).toMatch(/\?\s+passed/);
+      expect(beacon).toContain(show === "used" ? "14%" : "86%");
+    }
   });
 
   it("keeps the agy scope list the same when the other scope has a passed reset", () => {

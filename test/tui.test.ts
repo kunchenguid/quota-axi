@@ -740,7 +740,7 @@ describe("cards for providers with no combinable bound", () => {
     return renderQuotaTui(
       {
         generatedAt: GENERATED_AT,
-        schemaVersion: 5,
+        schemaVersion: 7,
         providers: [claudeProvider(), copilotProvider(stale)],
       },
       { timeZone: "America/Los_Angeles" },
@@ -815,7 +815,7 @@ describe("cards for providers with no combinable bound", () => {
     const lines = renderQuotaTui(
       {
         generatedAt: GENERATED_AT,
-        schemaVersion: 5,
+        schemaVersion: 7,
         providers: [creditsOnly],
       },
       { timeZone: "America/Los_Angeles" },
@@ -866,7 +866,7 @@ describe("cards for providers with no combinable bound", () => {
     const lines = renderQuotaTui(
       {
         generatedAt: GENERATED_AT,
-        schemaVersion: 5,
+        schemaVersion: 7,
         providers: [claudeProvider(), cursor],
       },
       { timeZone: "America/Los_Angeles" },
@@ -882,7 +882,7 @@ describe("cards for providers with no combinable bound", () => {
     const withoutCopilot = renderQuotaTui(
       {
         generatedAt: GENERATED_AT,
-        schemaVersion: 5,
+        schemaVersion: 7,
         providers: [claudeProvider()],
       },
       { timeZone: "America/Los_Angeles" },
@@ -903,7 +903,7 @@ describe("cards for providers with no combinable bound", () => {
       const output = renderQuotaTui(
         {
           generatedAt: GENERATED_AT,
-          schemaVersion: 5,
+          schemaVersion: 7,
           providers: [unfamiliarClaude(stale)],
         },
         { timeZone: "America/Los_Angeles" },
@@ -957,7 +957,7 @@ describe("used-share window rows", () => {
       GENERATED_AT,
     );
     const lines = renderQuotaTui(
-      { generatedAt: GENERATED_AT, schemaVersion: 5, providers: [kimi] },
+      { generatedAt: GENERATED_AT, schemaVersion: 7, providers: [kimi] },
       { timeZone: "America/Los_Angeles" },
     ).split("\n");
     const code = findLine(lines, "│   code");
@@ -971,7 +971,7 @@ describe("used-share window rows", () => {
     // A share is already a used figure, so the used view leaves it as is and
     // flips only the windows around it.
     const used = renderQuotaTui(
-      { generatedAt: GENERATED_AT, schemaVersion: 5, providers: [kimi] },
+      { generatedAt: GENERATED_AT, schemaVersion: 7, providers: [kimi] },
       { timeZone: "America/Los_Angeles", show: "used" },
     ).split("\n");
     expect(findLine(used, "│   code")).toBe(code);
@@ -998,7 +998,7 @@ describe("used-share window rows", () => {
       GENERATED_AT,
     );
     const lines = renderQuotaTui(
-      { generatedAt: GENERATED_AT, schemaVersion: 5, providers: [copilot] },
+      { generatedAt: GENERATED_AT, schemaVersion: 7, providers: [copilot] },
       { timeZone: "America/Los_Angeles" },
     ).split("\n");
     const chat = findLine(lines, "│   chat");
@@ -1008,7 +1008,7 @@ describe("used-share window rows", () => {
     // The used view is a display of the same remaining figure, so it does not
     // turn an unmeasured window into a measured one either.
     const used = renderQuotaTui(
-      { generatedAt: GENERATED_AT, schemaVersion: 5, providers: [copilot] },
+      { generatedAt: GENERATED_AT, schemaVersion: 7, providers: [copilot] },
       { timeZone: "America/Los_Angeles", show: "used" },
     ).split("\n");
     expect(findLine(used, "│   chat")).toBe(chat);
@@ -1239,7 +1239,7 @@ describe("color handling", () => {
     const lines = renderQuotaTui(
       {
         generatedAt: GENERATED_AT,
-        schemaVersion: 5,
+        schemaVersion: 7,
         providers: [work, personal],
       },
       { columns: 120, timeZone: "America/Los_Angeles" },
@@ -1498,7 +1498,7 @@ describe("providers that are not set up", () => {
   function fleet(): QuotaAxiResponse {
     return {
       generatedAt: GENERATED_AT,
-      schemaVersion: 5,
+      schemaVersion: 7,
       providers: [
         notSetUp("zai", ["pi:zai", "opencode:auth.json"]),
         claudeProvider(),
@@ -1599,7 +1599,7 @@ describe("providers that are not set up", () => {
   it("renders only the header and the footer when nothing is set up", () => {
     const response: QuotaAxiResponse = {
       generatedAt: GENERATED_AT,
-      schemaVersion: 5,
+      schemaVersion: 7,
       providers: [notSetUp("zai"), notSetUp("mimo"), notSetUp("deepseek")],
     };
 
@@ -1622,7 +1622,7 @@ describe("providers that are not set up", () => {
   it("gives up the timestamp before a tier count in a narrow terminal", () => {
     const response: QuotaAxiResponse = {
       generatedAt: GENERATED_AT,
-      schemaVersion: 5,
+      schemaVersion: 7,
       providers: PROVIDER_IDS.map((provider) => notSetUp(provider)),
     };
     const zone = { timeZone: "Australia/Adelaide" };
@@ -1643,7 +1643,7 @@ describe("providers that are not set up", () => {
   it("names every tier in the header, including the ones that are empty", () => {
     const lines = frame({
       generatedAt: GENERATED_AT,
-      schemaVersion: 5,
+      schemaVersion: 7,
       providers: [claudeProvider(), codexProvider()],
     });
 
@@ -1657,7 +1657,7 @@ describe("providers that are not set up", () => {
     const lane = { ...notSetUp("zai"), accountKey: "default" };
     const lines = frame({
       generatedAt: GENERATED_AT,
-      schemaVersion: 6,
+      schemaVersion: 8,
       providers: [work, lane],
     });
 
@@ -1671,7 +1671,7 @@ describe("providers that are not set up", () => {
     const lines = frame(
       {
         generatedAt: GENERATED_AT,
-        schemaVersion: 6,
+        schemaVersion: 8,
         providers: [work, notSetUp("zai")],
       },
       { accountLabels: ["work", undefined] },
@@ -1689,7 +1689,7 @@ describe("providers that are not set up", () => {
     const lines = frame(
       {
         generatedAt: GENERATED_AT,
-        schemaVersion: 6,
+        schemaVersion: 8,
         providers: [long, notSetUp("zai")],
       },
       { columns: 80 },
@@ -1721,7 +1721,7 @@ describe("account labels", () => {
   function lanes(): QuotaAxiResponse {
     return {
       generatedAt: GENERATED_AT,
-      schemaVersion: 6,
+      schemaVersion: 8,
       providers: [
         { ...claudeProvider(), accountKey: "profile:aaaa" },
         { ...claudeProvider(), accountKey: "profile:bbbb" },

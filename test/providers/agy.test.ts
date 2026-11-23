@@ -29,7 +29,6 @@ import {
   normalizeAgyPrintUsage,
   normalizeAgyQuotaSummary,
   normalizeAgyUserStatus,
-  parseAgyModelCatalog,
   portsFromLsof,
   processInfosFromPs,
   requestLoopbackJson,
@@ -240,22 +239,20 @@ describe("Antigravity quota parsing", () => {
     // Captured 2026-11-22T06:20:29Z. agy reported "now plus period" resets for
     // the Gemini and Argon limits and the Unix epoch for Claude and GPT.
     const NOW_MS = Date.parse("2026-11-22T06:20:29Z");
-    const CATALOG = parseAgyModelCatalog(
-      [
-        "gemini-4-neon-high\tGemini 4 Neon (High)",
-        "gemini-4-neon-xhigh\tGemini 4 Neon (XHigh)",
-        "gemini-4-neon-medium\tGemini 4 Neon (Medium)",
-        "gemini-4-neon-low\tGemini 4 Neon (Low)",
-        "gemini-4-argon-medium\tGemini 4 Argon (Medium)",
-        "gemini-4-hydrogen-medium\tGemini 4 Hydrogen (Medium)",
-        "gemini-pro-orchestrator-neon\tOrchestrator (Neon)",
-        "gemini-pro-orchestrator-g1-pro\tOrchestrator (Argon)",
-        "gemini-3.8-flash-medium\tGemini 3.8 Flash (Medium)",
-        "claude-opus-5-5-low\tClaude Opus 5.5 (Low)",
-        "claude-sonnet-5-5-high\tClaude Sonnet 5.5 (High)",
-        "gpt-oss-120b-medium\tGPT-OSS 120B (Medium)",
-      ].join("\n"),
-    );
+    const CATALOG = [
+      "gemini-4-neon-high\tGemini 4 Neon (High)",
+      "gemini-4-neon-xhigh\tGemini 4 Neon (XHigh)",
+      "gemini-4-neon-medium\tGemini 4 Neon (Medium)",
+      "gemini-4-neon-low\tGemini 4 Neon (Low)",
+      "gemini-4-argon-medium\tGemini 4 Argon (Medium)",
+      "gemini-4-hydrogen-medium\tGemini 4 Hydrogen (Medium)",
+      "gemini-pro-orchestrator-neon\tOrchestrator (Neon)",
+      "gemini-pro-orchestrator-g1-pro\tOrchestrator (Argon)",
+      "gemini-3.8-flash-medium\tGemini 3.8 Flash (Medium)",
+      "claude-opus-5-5-low\tClaude Opus 5.5 (Low)",
+      "claude-sonnet-5-5-high\tClaude Sonnet 5.5 (High)",
+      "gpt-oss-120b-medium\tGPT-OSS 120B (Medium)",
+    ].join("\n");
 
     function windowById(
       windows: ReturnType<typeof normalizeAgyPrintUsage> & object,
@@ -269,7 +266,6 @@ describe("Antigravity quota parsing", () => {
     it("keeps 100% and drops the placeholder reset for unused limits", () => {
       const result = normalizeAgyPrintUsage(fixture("cli-quota-unused.json"), {
         nowMs: NOW_MS,
-        catalog: CATALOG,
       })!;
 
       expect(result.windows.map(({ id }) => id)).toEqual([
@@ -326,24 +322,28 @@ describe("Antigravity quota parsing", () => {
         JSON.stringify(fixture("cli-quota-unused.json")),
       ) as { command: { data: { groups: unknown[] } } };
       raw.command.data.groups.push({
-        name: "Gemini 5 Future",
-        description: "Models within this group: Gemini 5 Future",
+        name: "Claude Enterprise",
+        description: "Models within this group: Claude Enterprise",
         buckets: [
           {
-            id: "future-weekly",
-            name: "Weekly Limit Remaining",
-            window: "weekly",
+            id: "enterprise-monthly",
+            window: "monthly",
             remaining_fraction: 0.5,
             reset_time: "2026-11-25T00:00:00Z",
           },
         ],
       });
       const result = normalizeAgyPrintUsage(raw, { nowMs: NOW_MS })!;
-      const future = windowById(result, "gemini_5_future_weekly");
-      expect(future).toMatchObject({
+      const enterprise = windowById(
+        result,
+        "group:Claude%20Enterprise:bucket:enterprise-monthly",
+      );
+      expect(enterprise).toMatchObject({
+        kind: "unknown",
         percentRemaining: 50,
         resetsAt: "2026-11-25T00:00:00.000Z",
       });
+      expect(enterprise.windowSeconds).toBeUndefined();
       const semantics = withQuotaSemantics(
         {
           provider: "agy",
@@ -356,11 +356,21 @@ describe("Antigravity quota parsing", () => {
       ).quotaSemantics;
       expect(semantics?.unresolvedWindowIds).toBeUndefined();
       expect(
-        semantics?.effectiveAvailability.map(({ scope }) => scope),
-      ).toEqual(["gemini", "gemini_argon", "claude_gpt", "gemini_5_future"]);
+        semantics?.effectiveAvailability.map(
+          ({ scope, effectivePercentRemaining }) => [
+            scope,
+            effectivePercentRemaining,
+          ],
+        ),
+      ).toEqual([
+        ["gemini", 100],
+        ["gemini_argon", 100],
+        ["claude_gpt", 100],
+        ["group:Claude%20Enterprise", 50],
+      ]);
     });
 
-    it("keeps a used limit's real reset and pace", () => {
+    it("keeps a synthetic used limit's real reset and pace", () => {
       const raw = JSON.parse(
         JSON.stringify(fixture("cli-quota-unused.json")),
       ) as {
@@ -401,7 +411,7 @@ describe("Antigravity quota parsing", () => {
       expect(
         windowById({ ...fetched, windows: result.windows }, "gemini_weekly")
           .pace?.status,
-      ).not.toBe("unknown");
+      ).toBe("behind");
       expect(result.quotaSemantics?.effectiveAvailability[0]).toMatchObject({
         scope: "gemini",
         status: "known",
@@ -409,33 +419,50 @@ describe("Antigravity quota parsing", () => {
       });
     });
 
-    it("does not call a partly used limit unstarted when agy sends the epoch", () => {
+    it.each([
+      [0.999, "2026-11-29T06:19:29.000Z"],
+      [0.999, "1970-01-01T00:00:00.000Z"],
+      [0.9, "1970-01-01T00:00:00.000Z"],
+      [1, "1969-12-31T23:59:59.000Z"],
+    ])("keeps the reset for synthetic fraction %s at %s", (fraction, reset) => {
       const raw = JSON.parse(
         JSON.stringify(fixture("cli-quota-unused.json")),
       ) as {
         command: {
           data: {
             groups: Array<{
-              buckets: Array<{ remaining_fraction: number }>;
+              buckets: Array<{
+                remaining_fraction: number;
+                reset_time: string;
+              }>;
             }>;
           };
         };
       };
-      raw.command.data.groups[1]!.buckets[0]!.remaining_fraction = 0.9;
+      const weekly = raw.command.data.groups[1]!.buckets[0]!;
+      weekly.remaining_fraction = fraction;
+      weekly.reset_time = reset;
       const result = normalizeAgyPrintUsage(raw, { nowMs: NOW_MS })!;
       const used = windowById(result, "claude_gpt_weekly");
-      expect(used.percentRemaining).toBe(90);
-      expect(used.resetsAt).toBeUndefined();
+      expect(used.resetsAt).toBe(reset);
       expect(used.notStarted).toBeUndefined();
     });
 
-    it("lists each group's models and matches them to agy model ids", () => {
-      const result = normalizeAgyPrintUsage(fixture("cli-quota-unused.json"), {
-        nowMs: NOW_MS,
-        catalog: CATALOG,
-      })!;
+    it("lists each group's models and matches them to agy model ids", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(NOW_MS);
+      const fetched = await fetchQuotaWithRuntime(
+        runtimeWith({
+          cliQuota: JSON.stringify(fixture("cli-quota-unused.json")),
+          cliModels: CATALOG,
+        }),
+      );
+      const scopes = withQuotaSemantics(fetched, new Date(NOW_MS).toISOString())
+        .quotaSemantics?.effectiveAvailability;
+      const modelsFor = (scope: string) =>
+        scopes?.find((entry) => entry.scope === scope)?.models;
 
-      expect(windowById(result, "gemini_weekly").models).toEqual({
+      expect(modelsFor("gemini")).toEqual({
         status: "known",
         labels: [
           "Gemini 4 Neon",
@@ -453,7 +480,7 @@ describe("Antigravity quota parsing", () => {
           "gemini-3.8-flash-medium",
         ],
       });
-      expect(windowById(result, "claude_gpt_5h").models).toMatchObject({
+      expect(modelsFor("claude_gpt")).toMatchObject({
         status: "known",
         ids: [
           "claude-opus-5-5-low",
@@ -462,7 +489,7 @@ describe("Antigravity quota parsing", () => {
         ],
       });
       // Argon's description is plan advice, not a model list.
-      expect(windowById(result, "gemini_argon_weekly").models).toEqual({
+      expect(modelsFor("gemini_argon")).toEqual({
         status: "unknown",
       });
     });
@@ -500,30 +527,67 @@ describe("Antigravity quota parsing", () => {
       ]);
     });
 
-    it("rejects a cut-off all-full placeholder with no group descriptions", () => {
+    it("rejects a synthetic cut-off all-full placeholder with no group descriptions", () => {
       const raw = JSON.parse(
         JSON.stringify(fixture("cli-quota-unused.json")),
       ) as { command: { data: { groups: Array<{ description?: string }> } } };
       for (const group of raw.command.data.groups) delete group.description;
-      expect(normalizeAgyPrintUsage(raw, { nowMs: NOW_MS })).toBeUndefined();
+      expect(() => normalizeAgyPrintUsage(raw, { nowMs: NOW_MS })).toThrow(
+        "cut-off placeholder",
+      );
     });
 
-    it("fails the read and serves the cached reading for a cut-off placeholder", async () => {
+    it("serves the saved reading for a synthetic cut-off placeholder", async () => {
       const raw = JSON.parse(
         JSON.stringify(fixture("cli-quota-unused.json")),
       ) as { command: { data: { groups: Array<{ description?: string }> } } };
       for (const group of raw.command.data.groups) delete group.description;
       vi.useFakeTimers({ toFake: ["Date"] });
       vi.setSystemTime(NOW_MS);
-      try {
-        const result = await fetchQuotaWithRuntime(
-          runtimeWith({ ps: "", cliQuota: JSON.stringify(raw) }),
-        );
-        expect(result.state.status).not.toBe("fresh");
-        expect(result.windows).toEqual([]);
-      } finally {
-        vi.useRealTimers();
-      }
+      const cached = cachedAgyQuota();
+      const normalized = normalizeAgyPrintUsage(
+        fixture("cli-quota-unused.json"),
+        { nowMs: NOW_MS },
+      )!;
+      cached.windows = normalized.windows
+        .filter(({ id }) => id === "gemini_5h" || id === "gemini_weekly")
+        .map((window) => ({
+          ...window,
+          percentUsed: 12,
+          percentRemaining: 88,
+          notStarted: undefined,
+          resetsAt: new Date(
+            NOW_MS + (window.kind === "weekly" ? 3_600_000 : -60_000),
+          ).toISOString(),
+        }));
+      writeCachedProviders([cached]);
+      const onExec = vi.fn();
+      const result = await fetchQuotaWithRuntime(
+        runtimeWith({ ps: "", cliQuota: JSON.stringify(raw), onExec }),
+      );
+      expect(result.state.status).toBe("stale");
+      expect(result.windows).toMatchObject([
+        { id: "gemini_weekly", percentRemaining: 88 },
+      ]);
+      expect(onExec.mock.calls.map(([, args]) => args[0])).not.toContain(
+        "models",
+      );
+      const scopes = withQuotaSemantics(result, new Date(NOW_MS).toISOString())
+        .quotaSemantics?.effectiveAvailability;
+      expect(scopes?.[0]).toMatchObject({
+        scope: "gemini",
+        status: "unknown",
+        models: {
+          status: "known",
+          labels: [
+            "Gemini 4 Neon",
+            "Gemini 4 Hydrogen",
+            "Orchestrator (Neon)",
+            "Gemini 3.8 Flash",
+          ],
+        },
+      });
+      expect(scopes?.[0]?.effectivePercentRemaining).toBeUndefined();
     });
   });
 
@@ -546,6 +610,28 @@ describe("Antigravity quota parsing", () => {
         percentRemaining: 50,
       },
     ]);
+  });
+
+  it("distinguishes exact and rounded full model resets at the epoch", () => {
+    const result = normalizeAgyUserStatus({
+      clientModelConfigs: [
+        {
+          label: "Atlas",
+          quotaInfo: { remainingFraction: 0.999, resetTime: 0 },
+        },
+        { label: "Beacon", quotaInfo: { remainingFraction: 1, resetTime: 0 } },
+      ],
+    });
+    expect(result?.windows).toMatchObject([
+      {
+        id: "model:atlas",
+        percentRemaining: 100,
+        resetsAt: "1970-01-01T00:00:00.000Z",
+      },
+      { id: "model:beacon", percentRemaining: 100, notStarted: true },
+    ]);
+    expect(result?.windows[0]?.notStarted).toBeUndefined();
+    expect(result?.windows[1]?.resetsAt).toBeUndefined();
   });
 
   it("parses Antigravity processes and listening ports without matching prompt text", () => {
@@ -619,6 +705,46 @@ describe("Antigravity provider", () => {
       "claude_gpt_5h",
       "claude_gpt_weekly",
     ]);
+  });
+
+  it("resolves loopback model labels after a failed CLI read", async () => {
+    const onExec = vi.fn();
+    const fetched = await fetchQuotaWithRuntime(
+      runtimeWith({
+        cliQuota: "{}",
+        cliModels:
+          "gemini-flash-low\tGemini Flash (Low)\ngemini-flash-high\tGemini Flash (High)",
+        ps: "123 /Users/test/.local/bin/agy\n",
+        lsof: lsofFor(123, 64440),
+        responses: {
+          "https:64440:/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary":
+            fixture("quota-summary.json"),
+        },
+        onExec,
+      }),
+    );
+    expect(fetched.source).toBe("cli-rpc");
+    expect(
+      onExec.mock.calls.filter(([, args]) => args[0] === "models"),
+    ).toHaveLength(1);
+    const result = withQuotaSemantics(fetched, "2026-06-15T09:00:00Z");
+    expect(result.quotaSemantics?.effectiveAvailability[0]?.models).toEqual({
+      status: "known",
+      labels: ["Gemini Flash", "Gemini Pro"],
+      ids: ["gemini-flash-low", "gemini-flash-high"],
+    });
+  });
+
+  it("skips the model catalog when a usable CLI quota names no models", async () => {
+    const onExec = vi.fn();
+    const fetched = await fetchQuotaWithRuntime(
+      runtimeWith({
+        cliQuota: JSON.stringify(fixture("cli-quota.json")),
+        onExec,
+      }),
+    );
+    expect(fetched.state.status).toBe("fresh");
+    expect(onExec.mock.calls.map(([, args]) => args[0])).toEqual(["-p"]);
   });
 
   it("probes app language-server endpoints with CSRF before quota requests", async () => {
@@ -1462,6 +1588,7 @@ function runtimeWith(options: {
   lsofError?: Error;
   lsofByPid?: Record<number, string | Error>;
   cliQuota?: string | Error;
+  cliModels?: string;
   requestJson?: AgyProbeRuntime["requestJson"];
   responses?: Record<string, unknown>;
   onExec?: (
@@ -1496,6 +1623,7 @@ function runtimeWith(options: {
         command === "agy" ||
         (options.agyPath && command === options.agyPath)
       ) {
+        if (args[0] === "models") return options.cliModels ?? "";
         if (options.agyError) throw options.agyError;
         if (options.cliQuota instanceof Error) throw options.cliQuota;
         if (typeof options.cliQuota === "string") return options.cliQuota;

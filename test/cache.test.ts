@@ -298,7 +298,7 @@ describe("quota cache", () => {
       generatedAt: "2026-07-06T18:10:00Z",
       providers: [work, quota("copilot", 40)],
     });
-    expect(expanded.schemaVersion).toBe(6);
+    expect(expanded.schemaVersion).toBe(8);
     expect(expanded.providers[1]?.accountKey).toBe("default");
 
     writeCachedProviders(expanded.providers);
@@ -318,7 +318,7 @@ describe("quota cache", () => {
         )!,
       ],
     });
-    expect(later.schemaVersion).toBe(5);
+    expect(later.schemaVersion).toBe(7);
     expect(later.providers[0]?.accountKey).toBeUndefined();
   });
 

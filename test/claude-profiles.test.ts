@@ -248,7 +248,7 @@ describe("unconfigured Claude stays one selected lane", () => {
       vi.stubEnv("QUOTA_AXI_CLAUDE_PROFILES", value);
       expect(await read()).toEqual(baseline);
     }
-    expect(response(baseline.outputs[0]).schemaVersion).toBe(5);
+    expect(response(baseline.outputs[0]).schemaVersion).toBe(7);
     expect(baseline.outputs.join("\n")).not.toMatch(
       /\baccountKey\b|accountLocator|profile:/,
     );
@@ -275,7 +275,7 @@ describe("opt-in Claude profile lanes", () => {
     optIn(work, team);
 
     const first = response(await command(["--json"]));
-    expect(first.schemaVersion).toBe(6);
+    expect(first.schemaVersion).toBe(8);
     expect(first.providers).toHaveLength(3);
     expect(remaining(JSON.stringify(first))).toEqual(
       ["synthetic-personal", "synthetic-work", "synthetic-team"].map(
@@ -453,7 +453,7 @@ describe("opt-in Claude profile lanes", () => {
     optIn(personal);
 
     const output = response(await command(["--full", "--json"]));
-    expect(output.schemaVersion).toBe(5);
+    expect(output.schemaVersion).toBe(7);
     expect(output.providers).toHaveLength(1);
     expect(output.providers[0].accountKey).toBeUndefined();
     expect(output.providers[0].accountLocator).toBeUndefined();
@@ -475,7 +475,7 @@ describe("opt-in Claude profile lanes", () => {
 
     vi.stubEnv("CLAUDE_CONFIG_DIR", work);
     const output = response(await command(["--profile-only", "--json"]));
-    expect(output.schemaVersion).toBe(5);
+    expect(output.schemaVersion).toBe(7);
     expect(output.providers).toHaveLength(1);
     expect(output.providers[0].accountKey).toBeUndefined();
     expect(() => statSync(join(home, "cache"))).toThrow();

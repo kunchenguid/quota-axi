@@ -120,7 +120,7 @@ describe("model quota join", () => {
 function quotaResponse(): QuotaAxiResponse {
   return {
     generatedAt,
-    schemaVersion: 5,
+    schemaVersion: 7,
     providers: [
       {
         provider: "claude",
@@ -234,7 +234,7 @@ function quotaResponseWithRunways(): QuotaAxiResponse {
   ];
   return {
     generatedAt,
-    schemaVersion: 5,
+    schemaVersion: 7,
     providers: [
       {
         provider: "claude",

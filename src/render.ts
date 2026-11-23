@@ -17,6 +17,8 @@ import type {
   SourceAttempt,
 } from "./types.js";
 
+import type { AgyQuotaWindow } from "./providers/agy.js";
+
 const UNKNOWN = "unknown";
 const NONE = "none";
 const NOT_STARTED = "not_started";
@@ -481,8 +483,11 @@ function auditBlocks(response: QuotaAxiResponse): string[] {
       resetsAt:
         window.resetsAt ??
         window.resetText ??
-        (window.notStarted ? NOT_STARTED : UNKNOWN),
-      pace: window.notStarted ? NOT_STARTED : (window.pace?.status ?? UNKNOWN),
+        (window.pace?.reason === NOT_STARTED ? NOT_STARTED : UNKNOWN),
+      pace:
+        (provider.provider === "agy" ? window.pace?.reason : undefined) ??
+        window.pace?.status ??
+        UNKNOWN,
       reserve: window.pace?.reservePercentPoints ?? UNKNOWN,
       burnMultiple: window.pace?.burnMultiple ?? UNKNOWN,
       timeRemainingPercent: window.pace?.timeRemainingPercent ?? UNKNOWN,
@@ -663,14 +668,33 @@ export function quotaJsonReport(
   laneAbsent: readonly boolean[] = [],
 ): QuotaAxiResponse {
   const redacted = redactedResponse(markNotSetUp(response, laneAbsent), full);
-  if (full) return redacted;
-  return {
+  const publicResponse = {
     ...redacted,
-    providers: redacted.providers.map((provider) => ({
+    providers: redacted.providers.map((provider) =>
+      provider.provider === "agy"
+        ? {
+            ...provider,
+            windows: provider.windows.map(
+              ({ models: _models, ...window }: AgyQuotaWindow) => window,
+            ),
+          }
+        : provider,
+    ),
+  };
+  if (full) return publicResponse;
+  return {
+    ...publicResponse,
+    providers: publicResponse.providers.map((provider) => ({
       ...provider,
       label: undefined,
       source: undefined,
-      windows: provider.windows.map(demotedWindow),
+      windows: provider.windows.map((window) =>
+        demotedWindow(
+          window,
+          provider.provider === "agy" &&
+            provider.state.untrustedWindowIds?.includes(window.id),
+        ),
+      ),
       ...(provider.quotaSemantics
         ? { quotaSemantics: demotedSemantics(provider.quotaSemantics) }
         : {}),
@@ -704,10 +728,17 @@ function markNotSetUp(
   };
 }
 
-function demotedWindow(window: QuotaWindow): QuotaWindow {
+function demotedWindow(window: QuotaWindow, untrusted?: boolean): QuotaWindow {
   return {
     ...window,
     percentUsed: window.shareOf === undefined ? undefined : window.percentUsed,
+    ...(untrusted
+      ? {
+          percentRemaining: undefined,
+          resetsAt: undefined,
+          resetText: undefined,
+        }
+      : {}),
     startsAt: undefined,
     windowSeconds: undefined,
     ...(window.pace
@@ -727,7 +758,9 @@ function demotedWindow(window: QuotaWindow): QuotaWindow {
 
 function modelsColumn(models: EffectiveAvailability["models"]): string {
   if (models?.status !== "known") return UNKNOWN;
-  return joinIds(models.ids ?? models.labels) ?? UNKNOWN;
+  const labels = joinIds(models.labels) ?? UNKNOWN;
+  const ids = joinIds(models.ids);
+  return ids ? `${labels}${DETAIL_SEPARATOR}${ids}` : labels;
 }
 
 function demotedSemantics(semantics: QuotaSemantics): QuotaSemantics {

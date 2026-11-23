@@ -506,7 +506,14 @@ function buildLiveCard(
     for (const window of provider.windows) {
       lines.push(
         interior(
-          windowRow(window, generatedAtMs, provider.windows, show),
+          windowRow(
+            window,
+            generatedAtMs,
+            provider.windows,
+            show,
+            provider.provider === "agy" &&
+              provider.state.untrustedWindowIds?.includes(window.id),
+          ),
           border,
         ),
       );
@@ -781,13 +788,14 @@ function windowRow(
   generatedAtMs: number,
   windows: QuotaWindow[],
   show: TuiShow,
+  untrusted?: boolean,
 ): Line {
   if (window.shareOf) {
     return shareWindowRow(window, generatedAtMs, windows);
   }
-  const pct = window.percentRemaining;
-  const marker = window.pace?.timeRemainingPercent;
-  const reset = resetCountdown(window, generatedAtMs);
+  const pct = untrusted ? undefined : window.percentRemaining;
+  const marker = untrusted ? undefined : window.pace?.timeRemainingPercent;
+  const reset = untrusted ? "passed" : resetCountdown(window, generatedAtMs);
   return [
     { text: "   " },
     { text: padEndDisplay(shortWindowLabel(window), 8), style: "label" },

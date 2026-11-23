@@ -959,7 +959,7 @@ describe("CLI quota rendering", () => {
     const codex = output.providers.find(
       (provider) => provider.provider === "codex",
     );
-    expect(output.schemaVersion).toBe(5);
+    expect(output.schemaVersion).toBe(7);
     expect(claude?.state.reason).toBe("keychain_access_required");
     expect(claude?.state.remedyCommand).toBe(
       "quota-axi --allow-keychain-prompt",
@@ -1264,7 +1264,7 @@ describe("CLI quota rendering", () => {
     const json = JSON.parse(
       await capture(["--provider", "kimi", "--json"]),
     ) as QuotaAxiResponse;
-    expect(json.schemaVersion).toBe(5);
+    expect(json.schemaVersion).toBe(7);
     expect(json.providers).toEqual([
       expect.objectContaining({
         provider: "kimi",
@@ -2313,8 +2313,8 @@ describe("default TOON decision blocks", () => {
       await capture(["--json", "--full"]),
     ) as QuotaAxiResponse;
 
-    expect(lean.schemaVersion).toBe(5);
-    expect(full.schemaVersion).toBe(5);
+    expect(lean.schemaVersion).toBe(7);
+    expect(full.schemaVersion).toBe(7);
     expect(lean.providers.map((provider) => provider.provider)).toEqual(
       Object.keys(PROVIDERS),
     );
@@ -2374,7 +2374,7 @@ describe("default TOON decision blocks", () => {
     expect(process.exitCode).toBeUndefined();
 
     const json = JSON.parse(await capture(["--json"])) as QuotaAxiResponse;
-    expect(json.schemaVersion).toBe(6);
+    expect(json.schemaVersion).toBe(8);
     expect(json.providers).toHaveLength(Object.keys(PROVIDERS).length + 1);
     const lanes = json.providers.filter(
       (provider) => provider.provider === "codex",
@@ -2811,7 +2811,7 @@ describe("default TOON decision blocks", () => {
     const json = JSON.parse(
       await capture(["--provider", "claude,codex", "--json"]),
     ) as QuotaAxiResponse;
-    expect(json.schemaVersion).toBe(6);
+    expect(json.schemaVersion).toBe(8);
     expect(
       json.providers.map((provider) => [
         provider.provider,
@@ -2839,7 +2839,7 @@ describe("default TOON decision blocks", () => {
     const single = JSON.parse(
       await capture(["--provider", "claude", "--json"]),
     ) as QuotaAxiResponse;
-    expect(single.schemaVersion).toBe(5);
+    expect(single.schemaVersion).toBe(7);
     expect(single.providers[0]?.accountKey).toBeUndefined();
     expect(single.providers[0]?.accountKeys).toEqual(["default"]);
   });
@@ -2952,7 +2952,7 @@ describe("--json tiering", () => {
     ) as QuotaAxiResponse;
     const [claude, cursor, grok, kimi] = json.providers;
 
-    expect(json.schemaVersion).toBe(5);
+    expect(json.schemaVersion).toBe(7);
     expect(claude?.state).toMatchObject({
       status: "stale",
       stale: true,
@@ -3091,7 +3091,7 @@ describe("response redaction", () => {
   it("hides account identity and attempts unless --full is set", () => {
     const response: QuotaAxiResponse = {
       generatedAt: "2026-07-06T18:10:00Z",
-      schemaVersion: 5,
+      schemaVersion: 7,
       providers: [
         {
           provider: "claude",

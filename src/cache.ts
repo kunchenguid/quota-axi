@@ -7,6 +7,7 @@ import {
   ensurePrivateParent,
   readUntracedJsonFile,
 } from "./lib/fs.js";
+import type { AgyQuotaWindow } from "./providers/agy.js";
 import { kimiReadingContextId } from "./providers/kimi-cache-context.js";
 import { commandCodeReadingContextId } from "./providers/commandcode-cache-context.js";
 import { devinReadingContextId } from "./providers/devin-cache-context.js";
@@ -1060,7 +1061,7 @@ function normalizeCachedProvider(
   const sourcesTried = stringArrayValue(state?.sourcesTried);
   const windows = Array.isArray(data.windows)
     ? data.windows
-        .map(normalizeCachedWindow)
+        .map((window) => normalizeCachedWindow(window, provider))
         .filter((window): window is QuotaWindow => Boolean(window))
         .map((window) =>
           provider === "kimi" ? upgradeLegacyKimiShareWindow(window) : window,
@@ -1271,14 +1272,17 @@ function readableWindowDuration(windowSeconds: number): string {
   return `${Number.isInteger(hours) ? hours : Number(hours.toFixed(2))}h`;
 }
 
-function normalizeCachedWindow(raw: unknown): QuotaWindow | undefined {
+function normalizeCachedWindow(
+  raw: unknown,
+  provider: ProviderId | undefined,
+): QuotaWindow | undefined {
   const data = objectValue(raw);
   if (!data) return undefined;
   const id = stringValue(data.id);
   const label = stringValue(data.label);
   const kind = literalValue(data.kind, WINDOW_KINDS);
   if (!id || !label || !kind) return undefined;
-  const result: QuotaWindow = { id, label, kind };
+  const result: AgyQuotaWindow = { id, label, kind };
   assignNumber(result, "percentUsed", data.percentUsed);
   assignNumber(result, "percentRemaining", data.percentRemaining);
   assignString(result, "shareOf", data.shareOf);
@@ -1292,26 +1296,22 @@ function normalizeCachedWindow(raw: unknown): QuotaWindow | undefined {
   assignNumber(result, "usedCredits", data.usedCredits);
   assignNumber(result, "remainingCredits", data.remainingCredits);
   assignString(result, "creditUnit", data.creditUnit);
-  if (data.notStarted === true) result.notStarted = true;
-  const models = normalizeCachedModelList(data.models);
-  if (models) result.models = models;
+  if (provider === "agy") {
+    if (data.notStarted === true) result.notStarted = true;
+    const models = normalizeCachedModelList(data.models);
+    if (models) result.models = models;
+  }
   return result;
 }
 
-function normalizeCachedModelList(
-  raw: unknown,
-): QuotaWindow["models"] | undefined {
+function normalizeCachedModelList(raw: unknown): AgyQuotaWindow["models"] {
   const data = objectValue(raw);
   if (!data) return undefined;
   if (data.status === "unknown") return { status: "unknown" };
   if (data.status !== "known") return undefined;
-  const strings = (value: unknown): string[] | undefined =>
-    Array.isArray(value) && value.every((item) => typeof item === "string")
-      ? (value as string[])
-      : undefined;
-  const labels = strings(data.labels);
-  if (!labels) return undefined;
-  const ids = strings(data.ids);
+  const labels = stringArrayValue(data.labels);
+  if (!labels?.length) return undefined;
+  const ids = stringArrayValue(data.ids);
   return ids ? { status: "known", labels, ids } : { status: "known", labels };
 }
 

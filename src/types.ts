@@ -226,8 +226,6 @@ export type QuotaWindow = {
    * its 100% and carries no `resetsAt`.
    */
   notStarted?: boolean;
-  /** Models that draw on this window, when the vendor names them. */
-  models?: QuotaModelList;
   /** Cycle-average pace relative to generatedAt. Not cached. */
   pace?: QuotaPace;
 };
@@ -418,7 +416,7 @@ export type ProviderQuota = {
 
 export type QuotaAxiResponse = {
   generatedAt: string;
-  schemaVersion: 5 | 6;
+  schemaVersion: 7 | 8;
   providers: ProviderQuota[];
   help?: string[];
 };

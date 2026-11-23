@@ -1,4 +1,5 @@
 import { degradedSources } from "./lib/source-attempts.js";
+import type { AgyQuotaWindow } from "./providers/agy.js";
 import {
   computeEffectiveRunway,
   computeWindowPace,
@@ -23,11 +24,21 @@ export function withQuotaSemantics(
       stale: provider.state.stale,
     }),
   }));
-  const withWindows = { ...provider, windows };
+  const state = { ...provider.state, ...supersededSources(provider) };
+  if (provider.provider === "agy") {
+    const generatedAtMs = Date.parse(generatedAt);
+    const untrusted = windows
+      .filter(
+        ({ resetsAt }) => resetsAt && Date.parse(resetsAt) <= generatedAtMs,
+      )
+      .map(({ id }) => id);
+    if (untrusted.length > 0) state.untrustedWindowIds = untrusted;
+    else delete state.untrustedWindowIds;
+  }
+  const withWindows = { ...provider, windows, state };
   const semantics = semanticsFor(withWindows, generatedAt);
   return {
     ...withWindows,
-    state: { ...provider.state, ...supersededSources(provider) },
     quotaSemantics: provider.state.stale
       ? staleSemantics(semantics)
       : semantics,
@@ -54,8 +65,9 @@ function staleSemantics(semantics: QuotaSemantics): QuotaSemantics {
     description:
       "The raw quota windows are stale diagnostic data, so effective remaining is unknown until the provider refreshes successfully.",
     effectiveAvailability: semantics.effectiveAvailability.map(
-      ({ scope, boundedBy, pace }) => ({
+      ({ scope, boundedBy, pace, models }) => ({
         scope,
+        ...(models ? { models } : {}),
         status: "unknown",
         boundedBy,
         runway: {
@@ -124,7 +136,11 @@ function semanticsFor(
         `quota-axi does not know whether ${provider.label ?? provider.provider}'s reported windows are independent or jointly bounding, so it does not claim an effective remaining percentage.`,
       );
     case "agy":
-      return agySemantics(provider.windows, generatedAt);
+      return agySemantics(
+        provider.windows,
+        provider.state.untrustedWindowIds ?? [],
+        generatedAt,
+      );
     case "alibaba":
       return alibabaSemantics(provider.windows, generatedAt);
     case "opencode-go":
@@ -960,19 +976,19 @@ function partialSemantics(
   };
 }
 
-const AGY_WINDOW_ID = /^(.+)_(?:5h|weekly)$/;
+const AGY_WINDOW_ID = /^([^:]+|group:[^:]+)(?:_(?:5h|weekly)|:bucket:[^:]+)$/;
 
 /**
  * One scope per agy group: the group's weekly and 5-hour windows jointly bound
- * it. Any group agy names becomes its own scope; only a window with no known
- * period stays unresolved. A used limit whose reset has already passed is not
- * trusted, so it makes its own scope unknown and leaves the other scopes alone.
+ * it. Any group agy names becomes its own scope. A passed reset makes its own
+ * scope unknown and leaves the other scopes alone.
  */
 function agySemantics(
   windows: QuotaWindow[],
+  untrustedWindowIds: string[],
   generatedAt: string,
 ): QuotaSemantics {
-  const scopes = new Map<string, QuotaWindow[]>();
+  const scopes = new Map<string, AgyQuotaWindow[]>();
   const unresolved: QuotaWindow[] = [];
   for (const window of windows) {
     const scope = AGY_WINDOW_ID.exec(window.id)?.[1];
@@ -984,53 +1000,40 @@ function agySemantics(
   }
   const effectiveAvailability: EffectiveAvailability[] = [];
   for (const [scope, scopeWindows] of scopes) {
-    const entry = hasPassedReset(scopeWindows, generatedAt)
-      ? passedResetAvailability(scope, scopeWindows, generatedAt)
-      : availability(scope, scopeWindows, generatedAt);
+    const boundedBy = scopeWindows.map(({ id }) => id);
+    const unmeasurableWindowIds = boundedBy.filter((id) =>
+      untrustedWindowIds.includes(id),
+    );
+    const entry: EffectiveAvailability =
+      unmeasurableWindowIds.length > 0
+        ? {
+            scope,
+            status: "unknown",
+            boundedBy,
+            pace: summarizeEffectivePace(scopeWindows),
+            runway: { status: "unknown", unmeasurableWindowIds },
+            selection: { status: "unknown", unmeasurableWindowIds },
+          }
+        : availability(scope, scopeWindows, generatedAt);
     const models = scopeWindows.find((window) => window.models)?.models;
-    effectiveAvailability.push(models ? { ...entry, models } : entry);
+    effectiveAvailability.push({
+      ...entry,
+      models: models ?? { status: "unknown" },
+    });
   }
   if (unresolved.length > 0) {
     return {
       status: effectiveAvailability.length > 0 ? "partial" : "unknown",
       description:
-        "Antigravity publishes quota groups, and within a group the weekly and 5-hour windows jointly bound that group. Windows with no known period are not folded into any bound, so they stay unresolved.",
+        "Antigravity quota groups are independently bounded by their own buckets. Model-config windows do not identify a group and stay unresolved.",
       effectiveAvailability,
       unresolvedWindowIds: unresolved.map(({ id }) => id),
     };
   }
   return knownSemantics(
     effectiveAvailability,
-    "Antigravity publishes quota groups. Within a group, the weekly and 5-hour windows jointly bound that group, so that group's effective remaining percentage is the minimum across its windows.",
+    "Antigravity quota groups are independently bounded by their own buckets, so a group's effective remaining percentage is the minimum across its windows.",
   );
-}
-
-function hasPassedReset(windows: QuotaWindow[], generatedAt: string): boolean {
-  const generatedAtMs = Date.parse(generatedAt);
-  return windows.some(({ resetsAt }) => {
-    if (!resetsAt) return false;
-    const resetMs = Date.parse(resetsAt);
-    return Number.isFinite(resetMs) && resetMs <= generatedAtMs;
-  });
-}
-
-function passedResetAvailability(
-  scope: string,
-  windows: QuotaWindow[],
-  generatedAt: string,
-): EffectiveAvailability {
-  const generatedAtMs = Date.parse(generatedAt);
-  const unmeasurableWindowIds = windows
-    .filter(({ resetsAt }) => resetsAt && Date.parse(resetsAt) <= generatedAtMs)
-    .map(({ id }) => id);
-  return {
-    scope,
-    status: "unknown",
-    boundedBy: windows.map(({ id }) => id),
-    pace: summarizeEffectivePace(windows),
-    runway: { status: "unknown", unmeasurableWindowIds },
-    selection: { status: "unknown", unmeasurableWindowIds },
-  };
 }
 
 function unknownSemantics(
