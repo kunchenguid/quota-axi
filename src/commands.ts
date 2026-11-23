@@ -121,8 +121,8 @@ export async function quotaCommand(
 
 /**
  * Provider ids whose every lane is absent, in first-seen order. One live or
- * uncertain lane keeps the provider's rows; schema 6 folds a provider only
- * when all of its lanes are absent.
+ * uncertain lane keeps the provider's rows; account-expanded reports fold a
+ * provider only when all of its lanes are absent.
  */
 function omittedAbsentProviderIds(
   providers: ProviderQuota[],
