@@ -206,7 +206,7 @@ export async function fetchQuotaWithRuntime(
     };
   }
 
-  if (cli && !isDefinitiveAuthFailure(finalFailure))
+  if (cli)
     return reportAgyReading(runtime, cli, "cli", attempts, cli.commandPath);
 
   const finalError = errorMessage(finalFailure);
@@ -595,7 +595,7 @@ async function fetchLoopbackQuota(
       lastError = strongerFailure(lastError, error);
     }
   }
-  if (diagnostic && !isDefinitiveAuthFailure(lastError)) return diagnostic;
+  if (diagnostic) return diagnostic;
 
   throw lastError instanceof Error
     ? lastError
@@ -974,7 +974,9 @@ function applyAgyUsage(
   if (remaining === undefined || remaining < 0 || remaining > 1) return;
   const roundedUsed = clampPercent((1 - remaining) * 100);
   window.percentRemaining =
-    roundedUsed === 100 ? remaining * 100 : 100 - roundedUsed;
+    roundedUsed === 0 || roundedUsed === 100
+      ? remaining * 100
+      : 100 - roundedUsed;
   window.percentUsed = 100 - window.percentRemaining;
   if (remaining !== 1 || window.resetsAt === undefined) return;
   const resetMs = Date.parse(window.resetsAt);

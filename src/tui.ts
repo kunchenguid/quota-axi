@@ -854,8 +854,12 @@ function shownPercent(
   show: TuiShow,
   percentUsed = 100 - percentRemaining,
 ): string {
-  if (provider === "agy" && percentRemaining > 0 && percentRemaining <= 0.5)
-    return show === "used" ? ">99%" : "<1%";
+  if (provider === "agy") {
+    if (percentRemaining > 0 && percentRemaining <= 0.5)
+      return show === "used" ? ">99%" : "<1%";
+    if (percentRemaining >= 99.5 && percentRemaining < 100)
+      return show === "used" ? "<1%" : ">99%";
+  }
   return `${Math.round(show === "used" ? percentUsed : percentRemaining)}%`;
 }
 

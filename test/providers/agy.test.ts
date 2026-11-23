@@ -869,6 +869,70 @@ describe("Antigravity quota parsing", () => {
       },
     );
 
+    it("projects exhaustion from small Antigravity usage before and after caching", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(NOW_MS);
+      const generatedAt = new Date(NOW_MS).toISOString();
+      const groups = [
+        {
+          name: "Gemini Models",
+          buckets: [
+            {
+              bucketId: "5h",
+              remainingFraction: 0.996,
+              resetTime: new Date(NOW_MS + 17_990_000).toISOString(),
+            },
+            { bucketId: "weekly", remainingFraction: 1, resetTime: 0 },
+          ],
+        },
+      ];
+      const reading = await fetchQuotaWithRuntime(
+        runtimeWith({
+          cliQuota: JSON.stringify({
+            command: { name: "quota", data: { groups } },
+          }),
+        }),
+      );
+      writeCachedProviders([reading]);
+      vi.stubEnv(SNAPSHOT_ENV, cacheFilePath());
+      const snapshot = JSON.parse(
+        await quotaCommand(
+          ["--provider", "agy", "--json", "--no-credential-refresh"],
+          undefined,
+        ),
+      ) as ReturnType<typeof quotaJsonReport>;
+      const report = annotateQuotaAdvice({
+        generatedAt,
+        providers: [withQuotaSemantics(reading, generatedAt)],
+      });
+      for (const saved of [
+        quotaJsonReport(report, false).providers[0],
+        snapshot.providers[0],
+      ]) {
+        expect(
+          saved?.windows.find(({ id }) => id === "gemini_5h")?.percentRemaining,
+        ).toBe(99.6);
+        expect(
+          saved?.quotaSemantics?.effectiveAvailability[0]?.runway,
+        ).toMatchObject({
+          status: "projected_exhaustion",
+          usableRunwaySeconds: 2_490,
+          limitingWindowId: "gemini_5h",
+        });
+      }
+      expect(renderQuotaToon(report, "quota-axi", false)).toContain(
+        "agy,gemini,99.6,",
+      );
+      for (const show of ["remaining", "used"] as const) {
+        const tui = renderQuotaTui(report, {
+          columns: 80,
+          colorDepth: "none",
+          show,
+        });
+        expect(tui).toContain(show === "remaining" ? ">99%" : "<1%");
+      }
+    });
+
     it.each(["cli", "cli-rpc"] as const)(
       "does not infer Argon headroom from its weekly allowance alone in %s",
       async (source) => {
@@ -1263,11 +1327,12 @@ describe("Antigravity quota parsing", () => {
     expect(result?.windows).toMatchObject([
       {
         id: "model:atlas",
-        percentRemaining: 100,
+        percentRemaining: 99.9,
         resetsAt: "1970-01-01T00:00:00.000Z",
       },
       { id: "model:beacon", percentRemaining: 100, notStarted: true },
     ]);
+    expect(result?.windows[0]?.percentUsed).toBeCloseTo(0.1);
     expect(result?.windows[0]?.notStarted).toBeUndefined();
     expect(result?.windows[1]?.resetsAt).toBeUndefined();
   });
@@ -1788,11 +1853,13 @@ describe("Antigravity provider", () => {
         }),
       );
 
-      if (measured) {
+      if (otherListener || reading === "CLI diagnostic") {
         expect(result.state.status).toBe("fresh");
-        expect(result.windows).toMatchObject([
-          { id: "gemini_weekly", percentRemaining: 80 },
-        ]);
+        expect(result.source).toBe(otherListener ? "cli-rpc" : "cli");
+        expect(result[AGY_GROUPS]).toMatchObject([{ id: "gemini" }]);
+        expect(result.windows).toMatchObject(
+          measured ? [{ id: "gemini_weekly", percentRemaining: 80 }] : [],
+        );
         expect(readCachedProvider("agy")).toBeDefined();
       } else {
         expect(result.state).toMatchObject({

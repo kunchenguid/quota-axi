@@ -1677,6 +1677,36 @@ describe("per-scope selection signal", () => {
     },
   );
 
+  it.each(["live", "reuse", "snapshot"])(
+    "does not list an unstarted Antigravity runway bound as a blocker in %s",
+    (source) => {
+      const sessionId = "gemini_5h";
+      const weeklyId = "gemini_weekly";
+      const agy = agyProvider(
+        [
+          window(sessionId, "session", 100, { notStarted: true }),
+          {
+            id: weeklyId,
+            kind: "weekly",
+            label: "Gemini weekly",
+            resetsAt: weeklyResetsAt(0.5),
+          },
+        ],
+        { gemini: [sessionId, weeklyId] },
+      );
+      agy.state = {
+        ...agy.state,
+        reused: source !== "live",
+        sourcesTried: [source],
+      };
+      const [scope] = withQuotaSemantics(agy, GENERATED_AT).quotaSemantics!
+        .effectiveAvailability;
+      const unknown = { status: "unknown", unmeasurableWindowIds: [weeklyId] };
+      expect(scope?.runway).toEqual(unknown);
+      expect(scope?.selection).toEqual(unknown);
+    },
+  );
+
   it.each(["absent", "reset-only", "expired"] as const)(
     "reports exhaustion only from a current Antigravity zero with a %s sibling",
     (sibling) => {

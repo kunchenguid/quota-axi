@@ -1063,16 +1063,20 @@ function agySemantics(
       });
       continue;
     }
-    const trustedBounds = bounds.filter(
-      ({ id }) => !unmeasurableWindowIds.includes(id),
+    const currentBounds = bounds.filter(
+      ({ id, percentRemaining }) =>
+        !unmeasurableWindowIds.includes(id) ||
+        (percentRemaining === undefined && !expiredBoundIds.includes(id)),
     );
-    const runway = computeEffectiveRunway(trustedBounds, generatedAt);
-    const selection = summarizeEffectiveSelection(trustedBounds);
+    const runway = computeEffectiveRunway(currentBounds, generatedAt);
+    const selection = summarizeEffectiveSelection(currentBounds);
     const withMissing = (signal: { unmeasurableWindowIds?: string[] }) => ({
       status: "unknown" as const,
       unmeasurableWindowIds: [
-        ...unmeasurableWindowIds,
-        ...(signal.unmeasurableWindowIds ?? []),
+        ...new Set([
+          ...unmeasurableWindowIds,
+          ...(signal.unmeasurableWindowIds ?? []),
+        ]),
       ],
     });
     effectiveAvailability.push({
@@ -1085,7 +1089,7 @@ function agySemantics(
         ? {
             status: "known",
             effectivePercentRemaining: 0,
-            limitingWindowIds: trustedBounds
+            limitingWindowIds: currentBounds
               .filter(({ percentRemaining }) => percentRemaining === 0)
               .map(({ id }) => id),
             runway,
