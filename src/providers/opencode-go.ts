@@ -719,16 +719,19 @@ async function readLaneQuota(
   }
 }
 
-/** The unreadable store the single-winner path would name for a rejection. */
+/** The unreadable source the single-winner path would name for a rejection. */
 function indeterminateBlockedFailure(
   blocked: BlockedSurface[],
 ): { status: ProviderStatus; code: string } | undefined {
-  const preferred = blocked.find(
+  const store = blocked.find(
     ({ sourceName }) =>
       sourceName === OPENCODE_GO_DB_CREDENTIAL_SOURCE ||
       sourceName === OPENCODE_GO_CREDENTIAL_SOURCE,
   );
-  const failure = preferred ?? blocked[0];
+  const builtInPi = blocked.find(
+    ({ sourceName }) => sourceName === PI_OPENCODE_GO_SOURCE,
+  );
+  const failure = store ?? builtInPi;
   return failure ? localCredentialFailure(failure.resolution) : undefined;
 }
 
@@ -959,7 +962,7 @@ function selectionFailureFor(
         selection.transientError ?? "quota_request_failed",
       );
     case "all_rejected": {
-      const indeterminate = indeterminateFailureFor(resolved);
+      const indeterminate = indeterminateFailureFor(resolved, false);
       return (
         indeterminate ?? {
           status: "auth_required",
@@ -972,7 +975,7 @@ function selectionFailureFor(
       return { status: "error", code: "quota_missing" };
     default:
       return (
-        indeterminateFailureFor(resolved) ??
+        indeterminateFailureFor(resolved, true) ??
         localCredentialFailure({ status: "missing", path: "" })
       );
   }
@@ -985,8 +988,18 @@ function transientFailure(code: string): LocalFailure {
   };
 }
 
+/**
+ * The credential evidence that explains this read without being its verdict.
+ *
+ * A configured store that holds a key quota-axi could not read is named first,
+ * as it always has been. A Pi entry counts only one at a time: the built-in
+ * source always, and a sibling entry only when no usable credential was there
+ * to attempt, because a sibling is never read and so can never speak for the
+ * credential another surface supplied.
+ */
 function indeterminateFailureFor(
   resolved: readonly ResolvedCredentialSource[],
+  unusablePiSiblings: boolean,
 ): LocalFailure | undefined {
   const storeFailure = resolved.find(
     ({ name, resolution }) =>
@@ -994,11 +1007,12 @@ function indeterminateFailureFor(
         name === OPENCODE_GO_DB_CREDENTIAL_SOURCE) &&
       isCredentialEvidence(resolution),
   );
-  const piFailure = resolved.find(
-    ({ name, resolution }) =>
-      entryIdFromPiSource(name) !== undefined &&
-      isCredentialEvidence(resolution),
-  );
+  const piFailure = resolved.find(({ name, resolution }) => {
+    const piEntry = unusablePiSiblings
+      ? entryIdFromPiSource(name) !== undefined
+      : name === PI_OPENCODE_GO_SOURCE;
+    return piEntry && isCredentialEvidence(resolution);
+  });
   const failure = storeFailure ?? piFailure;
   return failure ? localCredentialFailure(failure.resolution) : undefined;
 }

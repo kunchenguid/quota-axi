@@ -2383,6 +2383,100 @@ describe("OpenCode Go account lanes", () => {
     ]);
   });
 
+  it("keeps a rejected lane's own verdict when a sibling is unusable", async () => {
+    const request = vi.fn(
+      async (_input: RequestInfo | URL, init?: RequestInit) => {
+        const headers = new Headers(init?.headers);
+        return headers.get("authorization") === `Bearer ${PI_KEY}`
+          ? new Response(null, { status: 401 })
+          : usageResponse();
+      },
+    );
+    const reports = await fetchAccountQuotas(
+      laneAdapter(
+        laneSources({
+          [PI_OPENCODE_GO_SOURCE]: {
+            status: "available",
+            key: PI_KEY,
+            path: PI_AUTH_PATH,
+          },
+          [OPENCODE_GO_CREDENTIAL_SOURCE]: {
+            status: "available",
+            key: AUTH_KEY,
+            path: "/oc/auth.json",
+          },
+        }),
+        request,
+        {
+          entryIds: ["opencode-go", "opencode-go-work"],
+          resolutionFor: () => ({ status: "invalid", path: PI_AUTH_PATH }),
+        },
+      ),
+      OPTIONS,
+    );
+
+    expect(reports.map((report) => report.accountKey)).toEqual([
+      "opencode-go",
+      OPENCODE_GO_AUTH_ACCOUNT_KEY,
+    ]);
+    expect(reports[0]?.state).toMatchObject({
+      status: "auth_required",
+      error: "provider_auth_rejected",
+    });
+    expect(reports[0]?.attempts).toEqual([
+      {
+        source: "pi:opencode-go-work",
+        status: "skipped",
+        error: "opencode_go_credential_invalid",
+        credentialPresent: true,
+      },
+      {
+        source: PI_OPENCODE_GO_SOURCE,
+        status: "failed",
+        error: "provider_auth_rejected",
+      },
+    ]);
+    expect(reports[1]?.state).toMatchObject({ status: "fresh" });
+  });
+
+  it("keeps the single account's rejected verdict beside an unusable sibling", async () => {
+    const request = vi.fn(async () => new Response(null, { status: 403 }));
+    const reports = await fetchAccountQuotas(
+      laneAdapter(
+        laneSources({
+          [PI_OPENCODE_GO_SOURCE]: {
+            status: "available",
+            key: PI_KEY,
+            path: PI_AUTH_PATH,
+          },
+          [OPENCODE_GO_CREDENTIAL_SOURCE]: {
+            status: "missing",
+            path: "/oc/auth.json",
+          },
+        }),
+        request,
+        {
+          entryIds: ["opencode-go", "opencode-go-work"],
+          resolutionFor: () => ({ status: "invalid", path: PI_AUTH_PATH }),
+        },
+      ),
+      OPTIONS,
+    );
+
+    expect(reports).toHaveLength(1);
+    expect(reports[0]?.state).toMatchObject({
+      status: "auth_required",
+      error: "provider_auth_rejected",
+    });
+    expect(reports[0]?.attempts).toContainEqual({
+      source: "pi:opencode-go-work",
+      status: "skipped",
+      error: "opencode_go_credential_invalid",
+      credentialPresent: true,
+    });
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
   it("reports a lone unusable sibling as a failed credential, not an absent provider", async () => {
     const request = vi.fn(async () => usageResponse());
     const adapter = () =>
