@@ -1191,17 +1191,21 @@ describe("quota semantics", () => {
       provider("agy", [
         window("gemini_5h", "session", 100),
         window("gemini_weekly", "weekly", 70),
-        window("gemini:bucket:monthly", "unknown", 10),
+        window("gemini:bucket:monthly", "unknown", 10, {
+          resetsAt: offsetFromGeneratedAt(-60),
+        }),
       ]),
       GENERATED_AT,
     );
     expect(agyUnknownKind.quotaSemantics).toMatchObject({
-      status: "known",
+      status: "partial",
+      unresolvedWindowIds: ["gemini:bucket:monthly"],
       effectiveAvailability: [
         expect.objectContaining({
           scope: "gemini",
-          effectivePercentRemaining: 10,
-          boundedBy: ["gemini_5h", "gemini_weekly", "gemini:bucket:monthly"],
+          status: "known",
+          effectivePercentRemaining: 70,
+          boundedBy: ["gemini_5h", "gemini_weekly"],
         }),
       ],
     });
@@ -1559,7 +1563,7 @@ describe("per-scope selection signal", () => {
     ).toEqual({ status: "unknown", unmeasurableWindowIds: ["seven_day"] });
   });
 
-  it("renders agy not-started limits and scope models in the full output", () => {
+  it("renders agy scope models once and separates pace from reset evidence", () => {
     const models = {
       status: "known" as const,
       labels: ["Gemini 4 Neon"],
@@ -1578,6 +1582,7 @@ describe("per-scope selection signal", () => {
         windowSeconds: WEEK_SECONDS,
         notStarted: true,
       }),
+      window("model:fallback", "model", 50),
     ]);
     for (const stale of [false, true]) {
       const result = withQuotaSemantics(
@@ -1596,10 +1601,19 @@ describe("per-scope selection signal", () => {
       expect(text).toContain(
         stale
           ? "agy,gemini_5h,gemini_5h,100,unknown,stale,"
-          : "agy,gemini_5h,gemini_5h,100,not_started,not_started,",
+          : "agy,gemini_5h,gemini_5h,100,unknown,not_started,",
       );
-      expect(text).toContain("gemini-4-neon-medium");
+      if (!stale)
+        expect(text).toContain(
+          'agy,"model:fallback","model:fallback",50,unknown,unknown,',
+        );
       for (const full of [false, true]) {
+        const toon = renderQuotaToon(report, "quota-axi", full);
+        expect(toon).toContain("scopeModels[1]{provider,scope,models}");
+        expect(toon).toContain(
+          "agy,gemini,Gemini 4 Neon · gemini-4-neon-medium",
+        );
+        expect(toon.match(/gemini-4-neon-medium/g)).toHaveLength(1);
         const publicProvider = quotaJsonReport(report, full).providers[0]!;
         for (const publicWindow of publicProvider.windows) {
           expect(publicWindow).not.toHaveProperty("models");

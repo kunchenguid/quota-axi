@@ -354,7 +354,16 @@ describe("Antigravity quota parsing", () => {
         },
         new Date(NOW_MS).toISOString(),
       ).quotaSemantics;
-      expect(semantics?.unresolvedWindowIds).toBeUndefined();
+      expect(semantics).toMatchObject({
+        status: "partial",
+        unresolvedWindowIds: [enterprise.id],
+      });
+      expect(semantics?.effectiveAvailability.at(-1)).toMatchObject({
+        scope: "group:Claude%20Enterprise",
+        status: "unknown",
+        boundedBy: [],
+        models: { status: "known", labels: ["Claude Enterprise"] },
+      });
       expect(
         semantics?.effectiveAvailability.map(
           ({ scope, effectivePercentRemaining }) => [
@@ -366,7 +375,7 @@ describe("Antigravity quota parsing", () => {
         ["gemini", 100],
         ["gemini_argon", 100],
         ["claude_gpt", 100],
-        ["group:Claude%20Enterprise", 50],
+        ["group:Claude%20Enterprise", undefined],
       ]);
     });
 
@@ -527,21 +536,51 @@ describe("Antigravity quota parsing", () => {
       ]);
     });
 
-    it("rejects a synthetic cut-off all-full placeholder with no group descriptions", () => {
-      const raw = JSON.parse(
-        JSON.stringify(fixture("cli-quota-unused.json")),
-      ) as { command: { data: { groups: Array<{ description?: string }> } } };
-      for (const group of raw.command.data.groups) delete group.description;
-      expect(() => normalizeAgyPrintUsage(raw, { nowMs: NOW_MS })).toThrow(
-        "cut-off placeholder",
+    it("reports unused CLI quota when the vendor names no models", async () => {
+      const cliQuota = JSON.stringify({
+        command: {
+          name: "quota",
+          data: {
+            groups: [
+              {
+                name: "Gemini Models",
+                buckets: [
+                  {
+                    id: "gemini-weekly",
+                    window: "weekly",
+                    remaining_fraction: 1,
+                    reset_time: 0,
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      });
+      const onExec = vi.fn();
+      const fetched = await fetchQuotaWithRuntime(
+        runtimeWith({ cliQuota, onExec }),
       );
+      expect(fetched.source).toBe("cli");
+      expect(fetched.windows).toMatchObject([
+        { id: "gemini_weekly", percentRemaining: 100, notStarted: true },
+      ]);
+      const result = withQuotaSemantics(
+        fetched,
+        new Date(NOW_MS).toISOString(),
+      );
+      expect(result.quotaSemantics?.effectiveAvailability).toMatchObject([
+        {
+          scope: "gemini",
+          status: "known",
+          effectivePercentRemaining: 100,
+          models: { status: "unknown" },
+        },
+      ]);
+      expect(onExec.mock.calls.map(([, args]) => args[0])).toEqual(["-p"]);
     });
 
-    it("serves the saved reading for a synthetic cut-off placeholder", async () => {
-      const raw = JSON.parse(
-        JSON.stringify(fixture("cli-quota-unused.json")),
-      ) as { command: { data: { groups: Array<{ description?: string }> } } };
-      for (const group of raw.command.data.groups) delete group.description;
+    it("keeps saved group models when an expired sibling drops from stale output", async () => {
       vi.useFakeTimers({ toFake: ["Date"] });
       vi.setSystemTime(NOW_MS);
       const cached = cachedAgyQuota();
@@ -563,7 +602,14 @@ describe("Antigravity quota parsing", () => {
       writeCachedProviders([cached]);
       const onExec = vi.fn();
       const result = await fetchQuotaWithRuntime(
-        runtimeWith({ ps: "", cliQuota: JSON.stringify(raw), onExec }),
+        runtimeWith({
+          agyPath: "agy",
+          ps: "",
+          onExec,
+          cliQuota: Object.assign(new Error("agy timed out"), {
+            code: "ETIMEDOUT",
+          }),
+        }),
       );
       expect(result.state.status).toBe("stale");
       expect(result.windows).toMatchObject([

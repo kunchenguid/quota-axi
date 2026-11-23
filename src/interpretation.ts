@@ -1000,7 +1000,12 @@ function agySemantics(
   }
   const effectiveAvailability: EffectiveAvailability[] = [];
   for (const [scope, scopeWindows] of scopes) {
-    const boundedBy = scopeWindows.map(({ id }) => id);
+    const bounds = scopeWindows.filter((window) => {
+      if (window.kind === "session" || window.kind === "weekly") return true;
+      unresolved.push(window);
+      return false;
+    });
+    const boundedBy = bounds.map(({ id }) => id);
     const unmeasurableWindowIds = boundedBy.filter((id) =>
       untrustedWindowIds.includes(id),
     );
@@ -1010,11 +1015,11 @@ function agySemantics(
             scope,
             status: "unknown",
             boundedBy,
-            pace: summarizeEffectivePace(scopeWindows),
+            pace: summarizeEffectivePace(bounds),
             runway: { status: "unknown", unmeasurableWindowIds },
             selection: { status: "unknown", unmeasurableWindowIds },
           }
-        : availability(scope, scopeWindows, generatedAt);
+        : availability(scope, bounds, generatedAt);
     const models = scopeWindows.find((window) => window.models)?.models;
     effectiveAvailability.push({
       ...entry,
@@ -1025,14 +1030,14 @@ function agySemantics(
     return {
       status: effectiveAvailability.length > 0 ? "partial" : "unknown",
       description:
-        "Antigravity quota groups are independently bounded by their own buckets. Model-config windows do not identify a group and stay unresolved.",
+        "Only recognized 5-hour and weekly buckets bound Antigravity quota groups. Unfamiliar buckets and model-config windows do not contribute to effective headroom.",
       effectiveAvailability,
       unresolvedWindowIds: unresolved.map(({ id }) => id),
     };
   }
   return knownSemantics(
     effectiveAvailability,
-    "Antigravity quota groups are independently bounded by their own buckets, so a group's effective remaining percentage is the minimum across its windows.",
+    "Antigravity quota groups are independently bounded by their recognized 5-hour and weekly buckets.",
   );
 }
 

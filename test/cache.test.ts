@@ -20,6 +20,7 @@ import {
   readCachedProvider,
   readCachedZaiProvider,
   readReusableProviders,
+  readSnapshotProviders,
   retireCodexAccount,
   stampClaudeReadingContext,
   stampReadingInputs,
@@ -408,6 +409,57 @@ describe("quota cache", () => {
       source: "cli",
       windows: [{ percentUsed: 18 }],
     });
+  });
+
+  it("reuses normalized Antigravity groups but not legacy grouped quota", () => {
+    useTempCache();
+    const now = Date.parse("2026-07-06T18:10:30Z");
+    const file = cacheFilePath();
+    const legacyWindow = {
+      id: "gemini_5h",
+      label: "Gemini 5-hour",
+      kind: "session" as const,
+      windowSeconds: 18_000,
+      percentUsed: 0,
+      percentRemaining: 100,
+      resetsAt: "2026-07-06T23:10:00Z",
+    };
+    const reading: ProviderQuota = {
+      ...quota("agy", 0),
+      source: "cli",
+      windows: [legacyWindow],
+    };
+    const inputs = tracedInputs();
+    stampReadingInputs(reading, inputs);
+    writeCachedProviders([reading], reading.state.refreshedAt);
+
+    expect(readReusableProviders("agy", 90, now)).toBeUndefined();
+    expect(readSnapshotProviders(file, "agy", now)).toBe("expired");
+    expect(readCachedProvider("agy")?.windows).toEqual([legacyWindow]);
+
+    const normalizedWindow = {
+      ...legacyWindow,
+      resetsAt: undefined,
+      notStarted: true,
+      models: { status: "unknown" },
+    };
+    const normalized = { ...reading, windows: [normalizedWindow] };
+    stampReadingInputs(normalized, inputs);
+    writeCachedProviders([normalized], reading.state.refreshedAt);
+
+    for (const reused of [
+      readReusableProviders("agy", 90, now),
+      readSnapshotProviders(file, "agy", now),
+    ]) {
+      expect(reused).toMatchObject([
+        {
+          state: { status: "fresh", reused: true },
+          windows: [
+            { id: "gemini_5h", percentRemaining: 100, notStarted: true },
+          ],
+        },
+      ]);
+    }
   });
 
   it("does not serve Higgsfield through --max-age, including after a login switch", () => {

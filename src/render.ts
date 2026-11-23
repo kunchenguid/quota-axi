@@ -21,7 +21,6 @@ import type { AgyQuotaWindow } from "./providers/agy.js";
 
 const UNKNOWN = "unknown";
 const NONE = "none";
-const NOT_STARTED = "not_started";
 const ID_SEPARATOR = " + ";
 /** Kept out of `,` so a detail never forces TOON string quoting on its own. */
 const DETAIL_SEPARATOR = " · ";
@@ -75,6 +74,9 @@ type ProviderBlocks = {
   quota: QuotaRow[];
   exhaustion: ExhaustionRow[];
   attention: AttentionRow[];
+  scopeModels: Array<
+    Pick<QuotaRow, "provider" | "accountKey" | "scope"> & { models: string }
+  >;
 };
 
 /**
@@ -101,7 +103,7 @@ export function renderQuotaToon(
             (provider) => !omit.has(provider.provider),
           ),
         };
-  const { quota, exhaustion, attention } = quotaBlocks(shown);
+  const { quota, exhaustion, attention, scopeModels } = quotaBlocks(shown);
   const blocks = [
     encode({
       bin: collapseHome(binPath),
@@ -114,6 +116,7 @@ export function renderQuotaToon(
     encode({ attention }),
   ];
 
+  if (scopeModels.length > 0) blocks.push(encode({ scopeModels }));
   if (full) blocks.push(...auditBlocks(response));
   blocks.push(renderHelp(quotaHelpLines(response, omit.size)));
   return blocks.filter(Boolean).join("\n");
@@ -125,13 +128,25 @@ export function renderQuotaToon(
  * TOON omission of not-set-up providers happens before this runs.
  */
 function quotaBlocks(response: QuotaAxiResponse): ProviderBlocks {
-  const blocks: ProviderBlocks = { quota: [], exhaustion: [], attention: [] };
+  const blocks: ProviderBlocks = {
+    quota: [],
+    exhaustion: [],
+    attention: [],
+    scopeModels: [],
+  };
   for (const provider of response.providers) {
     const scopes = provider.quotaSemantics?.effectiveAvailability ?? [];
     const scopeAttention: AttentionRow[] = [];
     let measured = false;
 
     for (const scope of scopes) {
+      if (scope.models) {
+        blocks.scopeModels.push({
+          ...providerColumns(provider),
+          scope: scope.scope,
+          models: modelsColumn(scope.models),
+        });
+      }
       if (scope.effectivePercentRemaining === undefined) {
         scopeAttention.push({
           ...providerColumns(provider),
@@ -480,14 +495,13 @@ function auditBlocks(response: QuotaAxiResponse): string[] {
       id: window.id,
       label: window.label,
       percentRemaining: window.percentRemaining ?? UNKNOWN,
-      resetsAt:
-        window.resetsAt ??
-        window.resetText ??
-        (window.pace?.reason === NOT_STARTED ? NOT_STARTED : UNKNOWN),
+      resetsAt: window.resetsAt ?? window.resetText ?? UNKNOWN,
       pace:
-        (provider.provider === "agy" ? window.pace?.reason : undefined) ??
-        window.pace?.status ??
-        UNKNOWN,
+        provider.provider === "agy" &&
+        (window.pace?.reason === "not_started" ||
+          window.pace?.reason === "stale")
+          ? window.pace.reason
+          : (window.pace?.status ?? UNKNOWN),
       reserve: window.pace?.reservePercentPoints ?? UNKNOWN,
       burnMultiple: window.pace?.burnMultiple ?? UNKNOWN,
       timeRemainingPercent: window.pace?.timeRemainingPercent ?? UNKNOWN,
@@ -496,11 +510,6 @@ function auditBlocks(response: QuotaAxiResponse): string[] {
       projectedExhaustedAt: window.pace?.projectedExhaustedAt ?? UNKNOWN,
       confidence: window.pace?.projectionConfidence ?? UNKNOWN,
     })),
-  );
-  const showModels = response.providers.some((provider) =>
-    provider.quotaSemantics?.effectiveAvailability.some(
-      (scope) => scope.models,
-    ),
   );
   const scopeAudit = response.providers.flatMap((provider) =>
     (provider.quotaSemantics?.effectiveAvailability ?? []).map((scope) => ({
@@ -515,7 +524,6 @@ function auditBlocks(response: QuotaAxiResponse): string[] {
       unknownWindowIds: joinIds(scope.pace?.unknownWindowIds) ?? NONE,
       worstReserve: scope.pace?.worstReservePercentPoints ?? UNKNOWN,
       worstReserveWindowId: scope.pace?.worstReserveWindowId ?? UNKNOWN,
-      ...(showModels ? { models: modelsColumn(scope.models) } : {}),
     })),
   );
   const locators = response.providers.some(
@@ -756,8 +764,10 @@ function demotedWindow(window: QuotaWindow, untrusted?: boolean): QuotaWindow {
   };
 }
 
-function modelsColumn(models: EffectiveAvailability["models"]): string {
-  if (models?.status !== "known") return UNKNOWN;
+function modelsColumn(
+  models: NonNullable<EffectiveAvailability["models"]>,
+): string {
+  if (models.status !== "known") return UNKNOWN;
   const labels = joinIds(models.labels) ?? UNKNOWN;
   const ids = joinIds(models.ids);
   return ids ? `${labels}${DETAIL_SEPARATOR}${ids}` : labels;

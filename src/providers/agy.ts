@@ -471,11 +471,7 @@ export function normalizeAgyPrintUsage(
     name !== "/quota"
   )
     return undefined;
-  const summary = normalizeAgyQuotaSummary(command?.data, options);
-  if (summary && isCutOffPlaceholder(command?.data, summary.windows)) {
-    throw new AgyCutOffError("agy /quota returned a cut-off placeholder");
-  }
-  return summary;
+  return normalizeAgyQuotaSummary(command?.data, options);
 }
 
 export function normalizeAgyUserStatus(raw: unknown):
@@ -918,22 +914,6 @@ function normalizeQuotaSummaryBucket(
 }
 
 /**
- * A `/quota` request that agy cuts off can come back as an all-full
- * placeholder. A real reading always carries group descriptions (agy puts them
- * on groups, not buckets), so full unused limits with no description anywhere
- * are not trusted. Upstream PR 382 rejects on bucket descriptions, which would
- * also drop a genuine unused account; the group description is the safe signal.
- */
-function isCutOffPlaceholder(raw: unknown, windows: QuotaWindow[]): boolean {
-  const groups = arrayValue(quotaSummaryPayload(raw)?.groups);
-  return (
-    windows.length > 0 &&
-    windows.every(({ notStarted }) => notStarted) &&
-    groups.every((group) => !stringValue(objectValue(group)?.description))
-  );
-}
-
-/**
  * agy fills the reset of a limit that has not started with a placeholder: the
  * Unix epoch, or "now plus one period". Neither is a real reset. A full
  * allowance with such a reset has not started, so it keeps its 100% and drops
@@ -1214,8 +1194,7 @@ function statusForError(error: string): ProviderStatus {
 }
 
 function statusForFailure(error: unknown): ProviderStatus {
-  if (error instanceof AgyUnavailableError || error instanceof AgyCutOffError)
-    return "unavailable";
+  if (error instanceof AgyUnavailableError) return "unavailable";
   return statusForError(errorMessage(error));
 }
 
@@ -1475,8 +1454,6 @@ class AgyCsrfError extends AgyUnavailableError {}
 class AgyProbeBudgetError extends AgyUnavailableError {}
 
 class AgyMalformedResponseError extends Error {}
-
-class AgyCutOffError extends Error {}
 
 class AgyDiscoveryError extends Error {}
 

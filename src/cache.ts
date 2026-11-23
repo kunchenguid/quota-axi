@@ -385,7 +385,7 @@ export function readReusableProviders(
       now - refreshedAt < maxAgeSeconds * 1_000
     );
   });
-  if (!young || !group.every((record) => stillCurrent(record, now)))
+  if (!young || !group.every((record) => canReuseReading(record, now)))
     return undefined;
   const stamp = group[0].reuse as ReuseStamp;
   if (inputsDigest(stamp.inputs) !== stamp.inputsDigest) return undefined;
@@ -426,8 +426,7 @@ export function isSnapshotFile(file: string): boolean {
 /**
  * Every reading of `provider` in a snapshot file supplied for tests and
  * fixtures, in file order. `undefined` when the file names no such provider;
- * `"expired"` when a window's own reset has already passed, because a number
- * that has stopped being true is never served (#257), not even from a stub.
+ * `"expired"` when the reading no longer qualifies for fresh reuse.
  */
 export function readSnapshotProviders(
   file: string,
@@ -438,15 +437,19 @@ export function readSnapshotProviders(
     (record) => record.snapshot.provider === provider,
   );
   if (records.length === 0) return undefined;
-  if (!records.every((record) => stillCurrent(record, now))) return "expired";
+  if (!records.every((record) => canReuseReading(record, now)))
+    return "expired";
   return records.map(reusedReading);
 }
 
-/** Whether no window of this reading has reached its own reported reset. */
-function stillCurrent(record: CachedProvider, now: number): boolean {
-  return record.snapshot.windows.every(
-    (window) =>
-      window.resetsAt === undefined || Date.parse(window.resetsAt) > now,
+function canReuseReading(record: CachedProvider, now: number): boolean {
+  const { provider, windows } = record.snapshot;
+  return windows.every(
+    (window: AgyQuotaWindow) =>
+      (provider !== "agy" ||
+        window.kind === "model" ||
+        window.models !== undefined) &&
+      (window.resetsAt === undefined || Date.parse(window.resetsAt) > now),
   );
 }
 
