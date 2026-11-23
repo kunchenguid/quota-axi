@@ -12,7 +12,10 @@ import {
   agyBoundWindowId,
   agyUnrecognizedWindowId,
 } from "./providers/agy-identity.js";
-import { hasCurrentPercentage, windowHasNotReset } from "./providers/common.js";
+import {
+  hasCurrentAgyPercentage,
+  windowHasNotReset,
+} from "./providers/common.js";
 import { kimiReadingContextId } from "./providers/kimi-cache-context.js";
 import { commandCodeReadingContextId } from "./providers/commandcode-cache-context.js";
 import { devinReadingContextId } from "./providers/devin-cache-context.js";
@@ -458,7 +461,7 @@ export function readSnapshotProviders(
         (provider === "agy"
           ? Boolean(record.snapshot[AGY_GROUPS]?.length) ||
             record.snapshot.windows.some((window) =>
-              windowHasNotReset(window, now),
+              windowHasNotReset(window, now, provider),
             )
           : hasUnexpiredWindows(record, now)),
     )
@@ -469,7 +472,7 @@ export function readSnapshotProviders(
 
 function hasLiveReuseEvidence(provider: ProviderQuota, now: number): boolean {
   return provider.provider === "agy"
-    ? hasCurrentPercentage(provider.windows, now)
+    ? hasCurrentAgyPercentage(provider.windows, now)
     : provider.windows.length > 0;
 }
 
@@ -486,7 +489,7 @@ function hasReusableFormat(record: CachedProvider): boolean {
 
 function hasUnexpiredWindows(record: CachedProvider, now: number): boolean {
   return record.snapshot.windows.every((window) =>
-    windowHasNotReset(window, now),
+    windowHasNotReset(window, now, record.snapshot.provider),
   );
 }
 
@@ -1359,6 +1362,19 @@ function normalizeCachedWindow(
   assignNumber(result, "remainingCredits", data.remainingCredits);
   assignString(result, "creditUnit", data.creditUnit);
   if (provider === "agy") {
+    const { percentUsed: used, percentRemaining: remaining } = result;
+    if (
+      (data.percentUsed !== undefined &&
+        (used === undefined || used < 0 || used > 100)) ||
+      (data.percentRemaining !== undefined &&
+        (remaining === undefined || remaining < 0 || remaining > 100)) ||
+      (used !== undefined &&
+        remaining !== undefined &&
+        (Math.abs(used + remaining - 100) > Number.EPSILON * 100 ||
+          (used === 0) !== (remaining === 100) ||
+          (remaining === 0 && used !== 100)))
+    )
+      return undefined;
     if (data.resetsAt !== undefined && result.resetsAt === undefined)
       return undefined;
     if (data.notStarted !== undefined) {

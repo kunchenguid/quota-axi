@@ -639,6 +639,15 @@ describe("quota cache", () => {
       ["reset text", [{ ...unused, resetText: "tomorrow" }, model]],
       ["duplicate window", [unused, unused]],
     ] as const;
+    const badPercentages = [
+      ["negative remaining", { percentRemaining: -10 }],
+      ["excess remaining", { percentRemaining: 110 }],
+      ["negative used", { percentUsed: -10 }],
+      ["excess used", { percentUsed: 110 }],
+      ["string remaining", { percentRemaining: "60" }],
+      ["null used", { percentUsed: null }],
+      ["inconsistent pair", { percentUsed: 0, percentRemaining: 60 }],
+    ] as const;
     const badGroups = [
       ["nonarray groups", {}],
       ["duplicate group", [group, group]],
@@ -697,6 +706,24 @@ describe("quota cache", () => {
     for (const [description, override] of [
       ...badWindows.map(
         ([description, windows]) => [description, { windows }] as const,
+      ),
+      ...badPercentages.map(
+        ([description, percentages]) =>
+          [
+            description,
+            {
+              windows: [
+                {
+                  ...unused,
+                  notStarted: undefined,
+                  percentUsed: undefined,
+                  percentRemaining: undefined,
+                  ...percentages,
+                },
+                model,
+              ],
+            },
+          ] as const,
       ),
       ...badGroups.map(
         ([description, agyGroups]) => [description, { agyGroups }] as const,

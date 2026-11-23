@@ -13,7 +13,7 @@ import {
   execFileText,
   type ExecFileTextOptions,
 } from "../lib/process.js";
-import { clampPercent, nowIso, parseEpochOrIso } from "../lib/time.js";
+import { clampPercent, nowIso } from "../lib/time.js";
 import { AGY_GROUPS } from "../types.js";
 import type {
   AgyQuotaGroup,
@@ -31,9 +31,10 @@ import {
   agyBoundWindowId,
   agyUnrecognizedWindowId,
 } from "./agy-identity.js";
+import { agyResetTimestamp } from "./agy-reset.js";
 import {
   failedProvider,
-  hasCurrentPercentage,
+  hasCurrentAgyPercentage,
   servableStaleWindows,
   sourceNames,
   staleFromCache,
@@ -175,7 +176,7 @@ export async function fetchQuotaWithRuntime(
   try {
     cli = await fetchCliQuota(runtime);
     attempts[0] = { source: "cli", status: "success" };
-    if (hasCurrentPercentage(cli.windows))
+    if (hasCurrentAgyPercentage(cli.windows))
       return reportAgyReading(runtime, cli, "cli", attempts, cli.commandPath);
   } catch (error) {
     finalFailure = error;
@@ -193,7 +194,7 @@ export async function fetchQuotaWithRuntime(
   try {
     const quota = await fetchLoopbackQuota(runtime);
     attempts[attempts.length - 1] = { source: "loopback", status: "success" };
-    if (!cli || hasCurrentPercentage(quota.windows))
+    if (!cli || hasCurrentAgyPercentage(quota.windows))
       return reportAgyReading(runtime, quota, "cli-rpc", attempts);
   } catch (error) {
     const skipped =
@@ -476,12 +477,35 @@ export function normalizeAgyQuotaSummary(
 ): AgyGroupedReading | undefined {
   const payload = quotaSummaryPayload(raw);
   const nowMs = options.nowMs ?? Date.now();
-  const windows: QuotaWindow[] = [];
-  const groups = arrayValue(payload?.groups).flatMap((group) => {
-    const normalized = normalizeQuotaSummaryGroup(group, nowMs, windows);
-    return normalized ? [normalized] : [];
+  const namedGroups = arrayValue(payload?.groups).flatMap((rawGroup) => {
+    const group = objectValue(rawGroup);
+    const name = stringValue(group?.displayName) ?? stringValue(group?.name);
+    return group && name?.trim()
+      ? [{ group, name, identity: agyWindowGroup(name) }]
+      : [];
   });
-  if (groups.length === 0) return undefined;
+  if (namedGroups.length === 0) return undefined;
+  const counts = new Map<string, number>();
+  for (const { identity } of namedGroups)
+    counts.set(identity.id, (counts.get(identity.id) ?? 0) + 1);
+  const windows: QuotaWindow[] = [];
+  const groups: AgyQuotaGroup[] = [];
+  const groupIds = new Set<string>();
+  for (const { group, name, identity } of namedGroups) {
+    const scoped =
+      counts.get(identity.id) === 1 ? identity : encodedAgyWindowGroup(name);
+    if (groupIds.has(scoped.id)) return undefined;
+    groupIds.add(scoped.id);
+    const normalized = normalizeQuotaSummaryGroup(
+      group,
+      name,
+      scoped,
+      nowMs,
+      windows,
+    );
+    if (!normalized) return undefined;
+    groups.push(normalized);
+  }
   groups.sort((left, right) => groupRank(left.id) - groupRank(right.id));
   return {
     [AGY_GROUPS]: groups,
@@ -594,7 +618,7 @@ async function fetchLoopbackQuota(
       if (endpoint.requiresUnleashProbe)
         await probeEndpoint(runtime, endpoint, deadline);
       const reading = await fetchEndpointQuota(runtime, endpoint, deadline);
-      if (hasCurrentPercentage(reading.windows)) return reading;
+      if (hasCurrentAgyPercentage(reading.windows)) return reading;
       diagnostic ??= reading;
     } catch (error) {
       lastError = strongerFailure(lastError, error);
@@ -750,14 +774,14 @@ async function fetchEndpointQuota(
       summaryError = strongerFailure(summaryError, error);
     }
     if (path === USER_STATUS_PATH) userStatus = fallback;
-    if (summary && hasCurrentPercentage(summary.windows)) {
+    if (summary && hasCurrentAgyPercentage(summary.windows)) {
       return {
         ...summary,
         plan: userStatus?.plan,
         account: userStatus?.account,
       };
     }
-    if (fallback && hasCurrentPercentage(fallback.windows)) {
+    if (fallback && hasCurrentAgyPercentage(fallback.windows)) {
       return summary
         ? {
             ...fallback,
@@ -838,15 +862,15 @@ async function readListeningPorts(
 }
 
 function normalizeQuotaSummaryGroup(
-  raw: unknown,
+  group: Record<string, unknown>,
+  name: string,
+  identity: ReturnType<typeof agyWindowGroup>,
   nowMs: number,
   windows: QuotaWindow[],
 ): AgyQuotaGroup | undefined {
-  const group = objectValue(raw);
-  const name = stringValue(group?.displayName) ?? stringValue(group?.name);
-  if (!group || !name?.trim()) return undefined;
-  const identity = agyWindowGroup(name);
-  const buckets = arrayValue(group.buckets).flatMap((rawBucket) => {
+  const buckets = arrayValue(group.buckets).flatMap<
+    AgyQuotaGroup["buckets"][number]
+  >((rawBucket) => {
     const bucket = objectValue(rawBucket);
     if (!bucket) return [];
     const id =
@@ -869,6 +893,15 @@ function normalizeQuotaSummaryGroup(
     windows.push(window);
     return [{ id, windowId: window.id }];
   });
+  const links = buckets.flatMap(({ windowId, unmeasuredBoundId }) => {
+    const link = windowId ?? unmeasuredBoundId;
+    return link ? [link] : [];
+  });
+  if (
+    new Set(buckets.map(({ id }) => id)).size !== buckets.length ||
+    new Set(links).size !== links.length
+  )
+    return undefined;
   return {
     id: identity.id,
     name,
@@ -937,18 +970,21 @@ function parseAgyReset({
   resetTime,
   reset_time,
 }: Record<string, unknown>): string | undefined {
+  let invalid: string | undefined;
   for (const value of [resetTime, reset_time]) {
-    if (typeof value === "number") {
-      const reset = new Date(value * 1000);
-      if (Number.isFinite(reset.getTime())) return reset.toISOString();
-    } else {
-      const reset = parseEpochOrIso(value);
-      if (reset !== undefined) return reset;
-    }
+    if (value === undefined) continue;
+    const timestamp =
+      typeof value === "number"
+        ? value * 1000
+        : typeof value === "string"
+          ? agyResetTimestamp(value)
+          : Number.NaN;
+    const reset = new Date(timestamp);
+    if (Number.isFinite(reset.getTime())) return reset.toISOString();
+    invalid ??=
+      typeof value === "string" && value.trim() ? value : "invalid reset";
   }
-  return resetTime === undefined && reset_time === undefined
-    ? undefined
-    : "invalid reset";
+  return invalid;
 }
 
 function normalizeQuotaSummaryBucket(
@@ -994,7 +1030,7 @@ function applyAgyUsage(
       : 100 - roundedUsed;
   window.percentUsed = 100 - window.percentRemaining;
   if (remaining !== 1 || window.resetsAt === undefined) return;
-  const resetMs = Date.parse(window.resetsAt);
+  const resetMs = agyResetTimestamp(window.resetsAt);
   if (
     resetMs === 0 ||
     (nowMs !== undefined &&
@@ -1061,11 +1097,15 @@ function agyWindowGroup(groupName: string): { id: string; label: string } {
     case "claude and gpt models":
       return { id: "claude_gpt", label: "Claude/GPT" };
     default:
-      return {
-        id: `group:${encodeURIComponent(Buffer.from(groupName).toString())}`,
-        label: groupName,
-      };
+      return encodedAgyWindowGroup(groupName);
   }
+}
+
+function encodedAgyWindowGroup(name: string): { id: string; label: string } {
+  return {
+    id: `group:${encodeURIComponent(Buffer.from(name).toString())}`,
+    label: name,
+  };
 }
 
 function agyWindowKind(bucket: Record<string, unknown>): {

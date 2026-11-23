@@ -1,4 +1,5 @@
 import type {
+  ProviderId,
   ProviderQuota,
   ProviderSource,
   ProviderStatus,
@@ -7,6 +8,7 @@ import type {
 } from "../types.js";
 import { isDegradedSourceAttempt } from "../lib/source-attempts.js";
 import { percentRemaining } from "../lib/time.js";
+import { agyResetTimestamp } from "./agy-reset.js";
 
 export function withRemaining(
   window: Omit<QuotaWindow, "percentRemaining">,
@@ -17,21 +19,24 @@ export function withRemaining(
   };
 }
 
-export function hasCurrentPercentage(
+export function hasCurrentAgyPercentage(
   windows: readonly QuotaWindow[],
   now = Date.now(),
 ): boolean {
   return windows.some(
     (window) =>
-      window.percentRemaining !== undefined && windowHasNotReset(window, now),
+      window.percentRemaining !== undefined &&
+      windowHasNotReset(window, now, "agy"),
   );
 }
 
 export function windowHasNotReset(
   { resetsAt }: QuotaWindow,
   now: number,
+  provider: ProviderId,
 ): boolean {
-  return resetsAt === undefined || Date.parse(resetsAt) > now;
+  const parse = provider === "agy" ? agyResetTimestamp : Date.parse;
+  return resetsAt === undefined || parse(resetsAt) > now;
 }
 
 export function successProvider(
@@ -116,12 +121,10 @@ export function servableStaleWindows(
   if (refreshedAt > now) return [];
   const ageMilliseconds = now - refreshedAt;
   return cached.windows.filter((window) => {
+    if (cached.provider === "agy" && window.resetsAt !== undefined)
+      return windowHasNotReset(window, now, "agy");
     const resetsAt = window.resetsAt ? Date.parse(window.resetsAt) : Number.NaN;
-    if (
-      Number.isFinite(resetsAt) ||
-      (cached.provider === "agy" && window.resetsAt !== undefined)
-    )
-      return windowHasNotReset(window, now);
+    if (Number.isFinite(resetsAt)) return resetsAt > now;
     if (resetless === "never" || !Number.isFinite(refreshedAt)) return false;
     const maxAgeSeconds = resetlessStaleMaxAgeSeconds(window);
     return maxAgeSeconds > 0 && ageMilliseconds < maxAgeSeconds * 1_000;

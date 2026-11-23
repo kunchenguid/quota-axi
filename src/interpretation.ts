@@ -1,9 +1,10 @@
 import { degradedSources } from "./lib/source-attempts.js";
 import { agyBoundWindowId } from "./providers/agy-identity.js";
+import { agyResetTimestamp } from "./providers/agy-reset.js";
 import { agyStaleQuotaAt } from "./providers/agy.js";
 import {
   failedProvider,
-  hasCurrentPercentage,
+  hasCurrentAgyPercentage,
   windowHasNotReset,
 } from "./providers/common.js";
 import {
@@ -35,7 +36,7 @@ export function withQuotaSemantics(
     agyReportTime === undefined
       ? []
       : provider.windows.filter(
-          (window) => !windowHasNotReset(window, agyReportTime),
+          (window) => !windowHasNotReset(window, agyReportTime, "agy"),
         );
   const untrustedIds = new Set(untrusted.map(({ id }) => id));
   let activeWindows =
@@ -49,7 +50,7 @@ export function withQuotaSemantics(
     if (
       snapshot
         ? activeWindows.length === 0 && !groups?.length
-        : !hasCurrentPercentage(activeWindows, agyReportTime)
+        : !hasCurrentAgyPercentage(activeWindows, agyReportTime)
     ) {
       provider = {
         ...failedProvider({
@@ -64,12 +65,20 @@ export function withQuotaSemantics(
       activeWindows = provider.windows;
     }
   }
-  const windows = activeWindows.map((window) => ({
-    ...window,
-    pace: computeWindowPace(window, generatedAt, {
-      stale: provider.state.stale,
+  const windows = activeWindows.map(
+    (window): QuotaWindow => ({
+      ...window,
+      pace:
+        !provider.state.stale &&
+        untrustedIds.has(window.id) &&
+        window.resetsAt !== undefined &&
+        !Number.isFinite(agyResetTimestamp(window.resetsAt))
+          ? { status: "unknown", reason: "invalid_cycle" }
+          : computeWindowPace(window, generatedAt, {
+              stale: provider.state.stale,
+            }),
     }),
-  }));
+  );
   const state = { ...provider.state, ...supersededSources(provider) };
   if (agyReportTime !== undefined) {
     if (!provider.state.reused && windows.length > 0 && untrustedIds.size > 0)

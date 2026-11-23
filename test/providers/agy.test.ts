@@ -1043,7 +1043,7 @@ describe("Antigravity quota parsing", () => {
           evidence === "expired"
             ? readAt
             : evidence === "malformed"
-              ? "not-a-date"
+              ? "2099-02-29T00:00:00Z"
               : "2026-06-19T08:45:39Z";
         const hasReset = evidence !== "disabled";
         const measurement =
@@ -1164,7 +1164,7 @@ describe("Antigravity quota parsing", () => {
       },
     );
 
-    it.each(["not-a-date", "", 1e100])(
+    it.each(["not-a-date", "2099-02-29T00:00:00Z", "", 1e100])(
       "keeps invalid Antigravity resets diagnostic-only (%s)",
       async (resetTime) => {
         vi.useFakeTimers({ toFake: ["Date"] });
@@ -1239,7 +1239,9 @@ describe("Antigravity quota parsing", () => {
           true,
         ).providers[0]?.windows.find(({ id }) => id === argonId);
         const invalidReset =
-          resetTime === "not-a-date" ? resetTime : "invalid reset";
+          typeof resetTime === "string" && resetTime
+            ? resetTime
+            : "invalid reset";
         expect(diagnostic).toMatchObject({
           percentRemaining: 0,
           resetsAt: invalidReset,
@@ -1276,6 +1278,71 @@ describe("Antigravity quota parsing", () => {
           windows: [{ id: "gemini_weekly", percentRemaining: 60 }],
         });
         expect(stale.windows).toHaveLength(1);
+      },
+    );
+
+    it.each([false, true])(
+      "keeps both Gemini groups independent in saved reports (reversed: %s)",
+      async (reversed) => {
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(NOW_MS);
+        const generatedAt = new Date(NOW_MS).toISOString();
+        const resetTime = new Date(NOW_MS + 3_600_000).toISOString();
+        const groups = [
+          {
+            name: "Gemini Models",
+            description: "Models within this group: Gemini Neon",
+            buckets: [
+              { bucketId: "weekly", remainingFraction: 0.8, resetTime },
+            ],
+          },
+          {
+            name: "Gemini Models (Flash, Pro)",
+            description: "Models within this group: Gemini Flash",
+            buckets: [
+              { bucketId: "weekly", remainingFraction: 0.2, resetTime },
+            ],
+          },
+        ];
+        const live = await fetchQuotaWithRuntime(
+          runtimeWith({
+            cliQuota: JSON.stringify({
+              command: {
+                name: "quota",
+                data: { groups: reversed ? groups.toReversed() : groups },
+              },
+            }),
+          }),
+        );
+        writeCachedProviders([live]);
+        const snapshot = readSnapshotProviders(cacheFilePath(), "agy", NOW_MS);
+        if (!Array.isArray(snapshot) || !snapshot[0])
+          throw new Error("Expected saved Gemini groups");
+        for (const reading of [live, snapshot[0]]) {
+          const report = annotateQuotaAdvice({
+            generatedAt,
+            providers: [withQuotaSemantics(reading, generatedAt)],
+          });
+          const scopes = quotaJsonReport(report, false).providers[0]
+            ?.quotaSemantics?.effectiveAvailability;
+          expect(scopes).toHaveLength(2);
+          expect(scopes).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({
+                scope: "group:Gemini%20Models",
+                boundedBy: ["group:Gemini%20Models_weekly"],
+                effectivePercentRemaining: 80,
+                models: { status: "known", labels: ["Gemini Neon"] },
+              }),
+              expect.objectContaining({
+                scope: "group:Gemini%20Models%20(Flash%2C%20Pro)",
+                boundedBy: ["group:Gemini%20Models%20(Flash%2C%20Pro)_weekly"],
+                effectivePercentRemaining: 20,
+                models: { status: "known", labels: ["Gemini Flash"] },
+              }),
+            ]),
+          );
+        }
       },
     );
 
@@ -1442,6 +1509,27 @@ describe("Antigravity quota parsing", () => {
       { id: "model:atlas", percentRemaining: 0.4 },
       { id: "model:beacon", percentRemaining: 0 },
     ]);
+  });
+
+  it("uses the valid reset alias in grouped and model responses", () => {
+    const quota = {
+      remainingFraction: 0,
+      resetTime: "2100-02-29T12:00:00Z",
+      reset_time: "2100-03-02T08:00:00-04:00",
+    };
+    const grouped = normalizeAgyQuotaSummary({
+      groups: [
+        { name: "Gemini 4 Argon", buckets: [{ bucketId: "weekly", ...quota }] },
+      ],
+    });
+    const model = normalizeAgyUserStatus({
+      clientModelConfigs: [{ label: "Argon", quotaInfo: quota }],
+    });
+    for (const reading of [grouped, model]) {
+      expect(reading?.windows).toMatchObject([
+        { percentRemaining: 0, resetsAt: "2100-03-02T12:00:00.000Z" },
+      ]);
+    }
   });
 
   it("distinguishes exact and rounded full model resets at the epoch", () => {

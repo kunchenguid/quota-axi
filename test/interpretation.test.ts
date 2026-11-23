@@ -97,6 +97,24 @@ function zaiToolWindow(): QuotaWindow {
 }
 
 describe("quota semantics", () => {
+  it("keeps the missing-cycle pace reason for an unreadable Codex reset", () => {
+    const codex = provider("codex", [
+      window("weekly", "weekly", 60, { resetsAt: "not-a-date" }),
+    ]);
+    const report = annotateQuotaAdvice({
+      generatedAt: GENERATED_AT,
+      providers: [withQuotaSemantics(codex, GENERATED_AT)],
+    });
+    for (const full of [false, true]) {
+      expect(
+        quotaJsonReport(report, full).providers[0]?.windows[0]?.pace,
+      ).toMatchObject({
+        status: "unknown",
+        reason: "missing_cycle",
+      });
+    }
+  });
+
   it("keeps every stale provider's effective availability unknown", () => {
     const cases: Array<[ProviderQuota["provider"], QuotaWindow[]]> = [
       ["claude", [window("five_hour", "session", 66)]],
@@ -1716,7 +1734,10 @@ describe("per-scope selection signal", () => {
         };
         expect(scope?.runway, source).toEqual(
           weeklyState === "unstarted"
-            ? { status: "unknown", unmeasurableWindowIds: [sessionId, weeklyId] }
+            ? {
+                status: "unknown",
+                unmeasurableWindowIds: [sessionId, weeklyId],
+              }
             : unknownWeekly,
         );
         expect(scope?.selection, source).toEqual(

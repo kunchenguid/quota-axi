@@ -3,6 +3,7 @@ import {
   type ProviderPresence,
 } from "./lib/source-attempts.js";
 import { collapseHome } from "./lib/fs.js";
+import { agyResetTimestamp } from "./providers/agy-reset.js";
 import { isUsageFetchFailure } from "./providers/usage-fetch-failure.js";
 import type {
   EffectiveAvailability,
@@ -790,7 +791,8 @@ function windowRow(
   const pct = untrusted ? undefined : window.percentRemaining;
   const marker = untrusted ? undefined : window.pace?.timeRemainingPercent;
   const reset = untrusted
-    ? Number.isFinite(Date.parse(window.resetsAt ?? ""))
+    ? window.resetsAt !== undefined &&
+      Number.isFinite(agyResetTimestamp(window.resetsAt))
       ? "passed"
       : "bad"
     : resetCountdown(window, generatedAtMs);
