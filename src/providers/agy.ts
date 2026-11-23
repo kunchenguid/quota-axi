@@ -19,7 +19,9 @@ import {
   parseEpochOrIso,
   percentRemaining,
 } from "../lib/time.js";
+import { AGY_GROUPS } from "../types.js";
 import type {
+  AgyQuotaGroup,
   AuthProviderReport,
   ProviderAdapter,
   ProviderOptions,
@@ -65,30 +67,27 @@ const MODELS_PREFIX = /^models within this group:\s*/i;
 /** One `agy models` row: the CLI id and the label agy prints for it. */
 type AgyModelCatalogEntry = { id: string; label: string };
 
-export type AgyQuotaWindow = QuotaWindow & { models?: QuotaModelList };
-
-export const AGY_STALE_READ = Symbol("agyStaleRead");
-export type AgyProviderQuota = ProviderQuota & {
-  [AGY_STALE_READ]?: {
-    groupModels: ReadonlyMap<string, QuotaModelList>;
-    failure: ProviderQuota;
-  };
+type AgyQuotaReading = {
+  plan?: string;
+  account?: ProviderQuota["account"];
+  windows: QuotaWindow[];
+  [AGY_GROUPS]?: AgyQuotaGroup[];
+  refreshedAt: string;
 };
 
-export function agyQuotaAt(
+type AgyGroupedReading = AgyQuotaReading & { [AGY_GROUPS]: AgyQuotaGroup[] };
+
+const AGY_STALE_FAILURE = Symbol("agyStaleFailure");
+type AgyProviderQuota = ProviderQuota & { [AGY_STALE_FAILURE]?: ProviderQuota };
+
+export function agyStaleQuotaAt(
   provider: AgyProviderQuota,
   now: number,
 ): ProviderQuota {
-  const stale = provider[AGY_STALE_READ];
-  if (!stale) return provider;
+  const failure = provider[AGY_STALE_FAILURE];
+  if (!failure) return provider;
   const windows = servableStaleWindows(provider, now);
-  return windows.length > 0 ? { ...provider, windows } : stale.failure;
-}
-
-export function agyGroupScope(windowId: string): string | undefined {
-  return /^([^:]+|group:[^:]+)(?:_(?:5h|weekly)|:bucket:[^:]+)$/.exec(
-    windowId,
-  )?.[1];
+  return windows.length > 0 ? { ...provider, windows } : failure;
 }
 
 export type AgyNormalizeOptions = {
@@ -174,10 +173,11 @@ export async function fetchQuotaWithRuntime(
   try {
     const quota = await fetchCliQuota(runtime);
     attempts[0] = { source: "cli", status: "success" };
-    const provider = successProvider({
+    return successProvider({
       provider: "agy",
       label: "Antigravity",
       source: "cli",
+      [AGY_GROUPS]: quota[AGY_GROUPS],
       plan: quota.plan,
       account: quota.account,
       windows: quota.windows,
@@ -185,7 +185,6 @@ export async function fetchQuotaWithRuntime(
       sourcesTried: sourceNames(attempts),
       attempts,
     });
-    return provider;
   } catch (error) {
     finalFailure = error;
     const skipped =
@@ -201,12 +200,13 @@ export async function fetchQuotaWithRuntime(
   attempts.push({ source: "loopback", status: "failed", degraded: false });
   try {
     const quota = await fetchLoopbackQuota(runtime);
-    await resolveGroupModels(runtime, quota.windows);
+    await resolveGroupModels(runtime, quota[AGY_GROUPS]);
     attempts[attempts.length - 1] = { source: "loopback", status: "success" };
-    const provider = successProvider({
+    return successProvider({
       provider: "agy",
       label: "Antigravity",
       source: "cli-rpc",
+      ...(quota[AGY_GROUPS] ? { [AGY_GROUPS]: quota[AGY_GROUPS] } : {}),
       plan: quota.plan,
       account: quota.account,
       windows: quota.windows,
@@ -214,7 +214,6 @@ export async function fetchQuotaWithRuntime(
       sourcesTried: sourceNames(attempts),
       attempts,
     });
-    return provider;
   } catch (error) {
     const skipped =
       error instanceof AgyUnavailableError || isMissingCommandError(error);
@@ -252,13 +251,10 @@ export async function fetchQuotaWithRuntime(
     const stale = cached
       ? staleFromCache(cached, finalError, sourcesTried, attempts)
       : undefined;
-    if (cached && stale) {
+    if (stale) {
       const report: AgyProviderQuota = {
         ...stale,
-        [AGY_STALE_READ]: {
-          groupModels: cachedGroupModels(cached.windows),
-          failure,
-        },
+        [AGY_STALE_FAILURE]: failure,
       };
       return report;
     }
@@ -271,18 +267,6 @@ export async function fetchQuotaWithRuntime(
   }
 
   return failure;
-}
-
-function cachedGroupModels(
-  windows: AgyQuotaWindow[],
-): Map<string, QuotaModelList> {
-  const groups = new Map<string, QuotaModelList>();
-  for (const { id, models } of windows) {
-    const scope = agyGroupScope(id);
-    if (scope && !groups.has(scope))
-      groups.set(scope, models ?? { status: "unknown" });
-  }
-  return groups;
 }
 
 export async function inspectAuth(
@@ -322,12 +306,9 @@ export async function inspectAuthWithRuntime(
   }
 }
 
-async function fetchCliQuota(runtime: AgyProbeRuntime): Promise<{
-  plan?: string;
-  account?: ProviderQuota["account"];
-  windows: QuotaWindow[];
-  refreshedAt: string;
-}> {
+async function fetchCliQuota(
+  runtime: AgyProbeRuntime,
+): Promise<AgyGroupedReading> {
   let commandPath: string | undefined;
   try {
     commandPath = await runtime.findCommandPath("agy");
@@ -363,7 +344,7 @@ async function fetchCliQuota(runtime: AgyProbeRuntime): Promise<{
   if (!summary) {
     throw new AgyMalformedResponseError("agy /quota quota summary malformed");
   }
-  await resolveGroupModels(runtime, summary.windows, commandPath);
+  await resolveGroupModels(runtime, summary[AGY_GROUPS], commandPath);
   return summary;
 }
 
@@ -442,15 +423,13 @@ async function readModelCatalog(
 
 async function resolveGroupModels(
   runtime: AgyProbeRuntime,
-  windows: AgyQuotaWindow[],
+  groups: AgyQuotaGroup[] | undefined,
   commandPath?: string,
 ): Promise<void> {
-  const modelLists = new Set(
-    windows
-      .map(({ models }) => models)
-      .filter((models) => models?.status === "known"),
-  );
-  if (modelLists.size === 0) return;
+  const modelLists = groups
+    ?.map(({ models }) => models)
+    .filter((models) => models.status === "known");
+  if (!modelLists?.length) return;
   commandPath ??= await runtime.findCommandPath("agy").catch(() => undefined);
   if (!commandPath) return;
   const catalog = await readModelCatalog(runtime, commandPath);
@@ -488,31 +467,27 @@ function isMissingCommandError(error: unknown): boolean {
 export function normalizeAgyQuotaSummary(
   raw: unknown,
   options: AgyNormalizeOptions = {},
-):
-  | {
-      windows: AgyQuotaWindow[];
-      refreshedAt: string;
-    }
-  | undefined {
+): AgyGroupedReading | undefined {
   const payload = quotaSummaryPayload(raw);
-  const groups = arrayValue(payload?.groups);
   const nowMs = options.nowMs ?? Date.now();
-  const windows = groups
-    .flatMap((group) => normalizeQuotaSummaryGroup(group, nowMs))
-    .sort(compareAgyWindows);
-  if (windows.length === 0) return undefined;
-  return { windows, refreshedAt: nowIso() };
+  const windows: QuotaWindow[] = [];
+  const groups = arrayValue(payload?.groups).flatMap((group) => {
+    const normalized = normalizeQuotaSummaryGroup(group, nowMs, windows);
+    return normalized ? [normalized] : [];
+  });
+  if (groups.length === 0) return undefined;
+  groups.sort((left, right) => groupRank(left.id) - groupRank(right.id));
+  return {
+    [AGY_GROUPS]: groups,
+    windows: windows.sort(compareAgyWindows),
+    refreshedAt: nowIso(),
+  };
 }
 
 export function normalizeAgyPrintUsage(
   raw: unknown,
   options: AgyNormalizeOptions = {},
-):
-  | {
-      windows: AgyQuotaWindow[];
-      refreshedAt: string;
-    }
-  | undefined {
+): AgyGroupedReading | undefined {
   const root = objectValue(raw);
   const command = objectValue(root?.command);
   const name = stringValue(command?.name);
@@ -591,12 +566,9 @@ export function portsFromLsof(output: string): number[] {
   return [...ports];
 }
 
-async function fetchLoopbackQuota(runtime: AgyProbeRuntime): Promise<{
-  plan?: string;
-  account?: ProviderQuota["account"];
-  windows: QuotaWindow[];
-  refreshedAt: string;
-}> {
+async function fetchLoopbackQuota(
+  runtime: AgyProbeRuntime,
+): Promise<AgyQuotaReading> {
   const deadline = createProbeDeadline();
   const { endpoints, confirmedNoProcess, processDiscoveryUnavailable } =
     await discoverAgyEndpoints(runtime, deadline);
@@ -737,12 +709,7 @@ async function fetchEndpointQuota(
   runtime: AgyProbeRuntime,
   endpoint: AgyConnectionEndpoint,
   deadline: number,
-): Promise<{
-  plan?: string;
-  account?: ProviderQuota["account"];
-  windows: QuotaWindow[];
-  refreshedAt: string;
-}> {
+): Promise<AgyQuotaReading> {
   let summaryError: unknown;
   try {
     const summary = normalizeAgyQuotaSummary(
@@ -862,17 +829,31 @@ async function readListeningPorts(
 function normalizeQuotaSummaryGroup(
   raw: unknown,
   nowMs: number,
-): AgyQuotaWindow[] {
+  windows: QuotaWindow[],
+): AgyQuotaGroup | undefined {
   const group = objectValue(raw);
-  if (!group) return [];
-  const groupName = stringValue(group.displayName) ?? stringValue(group.name);
-  if (!groupName?.trim()) return [];
-  const identity = agyWindowGroup(groupName);
-  const models = groupModelList(stringValue(group.description));
-  return arrayValue(group.buckets).flatMap((bucket) => {
-    const window = normalizeQuotaSummaryBucket(identity, bucket, nowMs);
-    return window ? [{ ...window, models }] : [];
+  const name = stringValue(group?.displayName) ?? stringValue(group?.name);
+  if (!group || !name?.trim()) return undefined;
+  const identity = agyWindowGroup(name);
+  const buckets = arrayValue(group.buckets).flatMap((rawBucket) => {
+    const bucket = objectValue(rawBucket);
+    if (!bucket) return [];
+    const id =
+      stringValue(bucket.bucketId) ??
+      stringValue(bucket.bucket_id) ??
+      stringValue(bucket.id);
+    if (!id) return [];
+    const window = normalizeQuotaSummaryBucket(identity, bucket, id, nowMs);
+    if (!window) return [{ id }];
+    windows.push(window);
+    return [{ id, windowId: window.id }];
   });
+  return {
+    id: identity.id,
+    name,
+    models: groupModelList(stringValue(group.description)),
+    buckets,
+  };
 }
 
 /**
@@ -935,18 +916,11 @@ function matchModelIds(
 
 function normalizeQuotaSummaryBucket(
   group: ReturnType<typeof agyWindowGroup>,
-  raw: unknown,
+  bucket: Record<string, unknown>,
+  bucketId: string,
   nowMs: number,
 ): QuotaWindow | undefined {
-  const bucket = objectValue(raw);
-  if (!bucket) return undefined;
-  const disabled = booleanValue(bucket.disabled) ?? false;
-  if (disabled) return undefined;
-  const bucketId =
-    stringValue(bucket.bucketId) ??
-    stringValue(bucket.bucket_id) ??
-    stringValue(bucket.id);
-  if (!bucketId) return undefined;
+  if (booleanValue(bucket.disabled)) return undefined;
   const windowKind = agyWindowKind(bucket);
   const result: QuotaWindow = {
     id:
@@ -1135,8 +1109,12 @@ function compareAgyWindows(left: QuotaWindow, right: QuotaWindow): number {
 }
 
 function windowGroupRank(id: string): number {
-  if (/^(?:gemini|gemini_argon)[_:]/.test(id)) return 0;
-  if (/^claude_gpt[_:]/.test(id)) return 1;
+  return groupRank(/^(gemini_argon|gemini|claude_gpt)[_:]/.exec(id)?.[1] ?? id);
+}
+
+function groupRank(id: string): number {
+  if (id === "gemini" || id === "gemini_argon") return 0;
+  if (id === "claude_gpt") return 1;
   return 2;
 }
 

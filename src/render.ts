@@ -17,8 +17,6 @@ import type {
   SourceAttempt,
 } from "./types.js";
 
-import type { AgyQuotaWindow } from "./providers/agy.js";
-
 const UNKNOWN = "unknown";
 const NONE = "none";
 const ID_SEPARATOR = " + ";
@@ -676,23 +674,10 @@ export function quotaJsonReport(
   laneAbsent: readonly boolean[] = [],
 ): QuotaAxiResponse {
   const redacted = redactedResponse(markNotSetUp(response, laneAbsent), full);
-  const publicResponse = {
-    ...redacted,
-    providers: redacted.providers.map((provider) =>
-      provider.provider === "agy"
-        ? {
-            ...provider,
-            windows: provider.windows.map(
-              ({ models: _models, ...window }: AgyQuotaWindow) => window,
-            ),
-          }
-        : provider,
-    ),
-  };
-  if (full) return publicResponse;
+  if (full) return redacted;
   return {
-    ...publicResponse,
-    providers: publicResponse.providers.map((provider) => ({
+    ...redacted,
+    providers: redacted.providers.map((provider) => ({
       ...provider,
       label: undefined,
       source: undefined,

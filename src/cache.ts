@@ -7,7 +7,6 @@ import {
   ensurePrivateParent,
   readUntracedJsonFile,
 } from "./lib/fs.js";
-import type { AgyQuotaWindow } from "./providers/agy.js";
 import { kimiReadingContextId } from "./providers/kimi-cache-context.js";
 import { commandCodeReadingContextId } from "./providers/commandcode-cache-context.js";
 import { devinReadingContextId } from "./providers/devin-cache-context.js";
@@ -22,6 +21,7 @@ import { inputsDigest, type TracedInputs } from "./lib/input-trace.js";
 import { reuseContextId } from "./lib/reuse-context.js";
 import type {
   AccountLocator,
+  AgyQuotaGroup,
   DegradedSource,
   ProviderAuthStatus,
   ProviderId,
@@ -30,7 +30,7 @@ import type {
   ProviderStatus,
   QuotaWindow,
 } from "./types.js";
-import { PROVIDER_IDS } from "./types.js";
+import { AGY_GROUPS, PROVIDER_IDS } from "./types.js";
 
 const PROVIDER_SOURCES = [
   "oauth",
@@ -443,12 +443,15 @@ export function readSnapshotProviders(
 }
 
 function canReuseReading(record: CachedProvider, now: number): boolean {
-  const { provider, windows } = record.snapshot;
+  const { provider, windows, [AGY_GROUPS]: groups } = record.snapshot;
+  const groupedWindowIds = new Set(
+    groups?.flatMap(({ buckets }) => buckets.map(({ windowId }) => windowId)),
+  );
   return windows.every(
-    (window: AgyQuotaWindow) =>
+    (window) =>
       (provider !== "agy" ||
         window.kind === "model" ||
-        window.models !== undefined) &&
+        groupedWindowIds.has(window.id)) &&
       (window.resetsAt === undefined || Date.parse(window.resetsAt) > now),
   );
 }
@@ -659,6 +662,7 @@ export function writeCachedProviders(
     (provider) =>
       provider.state.status === "fresh" &&
       provider.windows.length === 0 &&
+      !provider[AGY_GROUPS]?.length &&
       !missingRequiredContext(provider.provider),
   );
   const clearProviders = new Set(emptyReadings.map(cacheIdentity));
@@ -908,7 +912,7 @@ function toCacheProvider(provider: ProviderQuota): CachedProvider | undefined {
   // only relabel an old observation.
   if (
     provider.state.status !== "fresh" ||
-    provider.windows.length === 0 ||
+    (provider.windows.length === 0 && !provider[AGY_GROUPS]?.length) ||
     provider.source === "cache"
   )
     return undefined;
@@ -923,6 +927,7 @@ function toCacheProvider(provider: ProviderQuota): CachedProvider | undefined {
       source: provider.source,
       plan: provider.plan,
       windows: provider.windows,
+      agyGroups: provider[AGY_GROUPS],
       credits: provider.credits,
       jobs: provider.jobs,
       state: {
@@ -973,6 +978,9 @@ function serializeCachedProvider(
   ];
   return {
     ...provider.snapshot,
+    ...(provider.snapshot[AGY_GROUPS]
+      ? { agyGroups: provider.snapshot[AGY_GROUPS] }
+      : {}),
     ...(subscription ? { subscription } : {}),
     ...(provider.credentialContextId
       ? { credentialContext: provider.credentialContextId }
@@ -1070,6 +1078,8 @@ function normalizeCachedProvider(
           provider === "kimi" ? upgradeLegacyKimiShareWindow(window) : window,
         )
     : [];
+  const agyGroups =
+    provider === "agy" ? normalizeCachedAgyGroups(data.agyGroups) : undefined;
   if (
     !provider ||
     !label ||
@@ -1077,7 +1087,7 @@ function normalizeCachedProvider(
     !state ||
     !status ||
     !sourcesTried ||
-    windows.length === 0 ||
+    (windows.length === 0 && !agyGroups?.length) ||
     (provider === "codex" && hasInvalidCodexWindowIdentities(windows))
   )
     return undefined;
@@ -1096,6 +1106,7 @@ function normalizeCachedProvider(
     label,
     source,
     windows,
+    ...(agyGroups ? { [AGY_GROUPS]: agyGroups } : {}),
     state: {
       status,
       stale: booleanValue(state.stale) ?? false,
@@ -1285,7 +1296,7 @@ function normalizeCachedWindow(
   const label = stringValue(data.label);
   const kind = literalValue(data.kind, WINDOW_KINDS);
   if (!id || !label || !kind) return undefined;
-  const result: AgyQuotaWindow = { id, label, kind };
+  const result: QuotaWindow = { id, label, kind };
   assignNumber(result, "percentUsed", data.percentUsed);
   assignNumber(result, "percentRemaining", data.percentRemaining);
   assignString(result, "shareOf", data.shareOf);
@@ -1299,15 +1310,36 @@ function normalizeCachedWindow(
   assignNumber(result, "usedCredits", data.usedCredits);
   assignNumber(result, "remainingCredits", data.remainingCredits);
   assignString(result, "creditUnit", data.creditUnit);
-  if (provider === "agy") {
-    if (data.notStarted === true) result.notStarted = true;
-    const models = normalizeCachedModelList(data.models);
-    if (models) result.models = models;
-  }
+  if (provider === "agy" && data.notStarted === true) result.notStarted = true;
   return result;
 }
 
-function normalizeCachedModelList(raw: unknown): AgyQuotaWindow["models"] {
+function normalizeCachedAgyGroups(raw: unknown): AgyQuotaGroup[] | undefined {
+  if (!Array.isArray(raw) || raw.length === 0) return undefined;
+  const groups: AgyQuotaGroup[] = [];
+  for (const value of raw) {
+    const group = objectValue(value);
+    const id = stringValue(group?.id);
+    const name = stringValue(group?.name);
+    const models = normalizeCachedModelList(group?.models);
+    if (!id || !name || !models || !Array.isArray(group?.buckets))
+      return undefined;
+    const buckets: AgyQuotaGroup["buckets"] = [];
+    for (const value of group.buckets) {
+      const bucket = objectValue(value);
+      const id = stringValue(bucket?.id);
+      const windowId = stringValue(bucket?.windowId);
+      if (!id) return undefined;
+      buckets.push({ id, ...(windowId ? { windowId } : {}) });
+    }
+    groups.push({ id, name, models, buckets });
+  }
+  return groups;
+}
+
+function normalizeCachedModelList(
+  raw: unknown,
+): AgyQuotaGroup["models"] | undefined {
   const data = objectValue(raw);
   if (!data) return undefined;
   if (data.status === "unknown") return { status: "unknown" };

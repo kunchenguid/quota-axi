@@ -1,17 +1,12 @@
 import { degradedSources } from "./lib/source-attempts.js";
-import {
-  AGY_STALE_READ,
-  agyGroupScope,
-  agyQuotaAt,
-  type AgyProviderQuota,
-  type AgyQuotaWindow,
-} from "./providers/agy.js";
+import { agyStaleQuotaAt } from "./providers/agy.js";
 import {
   computeEffectiveRunway,
   computeWindowPace,
   summarizeEffectivePace,
   summarizeEffectiveSelection,
 } from "./pace.js";
+import { AGY_GROUPS } from "./types.js";
 import type {
   BoundConflict,
   EffectiveAvailability,
@@ -27,8 +22,21 @@ export function withQuotaSemantics(
   const agyReportTime =
     reading.provider === "agy" ? Date.parse(generatedAt) : undefined;
   const provider =
-    agyReportTime === undefined ? reading : agyQuotaAt(reading, agyReportTime);
-  const windows = provider.windows.map((window) => ({
+    agyReportTime === undefined
+      ? reading
+      : agyStaleQuotaAt(reading, agyReportTime);
+  const expired =
+    agyReportTime === undefined
+      ? []
+      : provider.windows.filter(
+          ({ resetsAt }) => resetsAt && Date.parse(resetsAt) <= agyReportTime,
+        );
+  const expiredIds = new Set(expired.map(({ id }) => id));
+  const activeWindows =
+    provider.state.reused && expiredIds.size > 0
+      ? provider.windows.filter(({ id }) => !expiredIds.has(id))
+      : provider.windows;
+  const windows = activeWindows.map((window) => ({
     ...window,
     pace: computeWindowPace(window, generatedAt, {
       stale: provider.state.stale,
@@ -36,16 +44,12 @@ export function withQuotaSemantics(
   }));
   const state = { ...provider.state, ...supersededSources(provider) };
   if (agyReportTime !== undefined) {
-    const untrusted = windows
-      .filter(
-        ({ resetsAt }) => resetsAt && Date.parse(resetsAt) <= agyReportTime,
-      )
-      .map(({ id }) => id);
-    if (untrusted.length > 0) state.untrustedWindowIds = untrusted;
+    if (!provider.state.reused && expiredIds.size > 0)
+      state.untrustedWindowIds = [...expiredIds];
     else delete state.untrustedWindowIds;
   }
   const withWindows = { ...provider, windows, state };
-  const semantics = semanticsFor(withWindows, generatedAt);
+  const semantics = semanticsFor(withWindows, generatedAt, expired);
   return {
     ...withWindows,
     quotaSemantics: provider.state.stale
@@ -117,6 +121,7 @@ function staleSemantics(semantics: QuotaSemantics): QuotaSemantics {
 function semanticsFor(
   provider: ProviderQuota,
   generatedAt: string,
+  expiredAgyWindows: QuotaWindow[],
 ): QuotaSemantics {
   switch (provider.provider) {
     case "claude":
@@ -145,7 +150,11 @@ function semanticsFor(
         `quota-axi does not know whether ${provider.label ?? provider.provider}'s reported windows are independent or jointly bounding, so it does not claim an effective remaining percentage.`,
       );
     case "agy":
-      return agySemantics(provider, generatedAt);
+      return agySemantics(
+        provider,
+        generatedAt,
+        expiredAgyWindows.filter(isAgyBound).map(({ id }) => id),
+      );
     case "alibaba":
       return alibabaSemantics(provider.windows, generatedAt);
     case "opencode-go":
@@ -987,32 +996,21 @@ function partialSemantics(
  * scope unknown and leaves the other scopes alone.
  */
 function agySemantics(
-  provider: AgyProviderQuota,
+  provider: ProviderQuota,
   generatedAt: string,
+  expiredBoundIds: string[],
 ): QuotaSemantics {
-  const cachedModels = provider[AGY_STALE_READ]?.groupModels;
-  const untrustedWindowIds = provider.state.untrustedWindowIds ?? [];
-  const scopes = new Map<string, AgyQuotaWindow[]>();
-  for (const scope of cachedModels?.keys() ?? []) scopes.set(scope, []);
-  const unresolved: QuotaWindow[] = [];
-  for (const window of provider.windows) {
-    const scope = agyGroupScope(window.id);
-    if (scope === undefined) {
-      unresolved.push(window);
-      continue;
-    }
-    scopes.set(scope, [...(scopes.get(scope) ?? []), window]);
-  }
+  const scopedBoundIds = new Set<string>();
   const effectiveAvailability: EffectiveAvailability[] = [];
-  for (const [scope, scopeWindows] of scopes) {
-    const bounds = scopeWindows.filter((window) => {
-      if (window.kind === "session" || window.kind === "weekly") return true;
-      unresolved.push(window);
-      return false;
-    });
+  for (const { id: scope, buckets, models } of provider[AGY_GROUPS] ?? []) {
+    const windowIds = new Set(buckets.map(({ windowId }) => windowId));
+    const bounds = provider.windows.filter(
+      (window) => windowIds.has(window.id) && isAgyBound(window),
+    );
     const boundedBy = bounds.map(({ id }) => id);
-    const unmeasurableWindowIds = boundedBy.filter((id) =>
-      untrustedWindowIds.includes(id),
+    for (const id of boundedBy) scopedBoundIds.add(id);
+    const unmeasurableWindowIds = expiredBoundIds.filter((id) =>
+      windowIds.has(id),
     );
     const entry: EffectiveAvailability =
       unmeasurableWindowIds.length > 0
@@ -1025,14 +1023,11 @@ function agySemantics(
             selection: { status: "unknown", unmeasurableWindowIds },
           }
         : availability(scope, bounds, generatedAt);
-    const models =
-      scopeWindows.find((window) => window.models)?.models ??
-      cachedModels?.get(scope);
-    effectiveAvailability.push({
-      ...entry,
-      models: models ?? { status: "unknown" },
-    });
+    effectiveAvailability.push({ ...entry, models });
   }
+  const unresolved = provider.windows.filter(
+    ({ id }) => !scopedBoundIds.has(id),
+  );
   if (unresolved.length > 0) {
     return {
       status: effectiveAvailability.length > 0 ? "partial" : "unknown",
@@ -1046,6 +1041,10 @@ function agySemantics(
     effectiveAvailability,
     "Antigravity quota groups are independently bounded by their recognized 5-hour and weekly buckets.",
   );
+}
+
+function isAgyBound(window: QuotaWindow): boolean {
+  return window.kind === "session" || window.kind === "weekly";
 }
 
 function unknownSemantics(

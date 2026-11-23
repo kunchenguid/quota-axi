@@ -37,6 +37,7 @@ import {
 } from "../src/providers/commandcode-cache-context.js";
 import { staleFromCache } from "../src/providers/common.js";
 import { withQuotaSemantics } from "../src/interpretation.js";
+import { quotaJsonReport, renderQuotaToon } from "../src/render.js";
 import { createKimiCodeCliCredentialSource } from "../src/providers/kimi-code-cli-credential.js";
 import { createKimiAdapter } from "../src/providers/kimi.js";
 import {
@@ -49,7 +50,11 @@ import {
   stampZaiReadingContext,
   zaiCacheContextId,
 } from "../src/providers/zai-cache-context.js";
-import type { ProviderId, ProviderQuota } from "../src/types.js";
+import {
+  AGY_GROUPS,
+  type ProviderId,
+  type ProviderQuota,
+} from "../src/types.js";
 
 const originalXdgCacheHome = process.env.XDG_CACHE_HOME;
 const originalClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
@@ -441,9 +446,44 @@ describe("quota cache", () => {
       ...legacyWindow,
       resetsAt: undefined,
       notStarted: true,
-      models: { status: "unknown" },
     };
-    const normalized = { ...reading, windows: [normalizedWindow] };
+    const reset = "2026-07-06T18:10:31Z";
+    const normalized: ProviderQuota = {
+      ...reading,
+      windows: [
+        normalizedWindow,
+        {
+          id: "gemini_weekly",
+          label: "Gemini weekly",
+          kind: "weekly",
+          percentRemaining: 20,
+          resetsAt: reset,
+        },
+        {
+          id: "claude_gpt_weekly",
+          label: "Claude/GPT weekly",
+          kind: "weekly",
+          percentRemaining: 90,
+        },
+      ],
+      [AGY_GROUPS]: [
+        {
+          id: "gemini",
+          name: "Gemini Models",
+          models: { status: "unknown" },
+          buckets: [
+            { id: "gemini-5h", windowId: "gemini_5h" },
+            { id: "gemini-weekly", windowId: "gemini_weekly" },
+          ],
+        },
+        {
+          id: "claude_gpt",
+          name: "Claude and GPT Models",
+          models: { status: "known", labels: ["Claude Sonnet"] },
+          buckets: [{ id: "3p-weekly", windowId: "claude_gpt_weekly" }],
+        },
+      ],
+    };
     stampReadingInputs(normalized, inputs);
     writeCachedProviders([normalized], reading.state.refreshedAt);
 
@@ -456,10 +496,55 @@ describe("quota cache", () => {
           state: { status: "fresh", reused: true },
           windows: [
             { id: "gemini_5h", percentRemaining: 100, notStarted: true },
+            { id: "gemini_weekly", percentRemaining: 20 },
+            { id: "claude_gpt_weekly", percentRemaining: 90 },
           ],
         },
       ]);
+      if (!Array.isArray(reused) || !reused[0])
+        throw new Error("Expected an Antigravity cache hit");
+      const result = withQuotaSemantics(reused[0], reset);
+      expect(result.state).toMatchObject({ reused: true, stale: false });
+      const report = annotateQuotaAdvice({
+        generatedAt: reset,
+        providers: [result],
+      });
+      for (const full of [false, true]) {
+        expect(
+          quotaJsonReport(report, full).providers[0]?.windows.map(
+            ({ id }) => id,
+          ),
+        ).toEqual(["gemini_5h", "claude_gpt_weekly"]);
+        expect(renderQuotaToon(report, "quota-axi", full)).not.toContain(
+          "agy,gemini_weekly,",
+        );
+      }
+      expect(result.quotaSemantics?.effectiveAvailability).toMatchObject([
+        {
+          scope: "gemini",
+          status: "unknown",
+          boundedBy: ["gemini_5h"],
+          runway: {
+            status: "unknown",
+            unmeasurableWindowIds: ["gemini_weekly"],
+          },
+        },
+        {
+          scope: "claude_gpt",
+          status: "known",
+          effectivePercentRemaining: 90,
+          models: { status: "known", labels: ["Claude Sonnet"] },
+        },
+      ]);
+      expect(
+        result.quotaSemantics?.effectiveAvailability[0]
+          ?.effectivePercentRemaining,
+      ).toBeUndefined();
     }
+    expect(readReusableProviders("agy", 90, Date.parse(reset))).toBeUndefined();
+    expect(readSnapshotProviders(file, "agy", Date.parse(reset))).toBe(
+      "expired",
+    );
   });
 
   it("does not serve Higgsfield through --max-age, including after a login switch", () => {

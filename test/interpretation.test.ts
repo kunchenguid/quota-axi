@@ -4,8 +4,10 @@ import { annotateQuotaAdvice } from "../src/advice.js";
 import { quotaJsonReport, renderQuotaToon } from "../src/render.js";
 import { renderQuotaTui } from "../src/tui.js";
 import {
+  AGY_GROUPS,
   SELECTION_SCALAR_KEY,
   type ProviderQuota,
+  type QuotaModelList,
   type QuotaWindow,
 } from "../src/types.js";
 
@@ -22,6 +24,22 @@ function provider(
     source: "api",
     windows,
     state: { status: "fresh", stale: false, sourcesTried: ["api"] },
+  };
+}
+
+function agyProvider(
+  windows: QuotaWindow[],
+  groups: Record<string, string[]>,
+  models: Record<string, QuotaModelList> = {},
+): ProviderQuota {
+  return {
+    ...provider("agy", windows),
+    [AGY_GROUPS]: Object.entries(groups).map(([id, windowIds]) => ({
+      id,
+      name: id,
+      models: models[id] ?? { status: "unknown" },
+      buckets: windowIds.map((windowId) => ({ id: windowId, windowId })),
+    })),
   };
 }
 
@@ -1091,12 +1109,18 @@ describe("quota semantics", () => {
     });
 
     const agy = withQuotaSemantics(
-      provider("agy", [
-        window("gemini_5h", "session", 100),
-        window("gemini_weekly", "weekly", 0),
-        window("claude_gpt_5h", "session", 100),
-        window("claude_gpt_weekly", "weekly", 90),
-      ]),
+      agyProvider(
+        [
+          window("gemini_5h", "session", 100),
+          window("gemini_weekly", "weekly", 0),
+          window("claude_gpt_5h", "session", 100),
+          window("claude_gpt_weekly", "weekly", 90),
+        ],
+        {
+          gemini: ["gemini_5h", "gemini_weekly"],
+          claude_gpt: ["claude_gpt_5h", "claude_gpt_weekly"],
+        },
+      ),
       GENERATED_AT,
     );
     expect(agy.quotaSemantics).toMatchObject({
@@ -1125,24 +1149,30 @@ describe("quota semantics", () => {
         Date.parse(GENERATED_AT) + 18_000 * (1 - elapsedFraction) * 1000,
       ).toISOString();
     const agyMeasured = withQuotaSemantics(
-      provider("agy", [
-        window("gemini_5h", "session", 95, {
-          windowSeconds: 18_000,
-          resetsAt: fiveHoursResetsAt(0.5),
-        }),
-        window("gemini_weekly", "weekly", 99, {
-          windowSeconds: WEEK_SECONDS,
-          resetsAt: weeklyResetsAt(0.5),
-        }),
-        window("claude_gpt_5h", "session", 100, {
-          windowSeconds: 18_000,
-          resetsAt: fiveHoursResetsAt(0),
-        }),
-        window("claude_gpt_weekly", "weekly", 100, {
-          windowSeconds: WEEK_SECONDS,
-          resetsAt: weeklyResetsAt(0),
-        }),
-      ]),
+      agyProvider(
+        [
+          window("gemini_5h", "session", 95, {
+            windowSeconds: 18_000,
+            resetsAt: fiveHoursResetsAt(0.5),
+          }),
+          window("gemini_weekly", "weekly", 99, {
+            windowSeconds: WEEK_SECONDS,
+            resetsAt: weeklyResetsAt(0.5),
+          }),
+          window("claude_gpt_5h", "session", 100, {
+            windowSeconds: 18_000,
+            resetsAt: fiveHoursResetsAt(0),
+          }),
+          window("claude_gpt_weekly", "weekly", 100, {
+            windowSeconds: WEEK_SECONDS,
+            resetsAt: weeklyResetsAt(0),
+          }),
+        ],
+        {
+          gemini: ["gemini_5h", "gemini_weekly"],
+          claude_gpt: ["claude_gpt_5h", "claude_gpt_weekly"],
+        },
+      ),
       GENERATED_AT,
     );
     for (const scope of ["gemini", "claude_gpt"]) {
@@ -1155,7 +1185,9 @@ describe("quota semantics", () => {
     }
 
     const agyWeeklyOnly = withQuotaSemantics(
-      provider("agy", [window("gemini_weekly", "weekly", 40)]),
+      agyProvider([window("gemini_weekly", "weekly", 40)], {
+        gemini: ["gemini_weekly"],
+      }),
       GENERATED_AT,
     );
     expect(agyWeeklyOnly.quotaSemantics).toMatchObject({
@@ -1170,10 +1202,13 @@ describe("quota semantics", () => {
     });
 
     const agyUnfamiliar = withQuotaSemantics(
-      provider("agy", [
-        window("gemini_weekly", "weekly", 40),
-        window("limit:extra", "unknown", 80),
-      ]),
+      agyProvider(
+        [
+          window("gemini_weekly", "weekly", 40),
+          window("limit:extra", "unknown", 80),
+        ],
+        { gemini: ["gemini_weekly"] },
+      ),
       GENERATED_AT,
     );
     expect(agyUnfamiliar.quotaSemantics).toMatchObject({
@@ -1188,13 +1223,16 @@ describe("quota semantics", () => {
     });
 
     const agyUnknownKind = withQuotaSemantics(
-      provider("agy", [
-        window("gemini_5h", "session", 100),
-        window("gemini_weekly", "weekly", 70),
-        window("gemini:bucket:monthly", "unknown", 10, {
-          resetsAt: offsetFromGeneratedAt(-60),
-        }),
-      ]),
+      agyProvider(
+        [
+          window("gemini_5h", "session", 100),
+          window("gemini_weekly", "weekly", 70),
+          window("gemini:bucket:monthly", "unknown", 10, {
+            resetsAt: offsetFromGeneratedAt(-60),
+          }),
+        ],
+        { gemini: ["gemini_5h", "gemini_weekly", "gemini:bucket:monthly"] },
+      ),
       GENERATED_AT,
     );
     expect(agyUnknownKind.quotaSemantics).toMatchObject({
@@ -1570,26 +1608,28 @@ describe("per-scope selection signal", () => {
       ids: ["gemini-4-neon-medium"],
       unmatchedLabels: ["Gemini 4 Hydrogen"],
     };
-    const session = {
-      ...window("gemini_5h", "session", 100, {
-        windowSeconds: 18_000,
-        notStarted: true,
-      }),
-      models,
-    };
-    const claude = {
-      ...window("claude_gpt_weekly", "weekly", 80),
-      models: { status: "known" as const, labels: ["Claude Sonnet"] },
-    };
-    const agy = provider("agy", [
-      session,
-      window("gemini_weekly", "weekly", 100, {
-        windowSeconds: WEEK_SECONDS,
-        notStarted: true,
-      }),
-      claude,
-      window("model:fallback", "model", 50),
-    ]);
+    const agy = agyProvider(
+      [
+        window("gemini_5h", "session", 100, {
+          windowSeconds: 18_000,
+          notStarted: true,
+        }),
+        window("gemini_weekly", "weekly", 100, {
+          windowSeconds: WEEK_SECONDS,
+          notStarted: true,
+        }),
+        window("claude_gpt_weekly", "weekly", 80),
+        window("model:fallback", "model", 50),
+      ],
+      {
+        gemini: ["gemini_5h", "gemini_weekly"],
+        claude_gpt: ["claude_gpt_weekly"],
+      },
+      {
+        gemini: models,
+        claude_gpt: { status: "known", labels: ["Claude Sonnet"] },
+      },
+    );
     for (const stale of [false, true]) {
       const result = withQuotaSemantics(
         {
@@ -1683,16 +1723,19 @@ describe("per-scope selection signal", () => {
 
   it("keeps the agy scope list the same when the other scope has a passed reset", () => {
     const result = withQuotaSemantics(
-      provider("agy", [
-        window("gemini_weekly", "weekly", 80, {
-          windowSeconds: WEEK_SECONDS,
-          resetsAt: offsetFromGeneratedAt(-60),
-        }),
-        window("claude_gpt_weekly", "weekly", 90, {
-          windowSeconds: WEEK_SECONDS,
-          resetsAt: offsetFromGeneratedAt(3 * 86_400),
-        }),
-      ]),
+      agyProvider(
+        [
+          window("gemini_weekly", "weekly", 80, {
+            windowSeconds: WEEK_SECONDS,
+            resetsAt: offsetFromGeneratedAt(-60),
+          }),
+          window("claude_gpt_weekly", "weekly", 90, {
+            windowSeconds: WEEK_SECONDS,
+            resetsAt: offsetFromGeneratedAt(3 * 86_400),
+          }),
+        ],
+        { gemini: ["gemini_weekly"], claude_gpt: ["claude_gpt_weekly"] },
+      ),
       GENERATED_AT,
     );
     expect(
@@ -1707,16 +1750,19 @@ describe("per-scope selection signal", () => {
   });
 
   it("makes only the agy scope with a passed reset unknown", () => {
-    const agy = provider("agy", [
-      window("gemini_5h", "session", 90, {
-        windowSeconds: FIVE_HOURS_SECONDS,
-        resetsAt: new Date(Date.parse(GENERATED_AT) - 1_000).toISOString(),
-      }),
-      window("gemini_weekly", "weekly", 80, {
-        windowSeconds: WEEK_SECONDS,
-        resetsAt: after(3 * DAY_SECONDS),
-      }),
-    ]);
+    const agy = agyProvider(
+      [
+        window("gemini_5h", "session", 90, {
+          windowSeconds: FIVE_HOURS_SECONDS,
+          resetsAt: new Date(Date.parse(GENERATED_AT) - 1_000).toISOString(),
+        }),
+        window("gemini_weekly", "weekly", 80, {
+          windowSeconds: WEEK_SECONDS,
+          resetsAt: after(3 * DAY_SECONDS),
+        }),
+      ],
+      { gemini: ["gemini_5h", "gemini_weekly"] },
+    );
 
     const result = withQuotaSemantics(agy, GENERATED_AT);
     expect(result.state.status).not.toBe("stale");

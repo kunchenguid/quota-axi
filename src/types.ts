@@ -244,6 +244,15 @@ export type QuotaModelList =
     }
   | { status: "unknown" };
 
+export const AGY_GROUPS = Symbol("agyGroups");
+
+export type AgyQuotaGroup = {
+  id: string;
+  name: string;
+  models: QuotaModelList;
+  buckets: { id: string; windowId?: string }[];
+};
+
 export type EffectiveAvailability = {
   scope: string;
   /** Models in this scope, when the provider names them. */
@@ -336,6 +345,7 @@ export type ProviderAccount = {
 
 export type ProviderQuota = {
   provider: ProviderId;
+  [AGY_GROUPS]?: AgyQuotaGroup[];
   /** Present in account-expanded reports; absent for the legacy single lane. */
   accountKey?: string;
   /**

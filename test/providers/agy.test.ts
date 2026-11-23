@@ -20,7 +20,12 @@ import {
   currentUserProcessListArgs,
   type ExecFileTextOptions,
 } from "../../src/lib/process.js";
-import { readCachedProvider, writeCachedProviders } from "../../src/cache.js";
+import {
+  readCachedProvider,
+  readSnapshotProviders,
+  writeCachedProviders,
+} from "../../src/cache.js";
+import { cacheFilePath } from "../../src/lib/fs.js";
 import { annotateQuotaAdvice } from "../../src/advice.js";
 import { quotaJsonReport, renderQuotaToon } from "../../src/render.js";
 import {
@@ -39,7 +44,7 @@ import {
 } from "../../src/providers/agy.js";
 import { providerPresence } from "../../src/lib/source-attempts.js";
 import { withQuotaSemantics } from "../../src/interpretation.js";
-import type { ProviderQuota } from "../../src/types.js";
+import { AGY_GROUPS, type ProviderQuota } from "../../src/types.js";
 
 const originalXdgCacheHome = process.env.XDG_CACHE_HOME;
 const originalPath = process.env.PATH;
@@ -295,7 +300,7 @@ describe("Antigravity quota parsing", () => {
           provider: "agy",
           label: "Antigravity",
           source: "cli",
-          windows: fetched.windows,
+          ...fetched,
           state: { status: "fresh", stale: false, sourcesTried: ["cli"] },
         },
         new Date(NOW_MS).toISOString(),
@@ -353,7 +358,7 @@ describe("Antigravity quota parsing", () => {
           provider: "agy",
           label: "Antigravity",
           source: "cli",
-          windows: result.windows,
+          ...result,
           state: { status: "fresh", stale: false, sourcesTried: ["cli"] },
         },
         new Date(NOW_MS).toISOString(),
@@ -416,7 +421,7 @@ describe("Antigravity quota parsing", () => {
           provider: "agy",
           label: "Antigravity",
           source: "cli",
-          windows: fetched.windows,
+          ...fetched,
           state: { status: "fresh", stale: false, sourcesTried: ["cli"] },
         },
         new Date(NOW_MS).toISOString(),
@@ -576,7 +581,7 @@ describe("Antigravity quota parsing", () => {
           provider: "agy",
           label: "Antigravity",
           source: "cli",
-          windows: fetched.windows,
+          ...fetched,
           state: { status: "fresh", stale: false, sourcesTried: ["cli"] },
         },
         new Date(NOW_MS).toISOString(),
@@ -634,6 +639,104 @@ describe("Antigravity quota parsing", () => {
       expect(onExec.mock.calls.map(([, args]) => args[0])).toEqual(["-p"]);
     });
 
+    it.each(["cli", "cli-rpc", "group-only"] as const)(
+      "keeps a disabled Argon group in %s quota and snapshots",
+      async (source) => {
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(NOW_MS);
+        const groups = [
+          {
+            displayName: "Gemini 4 Argon",
+            description: "Models within this group: Gemini 4 Argon",
+            buckets: [
+              {
+                bucketId: "argon-weekly",
+                window: "weekly",
+                disabled: true,
+                remainingFraction: 0.5,
+              },
+            ],
+          },
+        ];
+        if (source !== "group-only")
+          groups.unshift({
+            displayName: "Gemini Models",
+            description: "General quota",
+            buckets: [
+              {
+                bucketId: "gemini-weekly",
+                window: "weekly",
+                disabled: false,
+                remainingFraction: 0.8,
+              },
+            ],
+          });
+        const fresh = await fetchQuotaWithRuntime(
+          runtimeWith({
+            cliModels: "gemini-4-argon-high\tGemini 4 Argon (High)",
+            ...(source === "cli-rpc"
+              ? {
+                  cliQuota: "{}",
+                  ps: "123 /Users/test/.local/bin/agy\n",
+                  lsof: lsofFor(123, 64440),
+                  responses: {
+                    "https:64440:/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary":
+                      { groups },
+                  },
+                }
+              : {
+                  cliQuota: JSON.stringify({
+                    command: { name: "quota", data: { groups } },
+                  }),
+                }),
+          }),
+        );
+        expect(fresh).toMatchObject({
+          source: source === "group-only" ? "cli" : source,
+          state: { status: "fresh" },
+        });
+        writeCachedProviders([fresh]);
+        expect(readCachedProvider("agy")?.[AGY_GROUPS]?.at(-1)).toEqual({
+          id: "gemini_argon",
+          name: "Gemini 4 Argon",
+          models: {
+            status: "known",
+            labels: ["Gemini 4 Argon"],
+            ids: ["gemini-4-argon-high"],
+          },
+          buckets: [{ id: "argon-weekly" }],
+        });
+        const snapshot = readSnapshotProviders(cacheFilePath(), "agy", NOW_MS);
+        if (!Array.isArray(snapshot) || !snapshot[0])
+          throw new Error("Expected an Antigravity snapshot");
+        for (const reading of [fresh, snapshot[0]]) {
+          const generatedAt = new Date(NOW_MS).toISOString();
+          const report = annotateQuotaAdvice({
+            generatedAt,
+            providers: [withQuotaSemantics(reading, generatedAt)],
+          });
+          const json = quotaJsonReport(report, true).providers[0];
+          expect(json?.windows.map(({ id }) => id)).toEqual(
+            source === "group-only" ? [] : ["gemini_weekly"],
+          );
+          const argon = json?.quotaSemantics?.effectiveAvailability.find(
+            ({ scope }) => scope === "gemini_argon",
+          );
+          expect(argon).toMatchObject({
+            status: "unknown",
+            boundedBy: [],
+            models: { ids: ["gemini-4-argon-high"] },
+          });
+          expect(argon?.effectivePercentRemaining).toBeUndefined();
+          for (const full of [false, true]) {
+            expect(renderQuotaToon(report, "quota-axi", full)).toContain(
+              "agy,gemini_argon,gemini-4-argon-high",
+            );
+          }
+        }
+      },
+    );
+
     it("drops stale windows at report time without losing group membership", async () => {
       vi.useFakeTimers({ toFake: ["Date"] });
       vi.setSystemTime(NOW_MS);
@@ -647,6 +750,7 @@ describe("Antigravity quota parsing", () => {
       expect(
         fresh.windows.filter(({ id }) => id.startsWith("gemini_argon_")),
       ).toMatchObject([{ id: "gemini_argon_weekly" }]);
+      cached[AGY_GROUPS] = fresh[AGY_GROUPS];
       cached.windows = fresh.windows.map((window) => ({
         ...window,
         percentUsed: 12,
@@ -1060,7 +1164,7 @@ describe("Antigravity provider", () => {
     expect(result.state.status).toBe("fresh");
   });
 
-  it("falls back to model quotas when quota summary has no usable buckets", async () => {
+  it("falls back to model quotas when the quota summary has no named groups", async () => {
     const result = await fetchQuotaWithRuntime(
       runtimeWith({
         ps: "123 /Users/test/.local/bin/agy\n",
