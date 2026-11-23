@@ -485,12 +485,14 @@ async function discoverOpenCodeGoAccounts(
   const [firstLane] = lanes;
   if (
     lanes.length === 1 &&
-    dependencies.credentialSources.some(
-      ({ name }) => name === firstLane.surfaces[0]!.sourceName,
+    firstLane.surfaces.some(({ sourceName }) =>
+      dependencies.credentialSources.some(({ name }) => name === sourceName),
     )
   ) {
-    // The single-winner path reads this credential itself, with its own
+    // The single-winner path reads a configured store itself, with its own
     // multi-source fallback and evidence; keep that report byte-identical.
+    // Any surface of the lane counts, not just the first: a fold whose first
+    // surface is a Pi sibling still covers the store holding the same key.
     return undefined;
   }
   // Unreadable stores are provider evidence no lane can own, so the selected

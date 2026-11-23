@@ -1903,6 +1903,62 @@ describe("OpenCode Go account lanes", () => {
     expect(request).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps the legacy path when a lone sibling shares a store's credential", async () => {
+    const request = vi.fn(
+      async (_input: RequestInfo | URL, init?: RequestInit) => {
+        const headers = new Headers(init?.headers);
+        return headers.get("authorization") === `Bearer ${KEY}`
+          ? usageResponse()
+          : new Response(null, { status: 401 });
+      },
+    );
+    const reports = await fetchAccountQuotas(
+      laneAdapter(
+        laneSources({
+          [PI_OPENCODE_GO_SOURCE]: { status: "missing", path: PI_AUTH_PATH },
+          [OPENCODE_GO_DB_CREDENTIAL_SOURCE]: {
+            status: "available",
+            key: KEY,
+            path: "/x/opencode.db",
+          },
+          [OPENCODE_GO_CREDENTIAL_SOURCE]: {
+            status: "missing",
+            path: "/oc/auth.json",
+          },
+        }),
+        request,
+        { entryIds: ["opencode-go-work"], keyFor: () => KEY },
+      ),
+      OPTIONS,
+    );
+
+    // The lane folds the sibling with the store holding the identical key, so
+    // the single-winner path reads that store and keeps its report shape.
+    const response = annotateQuotaAdvice({
+      generatedAt: "2026-08-28T00:00:00.000Z",
+      providers: reports,
+    });
+
+    expect(response.schemaVersion).toBe(5);
+    expect(response.providers).toHaveLength(1);
+    expect(response.providers[0]?.accountKey).toBeUndefined();
+    expect(response.providers[0]?.accountKeys).toEqual(["default"]);
+    expect(reports[0]?.state.sourcesTried).toEqual([
+      PI_OPENCODE_GO_SOURCE,
+      OPENCODE_GO_DB_CREDENTIAL_SOURCE,
+    ]);
+    expect(reports[0]?.attempts).toEqual([
+      {
+        source: PI_OPENCODE_GO_SOURCE,
+        status: "skipped",
+        error: "opencode_go_credential_unavailable",
+      },
+      { source: OPENCODE_GO_DB_CREDENTIAL_SOURCE, status: "success" },
+    ]);
+    expect(JSON.stringify(reports)).not.toContain("opencode-go-work");
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
   it("reports two distinct credentials as two lanes with their own windows", async () => {
     const request = vi.fn(
       async (_input: RequestInfo | URL, init?: RequestInit) => {
