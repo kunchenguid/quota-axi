@@ -3,7 +3,12 @@ import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { annotateQuotaAdvice } from "../../src/advice.js";
 import { withQuotaSemantics } from "../../src/interpretation.js";
+import {
+  fetchAccountQuotas,
+  inspectAccountAuth,
+} from "../../src/providers/accounts.js";
 import {
   createOpenCodeGoAdapter,
   createPiOpenCodeGoCredentialSource,
@@ -11,11 +16,15 @@ import {
   extractOpenCodeGoCredential,
   normalizeOpenCodeGoPayload,
   opencodeGoAuthFilePath,
+  isPiOpenCodeGoEntryId,
+  OPENCODE_GO_AUTH_ACCOUNT_KEY,
   OPENCODE_GO_CREDENTIAL_SOURCE,
+  OPENCODE_GO_DB_ACCOUNT_KEY,
   OPENCODE_GO_DB_CREDENTIAL_SOURCE,
   createOpencodeGoDbCredentialSource,
   PI_OPENCODE_GO_AUTH_ENV,
   PI_OPENCODE_GO_SOURCE,
+  piOpenCodeGoEntryIdsFromAuth,
   type CredentialResolution,
   type NamedOpenCodeGoCredentialSource,
   type OpenCodeGoCredentialSource,
@@ -1784,3 +1793,445 @@ async function withDatabaseAsync(
     rmSync(directory, { recursive: true, force: true });
   }
 }
+
+describe("OpenCode Go account lanes", () => {
+  const WORK_KEY = "synthetic-pi-opencode-go-work-key-91";
+  const AUTH_KEY = "synthetic-opencode-auth-key-55";
+
+  function laneSources(
+    surfaces: Record<string, CredentialResolution>,
+  ): NamedOpenCodeGoCredentialSource[] {
+    return Object.entries(surfaces).map(([name, resolution]) => ({
+      name,
+      source: fakeSource(resolution),
+    }));
+  }
+
+  function laneAdapter(
+    credentialSources: NamedOpenCodeGoCredentialSource[],
+    fetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>,
+    pi: {
+      entryIds?: string[];
+      keyFor?: (entryId: string) => string;
+    } = {},
+  ) {
+    return createOpenCodeGoAdapter({
+      credentialSources,
+      piEntryIds: async () => pi.entryIds ?? [],
+      piEntrySource: (entryId) =>
+        fakeSource({
+          status: "available",
+          key: (
+            pi.keyFor ?? ((id) => (id === "opencode-go" ? PI_KEY : WORK_KEY))
+          )(entryId),
+          path: PI_AUTH_PATH,
+        }),
+      fetch: fetch as unknown as typeof fetch,
+      now: () => Date.parse("2026-08-28T00:00:00Z"),
+    });
+  }
+
+  function piAndAuthSources(): NamedOpenCodeGoCredentialSource[] {
+    return laneSources({
+      [PI_OPENCODE_GO_SOURCE]: {
+        status: "available",
+        key: PI_KEY,
+        path: PI_AUTH_PATH,
+      },
+      [OPENCODE_GO_CREDENTIAL_SOURCE]: {
+        status: "available",
+        key: AUTH_KEY,
+        path: "/oc/auth.json",
+      },
+    });
+  }
+
+  it("keeps the single selected account when fewer than two distinct credentials exist", async () => {
+    const request = vi.fn(async () => usageResponse());
+    const reports = await fetchAccountQuotas(
+      laneAdapter(
+        laneSources({
+          [PI_OPENCODE_GO_SOURCE]: {
+            status: "available",
+            key: PI_KEY,
+            path: PI_AUTH_PATH,
+          },
+          [OPENCODE_GO_CREDENTIAL_SOURCE]: {
+            status: "missing",
+            path: "/oc/auth.json",
+          },
+        }),
+        request,
+      ),
+      OPTIONS,
+    );
+
+    expect(reports).toHaveLength(1);
+    expect(reports[0]?.accountKey).toBeUndefined();
+    expect(reports[0]?.state.sourcesTried).toEqual([PI_OPENCODE_GO_SOURCE]);
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the legacy path when two stores hold the same credential", async () => {
+    const request = vi.fn(async () => usageResponse());
+    const reports = await fetchAccountQuotas(
+      laneAdapter(
+        laneSources({
+          [OPENCODE_GO_DB_CREDENTIAL_SOURCE]: {
+            status: "available",
+            key: KEY,
+            path: "/x/opencode.db",
+          },
+          [OPENCODE_GO_CREDENTIAL_SOURCE]: {
+            status: "available",
+            key: KEY,
+            path: "/oc/auth.json",
+          },
+        }),
+        request,
+      ),
+      OPTIONS,
+    );
+
+    expect(reports).toHaveLength(1);
+    expect(reports[0]?.accountKey).toBeUndefined();
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports two distinct credentials as two lanes with their own windows", async () => {
+    const request = vi.fn(
+      async (_input: RequestInfo | URL, init?: RequestInit) => {
+        const headers = new Headers(init?.headers);
+        return headers.get("authorization") === `Bearer ${PI_KEY}`
+          ? new Response(
+              JSON.stringify({
+                usage: {
+                  weekly: { percent: 80, resetsAt: "2026-09-01T00:00:00Z" },
+                },
+              }),
+              { status: 200 },
+            )
+          : usageResponse();
+      },
+    );
+    const reports = await fetchAccountQuotas(
+      laneAdapter(piAndAuthSources(), request),
+      OPTIONS,
+    );
+
+    expect(reports).toHaveLength(2);
+    expect(reports.map((report) => report.accountKey)).toEqual([
+      "opencode-go",
+      OPENCODE_GO_AUTH_ACCOUNT_KEY,
+    ]);
+    expect(reports[0]?.accountKeys).toEqual(["opencode-go"]);
+    expect(reports[0]?.windows).toMatchObject([
+      {
+        id: "weekly",
+        label: "weekly",
+        kind: "weekly",
+        percentUsed: 80,
+        percentRemaining: 20,
+        resetsAt: "2026-09-01T00:00:00.000Z",
+      },
+    ]);
+    expect(reports[1]?.windows).toMatchObject([
+      { id: "weekly", percentUsed: 21, percentRemaining: 79 },
+    ]);
+    expect(reports[0]?.attempts).toEqual([
+      { source: PI_OPENCODE_GO_SOURCE, status: "success" },
+    ]);
+    expect(reports[1]?.attempts).toEqual([
+      { source: OPENCODE_GO_CREDENTIAL_SOURCE, status: "success" },
+    ]);
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(JSON.stringify(reports)).not.toContain(PI_KEY);
+    expect(JSON.stringify(reports)).not.toContain(AUTH_KEY);
+  });
+
+  it("publishes schema 6 with account columns when lanes expand", async () => {
+    const response = annotateQuotaAdvice({
+      generatedAt: "2026-08-28T00:00:00.000Z",
+      providers: await fetchAccountQuotas(
+        laneAdapter(piAndAuthSources(), async () => usageResponse()),
+        OPTIONS,
+      ),
+    });
+
+    expect(response.schemaVersion).toBe(6);
+    expect(response.providers.map((provider) => provider.accountKey)).toEqual([
+      "opencode-go",
+      OPENCODE_GO_AUTH_ACCOUNT_KEY,
+    ]);
+  });
+
+  it("keeps a rejected account visible beside a healthy sibling", async () => {
+    const request = vi.fn(
+      async (_input: RequestInfo | URL, init?: RequestInit) => {
+        const headers = new Headers(init?.headers);
+        return headers.get("authorization") === `Bearer ${PI_KEY}`
+          ? new Response(null, { status: 401 })
+          : usageResponse();
+      },
+    );
+    const reports = await fetchAccountQuotas(
+      laneAdapter(piAndAuthSources(), request),
+      OPTIONS,
+    );
+
+    expect(reports[0]?.state).toMatchObject({
+      status: "auth_required",
+      error: "provider_auth_rejected",
+    });
+    expect(reports[0]?.attempts).toEqual([
+      {
+        source: PI_OPENCODE_GO_SOURCE,
+        status: "failed",
+        error: "provider_auth_rejected",
+      },
+    ]);
+    expect(reports[1]?.state).toMatchObject({ status: "fresh" });
+    expect(reports[1]?.windows).toHaveLength(1);
+  });
+
+  it("reports a rate-limited lane without hiding its sibling", async () => {
+    const request = vi.fn(
+      async (_input: RequestInfo | URL, init?: RequestInit) => {
+        const headers = new Headers(init?.headers);
+        return headers.get("authorization") === `Bearer ${PI_KEY}`
+          ? new Response(null, { status: 429 })
+          : usageResponse();
+      },
+    );
+    const reports = await fetchAccountQuotas(
+      laneAdapter(piAndAuthSources(), request),
+      OPTIONS,
+    );
+
+    expect(reports[0]?.state).toMatchObject({
+      status: "rate_limited",
+      error: "provider_rate_limited",
+    });
+    expect(reports[1]?.state).toMatchObject({ status: "fresh" });
+  });
+
+  it("folds stores holding the identical credential into the first lane", async () => {
+    const request = vi.fn(async () => usageResponse());
+    const reports = await fetchAccountQuotas(
+      laneAdapter(
+        laneSources({
+          [PI_OPENCODE_GO_SOURCE]: {
+            status: "available",
+            key: PI_KEY,
+            path: PI_AUTH_PATH,
+          },
+          [OPENCODE_GO_DB_CREDENTIAL_SOURCE]: {
+            status: "available",
+            key: PI_KEY,
+            path: "/x/opencode.db",
+          },
+          [OPENCODE_GO_CREDENTIAL_SOURCE]: {
+            status: "available",
+            key: AUTH_KEY,
+            path: "/oc/auth.json",
+          },
+        }),
+        request,
+      ),
+      OPTIONS,
+    );
+
+    expect(reports).toHaveLength(2);
+    expect(reports[0]?.accountKey).toBe("opencode-go");
+    expect(reports[0]?.accountKeys).toEqual([
+      "opencode-go",
+      OPENCODE_GO_DB_ACCOUNT_KEY,
+    ]);
+    expect(reports[0]?.state.sourcesTried).toEqual([PI_OPENCODE_GO_SOURCE]);
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("enrolls Pi sibling entries beside the built-in entry when the opt-in gate is on", async () => {
+    const request = vi.fn(async () => usageResponse());
+    const reports = await fetchAccountQuotas(
+      laneAdapter(
+        laneSources({
+          [PI_OPENCODE_GO_SOURCE]: {
+            status: "available",
+            key: PI_KEY,
+            path: PI_AUTH_PATH,
+          },
+        }),
+        request,
+        { entryIds: ["opencode-go", "opencode-go-work"] },
+      ),
+      OPTIONS,
+    );
+
+    expect(reports).toHaveLength(2);
+    expect(reports.map((report) => report.accountKey)).toEqual([
+      "opencode-go",
+      "opencode-go-work",
+    ]);
+    expect(reports[1]?.accountKeys).toEqual(["opencode-go-work"]);
+    expect(reports[1]?.attempts).toEqual([
+      { source: "pi:opencode-go-work", status: "success" },
+    ]);
+  });
+
+  it("slots siblings after the built-in entry and before the opencode stores", async () => {
+    const reports = await inspectAccountAuth(
+      laneAdapter(
+        laneSources({
+          [PI_OPENCODE_GO_SOURCE]: { status: "missing", path: PI_AUTH_PATH },
+          [OPENCODE_GO_DB_CREDENTIAL_SOURCE]: {
+            status: "available",
+            key: KEY,
+            path: "/x/opencode.db",
+          },
+          [OPENCODE_GO_CREDENTIAL_SOURCE]: {
+            status: "available",
+            key: AUTH_KEY,
+            path: "/oc/auth.json",
+          },
+        }),
+        async () => usageResponse(),
+        {
+          entryIds: ["opencode-go", "opencode-go-ams", "opencode-go-work"],
+          keyFor: (entryId) =>
+            entryId === "opencode-go-ams" ? "ams-key" : "work-key",
+        },
+      ),
+      OPTIONS,
+    );
+
+    expect(reports.map((report) => report.accountKey)).toEqual([
+      "opencode-go-ams",
+      "opencode-go-work",
+      OPENCODE_GO_DB_ACCOUNT_KEY,
+      OPENCODE_GO_AUTH_ACCOUNT_KEY,
+    ]);
+    expect(reports[0]?.sources).toEqual([
+      { source: "pi:opencode-go-ams", status: "available", path: PI_AUTH_PATH },
+    ]);
+    expect(reports[2]?.sources).toEqual([
+      {
+        source: OPENCODE_GO_DB_CREDENTIAL_SOURCE,
+        status: "available",
+        path: "/x/opencode.db",
+      },
+    ]);
+  });
+
+  it("folds a sibling that shares the built-in entry's credential", async () => {
+    const request = vi.fn(async () => usageResponse());
+    const reports = await fetchAccountQuotas(
+      laneAdapter(
+        laneSources({
+          [PI_OPENCODE_GO_SOURCE]: {
+            status: "available",
+            key: PI_KEY,
+            path: PI_AUTH_PATH,
+          },
+          [OPENCODE_GO_CREDENTIAL_SOURCE]: {
+            status: "available",
+            key: AUTH_KEY,
+            path: "/oc/auth.json",
+          },
+        }),
+        request,
+        { entryIds: ["opencode-go", "opencode-go-work"], keyFor: () => PI_KEY },
+      ),
+      OPTIONS,
+    );
+
+    expect(reports).toHaveLength(2);
+    expect(reports[0]?.accountKey).toBe("opencode-go");
+    expect(reports[0]?.accountKeys).toEqual([
+      "opencode-go",
+      "opencode-go-work",
+    ]);
+    expect(reports[1]?.accountKey).toBe(OPENCODE_GO_AUTH_ACCOUNT_KEY);
+  });
+
+  it("reports an exhausted lane and a healthy lane independently", async () => {
+    const request = vi.fn(
+      async (_input: RequestInfo | URL, init?: RequestInit) => {
+        const headers = new Headers(init?.headers);
+        return headers.get("authorization") === `Bearer ${PI_KEY}`
+          ? new Response(
+              JSON.stringify({ usage: { weekly: { percent: 100 } } }),
+              {
+                status: 200,
+              },
+            )
+          : usageResponse();
+      },
+    );
+    const interpreted = (
+      await fetchAccountQuotas(
+        laneAdapter(piAndAuthSources(), request),
+        OPTIONS,
+      )
+    ).map((report) => withQuotaSemantics(report, "2026-08-28T00:00:00.000Z"));
+
+    expect(interpreted[0]?.windows[0]).toMatchObject({
+      percentUsed: 100,
+      percentRemaining: 0,
+    });
+    expect(interpreted[1]?.windows[0]).toMatchObject({
+      percentUsed: 21,
+      percentRemaining: 79,
+    });
+  });
+
+  it("reports an empty usage response as its own failed lane", async () => {
+    const request = vi.fn(
+      async (_input: RequestInfo | URL, init?: RequestInit) => {
+        const headers = new Headers(init?.headers);
+        return headers.get("authorization") === `Bearer ${PI_KEY}`
+          ? new Response(JSON.stringify({ usage: {} }), { status: 200 })
+          : usageResponse();
+      },
+    );
+    const reports = await fetchAccountQuotas(
+      laneAdapter(piAndAuthSources(), request),
+      OPTIONS,
+    );
+
+    expect(reports[0]?.state).toMatchObject({
+      status: "error",
+      error: "quota_missing",
+    });
+    expect(reports[1]?.state).toMatchObject({ status: "fresh" });
+  });
+
+  it("lists Pi entry ids built-in first with siblings in lexical order", () => {
+    expect(
+      piOpenCodeGoEntryIdsFromAuth({
+        "opencode-go-work": { type: "api_key", key: "x" },
+        "opencode-go-z": { type: "api_key", key: "x" },
+        kimi: { type: "api_key", key: "x" },
+        "opencode-go": { type: "api_key", key: "x" },
+        "not-opencode-go": { type: "api_key", key: "x" },
+      }),
+    ).toEqual(["opencode-go", "opencode-go-work", "opencode-go-z"]);
+    expect(piOpenCodeGoEntryIdsFromAuth("nope")).toEqual([]);
+    expect(isPiOpenCodeGoEntryId("opencode-go")).toBe(true);
+    expect(isPiOpenCodeGoEntryId("opencode-go-work")).toBe(true);
+    expect(isPiOpenCodeGoEntryId("opencode")).toBe(false);
+    expect(isPiOpenCodeGoEntryId("opencode-go--x")).toBe(false);
+    expect(isPiOpenCodeGoEntryId("opencode-go-WORK")).toBe(false);
+  });
+
+  it("stays on one selected account when the opt-in gate is off", () => {
+    const gateOff = defaultOpenCodeGoCredentialSources({});
+    expect(gateOff.some(({ name }) => name === PI_OPENCODE_GO_SOURCE)).toBe(
+      false,
+    );
+    const gateOn = defaultOpenCodeGoCredentialSources({
+      [PI_OPENCODE_GO_AUTH_ENV]: "1",
+    });
+    expect(gateOn.map(({ name }) => name)[0]).toBe(PI_OPENCODE_GO_SOURCE);
+  });
+});

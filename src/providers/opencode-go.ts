@@ -16,6 +16,7 @@ import { usableLiteralSecret } from "../lib/secret.js";
 import type {
   AuthProviderReport,
   AuthSourceReport,
+  ProviderAccount,
   ProviderAdapter,
   ProviderQuota,
   ProviderStatus,
@@ -35,6 +36,42 @@ export const OPENCODE_GO_USAGE_URL = "https://opencode.ai/zen/go/v1/usage";
 export const OPENCODE_GO_CREDENTIAL_SOURCE = "opencode:auth.json";
 export const OPENCODE_GO_DB_CREDENTIAL_SOURCE = "opencode:opencode.db";
 export const PI_OPENCODE_GO_SOURCE = "pi:opencode-go";
+/** Lane keys for the two opencode stores, after the `codex-home` pattern. */
+export const OPENCODE_GO_DB_ACCOUNT_KEY = "opencode-db";
+export const OPENCODE_GO_AUTH_ACCOUNT_KEY = "opencode-auth";
+
+/**
+ * Pi auth.json entry ids quota-axi reads for OpenCode Go: the built-in
+ * `opencode-go` entry plus sibling keys such as `opencode-go-work`, the same
+ * sibling shape #206 established for Codex.
+ */
+const PI_OPENCODE_GO_ENTRY_ID = /^opencode-go(?:-[a-z0-9]+(?:-[a-z0-9]+)*)?$/;
+
+export function isPiOpenCodeGoEntryId(value: string): boolean {
+  return PI_OPENCODE_GO_ENTRY_ID.test(value);
+}
+
+function piOpenCodeGoSourceName(entryId: string): string {
+  return `pi:${entryId}`;
+}
+
+function entryIdFromPiSource(sourceName: string): string | undefined {
+  return sourceName.startsWith("pi:") &&
+    isPiOpenCodeGoEntryId(sourceName.slice("pi:".length))
+    ? sourceName.slice("pi:".length)
+    : undefined;
+}
+
+/** The lane key a credential source belongs to; unknown names open no lane. */
+function laneKeyForSource(sourceName: string): string | undefined {
+  const entryId = entryIdFromPiSource(sourceName);
+  if (entryId) return entryId;
+  if (sourceName === OPENCODE_GO_DB_CREDENTIAL_SOURCE)
+    return OPENCODE_GO_DB_ACCOUNT_KEY;
+  if (sourceName === OPENCODE_GO_CREDENTIAL_SOURCE)
+    return OPENCODE_GO_AUTH_ACCOUNT_KEY;
+  return undefined;
+}
 /**
  * Explicit opt-in that lets OpenCode Go read Pi's `opencode-go` entry ahead of
  * the opencode store. Unset or falsey keeps the long-standing default: the
@@ -76,6 +113,10 @@ export type NamedOpenCodeGoCredentialSource = {
 
 type Dependencies = {
   credentialSources: NamedOpenCodeGoCredentialSource[];
+  /** Pi auth.json entry ids OpenCode Go may read, built-in first. */
+  piEntryIds: () => Promise<string[]>;
+  /** The credential source one Pi entry id resolves through. */
+  piEntrySource: (entryId: string) => OpenCodeGoCredentialSource;
   fetch: typeof globalThis.fetch;
   now: () => number;
   deadlineMs: number;
@@ -121,11 +162,12 @@ export function extractOpenCodeGoCredential(
   return { status: hasEntry ? "invalid" : "missing", path };
 }
 
-function extractPiOpenCodeGoCredential(
+function extractPiOpenCodeGoEntryCredential(
   value: unknown,
   path: string,
+  entryId: string,
 ): CredentialResolution {
-  const classified = classifyPiAuthEntry(value, PI_OPENCODE_GO_PROVIDER_ID);
+  const classified = classifyPiAuthEntry(value, entryId);
   if (classified.status === "missing") return { status: "missing", path };
   const key =
     classified.status === "present" && classified.entry.type === "api_key"
@@ -198,7 +240,51 @@ export function createOpencodeGoDbCredentialSource(
 export function createPiOpenCodeGoCredentialSource(
   filePath: () => string = resolvePiAuthFilePath,
 ): OpenCodeGoCredentialSource {
-  return createJsonCredentialSource(filePath, extractPiOpenCodeGoCredential);
+  return createJsonCredentialSource(filePath, (value, path) =>
+    extractPiOpenCodeGoEntryCredential(value, path, PI_OPENCODE_GO_PROVIDER_ID),
+  );
+}
+
+export function createPiOpenCodeGoEntryCredentialSource(
+  entryId: string,
+  filePath: () => string = resolvePiAuthFilePath,
+): OpenCodeGoCredentialSource {
+  if (!isPiOpenCodeGoEntryId(entryId))
+    return {
+      resolve: () => ({ status: "missing", path: filePath() }),
+      inspect: () => ({ status: "missing", path: filePath() }),
+    };
+  return createJsonCredentialSource(filePath, (value, path) =>
+    extractPiOpenCodeGoEntryCredential(value, path, entryId),
+  );
+}
+
+/**
+ * Every Pi auth.json entry id quota-axi may read for OpenCode Go, built-in
+ * first, then siblings in lexical order. Empty unless the opt-in environment
+ * flag is set: an unscoped run never probes Pi, so it also discovers no Pi
+ * lanes.
+ */
+export async function listPiOpenCodeGoEntryIds(
+  environment: Readonly<Record<string, string | undefined>> = process.env,
+): Promise<string[]> {
+  if (!piOpenCodeGoAuthEnabled(environment)) return [];
+  const result = readJsonFileResult(resolvePiAuthFilePath(environment));
+  if (result.status !== "success") return [];
+  return piOpenCodeGoEntryIdsFromAuth(result.value);
+}
+
+/** The OpenCode Go entry ids one parsed Pi auth.json carries. */
+export function piOpenCodeGoEntryIdsFromAuth(value: unknown): string[] {
+  const root = objectValue(value);
+  if (!root) return [];
+  const ids = Object.keys(root).filter(isPiOpenCodeGoEntryId);
+  ids.sort((left, right) => {
+    if (left === PI_OPENCODE_GO_PROVIDER_ID) return -1;
+    if (right === PI_OPENCODE_GO_PROVIDER_ID) return 1;
+    return left.localeCompare(right);
+  });
+  return ids;
 }
 
 /**
@@ -249,6 +335,9 @@ export function createOpenCodeGoAdapter(
 ): ProviderAdapter {
   const dependencies: Dependencies = {
     credentialSources: defaultOpenCodeGoCredentialSources(),
+    piEntryIds: () => listPiOpenCodeGoEntryIds(),
+    piEntrySource: (entryId) =>
+      createPiOpenCodeGoEntryCredentialSource(entryId),
     fetch: globalThis.fetch,
     now: Date.now,
     deadlineMs: DEADLINE_MS,
@@ -257,6 +346,7 @@ export function createOpenCodeGoAdapter(
   return {
     id: "opencode-go",
     label: LABEL,
+    discoverAccounts: () => discoverOpenCodeGoAccounts(dependencies),
     fetchQuota: () => fetchQuota(dependencies),
     inspectAuth: () => inspectAuth(dependencies),
   };
@@ -318,6 +408,232 @@ async function inspectSafely(
   } catch {
     return { status: "error", path: "" };
   }
+}
+
+/** One credential surface discovery found holding a usable literal key. */
+type DiscoveredSurface = {
+  laneKey: string;
+  sourceName: string;
+  source: OpenCodeGoCredentialSource;
+  key: string;
+};
+
+/**
+ * One reported account: its own credential first, then the sibling surfaces
+ * folded into it because they hold the identical literal key. Keys stay in
+ * memory only; they are never logged, rendered, cached, or sent anywhere but
+ * the usage request's authorization header.
+ */
+type DiscoveredLane = {
+  accountKey: string;
+  key: string;
+  surfaces: DiscoveredSurface[];
+};
+
+/**
+ * The lanes to report, or `undefined` to keep the single selected account.
+ *
+ * Following the #206 Codex pattern, expansion is a default only when the host
+ * actually holds more than one distinct OpenCode Go credential: every
+ * configured surface resolves in its own priority order, Pi sibling entries
+ * slot in beside the built-in entry when the opt-in flag is set, and surfaces
+ * whose literal keys are byte-identical fold into the first lane as one
+ * account. One surface or one folded account keeps the legacy single-winner
+ * path byte-identical, so a host with a single key sees exactly what it saw
+ * before.
+ */
+async function discoverOpenCodeGoAccounts(
+  dependencies: Dependencies,
+): Promise<ProviderAccount[] | undefined> {
+  const surfaces = await discoverSurfaces(dependencies);
+  const lanes: DiscoveredLane[] = [];
+  const laneByCredential = new Map<string, DiscoveredLane>();
+  for (const surface of surfaces) {
+    const existing = laneByCredential.get(surface.key);
+    if (existing) {
+      existing.surfaces.push(surface);
+      continue;
+    }
+    const lane: DiscoveredLane = {
+      accountKey: surface.laneKey,
+      key: surface.key,
+      surfaces: [surface],
+    };
+    lanes.push(lane);
+    laneByCredential.set(surface.key, lane);
+  }
+  // A sole credential keeps the single selected account, as Codex keeps its
+  // single-winner path when only the built-in Pi entry is present.
+  if (lanes.length < 2) return undefined;
+  return lanes.map((lane) => ({
+    accountKey: lane.accountKey,
+    fetchQuota: async () => readLaneQuota(lane, dependencies),
+    inspectAuth: async () => inspectLaneAuth(lane),
+  }));
+}
+
+/**
+ * Every surface holding a usable key, in report order: the configured
+ * sources in their own priority order, with Pi sibling entries slotted
+ * directly after the last Pi surface so all Pi lanes stay together ahead of
+ * the opencode stores.
+ */
+async function discoverSurfaces(
+  dependencies: Dependencies,
+): Promise<DiscoveredSurface[]> {
+  const configured: (DiscoveredSurface | undefined)[] = [];
+  let lastPiBoundary = 0;
+  for (const { name, source } of dependencies.credentialSources) {
+    const laneKey = laneKeyForSource(name);
+    const resolution = await resolveSafely(source);
+    configured.push(
+      laneKey && resolution.status === "available"
+        ? {
+            laneKey,
+            sourceName: name,
+            source,
+            key: resolution.key,
+          }
+        : undefined,
+    );
+    if (entryIdFromPiSource(name)) lastPiBoundary = configured.length;
+  }
+  const covered = new Set(
+    dependencies.credentialSources.map(({ name }) => name),
+  );
+  const surfaces: DiscoveredSurface[] = [];
+  for (const entryId of await safePiEntryIds(dependencies)) {
+    const sourceName = piOpenCodeGoSourceName(entryId);
+    if (covered.has(sourceName)) continue;
+    const source = dependencies.piEntrySource(entryId);
+    const resolution = await resolveSafely(source);
+    if (resolution.status !== "available") continue;
+    configured.splice(lastPiBoundary++, 0, {
+      laneKey: entryId,
+      sourceName,
+      source,
+      key: resolution.key,
+    });
+  }
+  for (const surface of configured) {
+    if (surface) surfaces.push(surface);
+  }
+  return surfaces;
+}
+
+async function safePiEntryIds(dependencies: Dependencies): Promise<string[]> {
+  try {
+    return await dependencies.piEntryIds();
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * One lane's own reading: the lane's credential alone asks the vendor, and a
+ * sibling's success or failure never substitutes for it. The published row
+ * names every credential key the lane covers, own key first, so consumers can
+ * bind either route to it (#275).
+ */
+async function readLaneQuota(
+  lane: DiscoveredLane,
+  dependencies: Dependencies,
+): Promise<ProviderQuota> {
+  const accountKeys = lane.surfaces.map((surface) => surface.laneKey);
+  try {
+    const payload = await requestUsage(
+      lane.key,
+      dependencies.fetch,
+      dependencies.deadlineMs,
+    );
+    const normalized = normalizeOpenCodeGoPayload(payload);
+    if (normalized.windows.length === 0)
+      return laneFailureReport(lane, "quota_missing", "error", accountKeys);
+    return {
+      ...successProvider({
+        provider: "opencode-go",
+        label: LABEL,
+        source: "api",
+        ...(normalized.plan ? { plan: normalized.plan } : {}),
+        windows: normalized.windows,
+        refreshedAt: new Date(dependencies.now()).toISOString(),
+        sourcesTried: [lane.surfaces[0]!.sourceName],
+        attempts: [{ source: lane.surfaces[0]!.sourceName, status: "success" }],
+      }),
+      accountKeys,
+    };
+  } catch (error) {
+    const code = errorCode(error);
+    const status =
+      code === "provider_auth_rejected"
+        ? "auth_required"
+        : code === "provider_rate_limited"
+          ? "rate_limited"
+          : "error";
+    return laneFailureReport(lane, code, status, accountKeys);
+  }
+}
+
+function laneFailureReport(
+  lane: DiscoveredLane,
+  code: string,
+  status: ProviderStatus,
+  accountKeys: string[],
+): ProviderQuota {
+  return {
+    ...failedProvider({
+      provider: "opencode-go",
+      label: LABEL,
+      status,
+      error: code,
+      source: "api",
+      sourcesTried: [lane.surfaces[0]!.sourceName],
+      attempts: [
+        { source: lane.surfaces[0]!.sourceName, status: "failed", error: code },
+      ],
+    }),
+    accountKeys,
+  };
+}
+
+/** A lane's own stores, each reporting the credential state it holds now. */
+async function inspectLaneAuth(
+  lane: DiscoveredLane,
+): Promise<AuthProviderReport> {
+  const sources: AuthSourceReport[] = await Promise.all(
+    lane.surfaces.map(async ({ sourceName, source }) => ({
+      source: sourceName,
+      ...authSourceStatus(await inspectSafely(source)),
+    })),
+  );
+  return { provider: "opencode-go", sources };
+}
+
+function authSourceStatus(inspection: CredentialInspection): {
+  path?: string;
+  status: AuthSourceReport["status"];
+  error?: string;
+  credentialPresent?: boolean;
+} {
+  return {
+    path: inspection.path,
+    status:
+      inspection.status === "available"
+        ? "available"
+        : inspection.status === "missing"
+          ? "missing"
+          : inspection.status === "error"
+            ? "error"
+            : inspection.status === "skipped"
+              ? "skipped"
+              : "invalid",
+    ...(inspection.status === "error"
+      ? { error: "credential_resolution_failed" }
+      : {}),
+    ...(inspection.status === "skipped"
+      ? { error: "sqlite3_unavailable", credentialPresent: true }
+      : {}),
+  };
 }
 
 async function selectOpenCodeGoCredential(dependencies: Dependencies): Promise<{
@@ -514,29 +830,10 @@ async function inspectAuth(
   dependencies: Dependencies,
 ): Promise<AuthProviderReport> {
   const sources: AuthSourceReport[] = await Promise.all(
-    dependencies.credentialSources.map(async ({ name, source }) => {
-      const inspection = await inspectSafely(source);
-      return {
-        source: name,
-        path: inspection.path,
-        status:
-          inspection.status === "available"
-            ? "available"
-            : inspection.status === "missing"
-              ? "missing"
-              : inspection.status === "error"
-                ? "error"
-                : inspection.status === "skipped"
-                  ? "skipped"
-                  : "invalid",
-        ...(inspection.status === "error"
-          ? { error: "credential_resolution_failed" }
-          : {}),
-        ...(inspection.status === "skipped"
-          ? { error: "sqlite3_unavailable", credentialPresent: true }
-          : {}),
-      };
-    }),
+    dependencies.credentialSources.map(async ({ name, source }) => ({
+      source: name,
+      ...authSourceStatus(await inspectSafely(source)),
+    })),
   );
   return { provider: "opencode-go", sources };
 }
