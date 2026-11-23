@@ -1627,6 +1627,57 @@ describe("per-scope selection signal", () => {
   });
 
   it.each(["absent", "reset-only", "expired"] as const)(
+    "names every Antigravity signal blocker with an %s bound",
+    (gap) => {
+      const sessionId = "gemini_argon_5h";
+      const weeklyId = "gemini_argon_weekly";
+      const weekly = window(weeklyId, "weekly", 90);
+      const session: QuotaWindow = {
+        id: sessionId,
+        label: "Argon 5-hour",
+        kind: "session",
+        ...(gap === "expired"
+          ? { percentRemaining: 80, resetsAt: GENERATED_AT }
+          : { resetsAt: offsetFromGeneratedAt(3_600) }),
+      };
+      for (const source of ["live", "reuse", "snapshot", "stale"]) {
+        const agy = agyProvider(
+          gap === "absent" ? [weekly] : [weekly, session],
+          {
+            gemini_argon: gap === "absent" ? [weeklyId] : [weeklyId, sessionId],
+          },
+        );
+        if (gap === "absent") {
+          agy[AGY_GROUPS]![0]!.buckets.push({
+            id: "5h",
+            unmeasuredBoundId: sessionId,
+          });
+        }
+        agy.state = {
+          ...agy.state,
+          reused: source === "reuse" || source === "snapshot",
+          sourcesTried: [source],
+          stale: source === "stale",
+          status: source === "stale" ? "stale" : "fresh",
+        };
+        const report = annotateQuotaAdvice({
+          generatedAt: GENERATED_AT,
+          providers: [withQuotaSemantics(agy, GENERATED_AT)],
+        });
+        const scope = quotaJsonReport(report, false).providers[0]
+          ?.quotaSemantics?.effectiveAvailability[0];
+        for (const signal of [scope?.runway, scope?.selection]) {
+          expect(signal?.status, source).toBe("unknown");
+          expect(signal?.unmeasurableWindowIds?.toSorted(), source).toEqual([
+            sessionId,
+            weeklyId,
+          ]);
+        }
+      }
+    },
+  );
+
+  it.each(["absent", "reset-only", "expired"] as const)(
     "reports exhaustion only from a current Antigravity zero with a %s sibling",
     (sibling) => {
       const future = offsetFromGeneratedAt(3_600);

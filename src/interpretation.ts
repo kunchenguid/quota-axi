@@ -1063,27 +1063,34 @@ function agySemantics(
       });
       continue;
     }
-    const exhausted = bounds.filter(
-      ({ id, percentRemaining }) =>
-        percentRemaining === 0 && !unmeasurableWindowIds.includes(id),
+    const trustedBounds = bounds.filter(
+      ({ id }) => !unmeasurableWindowIds.includes(id),
     );
+    const runway = computeEffectiveRunway(trustedBounds, generatedAt);
+    const selection = summarizeEffectiveSelection(trustedBounds);
+    const withMissing = (signal: { unmeasurableWindowIds?: string[] }) => ({
+      status: "unknown" as const,
+      unmeasurableWindowIds: [
+        ...unmeasurableWindowIds,
+        ...(signal.unmeasurableWindowIds ?? []),
+      ],
+    });
     effectiveAvailability.push({
       scope,
       models,
       boundedBy,
       pace: summarizeEffectivePace(bounds, unmeasurableWindowIds),
-      selection: { status: "unknown", unmeasurableWindowIds },
-      ...(exhausted.length > 0
+      selection: withMissing(selection),
+      ...(runway.status === "exhausted_now"
         ? {
             status: "known",
             effectivePercentRemaining: 0,
-            limitingWindowIds: exhausted.map(({ id }) => id),
-            runway: computeEffectiveRunway(exhausted, generatedAt),
+            limitingWindowIds: trustedBounds
+              .filter(({ percentRemaining }) => percentRemaining === 0)
+              .map(({ id }) => id),
+            runway,
           }
-        : {
-            status: "unknown",
-            runway: { status: "unknown", unmeasurableWindowIds },
-          }),
+        : { status: "unknown", runway: withMissing(runway) }),
     });
   }
   const unresolved = provider.windows.filter(

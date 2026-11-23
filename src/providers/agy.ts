@@ -206,7 +206,7 @@ export async function fetchQuotaWithRuntime(
     };
   }
 
-  if (cli)
+  if (cli && !isDefinitiveAuthFailure(finalFailure))
     return reportAgyReading(runtime, cli, "cli", attempts, cli.commandPath);
 
   const finalError = errorMessage(finalFailure);
@@ -595,7 +595,7 @@ async function fetchLoopbackQuota(
       lastError = strongerFailure(lastError, error);
     }
   }
-  if (diagnostic) return diagnostic;
+  if (diagnostic && !isDefinitiveAuthFailure(lastError)) return diagnostic;
 
   throw lastError instanceof Error
     ? lastError
@@ -745,7 +745,13 @@ async function fetchEndpointQuota(
       summaryError = strongerFailure(summaryError, error);
     }
     if (path === USER_STATUS_PATH) userStatus = fallback;
-    if (summary && hasCurrentPercentage(summary.windows)) break;
+    if (summary && hasCurrentPercentage(summary.windows)) {
+      return {
+        ...summary,
+        plan: userStatus?.plan,
+        account: userStatus?.account,
+      };
+    }
     if (fallback && hasCurrentPercentage(fallback.windows)) {
       return summary
         ? {
@@ -757,9 +763,15 @@ async function fetchEndpointQuota(
     }
     if (fallback?.windows.length) diagnostic ??= fallback;
   }
-  if (summary)
-    return { ...summary, plan: userStatus?.plan, account: userStatus?.account };
-  if (diagnostic) return diagnostic;
+  if (!isDefinitiveAuthFailure(summaryError)) {
+    if (summary)
+      return {
+        ...summary,
+        plan: userStatus?.plan,
+        account: userStatus?.account,
+      };
+    if (diagnostic) return diagnostic;
+  }
 
   throw summaryError instanceof Error
     ? summaryError

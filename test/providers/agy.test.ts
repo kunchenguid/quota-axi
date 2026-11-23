@@ -1709,28 +1709,101 @@ describe("Antigravity provider", () => {
     expect(readCachedProvider("agy")).toBeDefined();
   });
 
-  it("preserves authentication failures and retires stale cache", async () => {
-    writeCachedProviders([cachedAgyQuota()]);
-    const port = await startServer((_response) => {
-      _response.writeHead(401, { "content-type": "application/json" });
-      _response.end(JSON.stringify({ error: "secret-account@example.test" }));
-    });
+  it.each([
+    "no diagnostic",
+    "group diagnostic",
+    "model diagnostic",
+    "other listener diagnostic",
+    "CLI diagnostic",
+    "other listener measurement",
+  ] as const)(
+    "preserves definitive authentication evidence with %s",
+    async (reading) => {
+      writeCachedProviders([cachedAgyQuota()]);
+      const groups = [{ name: "Gemini Models", buckets: [] }];
+      const port = await startServer((response, request) => {
+        const grouped =
+          reading === "group diagnostic" &&
+          request.url?.endsWith("/RetrieveUserQuotaSummary");
+        const model =
+          reading === "model diagnostic" &&
+          request.url?.endsWith("/GetUserStatus");
+        response.writeHead(grouped || model ? 200 : 401, {
+          "content-type": "application/json",
+        });
+        response.end(
+          JSON.stringify(
+            grouped
+              ? { groups }
+              : model
+                ? {
+                    clientModelConfigs: [
+                      {
+                        label: "Test Model",
+                        quotaInfo: { resetTime: "2099-01-01T00:00:00Z" },
+                      },
+                    ],
+                  }
+                : { error: "secret-account@example.test" },
+          ),
+        );
+      });
+      const measured = reading === "other listener measurement";
+      const otherListener = measured || reading === "other listener diagnostic";
+      const result = await fetchQuotaWithRuntime(
+        runtimeWith({
+          ps: "123 /Users/test/.local/bin/agy\n",
+          lsof:
+            lsofFor(123, 64440) + (otherListener ? lsofFor(123, 64441) : ""),
+          ...(reading === "CLI diagnostic"
+            ? {
+                cliQuota: JSON.stringify({
+                  command: { name: "quota", data: { groups } },
+                }),
+              }
+            : {}),
+          async requestJson(endpoint, path, timeoutMs) {
+            if (endpoint.port === 64441) {
+              if (!path.endsWith("/RetrieveUserQuotaSummary")) return {};
+              return measured
+                ? {
+                    groups: [
+                      {
+                        name: "Gemini Models",
+                        buckets: [
+                          {
+                            bucketId: "weekly",
+                            remainingFraction: 0.8,
+                          },
+                        ],
+                      },
+                    ],
+                  }
+                : { groups };
+            }
+            if (endpoint.scheme === "https")
+              throw new Error("HTTPS unavailable");
+            return requestLoopbackJson(endpointAt(port), path, timeoutMs);
+          },
+        }),
+      );
 
-    const result = await fetchQuotaWithRuntime(
-      runtimeWith({
-        ps: "123 /Users/test/.local/bin/agy\n",
-        lsof: lsofFor(123, port),
-        requestJson: requestLoopbackJson,
-      }),
-    );
-
-    expect(result.state).toMatchObject({
-      status: "auth_required",
-      error: "Antigravity sign-in required",
-    });
-    expect(JSON.stringify(result)).not.toContain("secret-account");
-    expect(readCachedProvider("agy")).toBeUndefined();
-  });
+      if (measured) {
+        expect(result.state.status).toBe("fresh");
+        expect(result.windows).toMatchObject([
+          { id: "gemini_weekly", percentRemaining: 80 },
+        ]);
+        expect(readCachedProvider("agy")).toBeDefined();
+      } else {
+        expect(result.state).toMatchObject({
+          status: "auth_required",
+          error: "Antigravity sign-in required",
+        });
+        expect(readCachedProvider("agy")).toBeUndefined();
+      }
+      expect(JSON.stringify(result)).not.toContain("secret-account");
+    },
+  );
 
   it("prefers agy CLI /quota over loopback when both are available", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
