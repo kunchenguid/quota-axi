@@ -21,11 +21,17 @@ export function hasCurrentPercentage(
   windows: readonly QuotaWindow[],
   now = Date.now(),
 ): boolean {
-  return windows.some(({ percentRemaining, resetsAt }) => {
-    if (percentRemaining === undefined) return false;
-    const reset = Date.parse(resetsAt ?? "");
-    return Number.isNaN(reset) || reset > now;
-  });
+  return windows.some(
+    (window) =>
+      window.percentRemaining !== undefined && windowHasNotReset(window, now),
+  );
+}
+
+export function windowHasNotReset(
+  { resetsAt }: QuotaWindow,
+  now: number,
+): boolean {
+  return resetsAt === undefined || Date.parse(resetsAt) > now;
 }
 
 export function successProvider(
@@ -111,7 +117,11 @@ export function servableStaleWindows(
   const ageMilliseconds = now - refreshedAt;
   return cached.windows.filter((window) => {
     const resetsAt = window.resetsAt ? Date.parse(window.resetsAt) : Number.NaN;
-    if (Number.isFinite(resetsAt)) return resetsAt > now;
+    if (
+      Number.isFinite(resetsAt) ||
+      (cached.provider === "agy" && window.resetsAt !== undefined)
+    )
+      return windowHasNotReset(window, now);
     if (resetless === "never" || !Number.isFinite(refreshedAt)) return false;
     const maxAgeSeconds = resetlessStaleMaxAgeSeconds(window);
     return maxAgeSeconds > 0 && ageMilliseconds < maxAgeSeconds * 1_000;

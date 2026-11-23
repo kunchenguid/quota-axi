@@ -11,6 +11,7 @@ import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   deleteCachedProvider,
+  isSnapshotFile,
   readCachedClaudeProvider,
   readCachedCommandCodeProvider,
   readCachedCodexProvider,
@@ -565,6 +566,147 @@ describe("quota cache", () => {
       ).toBeUndefined();
     },
   );
+
+  it("rejects inconsistent Antigravity metadata without losing valid saved groups", () => {
+    useTempCache();
+    const file = cacheFilePath();
+    mkdirSync(dirname(file), { recursive: true });
+    const unused = {
+      id: "gemini_5h",
+      label: "Gemini 5-hour",
+      kind: "session",
+      percentUsed: 0,
+      percentRemaining: 100,
+      notStarted: true,
+    };
+    const model = {
+      id: "model:flash",
+      label: "Flash",
+      kind: "model",
+      percentRemaining: 40,
+    };
+    const session = { id: "5h", windowId: unused.id };
+    const models = {
+      status: "known",
+      labels: ["Gemini Flash", "Gemini Pro"],
+      ids: ["gemini-flash"],
+      unmatchedLabels: ["Gemini Pro"],
+    };
+    const group = {
+      id: "gemini",
+      name: "Gemini Models",
+      models,
+      buckets: [session],
+    };
+    const record = {
+      ...quota("agy", 0),
+      source: "cli",
+      windows: [unused, model],
+      agyGroups: [group],
+    };
+    function writeSnapshot(override: object) {
+      writeFileSync(
+        file,
+        JSON.stringify({
+          schemaVersion: 3,
+          providers: [{ ...record, ...override }],
+        }),
+      );
+    }
+    for (const override of [
+      {},
+      { agyGroups: undefined, windows: [model] },
+      { windows: [model] },
+      {
+        windows: [
+          { ...unused, notStarted: false, resetsAt: "2026-07-06T19:00:00Z" },
+          model,
+        ],
+      },
+    ]) {
+      writeSnapshot(override);
+      expect(isSnapshotFile(file)).toBe(true);
+      expect(readCachedProvider("agy")).toBeDefined();
+    }
+    const badWindows = [
+      ["nonboolean flag", [{ ...unused, notStarted: "true" }, model]],
+      [
+        "partly used",
+        [{ ...unused, percentUsed: 60, percentRemaining: 40 }, model],
+      ],
+      ["missing used", [{ ...unused, percentUsed: undefined }, model]],
+      ["reset date", [{ ...unused, resetsAt: "2026-07-06T19:00:00Z" }, model]],
+      ["reset text", [{ ...unused, resetText: "tomorrow" }, model]],
+      ["duplicate window", [unused, unused]],
+    ] as const;
+    const badGroups = [
+      ["nonarray groups", {}],
+      ["duplicate group", [group, group]],
+      ["duplicate bucket", [{ ...group, buckets: [session, { id: "5h" }] }]],
+      [
+        "duplicate link",
+        [{ ...group, buckets: [session, { ...session, id: "other" }] }],
+      ],
+      [
+        "nonstring window link",
+        [{ ...group, buckets: [{ ...session, windowId: 1 }] }],
+      ],
+      [
+        "nonstring unmeasured link",
+        [{ ...group, buckets: [{ id: "weekly", unmeasuredBoundId: null }] }],
+      ],
+      [
+        "two links",
+        [
+          {
+            ...group,
+            buckets: [{ ...session, unmeasuredBoundId: "gemini_weekly" }],
+          },
+        ],
+      ],
+      [
+        "link to another group",
+        [{ ...group, buckets: [{ ...session, windowId: "gemini_argon_5h" }] }],
+      ],
+      [
+        "unmeasured link to another group",
+        [
+          {
+            ...group,
+            buckets: [
+              { id: "weekly", unmeasuredBoundId: "gemini_argon_weekly" },
+            ],
+          },
+        ],
+      ],
+      ["invalid model IDs", [{ ...group, models: { ...models, ids: [2] } }]],
+      [
+        "invalid unmatched labels",
+        [
+          {
+            ...group,
+            models: { ...models, unmatchedLabels: ["Not a listed model"] },
+          },
+        ],
+      ],
+      [
+        "unmatched labels without IDs",
+        [{ ...group, models: { ...models, ids: undefined } }],
+      ],
+    ] as const;
+    for (const [description, override] of [
+      ...badWindows.map(
+        ([description, windows]) => [description, { windows }] as const,
+      ),
+      ...badGroups.map(
+        ([description, agyGroups]) => [description, { agyGroups }] as const,
+      ),
+    ]) {
+      writeSnapshot(override);
+      expect(isSnapshotFile(file), description).toBe(false);
+      expect(readCachedProvider("agy"), description).toBeUndefined();
+    }
+  });
 
   it.each(["group-only", "group reset only", "model reset only"] as const)(
     "keeps %s Antigravity diagnostics in snapshots but not live reuse",

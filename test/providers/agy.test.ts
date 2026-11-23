@@ -1029,7 +1029,7 @@ describe("Antigravity quota parsing", () => {
 
     it.each(
       ["CLI", "user status", "model configs", "later port"].flatMap((path) =>
-        ["disabled", "reset only", "expired"].map(
+        ["disabled", "reset only", "expired", "malformed"].map(
           (evidence) => [path, evidence] as const,
         ),
       ),
@@ -1040,10 +1040,18 @@ describe("Antigravity quota parsing", () => {
         const readAt = "2026-06-15T09:00:00Z";
         vi.setSystemTime(Date.parse(readAt));
         const resetTime =
-          evidence === "expired" ? readAt : "2026-06-19T08:45:39Z";
+          evidence === "expired"
+            ? readAt
+            : evidence === "malformed"
+              ? "not-a-date"
+              : "2026-06-19T08:45:39Z";
         const hasReset = evidence !== "disabled";
         const measurement =
-          evidence === "expired" ? { remainingFraction: 0.5 } : {};
+          evidence === "expired"
+            ? { remainingFraction: 0.5 }
+            : evidence === "malformed"
+              ? { remainingFraction: 0 }
+              : {};
         const groups = hasReset
           ? [
               {
@@ -1116,7 +1124,10 @@ describe("Antigravity quota parsing", () => {
             ? [
                 {
                   id: "gemini_argon_weekly",
-                  resetsAt: new Date(resetTime).toISOString(),
+                  resetsAt:
+                    evidence === "malformed"
+                      ? resetTime
+                      : new Date(resetTime).toISOString(),
                 },
               ]
             : []),
@@ -1140,12 +1151,131 @@ describe("Antigravity quota parsing", () => {
         );
         if (sameEndpoint && hasReset)
           expect(result.windows[0]?.percentRemaining).toBe(
-            evidence === "expired" ? 50 : undefined,
+            evidence === "expired"
+              ? 50
+              : evidence === "malformed"
+                ? 0
+                : undefined,
           );
         if (path === "model configs") {
           expect(result.plan).toBeUndefined();
           expect(result.account).toBeUndefined();
         }
+      },
+    );
+
+    it.each(["not-a-date", "", 1e100])(
+      "keeps invalid Antigravity resets diagnostic-only (%s)",
+      async (resetTime) => {
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(NOW_MS);
+        const generatedAt = new Date(NOW_MS).toISOString();
+        const reading = await fetchQuotaWithRuntime(
+          runtimeWith({
+            cliQuota: JSON.stringify({
+              command: {
+                name: "quota",
+                data: {
+                  groups: [
+                    {
+                      name: "Gemini 4 Argon",
+                      buckets: [
+                        {
+                          bucketId: "weekly",
+                          remainingFraction: 0,
+                          reset_time: resetTime,
+                        },
+                      ],
+                    },
+                    {
+                      name: "Gemini Models",
+                      buckets: [
+                        {
+                          bucketId: "weekly",
+                          remainingFraction: 0.6,
+                          resetTime: new Date(NOW_MS + 3_600_000).toISOString(),
+                        },
+                      ],
+                    },
+                  ],
+                },
+              },
+            }),
+          }),
+        );
+        const report = annotateQuotaAdvice({
+          generatedAt,
+          providers: [withQuotaSemantics(reading, generatedAt)],
+        });
+        const argonId = "gemini_argon_weekly";
+        const summary = quotaJsonReport(report, false).providers[0];
+        expect(summary?.state).toMatchObject({
+          status: "fresh",
+          untrustedWindowIds: [argonId],
+        });
+        const argon = summary?.windows.find(({ id }) => id === argonId);
+        expect(argon?.percentRemaining).toBeUndefined();
+        expect(argon?.resetsAt).toBeUndefined();
+        expect(argon?.pace).toMatchObject({
+          status: "unknown",
+          reason: "invalid_cycle",
+        });
+        const scopes = summary?.quotaSemantics?.effectiveAvailability;
+        expect(scopes).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              scope: "gemini",
+              effectivePercentRemaining: 60,
+            }),
+            expect.objectContaining({
+              scope: "gemini_argon",
+              status: "unknown",
+              runway: { status: "unknown", unmeasurableWindowIds: [argonId] },
+            }),
+          ]),
+        );
+        const diagnostic = quotaJsonReport(
+          report,
+          true,
+        ).providers[0]?.windows.find(({ id }) => id === argonId);
+        const invalidReset =
+          resetTime === "not-a-date" ? resetTime : "invalid reset";
+        expect(diagnostic).toMatchObject({
+          percentRemaining: 0,
+          resetsAt: invalidReset,
+        });
+        expect(renderQuotaToon(report, "quota-axi", true)).toContain(
+          invalidReset,
+        );
+        expect(renderQuotaToon(report, "quota-axi", false)).not.toContain(
+          "exhausted_now",
+        );
+        const tui = renderQuotaTui(report, { columns: 80, colorDepth: "none" });
+        expect(tui).toMatch(/\?\s+bad\s/);
+        expect(tui).not.toContain("passed");
+
+        writeCachedProviders(report.providers);
+        const snapshot = readSnapshotProviders(cacheFilePath(), "agy", NOW_MS);
+        expect(Array.isArray(snapshot) && snapshot[0]).toBeTruthy();
+        if (!Array.isArray(snapshot) || !snapshot[0])
+          throw new Error("Expected saved quota");
+        expect(
+          withQuotaSemantics(snapshot[0], generatedAt).windows.map(
+            ({ id }) => id,
+          ),
+        ).toEqual(["gemini_weekly"]);
+        const stale = await fetchQuotaWithRuntime(
+          runtimeWith({
+            cliQuota: Object.assign(new Error("agy timed out"), {
+              code: "ETIMEDOUT",
+            }),
+          }),
+        );
+        expect(stale).toMatchObject({
+          state: { status: "stale" },
+          windows: [{ id: "gemini_weekly", percentRemaining: 60 }],
+        });
+        expect(stale.windows).toHaveLength(1);
       },
     );
 

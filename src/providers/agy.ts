@@ -27,6 +27,11 @@ import type {
   SourceAttempt,
 } from "../types.js";
 import {
+  AGY_MODEL_ID,
+  agyBoundWindowId,
+  agyUnrecognizedWindowId,
+} from "./agy-identity.js";
+import {
   failedProvider,
   hasCurrentPercentage,
   servableStaleWindows,
@@ -453,7 +458,7 @@ function parseAgyModelCatalog(text: string): AgyModelCatalogEntry[] {
   const entries: AgyModelCatalogEntry[] = [];
   for (const line of text.split(/\r?\n/)) {
     const [id, label] = line.split("\t").map((part) => part.trim());
-    if (id && label && /^[a-z0-9][a-z0-9._-]*$/i.test(id)) {
+    if (id && label && AGY_MODEL_ID.test(id)) {
       entries.push({ id, label });
     }
   }
@@ -928,11 +933,22 @@ function matchModelIds(
     .map(({ id }) => id);
 }
 
-export function agyBoundWindowId(
-  groupId: string,
-  period: "5h" | "weekly",
-): string {
-  return `${groupId}_${period}`;
+function parseAgyReset({
+  resetTime,
+  reset_time,
+}: Record<string, unknown>): string | undefined {
+  for (const value of [resetTime, reset_time]) {
+    if (typeof value === "number") {
+      const reset = new Date(value * 1000);
+      if (Number.isFinite(reset.getTime())) return reset.toISOString();
+    } else {
+      const reset = parseEpochOrIso(value);
+      if (reset !== undefined) return reset;
+    }
+  }
+  return resetTime === undefined && reset_time === undefined
+    ? undefined
+    : "invalid reset";
 }
 
 function normalizeQuotaSummaryBucket(
@@ -945,12 +961,11 @@ function normalizeQuotaSummaryBucket(
   const result: QuotaWindow = {
     id:
       windowKind.id === "unknown"
-        ? `${group.id}:bucket:${encodeURIComponent(Buffer.from(bucketId).toString())}`
+        ? agyUnrecognizedWindowId(group.id, bucketId)
         : agyBoundWindowId(group.id, windowKind.id),
     label: `${group.label} ${windowKind.label}`,
     kind: windowKind.kind,
-    resetsAt:
-      parseEpochOrIso(bucket.resetTime) ?? parseEpochOrIso(bucket.reset_time),
+    resetsAt: parseAgyReset(bucket),
     resetText: stringValue(bucket.description),
   };
   if (windowKind.windowSeconds !== undefined) {
@@ -1016,9 +1031,7 @@ function normalizeModelConfigWindow(raw: unknown): QuotaWindow | undefined {
     id: `model:${slugify(modelId)}`,
     label,
     kind: "model",
-    resetsAt:
-      parseEpochOrIso(quotaInfo.resetTime) ??
-      parseEpochOrIso(quotaInfo.reset_time),
+    resetsAt: parseAgyReset(quotaInfo),
   };
   applyAgyUsage(result, remainingFraction(quotaInfo));
   return result.percentUsed === undefined && !result.resetsAt

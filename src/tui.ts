@@ -789,7 +789,11 @@ function windowRow(
     provider.state.untrustedWindowIds?.includes(window.id);
   const pct = untrusted ? undefined : window.percentRemaining;
   const marker = untrusted ? undefined : window.pace?.timeRemainingPercent;
-  const reset = untrusted ? "passed" : resetCountdown(window, generatedAtMs);
+  const reset = untrusted
+    ? Number.isFinite(Date.parse(window.resetsAt ?? ""))
+      ? "passed"
+      : "bad"
+    : resetCountdown(window, generatedAtMs);
   return [
     { text: "   " },
     { text: padEndDisplay(shortWindowLabel(window), 8), style: "label" },

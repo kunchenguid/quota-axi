@@ -1,6 +1,11 @@
 import { degradedSources } from "./lib/source-attempts.js";
-import { agyBoundWindowId, agyStaleQuotaAt } from "./providers/agy.js";
-import { failedProvider, hasCurrentPercentage } from "./providers/common.js";
+import { agyBoundWindowId } from "./providers/agy-identity.js";
+import { agyStaleQuotaAt } from "./providers/agy.js";
+import {
+  failedProvider,
+  hasCurrentPercentage,
+  windowHasNotReset,
+} from "./providers/common.js";
 import {
   computeEffectiveRunway,
   computeWindowPace,
@@ -26,21 +31,16 @@ export function withQuotaSemantics(
     agyReportTime === undefined
       ? reading
       : agyStaleQuotaAt(reading, agyReportTime);
-  const expired =
+  const untrusted =
     agyReportTime === undefined
       ? []
-      : provider.windows.filter(({ resetsAt }) => {
-          if (resetsAt === undefined) return false;
-          const reset = Date.parse(resetsAt);
-          return (
-            reset <= agyReportTime ||
-            (provider.state.reused && !Number.isFinite(reset))
-          );
-        });
-  const expiredIds = new Set(expired.map(({ id }) => id));
+      : provider.windows.filter(
+          (window) => !windowHasNotReset(window, agyReportTime),
+        );
+  const untrustedIds = new Set(untrusted.map(({ id }) => id));
   let activeWindows =
-    provider.state.reused && expiredIds.size > 0
-      ? provider.windows.filter(({ id }) => !expiredIds.has(id))
+    provider.state.reused && untrustedIds.size > 0
+      ? provider.windows.filter(({ id }) => !untrustedIds.has(id))
       : provider.windows;
   if (agyReportTime !== undefined && provider.state.reused) {
     const sourcesTried = provider.state.sourcesTried ?? [];
@@ -72,12 +72,12 @@ export function withQuotaSemantics(
   }));
   const state = { ...provider.state, ...supersededSources(provider) };
   if (agyReportTime !== undefined) {
-    if (!provider.state.reused && windows.length > 0 && expiredIds.size > 0)
-      state.untrustedWindowIds = [...expiredIds];
+    if (!provider.state.reused && windows.length > 0 && untrustedIds.size > 0)
+      state.untrustedWindowIds = [...untrustedIds];
     else delete state.untrustedWindowIds;
   }
   const withWindows = { ...provider, windows, state };
-  const semantics = semanticsFor(withWindows, generatedAt, expired);
+  const semantics = semanticsFor(withWindows, generatedAt, untrusted);
   return {
     ...withWindows,
     quotaSemantics: provider.state.stale
@@ -153,7 +153,7 @@ function staleSemantics(
 function semanticsFor(
   provider: ProviderQuota,
   generatedAt: string,
-  expiredAgyWindows: QuotaWindow[],
+  untrustedAgyWindows: QuotaWindow[],
 ): QuotaSemantics {
   switch (provider.provider) {
     case "claude":
@@ -185,7 +185,7 @@ function semanticsFor(
       return agySemantics(
         provider,
         generatedAt,
-        expiredAgyWindows.filter(isAgyBound).map(({ id }) => id),
+        untrustedAgyWindows.filter(isAgyBound).map(({ id }) => id),
       );
     case "alibaba":
       return alibabaSemantics(provider.windows, generatedAt);
@@ -1030,7 +1030,7 @@ function partialSemantics(
 function agySemantics(
   provider: ProviderQuota,
   generatedAt: string,
-  expiredBoundIds: string[],
+  untrustedBoundIds: string[],
 ): QuotaSemantics {
   const scopedBoundIds = new Set<string>();
   const effectiveAvailability: EffectiveAvailability[] = [];
@@ -1043,7 +1043,7 @@ function agySemantics(
     for (const id of boundedBy) scopedBoundIds.add(id);
     const unmeasurableWindowIds = [
       ...new Set([
-        ...expiredBoundIds.filter((id) => windowIds.has(id)),
+        ...untrustedBoundIds.filter((id) => windowIds.has(id)),
         ...bounds
           .filter(({ percentRemaining }) => percentRemaining === undefined)
           .map(({ id }) => id),
@@ -1066,7 +1066,7 @@ function agySemantics(
     const currentBounds = bounds.filter(
       ({ id, percentRemaining }) =>
         !unmeasurableWindowIds.includes(id) ||
-        (percentRemaining === undefined && !expiredBoundIds.includes(id)),
+        (percentRemaining === undefined && !untrustedBoundIds.includes(id)),
     );
     const runway = computeEffectiveRunway(
       currentBounds,

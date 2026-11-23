@@ -7,7 +7,12 @@ import {
   ensurePrivateParent,
   readUntracedJsonFile,
 } from "./lib/fs.js";
-import { hasCurrentPercentage } from "./providers/common.js";
+import {
+  AGY_MODEL_ID,
+  agyBoundWindowId,
+  agyUnrecognizedWindowId,
+} from "./providers/agy-identity.js";
+import { hasCurrentPercentage, windowHasNotReset } from "./providers/common.js";
 import { kimiReadingContextId } from "./providers/kimi-cache-context.js";
 import { commandCodeReadingContextId } from "./providers/commandcode-cache-context.js";
 import { devinReadingContextId } from "./providers/devin-cache-context.js";
@@ -483,10 +488,6 @@ function hasUnexpiredWindows(record: CachedProvider, now: number): boolean {
   return record.snapshot.windows.every((window) =>
     windowHasNotReset(window, now),
   );
-}
-
-function windowHasNotReset({ resetsAt }: QuotaWindow, now: number): boolean {
-  return resetsAt === undefined || Date.parse(resetsAt) > now;
 }
 
 function reusedReading(record: CachedProvider): ProviderQuota {
@@ -1105,16 +1106,28 @@ function normalizeCachedProvider(
   const state = objectValue(data.state);
   const status = literalValue(state?.status, PROVIDER_STATUSES);
   const sourcesTried = stringArrayValue(state?.sourcesTried);
-  const windows = Array.isArray(data.windows)
-    ? data.windows
-        .map((window) => normalizeCachedWindow(window, provider))
-        .filter((window): window is QuotaWindow => Boolean(window))
-        .map((window) =>
-          provider === "kimi" ? upgradeLegacyKimiShareWindow(window) : window,
-        )
+  const parsedWindows = Array.isArray(data.windows)
+    ? data.windows.map((window) => normalizeCachedWindow(window, provider))
     : [];
-  const agyGroups =
-    provider === "agy" ? normalizeCachedAgyGroups(data.agyGroups) : undefined;
+  const windows = parsedWindows
+    .filter((window): window is QuotaWindow => Boolean(window))
+    .map((window) =>
+      provider === "kimi" ? upgradeLegacyKimiShareWindow(window) : window,
+    );
+  let agyGroups: AgyQuotaGroup[] | undefined;
+  if (provider === "agy") {
+    const windowKinds = new Map(windows.map(({ id, kind }) => [id, kind]));
+    if (
+      (data.windows !== undefined && !Array.isArray(data.windows)) ||
+      parsedWindows.length !== windows.length ||
+      windowKinds.size !== windows.length
+    )
+      return undefined;
+    if (data.agyGroups !== undefined) {
+      agyGroups = normalizeCachedAgyGroups(data.agyGroups, windowKinds);
+      if (!agyGroups) return undefined;
+    }
+  }
   if (
     !provider ||
     !label ||
@@ -1345,29 +1358,87 @@ function normalizeCachedWindow(
   assignNumber(result, "usedCredits", data.usedCredits);
   assignNumber(result, "remainingCredits", data.remainingCredits);
   assignString(result, "creditUnit", data.creditUnit);
-  if (provider === "agy" && data.notStarted === true) result.notStarted = true;
+  if (provider === "agy") {
+    if (data.resetsAt !== undefined && result.resetsAt === undefined)
+      return undefined;
+    if (data.notStarted !== undefined) {
+      if (typeof data.notStarted !== "boolean") return undefined;
+      if (
+        data.notStarted &&
+        (result.percentRemaining !== 100 ||
+          result.percentUsed !== 0 ||
+          data.resetsAt !== undefined ||
+          data.resetText !== undefined)
+      )
+        return undefined;
+      result.notStarted = data.notStarted;
+    }
+  }
   return result;
 }
 
-function normalizeCachedAgyGroups(raw: unknown): AgyQuotaGroup[] | undefined {
+function normalizeCachedAgyGroups(
+  raw: unknown,
+  windowKinds: ReadonlyMap<string, QuotaWindow["kind"]>,
+): AgyQuotaGroup[] | undefined {
   if (!Array.isArray(raw) || raw.length === 0) return undefined;
   const groups: AgyQuotaGroup[] = [];
+  const groupIds = new Set<string>();
+  const links = new Set<string>();
   for (const value of raw) {
     const group = objectValue(value);
     const id = stringValue(group?.id);
     const name = stringValue(group?.name);
     const models = normalizeCachedModelList(group?.models);
-    if (!id || !name || !models || !Array.isArray(group?.buckets))
+    if (
+      !id?.trim() ||
+      groupIds.has(id) ||
+      !name?.trim() ||
+      !models ||
+      !Array.isArray(group?.buckets)
+    )
       return undefined;
+    groupIds.add(id);
+    const sessionId = agyBoundWindowId(id, "5h");
+    const weeklyId = agyBoundWindowId(id, "weekly");
+    const bucketIds = new Set<string>();
     const buckets: AgyQuotaGroup["buckets"] = [];
     for (const value of group.buckets) {
       const bucket = objectValue(value);
-      const id = stringValue(bucket?.id);
+      const bucketId = stringValue(bucket?.id);
       const windowId = stringValue(bucket?.windowId);
       const unmeasuredBoundId = stringValue(bucket?.unmeasuredBoundId);
-      if (!id) return undefined;
+      if (
+        !bucket ||
+        !bucketId?.trim() ||
+        bucketIds.has(bucketId) ||
+        (bucket.windowId !== undefined && !windowId) ||
+        (bucket.unmeasuredBoundId !== undefined && !unmeasuredBoundId) ||
+        (windowId && unmeasuredBoundId)
+      )
+        return undefined;
+      bucketIds.add(bucketId);
+      const link = windowId ?? unmeasuredBoundId;
+      if (link) {
+        const kind =
+          link === sessionId
+            ? "session"
+            : link === weeklyId
+              ? "weekly"
+              : windowId && link === agyUnrecognizedWindowId(id, bucketId)
+                ? "unknown"
+                : undefined;
+        const windowKind = windowKinds.get(link);
+        if (
+          !kind ||
+          links.has(link) ||
+          (windowKind && (!windowId || kind !== windowKind))
+        )
+          return undefined;
+        links.add(link);
+      }
       buckets.push({
-        id,
+        id: bucketId,
         ...(windowId ? { windowId } : {}),
         ...(unmeasuredBoundId ? { unmeasuredBoundId } : {}),
       });
@@ -1382,20 +1453,35 @@ function normalizeCachedModelList(
 ): AgyQuotaGroup["models"] | undefined {
   const data = objectValue(raw);
   if (!data) return undefined;
-  if (data.status === "unknown") return { status: "unknown" };
+  if (data.status === "unknown") {
+    return data.labels === undefined &&
+      data.ids === undefined &&
+      data.unmatchedLabels === undefined
+      ? { status: "unknown" }
+      : undefined;
+  }
   if (data.status !== "known") return undefined;
   const labels = stringArrayValue(data.labels);
-  if (!labels?.length) return undefined;
   const ids = stringArrayValue(data.ids);
-  if (!ids?.length) return { status: "known", labels };
-  const unmatchedLabels = stringArrayValue(data.unmatchedLabels)?.filter(
-    (label) => labels.includes(label),
-  );
+  const unmatchedLabels = stringArrayValue(data.unmatchedLabels);
+  if (
+    !labels?.length ||
+    labels.some((label) => !label.trim()) ||
+    (data.ids !== undefined &&
+      (!ids?.length ||
+        !ids.every((id) => AGY_MODEL_ID.test(id)) ||
+        new Set(ids).size !== ids.length)) ||
+    (data.unmatchedLabels !== undefined &&
+      (!ids ||
+        !unmatchedLabels ||
+        unmatchedLabels.some((label) => !labels.includes(label))))
+  )
+    return undefined;
   return {
     status: "known",
     labels,
-    ids,
-    ...(unmatchedLabels?.length ? { unmatchedLabels } : {}),
+    ...(ids ? { ids } : {}),
+    ...(unmatchedLabels ? { unmatchedLabels } : {}),
   };
 }
 

@@ -506,8 +506,10 @@ function resolveCycle(
   window: QuotaWindow,
   generatedAtMs: number,
 ): { ok: true; value: ResolvedCycle } | { ok: false; reason: QuotaPaceReason } {
-  const resetsAtMs = parseTimestamp(window.resetsAt);
-  if (resetsAtMs === undefined) return { ok: false, reason: "missing_cycle" };
+  const reset = resolveResetsAtOutcome(window.resetsAt);
+  if (reset.kind === "missing") return { ok: false, reason: "missing_cycle" };
+  if (reset.kind === "malformed") return { ok: false, reason: "invalid_cycle" };
+  const resetsAtMs = reset.ms;
   if (resetsAtMs <= generatedAtMs)
     return { ok: false, reason: "expired_reset" };
 
@@ -613,7 +615,7 @@ type ResetsAtOutcome =
  * as non-bounding.
  */
 function resolveResetsAtOutcome(value: string | undefined): ResetsAtOutcome {
-  if (!value) return { kind: "missing" };
+  if (value === undefined) return { kind: "missing" };
   const ms = Date.parse(value);
   return Number.isFinite(ms) ? { kind: "ok", ms } : { kind: "malformed" };
 }
