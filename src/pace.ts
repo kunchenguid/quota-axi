@@ -108,6 +108,7 @@ export function computeWindowPace(
 export function computeEffectiveRunway(
   windows: QuotaWindow[],
   generatedAt: string,
+  missingWindowIds: readonly string[] = [],
 ): EffectiveRunway {
   const generatedAtMs = Date.parse(generatedAt);
 
@@ -131,15 +132,13 @@ export function computeEffectiveRunway(
   // rather than publishing `through_reset` or a projection. A vendor-reported
   // zero above still yields `exhausted_now`, which needs no cycle.
   if (
-    windows.every(
-      (window) => resolveResetsAtOutcome(window.resetsAt).kind === "missing",
-    )
+    !isRepresentableDateMs(generatedAtMs) ||
+    (missingWindowIds.length === 0 &&
+      windows.every(
+        (window) => resolveResetsAtOutcome(window.resetsAt).kind === "missing",
+      ))
   ) {
-    return unknownRunway(windows);
-  }
-
-  if (!isRepresentableDateMs(generatedAtMs)) {
-    return unknownRunway(windows);
+    return unknownRunway([...missingWindowIds, ...windows.map(({ id }) => id)]);
   }
 
   const accountWindows = windows.filter(({ kind }) => kind !== "model");
@@ -148,7 +147,7 @@ export function computeEffectiveRunway(
     accountWindows.length > 0 &&
     computeEffectiveRunway(accountWindows, generatedAt).status !== "unknown";
 
-  const unmeasurableWindowIds: string[] = [];
+  const unmeasurableWindowIds = [...missingWindowIds];
   const projections: Array<{
     window: QuotaWindow;
     exhaustedAtMs: number;
@@ -234,7 +233,7 @@ export function computeEffectiveRunway(
   }
 
   if (unmeasurableWindowIds.length > 0) {
-    return { status: "unknown", unmeasurableWindowIds };
+    return unknownRunway(unmeasurableWindowIds);
   }
 
   if (projections.length === 0) {
@@ -436,11 +435,11 @@ function clamp(value: number, bound: number): number {
   return Math.min(bound, Math.max(-bound, value));
 }
 
-function unknownRunway(windows: QuotaWindow[]): EffectiveRunway {
+function unknownRunway(windowIds: string[]): EffectiveRunway {
   return {
     status: "unknown",
-    ...(windows.length > 0
-      ? { unmeasurableWindowIds: windows.map(({ id }) => id) }
+    ...(windowIds.length > 0
+      ? { unmeasurableWindowIds: [...new Set(windowIds)] }
       : {}),
   };
 }

@@ -1677,33 +1677,52 @@ describe("per-scope selection signal", () => {
     },
   );
 
-  it.each(["live", "reuse", "snapshot"])(
-    "does not list an unstarted Antigravity runway bound as a blocker in %s",
-    (source) => {
+  it.each(["absent", "unmeasured", "reset-only", "expired", "unstarted"])(
+    "names the Antigravity runway blockers when the five-hour bound is unstarted and the weekly bound is %s",
+    (weeklyState) => {
       const sessionId = "gemini_5h";
       const weeklyId = "gemini_weekly";
-      const agy = agyProvider(
-        [
-          window(sessionId, "session", 100, { notStarted: true }),
-          {
-            id: weeklyId,
-            kind: "weekly",
-            label: "Gemini weekly",
-            resetsAt: weeklyResetsAt(0.5),
-          },
-        ],
-        { gemini: [sessionId, weeklyId] },
-      );
-      agy.state = {
-        ...agy.state,
-        reused: source !== "live",
-        sourcesTried: [source],
+      const session = window(sessionId, "session", 100, { notStarted: true });
+      const weeklyByState: Record<string, QuotaWindow> = {
+        "reset-only": {
+          id: weeklyId,
+          kind: "weekly",
+          label: "Gemini weekly",
+          resetsAt: weeklyResetsAt(0.5),
+        },
+        expired: window(weeklyId, "weekly", 80, { resetsAt: GENERATED_AT }),
+        unstarted: window(weeklyId, "weekly", 100, { notStarted: true }),
       };
-      const [scope] = withQuotaSemantics(agy, GENERATED_AT).quotaSemantics!
-        .effectiveAvailability;
-      const unknown = { status: "unknown", unmeasurableWindowIds: [weeklyId] };
-      expect(scope?.runway).toEqual(unknown);
-      expect(scope?.selection).toEqual(unknown);
+      const weekly = weeklyByState[weeklyState];
+      for (const source of ["live", "reuse", "snapshot"]) {
+        const agy = agyProvider(weekly ? [session, weekly] : [session], {
+          gemini: [sessionId],
+        });
+        agy[AGY_GROUPS]![0]!.buckets.push(
+          weeklyState === "unmeasured"
+            ? { id: "weekly", unmeasuredBoundId: weeklyId }
+            : { id: "weekly", windowId: weeklyId },
+        );
+        agy.state = {
+          ...agy.state,
+          reused: source !== "live",
+          sourcesTried: [source],
+        };
+        const [scope] = withQuotaSemantics(agy, GENERATED_AT).quotaSemantics!
+          .effectiveAvailability;
+        const unknownWeekly = {
+          status: "unknown",
+          unmeasurableWindowIds: [weeklyId],
+        };
+        expect(scope?.runway, source).toEqual(
+          weeklyState === "unstarted"
+            ? { status: "unknown", unmeasurableWindowIds: [sessionId, weeklyId] }
+            : unknownWeekly,
+        );
+        expect(scope?.selection, source).toEqual(
+          weeklyState === "unstarted" ? { status: "unknown" } : unknownWeekly,
+        );
+      }
     },
   );
 

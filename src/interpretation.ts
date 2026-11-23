@@ -1068,23 +1068,27 @@ function agySemantics(
         !unmeasurableWindowIds.includes(id) ||
         (percentRemaining === undefined && !expiredBoundIds.includes(id)),
     );
-    const runway = computeEffectiveRunway(currentBounds, generatedAt);
+    const runway = computeEffectiveRunway(
+      currentBounds,
+      generatedAt,
+      unmeasurableWindowIds,
+    );
     const selection = summarizeEffectiveSelection(currentBounds);
-    const withMissing = (signal: { unmeasurableWindowIds?: string[] }) => ({
-      status: "unknown" as const,
-      unmeasurableWindowIds: [
-        ...new Set([
-          ...unmeasurableWindowIds,
-          ...(signal.unmeasurableWindowIds ?? []),
-        ]),
-      ],
-    });
     effectiveAvailability.push({
       scope,
       models,
       boundedBy,
       pace: summarizeEffectivePace(bounds, unmeasurableWindowIds),
-      selection: withMissing(selection),
+      runway,
+      selection: {
+        status: "unknown",
+        unmeasurableWindowIds: [
+          ...new Set([
+            ...unmeasurableWindowIds,
+            ...(selection.unmeasurableWindowIds ?? []),
+          ]),
+        ],
+      },
       ...(runway.status === "exhausted_now"
         ? {
             status: "known",
@@ -1092,9 +1096,8 @@ function agySemantics(
             limitingWindowIds: currentBounds
               .filter(({ percentRemaining }) => percentRemaining === 0)
               .map(({ id }) => id),
-            runway,
           }
-        : { status: "unknown", runway: withMissing(runway) }),
+        : { status: "unknown" }),
     });
   }
   const unresolved = provider.windows.filter(
