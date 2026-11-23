@@ -62,8 +62,11 @@ delete process.env.WINDSURF_API_SERVER_URL;
 delete process.env.QUOTA_AXI_MAX_AGE;
 delete process.env.QUOTA_AXI_SNAPSHOT;
 // A host that exports its Claude profile list would otherwise turn every
-// Claude read into several lanes; profile tests opt in themselves.
+// Claude read into several lanes, and one that opted into OpenCode Go's Pi
+// entries would let adapter defaults read this machine's real Pi store; those
+// tests opt in themselves.
 delete process.env.QUOTA_AXI_CLAUDE_PROFILES;
+delete process.env.QUOTA_AXI_OPENCODE_GO_PI_AUTH;
 // Theme tests inject the OS probe and opt in themselves; never inherit a
 // system-theme request that would read the developer's appearance settings.
 delete process.env.QUOTA_AXI_THEME;
