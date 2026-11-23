@@ -2346,7 +2346,7 @@ describe("OpenCode Go account lanes", () => {
       {
         source: "pi:opencode-go-work",
         status: "failed",
-        error: "sqlite3_unavailable",
+        error: "provider_auth_rejected",
       },
     ]);
     expect(reports[1]?.state).toMatchObject({

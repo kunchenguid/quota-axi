@@ -610,6 +610,7 @@ async function readLaneQuota(
       return laneFailureReport(
         lane,
         "quota_missing",
+        "quota_missing",
         "error",
         accountKeys,
         sourcesTried,
@@ -649,6 +650,9 @@ async function readLaneQuota(
     return laneFailureReport(
       lane,
       indeterminate?.code ?? code,
+      // The row speaks for the store when an unreadable one precedes this
+      // lane, but the lane's own attempt keeps the vendor's real verdict.
+      code,
       indeterminate?.status ?? status,
       accountKeys,
       sourcesTried,
@@ -685,6 +689,7 @@ function blockedAttempt(entry: BlockedSurface): SourceAttempt {
 function laneFailureReport(
   lane: DiscoveredLane,
   code: string,
+  laneAttemptError: string,
   status: ProviderStatus,
   accountKeys: string[],
   sourcesTried: string[],
@@ -700,7 +705,11 @@ function laneFailureReport(
       sourcesTried,
       attempts: [
         ...blockedAttempts,
-        { source: lane.surfaces[0]!.sourceName, status: "failed", error: code },
+        {
+          source: lane.surfaces[0]!.sourceName,
+          status: "failed",
+          error: laneAttemptError,
+        },
       ],
     }),
     accountKeys,
