@@ -121,6 +121,7 @@ export function servableStaleWindows(
   if (refreshedAt > now) return [];
   const ageMilliseconds = now - refreshedAt;
   return cached.windows.filter((window) => {
+    // A malformed Antigravity reset cannot qualify for resetless fallback.
     if (cached.provider === "agy" && window.resetsAt !== undefined)
       return windowHasNotReset(window, now, "agy");
     const resetsAt = window.resetsAt ? Date.parse(window.resetsAt) : Number.NaN;
