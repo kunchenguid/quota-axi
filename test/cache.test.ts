@@ -490,6 +490,7 @@ describe("quota cache", () => {
     for (const reused of [
       readReusableProviders("agy", 90, now),
       readSnapshotProviders(file, "agy", now),
+      readSnapshotProviders(file, "agy", Date.parse(reset)),
     ]) {
       expect(reused).toMatchObject([
         {
@@ -542,9 +543,6 @@ describe("quota cache", () => {
       ).toBeUndefined();
     }
     expect(readReusableProviders("agy", 90, Date.parse(reset))).toBeUndefined();
-    expect(readSnapshotProviders(file, "agy", Date.parse(reset))).toBe(
-      "expired",
-    );
   });
 
   it("does not serve Higgsfield through --max-age, including after a login switch", () => {

@@ -28,9 +28,14 @@ export function withQuotaSemantics(
   const expired =
     agyReportTime === undefined
       ? []
-      : provider.windows.filter(
-          ({ resetsAt }) => resetsAt && Date.parse(resetsAt) <= agyReportTime,
-        );
+      : provider.windows.filter(({ resetsAt }) => {
+          if (resetsAt === undefined) return false;
+          const reset = Date.parse(resetsAt);
+          return (
+            reset <= agyReportTime ||
+            (provider.state.reused && !Number.isFinite(reset))
+          );
+        });
   const expiredIds = new Set(expired.map(({ id }) => id));
   const activeWindows =
     provider.state.reused && expiredIds.size > 0

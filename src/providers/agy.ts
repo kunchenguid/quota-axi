@@ -169,22 +169,13 @@ export async function fetchQuotaWithRuntime(
 ): Promise<ProviderQuota> {
   const attempts: SourceAttempt[] = [{ source: "cli", status: "failed" }];
   let finalFailure: unknown;
+  let cli: AgyCliReading | undefined;
 
   try {
-    const quota = await fetchCliQuota(runtime);
+    cli = await fetchCliQuota(runtime);
     attempts[0] = { source: "cli", status: "success" };
-    return successProvider({
-      provider: "agy",
-      label: "Antigravity",
-      source: "cli",
-      [AGY_GROUPS]: quota[AGY_GROUPS],
-      plan: quota.plan,
-      account: quota.account,
-      windows: quota.windows,
-      refreshedAt: quota.refreshedAt,
-      sourcesTried: sourceNames(attempts),
-      attempts,
-    });
+    if (cli.windows.length > 0)
+      return reportAgyReading(runtime, cli, "cli", attempts, cli.commandPath);
   } catch (error) {
     finalFailure = error;
     const skipped =
@@ -200,20 +191,22 @@ export async function fetchQuotaWithRuntime(
   attempts.push({ source: "loopback", status: "failed", degraded: false });
   try {
     const quota = await fetchLoopbackQuota(runtime);
-    await resolveGroupModels(runtime, quota[AGY_GROUPS]);
     attempts[attempts.length - 1] = { source: "loopback", status: "success" };
-    return successProvider({
-      provider: "agy",
-      label: "Antigravity",
-      source: "cli-rpc",
-      ...(quota[AGY_GROUPS] ? { [AGY_GROUPS]: quota[AGY_GROUPS] } : {}),
-      plan: quota.plan,
-      account: quota.account,
-      windows: quota.windows,
-      refreshedAt: quota.refreshedAt,
-      sourcesTried: sourceNames(attempts),
+    if (cli && quota.windows.length === 0)
+      return reportAgyReading(
+        runtime,
+        withAgyGroups(cli, quota),
+        "cli",
+        attempts,
+        cli.commandPath,
+      );
+    return reportAgyReading(
+      runtime,
+      withAgyGroups(quota, cli),
+      "cli-rpc",
       attempts,
-    });
+      cli?.commandPath,
+    );
   } catch (error) {
     const skipped =
       error instanceof AgyUnavailableError || isMissingCommandError(error);
@@ -229,6 +222,9 @@ export async function fetchQuotaWithRuntime(
       degraded: false,
     };
   }
+
+  if (cli)
+    return reportAgyReading(runtime, cli, "cli", attempts, cli.commandPath);
 
   const finalError = errorMessage(finalFailure);
   const sourcesTried = sourceNames(attempts);
@@ -269,6 +265,42 @@ export async function fetchQuotaWithRuntime(
   return failure;
 }
 
+async function reportAgyReading(
+  runtime: AgyProbeRuntime,
+  quota: AgyQuotaReading,
+  source: "cli" | "cli-rpc",
+  attempts: SourceAttempt[],
+  commandPath?: string,
+): Promise<ProviderQuota> {
+  const { [AGY_GROUPS]: groups, plan, account, windows, refreshedAt } = quota;
+  await resolveGroupModels(runtime, groups, commandPath);
+  return successProvider({
+    provider: "agy",
+    label: "Antigravity",
+    source,
+    plan,
+    account,
+    windows,
+    refreshedAt,
+    ...(groups ? { [AGY_GROUPS]: groups } : {}),
+    sourcesTried: sourceNames(attempts),
+    attempts,
+  });
+}
+
+function withAgyGroups(
+  reading: AgyQuotaReading,
+  supplemental?: AgyQuotaReading,
+): AgyQuotaReading {
+  const groups = reading[AGY_GROUPS] ?? [];
+  const extra = supplemental?.[AGY_GROUPS]?.filter(
+    ({ id }) => !groups.some((group) => group.id === id),
+  );
+  return extra?.length
+    ? { ...reading, [AGY_GROUPS]: [...groups, ...extra] }
+    : reading;
+}
+
 export async function inspectAuth(
   _options: ProviderOptions,
 ): Promise<AuthProviderReport> {
@@ -306,9 +338,9 @@ export async function inspectAuthWithRuntime(
   }
 }
 
-async function fetchCliQuota(
-  runtime: AgyProbeRuntime,
-): Promise<AgyGroupedReading> {
+type AgyCliReading = AgyGroupedReading & { commandPath: string };
+
+async function fetchCliQuota(runtime: AgyProbeRuntime): Promise<AgyCliReading> {
   let commandPath: string | undefined;
   try {
     commandPath = await runtime.findCommandPath("agy");
@@ -344,8 +376,7 @@ async function fetchCliQuota(
   if (!summary) {
     throw new AgyMalformedResponseError("agy /quota quota summary malformed");
   }
-  await resolveGroupModels(runtime, summary[AGY_GROUPS], commandPath);
-  return summary;
+  return { ...summary, commandPath };
 }
 
 async function createOpenerGuard(): Promise<{
@@ -582,15 +613,19 @@ async function fetchLoopbackQuota(
     );
 
   let lastError: unknown;
+  let groupOnly: AgyQuotaReading | undefined;
   for (const endpoint of endpoints) {
     try {
       if (endpoint.requiresUnleashProbe)
         await probeEndpoint(runtime, endpoint, deadline);
-      return await fetchEndpointQuota(runtime, endpoint, deadline);
+      const reading = await fetchEndpointQuota(runtime, endpoint, deadline);
+      if (reading.windows.length > 0) return withAgyGroups(reading, groupOnly);
+      groupOnly = groupOnly ? withAgyGroups(groupOnly, reading) : reading;
     } catch (error) {
       lastError = strongerFailure(lastError, error);
     }
   }
+  if (groupOnly) return groupOnly;
 
   throw lastError instanceof Error
     ? lastError
@@ -711,39 +746,48 @@ async function fetchEndpointQuota(
   deadline: number,
 ): Promise<AgyQuotaReading> {
   let summaryError: unknown;
+  let summary: AgyGroupedReading | undefined;
   try {
-    const summary = normalizeAgyQuotaSummary(
+    summary = normalizeAgyQuotaSummary(
       await withinProbeBudget(deadline, REQUEST_TIMEOUT_MS, (timeoutMs) =>
         runtime.requestJson(endpoint, QUOTA_SUMMARY_PATH, timeoutMs),
       ),
     );
-    if (summary) {
-      const identity = await fetchEndpointIdentity(runtime, endpoint, deadline);
-      return {
-        ...summary,
-        plan: identity?.plan,
-        account: identity?.account,
-      };
-    }
-    summaryError = new AgyMalformedResponseError(
-      "Antigravity quota summary malformed",
-    );
+    if (!summary)
+      summaryError = new AgyMalformedResponseError(
+        "Antigravity quota summary malformed",
+      );
   } catch (error) {
-    summaryError = strongerFailure(summaryError, error);
+    summaryError = error;
   }
 
+  let userStatus: AgyQuotaReading | undefined;
   for (const path of [USER_STATUS_PATH, COMMAND_MODEL_CONFIGS_PATH]) {
+    let fallback: AgyQuotaReading | undefined;
     try {
-      const fallback = normalizeAgyUserStatus(
+      fallback = normalizeAgyUserStatus(
         await withinProbeBudget(deadline, REQUEST_TIMEOUT_MS, (timeoutMs) =>
           runtime.requestJson(endpoint, path, timeoutMs),
         ),
       );
-      if (fallback && fallback.windows.length > 0) return fallback;
     } catch (error) {
       summaryError = strongerFailure(summaryError, error);
     }
+    if (path === USER_STATUS_PATH) userStatus = fallback;
+    if (summary?.windows.length) break;
+    if (fallback?.windows.length) {
+      return withAgyGroups(
+        {
+          ...fallback,
+          plan: fallback.plan ?? userStatus?.plan,
+          account: fallback.account ?? userStatus?.account,
+        },
+        summary,
+      );
+    }
   }
+  if (summary)
+    return { ...summary, plan: userStatus?.plan, account: userStatus?.account };
 
   throw summaryError instanceof Error
     ? summaryError
@@ -758,28 +802,6 @@ async function probeEndpoint(
   await withinProbeBudget(deadline, REQUEST_TIMEOUT_MS, (timeoutMs) =>
     runtime.requestJson(endpoint, UNLEASH_PATH, timeoutMs),
   );
-}
-
-async function fetchEndpointIdentity(
-  runtime: AgyProbeRuntime,
-  endpoint: AgyConnectionEndpoint,
-  deadline: number,
-): Promise<
-  | {
-      plan?: string;
-      account?: ProviderQuota["account"];
-    }
-  | undefined
-> {
-  try {
-    return normalizeAgyUserStatus(
-      await withinProbeBudget(deadline, REQUEST_TIMEOUT_MS, (timeoutMs) =>
-        runtime.requestJson(endpoint, USER_STATUS_PATH, timeoutMs),
-      ),
-    );
-  } catch {
-    return undefined;
-  }
 }
 
 async function readProcessList(

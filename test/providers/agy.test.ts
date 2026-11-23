@@ -639,26 +639,31 @@ describe("Antigravity quota parsing", () => {
       expect(onExec.mock.calls.map(([, args]) => args[0])).toEqual(["-p"]);
     });
 
-    it.each(["cli", "cli-rpc", "group-only"] as const)(
-      "keeps a disabled Argon group in %s quota and snapshots",
-      async (source) => {
+    const disabledArgonGroup = {
+      displayName: "Gemini 4 Argon",
+      description: "Models within this group: Gemini 4 Argon",
+      buckets: [
+        {
+          bucketId: "argon-weekly",
+          window: "weekly",
+          disabled: true,
+          remainingFraction: 0.5,
+        },
+      ],
+    };
+
+    it.each([
+      ["cli", false],
+      ["cli-rpc", false],
+      ["cli", true],
+      ["cli-rpc", true],
+    ] as const)(
+      "keeps a disabled Argon group in %s quota and snapshots (group only: %s)",
+      async (source, groupOnly) => {
         vi.useFakeTimers({ toFake: ["Date"] });
         vi.setSystemTime(NOW_MS);
-        const groups = [
-          {
-            displayName: "Gemini 4 Argon",
-            description: "Models within this group: Gemini 4 Argon",
-            buckets: [
-              {
-                bucketId: "argon-weekly",
-                window: "weekly",
-                disabled: true,
-                remainingFraction: 0.5,
-              },
-            ],
-          },
-        ];
-        if (source !== "group-only")
+        const groups = [disabledArgonGroup];
+        if (!groupOnly)
           groups.unshift({
             displayName: "Gemini Models",
             description: "General quota",
@@ -692,7 +697,7 @@ describe("Antigravity quota parsing", () => {
           }),
         );
         expect(fresh).toMatchObject({
-          source: source === "group-only" ? "cli" : source,
+          source,
           state: { status: "fresh" },
         });
         writeCachedProviders([fresh]);
@@ -717,7 +722,7 @@ describe("Antigravity quota parsing", () => {
           });
           const json = quotaJsonReport(report, true).providers[0];
           expect(json?.windows.map(({ id }) => id)).toEqual(
-            source === "group-only" ? [] : ["gemini_weekly"],
+            groupOnly ? [] : ["gemini_weekly"],
           );
           const argon = json?.quotaSemantics?.effectiveAvailability.find(
             ({ scope }) => scope === "gemini_argon",
@@ -734,6 +739,57 @@ describe("Antigravity quota parsing", () => {
             );
           }
         }
+      },
+    );
+
+    it.each(["CLI", "user status", "model configs", "later port"] as const)(
+      "keeps Argon membership and finds fallback model quota after a group-only %s response",
+      async (path) => {
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(Date.parse("2026-06-15T09:00:00Z"));
+        const groups = [disabledArgonGroup];
+        const rpc = "/exa.language_server_pb.LanguageServerService/";
+        const result = await fetchQuotaWithRuntime(
+          runtimeWith({
+            cliQuota:
+              path === "CLI"
+                ? JSON.stringify({
+                    command: { name: "quota", data: { groups } },
+                  })
+                : "{}",
+            cliModels: "gemini-4-argon-high\tGemini 4 Argon (High)",
+            ps: "123 /Users/test/.local/bin/agy\n",
+            lsof:
+              lsofFor(123, 64440) +
+              (path === "later port" ? lsofFor(123, 64441) : ""),
+            responses: {
+              [`https:64440:${rpc}RetrieveUserQuotaSummary`]: {
+                groups: path === "CLI" ? [] : groups,
+              },
+              [`https:${path === "later port" ? 64441 : 64440}:${rpc}${path === "model configs" ? "GetCommandModelConfigs" : "GetUserStatus"}`]:
+                fixture("user-status.json"),
+            },
+          }),
+        );
+        expect(result).toMatchObject({
+          source: "cli-rpc",
+          state: { status: "fresh" },
+        });
+        expect(result.windows).toMatchObject([
+          { id: "model:model_fixture_gemini_flash", percentRemaining: 100 },
+          { id: "model:model_fixture_claude_sonnet", percentRemaining: 50 },
+        ]);
+        expect(
+          withQuotaSemantics(result, new Date().toISOString()).quotaSemantics
+            ?.effectiveAvailability,
+        ).toMatchObject([
+          {
+            scope: "gemini_argon",
+            status: "unknown",
+            boundedBy: [],
+            models: { ids: ["gemini-4-argon-high"] },
+          },
+        ]);
       },
     );
 

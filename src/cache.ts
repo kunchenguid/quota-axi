@@ -385,7 +385,12 @@ export function readReusableProviders(
       now - refreshedAt < maxAgeSeconds * 1_000
     );
   });
-  if (!young || !group.every((record) => canReuseReading(record, now)))
+  if (
+    !young ||
+    !group.every(
+      (record) => hasReusableFormat(record) && hasUnexpiredWindows(record, now),
+    )
+  )
     return undefined;
   const stamp = group[0].reuse as ReuseStamp;
   if (inputsDigest(stamp.inputs) !== stamp.inputsDigest) return undefined;
@@ -426,7 +431,7 @@ export function isSnapshotFile(file: string): boolean {
 /**
  * Every reading of `provider` in a snapshot file supplied for tests and
  * fixtures, in file order. `undefined` when the file names no such provider;
- * `"expired"` when the reading no longer qualifies for fresh reuse.
+ * `"expired"` when the snapshot cannot be used for a report.
  */
 export function readSnapshotProviders(
   file: string,
@@ -437,22 +442,31 @@ export function readSnapshotProviders(
     (record) => record.snapshot.provider === provider,
   );
   if (records.length === 0) return undefined;
-  if (!records.every((record) => canReuseReading(record, now)))
+  if (
+    !records.every(
+      (record) =>
+        hasReusableFormat(record) &&
+        (provider === "agy" || hasUnexpiredWindows(record, now)),
+    )
+  )
     return "expired";
   return records.map(reusedReading);
 }
 
-function canReuseReading(record: CachedProvider, now: number): boolean {
+function hasReusableFormat(record: CachedProvider): boolean {
   const { provider, windows, [AGY_GROUPS]: groups } = record.snapshot;
+  if (provider !== "agy") return true;
   const groupedWindowIds = new Set(
     groups?.flatMap(({ buckets }) => buckets.map(({ windowId }) => windowId)),
   );
   return windows.every(
-    (window) =>
-      (provider !== "agy" ||
-        window.kind === "model" ||
-        groupedWindowIds.has(window.id)) &&
-      (window.resetsAt === undefined || Date.parse(window.resetsAt) > now),
+    (window) => window.kind === "model" || groupedWindowIds.has(window.id),
+  );
+}
+
+function hasUnexpiredWindows(record: CachedProvider, now: number): boolean {
+  return record.snapshot.windows.every(
+    ({ resetsAt }) => resetsAt === undefined || Date.parse(resetsAt) > now,
   );
 }
 
