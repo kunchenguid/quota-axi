@@ -17,6 +17,17 @@ export function withRemaining(
   };
 }
 
+export function hasCurrentPercentage(
+  windows: readonly QuotaWindow[],
+  now = Date.now(),
+): boolean {
+  return windows.some(({ percentRemaining, resetsAt }) => {
+    if (percentRemaining === undefined) return false;
+    const reset = Date.parse(resetsAt ?? "");
+    return Number.isNaN(reset) || reset > now;
+  });
+}
+
 export function successProvider(
   provider: Omit<ProviderQuota, "state"> & {
     refreshedAt: string;

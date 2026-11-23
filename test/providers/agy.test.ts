@@ -76,6 +76,7 @@ afterEach(async () => {
 
 // The vendor names each bucket's window ("5h" or "weekly"), which fixes its
 // cycle length; quota-axi derives pace from that length plus resetsAt.
+const LOOPBACK_QUOTA_READ_AT = "2026-06-15T09:00:00.000Z";
 const EXPECTED_WINDOW_SECONDS = [
   ["gemini_5h", 18_000],
   ["gemini_weekly", 604_800],
@@ -518,8 +519,14 @@ describe("Antigravity quota parsing", () => {
       "keeps fresh %s quota when the model catalog times out",
       async (source) => {
         vi.useFakeTimers({ toFake: ["Date"] });
-        vi.setSystemTime(NOW_MS);
+        const readAt =
+          source === "cli"
+            ? new Date(NOW_MS).toISOString()
+            : LOOPBACK_QUOTA_READ_AT;
+        vi.setSystemTime(Date.parse(readAt));
         const onExec = vi.fn();
+        const onRequest =
+          vi.fn<(endpoint: AgyConnectionEndpoint, path: string) => void>();
         const fetched = await fetchQuotaWithRuntime(
           runtimeWith({
             cliModels: Object.assign(new Error("agy models timed out"), {
@@ -532,9 +539,12 @@ describe("Antigravity quota parsing", () => {
                   cliQuota: "{}",
                   ps: "123 /Users/test/.local/bin/agy\n",
                   lsof: lsofFor(123, 64440),
+                  onRequest,
                   responses: {
                     "https:64440:/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary":
                       fixture("quota-summary.json"),
+                    "https:64440:/exa.language_server_pb.LanguageServerService/GetUserStatus":
+                      fixture("user-status.json"),
                   },
                 }),
           }),
@@ -546,12 +556,15 @@ describe("Antigravity quota parsing", () => {
           source,
           state: { status: "fresh", stale: false },
         });
-        const result = withQuotaSemantics(
-          fetched,
-          source === "cli"
-            ? new Date(NOW_MS).toISOString()
-            : "2026-06-15T09:00:00Z",
-        );
+        if (source === "cli-rpc") {
+          expect(
+            onRequest.mock.calls.map(([, path]) => path.split("/").at(-1)),
+          ).toEqual(["RetrieveUserQuotaSummary", "GetUserStatus"]);
+          expect(fetched.windows.map(({ id }) => id)).toEqual(
+            EXPECTED_WINDOW_SECONDS.map(([id]) => id),
+          );
+        }
+        const result = withQuotaSemantics(fetched, readAt);
         expect(result.quotaSemantics?.effectiveAvailability[0]).toMatchObject({
           scope: "gemini",
           status: "known",
@@ -1124,6 +1137,8 @@ describe("Antigravity provider", () => {
   });
 
   it("resolves loopback model labels after a failed CLI read", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.parse(LOOPBACK_QUOTA_READ_AT));
     const onExec = vi.fn();
     const fetched = await fetchQuotaWithRuntime(
       runtimeWith({
@@ -1143,7 +1158,11 @@ describe("Antigravity provider", () => {
     expect(
       onExec.mock.calls.filter(([, args]) => args[0] === "models"),
     ).toHaveLength(1);
-    const result = withQuotaSemantics(fetched, "2026-06-15T09:00:00Z");
+    const result = withQuotaSemantics(fetched, LOOPBACK_QUOTA_READ_AT);
+    expect(
+      result.quotaSemantics?.effectiveAvailability[0]
+        ?.effectivePercentRemaining,
+    ).toBe(82);
     expect(result.quotaSemantics?.effectiveAvailability[0]?.models).toEqual({
       status: "known",
       labels: ["Gemini Flash", "Gemini Pro"],

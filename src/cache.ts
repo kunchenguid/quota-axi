@@ -7,6 +7,7 @@ import {
   ensurePrivateParent,
   readUntracedJsonFile,
 } from "./lib/fs.js";
+import { hasCurrentPercentage } from "./providers/common.js";
 import { kimiReadingContextId } from "./providers/kimi-cache-context.js";
 import { commandCodeReadingContextId } from "./providers/commandcode-cache-context.js";
 import { devinReadingContextId } from "./providers/devin-cache-context.js";
@@ -389,7 +390,7 @@ export function readReusableProviders(
     !young ||
     !group.every(
       (record) =>
-        record.snapshot.windows.length > 0 &&
+        hasLiveReuseEvidence(record.snapshot, now) &&
         hasReusableFormat(record) &&
         hasUnexpiredWindows(record, now),
     )
@@ -459,6 +460,12 @@ export function readSnapshotProviders(
   )
     return "expired";
   return records.map(reusedReading);
+}
+
+function hasLiveReuseEvidence(provider: ProviderQuota, now: number): boolean {
+  return provider.provider === "agy"
+    ? hasCurrentPercentage(provider.windows, now)
+    : provider.windows.length > 0;
 }
 
 function hasReusableFormat(record: CachedProvider): boolean {
@@ -760,6 +767,7 @@ function reuseStampsFor(
   readingAt: string,
 ): Map<ProviderQuota, ReuseStamp> {
   const stamps = new Map<ProviderQuota, ReuseStamp>();
+  const now = Date.parse(readingAt);
   let context: string | undefined;
   for (const id of new Set(providers.map((provider) => provider.provider))) {
     if (excludeFromFreshReuse(id)) continue;
@@ -770,7 +778,7 @@ function reuseStampsFor(
       !lanes.every(
         (provider) =>
           (provider as TracedQuota)[READING_INPUTS] === inputs &&
-          provider.windows.length > 0 &&
+          hasLiveReuseEvidence(provider, now) &&
           !isCacheExcluded(provider) &&
           toCacheProvider(provider),
       )

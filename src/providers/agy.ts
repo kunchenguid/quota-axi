@@ -33,6 +33,7 @@ import type {
 } from "../types.js";
 import {
   failedProvider,
+  hasCurrentPercentage,
   servableStaleWindows,
   sourceNames,
   staleFromCache,
@@ -174,7 +175,7 @@ export async function fetchQuotaWithRuntime(
   try {
     cli = await fetchCliQuota(runtime);
     attempts[0] = { source: "cli", status: "success" };
-    if (hasAgyMeasurement(cli))
+    if (hasCurrentPercentage(cli.windows))
       return reportAgyReading(runtime, cli, "cli", attempts, cli.commandPath);
   } catch (error) {
     finalFailure = error;
@@ -192,7 +193,7 @@ export async function fetchQuotaWithRuntime(
   try {
     const quota = await fetchLoopbackQuota(runtime);
     attempts[attempts.length - 1] = { source: "loopback", status: "success" };
-    if (!cli || hasAgyMeasurement(quota))
+    if (!cli || hasCurrentPercentage(quota.windows))
       return reportAgyReading(runtime, quota, "cli-rpc", attempts);
   } catch (error) {
     const skipped =
@@ -272,15 +273,6 @@ async function reportAgyReading(
     ...(groups ? { [AGY_GROUPS]: groups } : {}),
     sourcesTried: sourceNames(attempts),
     attempts,
-  });
-}
-
-function hasAgyMeasurement(reading: AgyQuotaReading): boolean {
-  const now = Date.now();
-  return reading.windows.some(({ percentRemaining, resetsAt }) => {
-    if (percentRemaining === undefined) return false;
-    const reset = Date.parse(resetsAt ?? "");
-    return Number.isNaN(reset) || reset > now;
   });
 }
 
@@ -602,7 +594,7 @@ async function fetchLoopbackQuota(
       if (endpoint.requiresUnleashProbe)
         await probeEndpoint(runtime, endpoint, deadline);
       const reading = await fetchEndpointQuota(runtime, endpoint, deadline);
-      if (hasAgyMeasurement(reading)) return reading;
+      if (hasCurrentPercentage(reading.windows)) return reading;
       diagnostic ??= reading;
     } catch (error) {
       lastError = strongerFailure(lastError, error);
@@ -758,8 +750,8 @@ async function fetchEndpointQuota(
       summaryError = strongerFailure(summaryError, error);
     }
     if (path === USER_STATUS_PATH) userStatus = fallback;
-    if (summary && hasAgyMeasurement(summary)) break;
-    if (fallback && hasAgyMeasurement(fallback)) {
+    if (summary && hasCurrentPercentage(summary.windows)) break;
+    if (fallback && hasCurrentPercentage(fallback.windows)) {
       return summary
         ? {
             ...fallback,

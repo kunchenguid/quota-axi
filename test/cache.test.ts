@@ -545,31 +545,81 @@ describe("quota cache", () => {
     expect(readReusableProviders("agy", 90, Date.parse(reset))).toBeUndefined();
   });
 
-  it("keeps Antigravity groups without windows in snapshots but not live reuse", () => {
-    useTempCache();
-    const reading: ProviderQuota = {
-      ...quota("agy", 0),
-      windows: [],
-      [AGY_GROUPS]: [
-        {
-          id: "gemini_argon",
-          name: "Gemini 4 Argon",
-          models: { status: "unknown" },
-          buckets: [{ id: "argon-weekly" }],
-        },
-      ],
-    };
-    stampReadingInputs(reading, tracedInputs());
-    writeCachedProviders([reading], reading.state.refreshedAt);
-    const now = Date.parse("2026-07-06T18:10:30Z");
-    expect(readReusableProviders("agy", 90, now)).toBeUndefined();
-    const snapshot = readSnapshotProviders(cacheFilePath(), "agy", now);
-    expect(snapshot).toMatchObject([{ windows: [], state: { reused: true } }]);
-    const file = JSON.parse(readFileSync(cacheFilePath(), "utf8")) as {
-      providers: Record<string, unknown>[];
-    };
-    expect(file.providers[0]).not.toHaveProperty("reuse");
-  });
+  it.each(["group-only", "group reset only", "model reset only"] as const)(
+    "keeps %s Antigravity diagnostics in snapshots but not live reuse",
+    (kind) => {
+      useTempCache();
+      const resetsAt = "2026-07-08T12:00:00Z";
+      const model = {
+        id: "model:argon",
+        label: "Argon",
+        kind: "model" as const,
+        resetsAt,
+      };
+      const weekly = {
+        id: "gemini_argon_weekly",
+        label: "Gemini Argon weekly",
+        kind: "weekly" as const,
+        resetsAt,
+      };
+      const reading: ProviderQuota = {
+        ...quota("agy", 0),
+        source: "cli-rpc",
+        windows:
+          kind === "group-only"
+            ? []
+            : [kind === "group reset only" ? weekly : model],
+        ...(kind === "model reset only"
+          ? {}
+          : {
+              [AGY_GROUPS]: [
+                {
+                  id: "gemini_argon",
+                  name: "Gemini 4 Argon",
+                  models: { status: "unknown" as const },
+                  buckets: [
+                    {
+                      id: "argon-weekly",
+                      ...(kind === "group reset only"
+                        ? { windowId: weekly.id }
+                        : {}),
+                    },
+                  ],
+                },
+              ],
+            }),
+      };
+      const inputs = tracedInputs();
+      const now = Date.parse("2026-07-06T18:10:30Z");
+      const file = cacheFilePath();
+      stampReadingInputs(reading, inputs);
+      writeCachedProviders([reading], reading.state.refreshedAt);
+      expect(readReusableProviders("agy", 90, now)).toBeUndefined();
+      expect(readSnapshotProviders(file, "agy", now)).toMatchObject([
+        { windows: reading.windows, state: { reused: true } },
+      ]);
+      const diagnostic = JSON.parse(readFileSync(file, "utf8")) as {
+        providers: Record<string, unknown>[];
+      };
+      expect(diagnostic.providers[0]).not.toHaveProperty("reuse");
+
+      const measured: ProviderQuota = {
+        ...reading,
+        windows: [{ ...model, percentRemaining: 60 }],
+      };
+      stampReadingInputs(measured, inputs);
+      writeCachedProviders([measured], reading.state.refreshedAt);
+      expect(readReusableProviders("agy", 90, now)).toMatchObject([
+        { windows: [{ percentRemaining: 60 }] },
+      ]);
+      const stamped = JSON.parse(
+        readFileSync(file, "utf8"),
+      ) as typeof diagnostic;
+      diagnostic.providers[0]!.reuse = stamped.providers[0]!.reuse;
+      writeFileSync(file, JSON.stringify(diagnostic));
+      expect(readReusableProviders("agy", 90, now)).toBeUndefined();
+    },
+  );
 
   it("reports model-only Antigravity reuse expired when the last reset passes", () => {
     useTempCache();
