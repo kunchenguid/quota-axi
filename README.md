@@ -490,7 +490,8 @@ QUOTA_AXI_OPENCODE_GO_PI_AUTH=1 quota-axi --provider opencode-go --full --json  
 - A Pi lane's key is the auth.json entry id (`opencode-go`, `opencode-go-work`); the database lane's key is `opencode-db` and the auth.json lane's key is `opencode-auth`. Keys are stable, contain no token or path, and name the lane's cache slot.
 - Two surfaces whose literal keys are byte-identical are one credential and fold into the first lane, which names the folded keys in its `accountKeys`. Distinct keys stay distinct lanes: the usage endpoint names no account identity, so quota-axi does not guess a merge.
 - Each lane is read with its own key only, and no lane borrows a sibling's credential, so one account's rejection, rate limit, or empty reading is that lane's own row and never hides or substitutes for another.
-- Lanes are reported in surface priority order, which is not a preference. A host with fewer than two distinct credentials keeps the single selected account and its existing report shape byte-identical.
+- Lanes are reported in surface priority order, which is not a preference. A host whose only discovered credential comes from one of the configured sources keeps the single selected account and its existing report shape byte-identical, and a fold that collapses to those configured stores keeps it too, with the row's `accountKeys: ["default"]`. A lone Pi sibling entry becomes a one-lane report that keeps the legacy keyless shape and names its key in `accountKeys`, because the single selected account can never read a sibling and discarding it would hide a working credential.
+- A configured store that holds a credential quota-axi cannot read (no `sqlite3` for the database, or an unusable entry shape) is nobody's lane: the first lane's row and auth view carry its evidence, and when the first lane's key is then rejected, the row reports that store's indeterminate error rather than a sign-out.
 
 ### Claude profiles
 

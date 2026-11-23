@@ -419,6 +419,19 @@ type DiscoveredSurface = {
 };
 
 /**
+ * A configured store that holds evidence of a credential but yielded no key:
+ * unreadable (no `sqlite3`), or an entry of an unusable shape. It is nobody's
+ * lane, so the selected lane carries its evidence.
+ */
+type BlockedSurface = {
+  sourceName: string;
+  source: OpenCodeGoCredentialSource;
+  resolution: Exclude<CredentialResolution, { status: "available" }>;
+  /** True when the store precedes every usable credential in priority. */
+  beforeFirst: boolean;
+};
+
+/**
  * One reported account: its own credential first, then the sibling surfaces
  * folded into it because they hold the identical literal key. Keys stay in
  * memory only; they are never logged, rendered, cached, or sent anywhere but
@@ -428,6 +441,10 @@ type DiscoveredLane = {
   accountKey: string;
   key: string;
   surfaces: DiscoveredSurface[];
+  /** Unreadable stores that precede this lane; set on the first lane only. */
+  blockedBefore?: BlockedSurface[];
+  /** Every unreadable configured store; set on the first lane only. */
+  blockedAll?: BlockedSurface[];
 };
 
 /**
@@ -438,14 +455,15 @@ type DiscoveredLane = {
  * configured surface resolves in its own priority order, Pi sibling entries
  * slot in beside the built-in entry when the opt-in flag is set, and surfaces
  * whose literal keys are byte-identical fold into the first lane as one
- * account. One surface or one folded account keeps the legacy single-winner
- * path byte-identical, so a host with a single key sees exactly what it saw
- * before.
+ * account. A sole credential from a configured source keeps the legacy
+ * single-winner path byte-identical; a lone Pi sibling becomes a one-lane
+ * report, as Codex's lone sibling does, because the single-winner path can
+ * never read a sibling and discarding it would hide a working credential.
  */
 async function discoverOpenCodeGoAccounts(
   dependencies: Dependencies,
 ): Promise<ProviderAccount[] | undefined> {
-  const surfaces = await discoverSurfaces(dependencies);
+  const { surfaces, blocked } = await discoverSurfaces(dependencies);
   const lanes: DiscoveredLane[] = [];
   const laneByCredential = new Map<string, DiscoveredLane>();
   for (const surface of surfaces) {
@@ -462,9 +480,22 @@ async function discoverOpenCodeGoAccounts(
     lanes.push(lane);
     laneByCredential.set(surface.key, lane);
   }
-  // A sole credential keeps the single selected account, as Codex keeps its
-  // single-winner path when only the built-in Pi entry is present.
-  if (lanes.length < 2) return undefined;
+  if (lanes.length === 0) return undefined;
+  const [firstLane] = lanes;
+  if (
+    lanes.length === 1 &&
+    dependencies.credentialSources.some(
+      ({ name }) => name === firstLane.surfaces[0]!.sourceName,
+    )
+  ) {
+    // The single-winner path reads this credential itself, with its own
+    // multi-source fallback and evidence; keep that report byte-identical.
+    return undefined;
+  }
+  // Unreadable stores are provider evidence no lane can own, so the selected
+  // lane carries them, exactly as the single winner's row always did.
+  firstLane.blockedBefore = blocked.filter((entry) => entry.beforeFirst);
+  firstLane.blockedAll = blocked;
   return lanes.map((lane) => ({
     accountKey: lane.accountKey,
     fetchQuota: async () => readLaneQuota(lane, dependencies),
@@ -476,49 +507,71 @@ async function discoverOpenCodeGoAccounts(
  * Every surface holding a usable key, in report order: the configured
  * sources in their own priority order, with Pi sibling entries slotted
  * directly after the last Pi surface so all Pi lanes stay together ahead of
- * the opencode stores.
+ * the opencode stores. Configured stores that hold a credential but yielded
+ * no key come back as `blocked`, in configured order, each marked by whether
+ * it precedes every usable credential.
  */
-async function discoverSurfaces(
-  dependencies: Dependencies,
-): Promise<DiscoveredSurface[]> {
-  const configured: (DiscoveredSurface | undefined)[] = [];
+async function discoverSurfaces(dependencies: Dependencies): Promise<{
+  surfaces: DiscoveredSurface[];
+  blocked: BlockedSurface[];
+}> {
+  const slots: (
+    | { kind: "surface"; surface: DiscoveredSurface }
+    | { kind: "blocked"; blocked: BlockedSurface }
+    | undefined
+  )[] = [];
   let lastPiBoundary = 0;
+  let sawUsable = false;
   for (const { name, source } of dependencies.credentialSources) {
     const laneKey = laneKeyForSource(name);
     const resolution = await resolveSafely(source);
-    configured.push(
-      laneKey && resolution.status === "available"
-        ? {
-            laneKey,
-            sourceName: name,
-            source,
-            key: resolution.key,
-          }
-        : undefined,
-    );
-    if (entryIdFromPiSource(name)) lastPiBoundary = configured.length;
+    if (resolution.status === "available" && laneKey) {
+      slots.push({
+        kind: "surface",
+        surface: { laneKey, sourceName: name, source, key: resolution.key },
+      });
+      sawUsable = true;
+    } else if (
+      resolution.status === "invalid" ||
+      resolution.status === "skipped" ||
+      resolution.status === "error"
+    ) {
+      slots.push({
+        kind: "blocked",
+        blocked: {
+          sourceName: name,
+          source,
+          resolution,
+          beforeFirst: !sawUsable,
+        },
+      });
+    } else {
+      slots.push(undefined);
+    }
+    if (entryIdFromPiSource(name)) lastPiBoundary = slots.length;
   }
   const covered = new Set(
     dependencies.credentialSources.map(({ name }) => name),
   );
-  const surfaces: DiscoveredSurface[] = [];
   for (const entryId of await safePiEntryIds(dependencies)) {
     const sourceName = piOpenCodeGoSourceName(entryId);
     if (covered.has(sourceName)) continue;
     const source = dependencies.piEntrySource(entryId);
     const resolution = await resolveSafely(source);
     if (resolution.status !== "available") continue;
-    configured.splice(lastPiBoundary++, 0, {
-      laneKey: entryId,
-      sourceName,
-      source,
-      key: resolution.key,
+    slots.splice(lastPiBoundary++, 0, {
+      kind: "surface",
+      surface: { laneKey: entryId, sourceName, source, key: resolution.key },
     });
   }
-  for (const surface of configured) {
-    if (surface) surfaces.push(surface);
+  const surfaces: DiscoveredSurface[] = [];
+  const blocked: BlockedSurface[] = [];
+  for (const slot of slots) {
+    if (!slot) continue;
+    if (slot.kind === "surface") surfaces.push(slot.surface);
+    else blocked.push(slot.blocked);
   }
-  return surfaces;
+  return { surfaces, blocked };
 }
 
 async function safePiEntryIds(dependencies: Dependencies): Promise<string[]> {
@@ -540,6 +593,12 @@ async function readLaneQuota(
   dependencies: Dependencies,
 ): Promise<ProviderQuota> {
   const accountKeys = lane.surfaces.map((surface) => surface.laneKey);
+  const blocked = lane.blockedBefore ?? [];
+  const blockedAttempts = blocked.map(blockedAttempt);
+  const sourcesTried = [
+    ...blocked.map((entry) => entry.sourceName),
+    lane.surfaces[0]!.sourceName,
+  ];
   try {
     const payload = await requestUsage(
       lane.key,
@@ -548,7 +607,14 @@ async function readLaneQuota(
     );
     const normalized = normalizeOpenCodeGoPayload(payload);
     if (normalized.windows.length === 0)
-      return laneFailureReport(lane, "quota_missing", "error", accountKeys);
+      return laneFailureReport(
+        lane,
+        "quota_missing",
+        "error",
+        accountKeys,
+        sourcesTried,
+        blockedAttempts,
+      );
     return {
       ...successProvider({
         provider: "opencode-go",
@@ -557,8 +623,11 @@ async function readLaneQuota(
         ...(normalized.plan ? { plan: normalized.plan } : {}),
         windows: normalized.windows,
         refreshedAt: new Date(dependencies.now()).toISOString(),
-        sourcesTried: [lane.surfaces[0]!.sourceName],
-        attempts: [{ source: lane.surfaces[0]!.sourceName, status: "success" }],
+        sourcesTried,
+        attempts: [
+          ...blockedAttempts,
+          { source: lane.surfaces[0]!.sourceName, status: "success" },
+        ],
       }),
       accountKeys,
     };
@@ -570,8 +639,47 @@ async function readLaneQuota(
         : code === "provider_rate_limited"
           ? "rate_limited"
           : "error";
-    return laneFailureReport(lane, code, status, accountKeys);
+    // The documented guarantee: when a preceding store holds a credential
+    // quota-axi could not read, the selected key's rejection reports that
+    // indeterminate cause rather than claiming a sign-out.
+    const indeterminate =
+      code === "provider_auth_rejected"
+        ? indeterminateBlockedFailure(blocked)
+        : undefined;
+    return laneFailureReport(
+      lane,
+      indeterminate?.code ?? code,
+      indeterminate?.status ?? status,
+      accountKeys,
+      sourcesTried,
+      blockedAttempts,
+    );
   }
+}
+
+/** The unreadable store the single-winner path would name for a rejection. */
+function indeterminateBlockedFailure(
+  blocked: BlockedSurface[],
+): { status: ProviderStatus; code: string } | undefined {
+  const preferred = blocked.find(
+    ({ sourceName }) =>
+      sourceName === OPENCODE_GO_DB_CREDENTIAL_SOURCE ||
+      sourceName === OPENCODE_GO_CREDENTIAL_SOURCE,
+  );
+  const failure = preferred ?? blocked[0];
+  return failure ? localCredentialFailure(failure.resolution) : undefined;
+}
+
+function blockedAttempt(entry: BlockedSurface): SourceAttempt {
+  return {
+    source: entry.sourceName,
+    status: entry.resolution.status === "error" ? "failed" : "skipped",
+    error: credentialError(entry.resolution),
+    ...(entry.resolution.status === "invalid" ||
+    entry.resolution.status === "skipped"
+      ? { credentialPresent: true }
+      : {}),
+  };
 }
 
 function laneFailureReport(
@@ -579,6 +687,8 @@ function laneFailureReport(
   code: string,
   status: ProviderStatus,
   accountKeys: string[],
+  sourcesTried: string[],
+  blockedAttempts: SourceAttempt[],
 ): ProviderQuota {
   return {
     ...failedProvider({
@@ -587,8 +697,9 @@ function laneFailureReport(
       status,
       error: code,
       source: "api",
-      sourcesTried: [lane.surfaces[0]!.sourceName],
+      sourcesTried,
       attempts: [
+        ...blockedAttempts,
         { source: lane.surfaces[0]!.sourceName, status: "failed", error: code },
       ],
     }),
@@ -600,13 +711,24 @@ function laneFailureReport(
 async function inspectLaneAuth(
   lane: DiscoveredLane,
 ): Promise<AuthProviderReport> {
-  const sources: AuthSourceReport[] = await Promise.all(
+  const laneSources = await Promise.all(
     lane.surfaces.map(async ({ sourceName, source }) => ({
       source: sourceName,
       ...authSourceStatus(await inspectSafely(source)),
     })),
   );
-  return { provider: "opencode-go", sources };
+  // The first lane also carries the unreadable configured stores, the way the
+  // single selected account's auth report always listed every source.
+  const blockedSources = await Promise.all(
+    (lane.blockedAll ?? []).map(async ({ sourceName, source }) => ({
+      source: sourceName,
+      ...authSourceStatus(await inspectSafely(source)),
+    })),
+  );
+  return {
+    provider: "opencode-go",
+    sources: [...laneSources, ...blockedSources],
+  };
 }
 
 function authSourceStatus(inspection: CredentialInspection): {
