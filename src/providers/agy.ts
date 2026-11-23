@@ -970,7 +970,6 @@ function parseAgyReset({
   resetTime,
   reset_time,
 }: Record<string, unknown>): string | undefined {
-  let invalid: string | undefined;
   for (const value of [resetTime, reset_time]) {
     if (value === undefined) continue;
     const timestamp =
@@ -981,10 +980,10 @@ function parseAgyReset({
           : Number.NaN;
     const reset = new Date(timestamp);
     if (Number.isFinite(reset.getTime())) return reset.toISOString();
-    invalid ??=
-      typeof value === "string" && value.trim() ? value : "invalid reset";
   }
-  return invalid;
+  return resetTime === undefined && reset_time === undefined
+    ? undefined
+    : "invalid reset";
 }
 
 function normalizeQuotaSummaryBucket(

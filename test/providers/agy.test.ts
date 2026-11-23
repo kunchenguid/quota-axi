@@ -1126,7 +1126,7 @@ describe("Antigravity quota parsing", () => {
                   id: "gemini_argon_weekly",
                   resetsAt:
                     evidence === "malformed"
-                      ? resetTime
+                      ? "invalid reset"
                       : new Date(resetTime).toISOString(),
                 },
               ]
@@ -1238,16 +1238,12 @@ describe("Antigravity quota parsing", () => {
           report,
           true,
         ).providers[0]?.windows.find(({ id }) => id === argonId);
-        const invalidReset =
-          typeof resetTime === "string" && resetTime
-            ? resetTime
-            : "invalid reset";
         expect(diagnostic).toMatchObject({
           percentRemaining: 0,
-          resetsAt: invalidReset,
+          resetsAt: "invalid reset",
         });
         expect(renderQuotaToon(report, "quota-axi", true)).toContain(
-          invalidReset,
+          "invalid reset",
         );
         expect(renderQuotaToon(report, "quota-axi", false)).not.toContain(
           "exhausted_now",
@@ -1261,6 +1257,11 @@ describe("Antigravity quota parsing", () => {
         expect(Array.isArray(snapshot) && snapshot[0]).toBeTruthy();
         if (!Array.isArray(snapshot) || !snapshot[0])
           throw new Error("Expected saved quota");
+        expect(
+          snapshot[0].windows.find(({ id }) => id === argonId),
+        ).toMatchObject({
+          resetsAt: "invalid reset",
+        });
         expect(
           withQuotaSemantics(snapshot[0], generatedAt).windows.map(
             ({ id }) => id,
@@ -1530,6 +1531,20 @@ describe("Antigravity quota parsing", () => {
         { percentRemaining: 0, resetsAt: "2100-03-02T12:00:00.000Z" },
       ]);
     }
+  });
+
+  it("does not retain malformed model reset text", () => {
+    const reading = normalizeAgyUserStatus({
+      clientModelConfigs: [
+        {
+          label: "Argon",
+          quotaInfo: { remainingFraction: 0, resetTime: "not-a-date" },
+        },
+      ],
+    });
+    expect(reading?.windows).toMatchObject([
+      { id: "model:argon", percentRemaining: 0, resetsAt: "invalid reset" },
+    ]);
   });
 
   it("distinguishes exact and rounded full model resets at the epoch", () => {
