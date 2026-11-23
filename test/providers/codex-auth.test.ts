@@ -27,6 +27,7 @@ beforeEach(() => {
   process.env.PI_CODING_AGENT_DIR = join(tempDir, "pi-agent");
   process.env.XDG_CACHE_HOME = join(tempDir, "cache");
   vi.doMock("../../src/lib/process.js", () => ({
+    execFileText: vi.fn(),
     findCommandPath: vi.fn(async () => undefined),
     terminateChild: vi.fn(),
   }));
@@ -1142,6 +1143,7 @@ describe("Codex credential-state reporting", () => {
     const spawn = vi.fn(() => successfulChild());
     vi.doMock("node:child_process", () => ({ spawn }));
     vi.doMock("../../src/lib/process.js", () => ({
+      execFileText: vi.fn(),
       findCommandPath: vi.fn(async () => binary),
       terminateChild: vi.fn(),
     }));
@@ -1173,6 +1175,7 @@ describe("Codex credential-state reporting", () => {
       const spawn = vi.fn(() => successfulChild());
       vi.doMock("node:child_process", () => ({ spawn }));
       vi.doMock("../../src/lib/process.js", () => ({
+        execFileText: vi.fn(),
         findCommandPath: vi.fn(async () => binary),
         terminateChild: vi.fn(),
       }));
