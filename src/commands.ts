@@ -562,8 +562,8 @@ function reusableReadings(
 
 /**
  * A provider's readings from the supplied snapshot. It never falls through to
- * the vendor: a provider missing from the file or ineligible for fresh reuse
- * is reported unavailable so a fixture cannot silently read live credentials.
+ * the vendor, even when a provider is missing or its saved reading cannot
+ * be used. Fixtures must not silently read live credentials.
  */
 function snapshotReadings(provider: ProviderId, file: string): ProviderQuota[] {
   let readings: ProviderQuota[] | "expired" | undefined;

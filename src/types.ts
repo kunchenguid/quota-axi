@@ -232,8 +232,8 @@ export type QuotaWindow = {
 
 /**
  * The models a quota group covers. `labels` are the vendor's own names; `ids`
- * are the CLI model ids matched to those labels and are present only when the
- * model catalog could be read. `unknown` means the vendor named no models.
+ * are the CLI model ids matched to those labels. If no IDs match, `ids` is
+ * absent and clients can use `labels`. `unknown` means the vendor named no models.
  */
 export type QuotaModelList =
   | {

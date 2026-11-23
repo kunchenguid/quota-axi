@@ -43,7 +43,7 @@ To prevent cross-account or cross-environment cache poisoning, providers whose i
 
 The following fields and statuses are **never cached**:
 
-- **Non-fresh or empty reads**: Only readings with `state.status: "fresh"`, at least one window, and a source other than `cache` are written (`toCacheProvider`); every other status and every cache-served report is skipped. `failed` is an attempt status, not a provider `state.status`.
+- **Cache admission**: See [README Cache](../../README.md#cache) and `toCacheProvider` in `src/cache.ts`. `failed` is an attempt status, not a provider `state.status`.
 - **Stale reads**: Stale data is never re-persisted as fresh.
 - **Account identities**: Explicit `account` objects are scrubbed before writing.
 - **Source attempts**: The report's `attempts` list and attempt diagnostic logs are excluded.
