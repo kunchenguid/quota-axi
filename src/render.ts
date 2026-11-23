@@ -19,6 +19,7 @@ import type {
 
 const UNKNOWN = "unknown";
 const NONE = "none";
+const NOT_STARTED = "not_started";
 const ID_SEPARATOR = " + ";
 /** Kept out of `,` so a detail never forces TOON string quoting on its own. */
 const DETAIL_SEPARATOR = " · ";
@@ -477,8 +478,11 @@ function auditBlocks(response: QuotaAxiResponse): string[] {
       id: window.id,
       label: window.label,
       percentRemaining: window.percentRemaining ?? UNKNOWN,
-      resetsAt: window.resetsAt ?? window.resetText ?? UNKNOWN,
-      pace: window.pace?.status ?? UNKNOWN,
+      resetsAt:
+        window.resetsAt ??
+        window.resetText ??
+        (window.notStarted ? NOT_STARTED : UNKNOWN),
+      pace: window.notStarted ? NOT_STARTED : (window.pace?.status ?? UNKNOWN),
       reserve: window.pace?.reservePercentPoints ?? UNKNOWN,
       burnMultiple: window.pace?.burnMultiple ?? UNKNOWN,
       timeRemainingPercent: window.pace?.timeRemainingPercent ?? UNKNOWN,
@@ -487,6 +491,11 @@ function auditBlocks(response: QuotaAxiResponse): string[] {
       projectedExhaustedAt: window.pace?.projectedExhaustedAt ?? UNKNOWN,
       confidence: window.pace?.projectionConfidence ?? UNKNOWN,
     })),
+  );
+  const showModels = response.providers.some((provider) =>
+    provider.quotaSemantics?.effectiveAvailability.some(
+      (scope) => scope.models,
+    ),
   );
   const scopeAudit = response.providers.flatMap((provider) =>
     (provider.quotaSemantics?.effectiveAvailability ?? []).map((scope) => ({
@@ -501,6 +510,7 @@ function auditBlocks(response: QuotaAxiResponse): string[] {
       unknownWindowIds: joinIds(scope.pace?.unknownWindowIds) ?? NONE,
       worstReserve: scope.pace?.worstReservePercentPoints ?? UNKNOWN,
       worstReserveWindowId: scope.pace?.worstReserveWindowId ?? UNKNOWN,
+      ...(showModels ? { models: modelsColumn(scope.models) } : {}),
     })),
   );
   const locators = response.providers.some(
@@ -713,6 +723,11 @@ function demotedWindow(window: QuotaWindow): QuotaWindow {
         }
       : {}),
   };
+}
+
+function modelsColumn(models: EffectiveAvailability["models"]): string {
+  if (models?.status !== "known") return UNKNOWN;
+  return joinIds(models.ids ?? models.labels) ?? UNKNOWN;
 }
 
 function demotedSemantics(semantics: QuotaSemantics): QuotaSemantics {

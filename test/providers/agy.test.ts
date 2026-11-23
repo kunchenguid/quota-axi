@@ -29,6 +29,7 @@ import {
   normalizeAgyPrintUsage,
   normalizeAgyQuotaSummary,
   normalizeAgyUserStatus,
+  parseAgyModelCatalog,
   portsFromLsof,
   processInfosFromPs,
   requestLoopbackJson,
@@ -233,6 +234,297 @@ describe("Antigravity quota parsing", () => {
       ["claude_gpt_5h", 18_000],
       ["claude_gpt_weekly", 604_800],
     ]);
+  });
+
+  describe("unused limits, groups and models (real /quota output)", () => {
+    // Captured 2026-11-22T06:20:29Z. agy reported "now plus period" resets for
+    // the Gemini and Argon limits and the Unix epoch for Claude and GPT.
+    const NOW_MS = Date.parse("2026-11-22T06:20:29Z");
+    const CATALOG = parseAgyModelCatalog(
+      [
+        "gemini-4-neon-high\tGemini 4 Neon (High)",
+        "gemini-4-neon-xhigh\tGemini 4 Neon (XHigh)",
+        "gemini-4-neon-medium\tGemini 4 Neon (Medium)",
+        "gemini-4-neon-low\tGemini 4 Neon (Low)",
+        "gemini-4-argon-medium\tGemini 4 Argon (Medium)",
+        "gemini-4-hydrogen-medium\tGemini 4 Hydrogen (Medium)",
+        "gemini-pro-orchestrator-neon\tOrchestrator (Neon)",
+        "gemini-pro-orchestrator-g1-pro\tOrchestrator (Argon)",
+        "gemini-3.8-flash-medium\tGemini 3.8 Flash (Medium)",
+        "claude-opus-5-5-low\tClaude Opus 5.5 (Low)",
+        "claude-sonnet-5-5-high\tClaude Sonnet 5.5 (High)",
+        "gpt-oss-120b-medium\tGPT-OSS 120B (Medium)",
+      ].join("\n"),
+    );
+
+    function windowById(
+      windows: ReturnType<typeof normalizeAgyPrintUsage> & object,
+      id: string,
+    ) {
+      const found = windows.windows.find((window) => window.id === id);
+      expect(found, id).toBeDefined();
+      return found!;
+    }
+
+    it("keeps 100% and drops the placeholder reset for unused limits", () => {
+      const result = normalizeAgyPrintUsage(fixture("cli-quota-unused.json"), {
+        nowMs: NOW_MS,
+        catalog: CATALOG,
+      })!;
+
+      expect(result.windows.map(({ id }) => id)).toEqual([
+        "gemini_5h",
+        "gemini_weekly",
+        "gemini_argon_weekly",
+        "claude_gpt_5h",
+        "claude_gpt_weekly",
+      ]);
+      for (const window of result.windows) {
+        expect(window.percentRemaining).toBe(100);
+        expect(window.notStarted).toBe(true);
+        expect(window.resetsAt).toBeUndefined();
+      }
+    });
+
+    it("reports not-started pace and a known scope for unused limits", () => {
+      const fetched = normalizeAgyPrintUsage(fixture("cli-quota-unused.json"), {
+        nowMs: NOW_MS,
+      })!;
+      const result = withQuotaSemantics(
+        {
+          provider: "agy",
+          label: "Antigravity",
+          source: "cli",
+          windows: fetched.windows,
+          state: { status: "fresh", stale: false, sourcesTried: ["cli"] },
+        },
+        new Date(NOW_MS).toISOString(),
+      );
+
+      expect(result.state.status).toBe("fresh");
+      expect(result.windows.map(({ pace }) => pace)).toEqual(
+        Array(5).fill({ status: "unknown", reason: "not_started" }),
+      );
+      expect(result.quotaSemantics?.status).toBe("known");
+      expect(
+        result.quotaSemantics?.effectiveAvailability.map(
+          ({ scope, status, effectivePercentRemaining }) => [
+            scope,
+            status,
+            effectivePercentRemaining,
+          ],
+        ),
+      ).toEqual([
+        ["gemini", "known", 100],
+        ["gemini_argon", "known", 100],
+        ["claude_gpt", "known", 100],
+      ]);
+    });
+
+    it("gives Argon its own scope and keeps unknown groups as their own scope", () => {
+      const raw = JSON.parse(
+        JSON.stringify(fixture("cli-quota-unused.json")),
+      ) as { command: { data: { groups: unknown[] } } };
+      raw.command.data.groups.push({
+        name: "Gemini 5 Future",
+        description: "Models within this group: Gemini 5 Future",
+        buckets: [
+          {
+            id: "future-weekly",
+            name: "Weekly Limit Remaining",
+            window: "weekly",
+            remaining_fraction: 0.5,
+            reset_time: "2026-11-25T00:00:00Z",
+          },
+        ],
+      });
+      const result = normalizeAgyPrintUsage(raw, { nowMs: NOW_MS })!;
+      const future = windowById(result, "gemini_5_future_weekly");
+      expect(future).toMatchObject({
+        percentRemaining: 50,
+        resetsAt: "2026-11-25T00:00:00.000Z",
+      });
+      const semantics = withQuotaSemantics(
+        {
+          provider: "agy",
+          label: "Antigravity",
+          source: "cli",
+          windows: result.windows,
+          state: { status: "fresh", stale: false, sourcesTried: ["cli"] },
+        },
+        new Date(NOW_MS).toISOString(),
+      ).quotaSemantics;
+      expect(semantics?.unresolvedWindowIds).toBeUndefined();
+      expect(
+        semantics?.effectiveAvailability.map(({ scope }) => scope),
+      ).toEqual(["gemini", "gemini_argon", "claude_gpt", "gemini_5_future"]);
+    });
+
+    it("keeps a used limit's real reset and pace", () => {
+      const raw = JSON.parse(
+        JSON.stringify(fixture("cli-quota-unused.json")),
+      ) as {
+        command: {
+          data: {
+            groups: Array<{
+              buckets: Array<{
+                id: string;
+                remaining_fraction: number;
+                reset_time: string;
+              }>;
+            }>;
+          };
+        };
+      };
+      const weekly = raw.command.data.groups[0]!.buckets[0]!;
+      weekly.remaining_fraction = 0.62;
+      weekly.reset_time = "2026-11-26T03:00:00Z";
+      const fetched = normalizeAgyPrintUsage(raw, { nowMs: NOW_MS })!;
+
+      expect(windowById(fetched, "gemini_weekly")).toMatchObject({
+        percentRemaining: 62,
+        resetsAt: "2026-11-26T03:00:00.000Z",
+      });
+      expect(windowById(fetched, "gemini_weekly").notStarted).toBeUndefined();
+      expect(windowById(fetched, "gemini_5h").notStarted).toBe(true);
+
+      const result = withQuotaSemantics(
+        {
+          provider: "agy",
+          label: "Antigravity",
+          source: "cli",
+          windows: fetched.windows,
+          state: { status: "fresh", stale: false, sourcesTried: ["cli"] },
+        },
+        new Date(NOW_MS).toISOString(),
+      );
+      expect(
+        windowById({ ...fetched, windows: result.windows }, "gemini_weekly")
+          .pace?.status,
+      ).not.toBe("unknown");
+      expect(result.quotaSemantics?.effectiveAvailability[0]).toMatchObject({
+        scope: "gemini",
+        status: "known",
+        effectivePercentRemaining: 62,
+      });
+    });
+
+    it("does not call a partly used limit unstarted when agy sends the epoch", () => {
+      const raw = JSON.parse(
+        JSON.stringify(fixture("cli-quota-unused.json")),
+      ) as {
+        command: {
+          data: {
+            groups: Array<{
+              buckets: Array<{ remaining_fraction: number }>;
+            }>;
+          };
+        };
+      };
+      raw.command.data.groups[1]!.buckets[0]!.remaining_fraction = 0.9;
+      const result = normalizeAgyPrintUsage(raw, { nowMs: NOW_MS })!;
+      const used = windowById(result, "claude_gpt_weekly");
+      expect(used.percentRemaining).toBe(90);
+      expect(used.resetsAt).toBeUndefined();
+      expect(used.notStarted).toBeUndefined();
+    });
+
+    it("lists each group's models and matches them to agy model ids", () => {
+      const result = normalizeAgyPrintUsage(fixture("cli-quota-unused.json"), {
+        nowMs: NOW_MS,
+        catalog: CATALOG,
+      })!;
+
+      expect(windowById(result, "gemini_weekly").models).toEqual({
+        status: "known",
+        labels: [
+          "Gemini 4 Neon",
+          "Gemini 4 Hydrogen",
+          "Orchestrator (Neon)",
+          "Gemini 3.8 Flash",
+        ],
+        ids: [
+          "gemini-4-neon-high",
+          "gemini-4-neon-xhigh",
+          "gemini-4-neon-medium",
+          "gemini-4-neon-low",
+          "gemini-4-hydrogen-medium",
+          "gemini-pro-orchestrator-neon",
+          "gemini-3.8-flash-medium",
+        ],
+      });
+      expect(windowById(result, "claude_gpt_5h").models).toMatchObject({
+        status: "known",
+        ids: [
+          "claude-opus-5-5-low",
+          "claude-sonnet-5-5-high",
+          "gpt-oss-120b-medium",
+        ],
+      });
+      // Argon's description is plan advice, not a model list.
+      expect(windowById(result, "gemini_argon_weekly").models).toEqual({
+        status: "unknown",
+      });
+    });
+
+    it("keeps model labels without ids when the model catalog is unavailable", () => {
+      const result = normalizeAgyPrintUsage(fixture("cli-quota-unused.json"), {
+        nowMs: NOW_MS,
+      })!;
+      expect(windowById(result, "claude_gpt_weekly").models).toEqual({
+        status: "known",
+        labels: ["Claude Opus 5.5", "Claude Sonnet 5.5", "GPT-OSS 120B"],
+      });
+    });
+
+    it("carries the model list onto the scope", () => {
+      const fetched = normalizeAgyPrintUsage(fixture("cli-quota-unused.json"), {
+        nowMs: NOW_MS,
+      })!;
+      const scopes = withQuotaSemantics(
+        {
+          provider: "agy",
+          label: "Antigravity",
+          source: "cli",
+          windows: fetched.windows,
+          state: { status: "fresh", stale: false, sourcesTried: ["cli"] },
+        },
+        new Date(NOW_MS).toISOString(),
+      ).quotaSemantics?.effectiveAvailability;
+      expect(
+        scopes?.map(({ scope, models }) => [scope, models?.status]),
+      ).toEqual([
+        ["gemini", "known"],
+        ["gemini_argon", "unknown"],
+        ["claude_gpt", "known"],
+      ]);
+    });
+
+    it("rejects a cut-off all-full placeholder with no group descriptions", () => {
+      const raw = JSON.parse(
+        JSON.stringify(fixture("cli-quota-unused.json")),
+      ) as { command: { data: { groups: Array<{ description?: string }> } } };
+      for (const group of raw.command.data.groups) delete group.description;
+      expect(normalizeAgyPrintUsage(raw, { nowMs: NOW_MS })).toBeUndefined();
+    });
+
+    it("fails the read and serves the cached reading for a cut-off placeholder", async () => {
+      const raw = JSON.parse(
+        JSON.stringify(fixture("cli-quota-unused.json")),
+      ) as { command: { data: { groups: Array<{ description?: string }> } } };
+      for (const group of raw.command.data.groups) delete group.description;
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(NOW_MS);
+      try {
+        const result = await fetchQuotaWithRuntime(
+          runtimeWith({ ps: "", cliQuota: JSON.stringify(raw) }),
+        );
+        expect(result.state.status).not.toBe("fresh");
+        expect(result.windows).toEqual([]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   it("falls back to model windows from user status payloads", () => {
@@ -709,14 +1001,15 @@ describe("Antigravity provider", () => {
       "claude_gpt_5h",
       "claude_gpt_weekly",
     ]);
-    expect(commands.at(-1)).toMatchObject({
+    const quotaCommand = commands.find(({ args }) => args[0] === "-p");
+    expect(quotaCommand).toMatchObject({
       command: "/Users/test/.local/bin/agy",
       args: ["-p", "/quota", "--output-format", "json"],
       timeoutMs: 15_000,
     });
-    expect(
-      commands.at(-1)?.path?.split(delimiter).slice(1).join(delimiter),
-    ).toBe(process.env.PATH ?? "");
+    expect(quotaCommand?.path?.split(delimiter).slice(1).join(delimiter)).toBe(
+      process.env.PATH ?? "",
+    );
     expect(loopbackCalled).toBe(false);
   });
 
@@ -1107,15 +1400,17 @@ exec node "$0-cli.js" "$@"
 
     const result = withQuotaSemantics(fetched, nowIso);
 
-    expect(result.quotaSemantics).toMatchObject({
-      status: "partial",
-      unresolvedWindowIds: ["gemini_argon_weekly"],
-    });
+    expect(result.quotaSemantics?.status).toBe("known");
+    expect(result.quotaSemantics?.unresolvedWindowIds).toBeUndefined();
     expect(result.quotaSemantics?.effectiveAvailability).toMatchObject([
       {
         scope: "gemini",
         boundedBy: ["gemini_weekly"],
         effectivePercentRemaining: 99,
+      },
+      {
+        scope: "gemini_argon",
+        boundedBy: ["gemini_argon_weekly"],
       },
       {
         scope: "claude_gpt",
@@ -1125,7 +1420,7 @@ exec node "$0-cli.js" "$@"
     ]);
   });
 
-  it("marks reading stale when resetsAt is in the past", async () => {
+  it("does not mark the whole reading stale when one limit's reset has passed", async () => {
     const nowIso = "2026-09-15T12:00:00.000Z";
     const pastReset = new Date(Date.parse(nowIso) - 60_000).toISOString();
     const quotaData = fixture("cli-quota.json") as {
@@ -1148,8 +1443,12 @@ exec node "$0-cli.js" "$@"
 
     const result = withQuotaSemantics(fetched, nowIso);
 
-    expect(result.state.status).toBe("stale");
-    expect(result.state.stale).toBe(true);
+    expect(result.state.status).toBe("fresh");
+    expect(result.state.stale).toBeFalsy();
+    const scopes = result.quotaSemantics?.effectiveAvailability ?? [];
+    expect(scopes.find(({ scope }) => scope === "gemini")?.status).toBe(
+      "unknown",
+    );
   });
 });
 

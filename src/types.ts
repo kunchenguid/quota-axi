@@ -80,6 +80,7 @@ export type QuotaPaceReason =
   | "invalid_cycle"
   | "future_cycle_start"
   | "expired_reset"
+  | "not_started"
   | "unsupported_period";
 
 export type QuotaPace = {
@@ -219,12 +220,31 @@ export type QuotaWindow = {
   usedCredits?: number;
   remainingCredits?: number;
   creditUnit?: string;
+  /**
+   * The vendor reported a full allowance whose reset is a placeholder (the Unix
+   * epoch, or "now plus one period"), so no cycle has begun. The window keeps
+   * its 100% and carries no `resetsAt`.
+   */
+  notStarted?: boolean;
+  /** Models that draw on this window, when the vendor names them. */
+  models?: QuotaModelList;
   /** Cycle-average pace relative to generatedAt. Not cached. */
   pace?: QuotaPace;
 };
 
+/**
+ * The models a quota group covers. `labels` are the vendor's own names; `ids`
+ * are the CLI model ids matched to those labels and are present only when the
+ * model catalog could be read. `unknown` means the vendor named no models.
+ */
+export type QuotaModelList =
+  | { status: "known"; labels: string[]; ids?: string[] }
+  | { status: "unknown" };
+
 export type EffectiveAvailability = {
   scope: string;
+  /** Models in this scope, when the provider names them. */
+  models?: QuotaModelList;
   status: "known" | "unknown";
   effectivePercentRemaining?: number;
   boundedBy: string[];

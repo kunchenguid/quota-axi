@@ -1292,7 +1292,27 @@ function normalizeCachedWindow(raw: unknown): QuotaWindow | undefined {
   assignNumber(result, "usedCredits", data.usedCredits);
   assignNumber(result, "remainingCredits", data.remainingCredits);
   assignString(result, "creditUnit", data.creditUnit);
+  if (data.notStarted === true) result.notStarted = true;
+  const models = normalizeCachedModelList(data.models);
+  if (models) result.models = models;
   return result;
+}
+
+function normalizeCachedModelList(
+  raw: unknown,
+): QuotaWindow["models"] | undefined {
+  const data = objectValue(raw);
+  if (!data) return undefined;
+  if (data.status === "unknown") return { status: "unknown" };
+  if (data.status !== "known") return undefined;
+  const strings = (value: unknown): string[] | undefined =>
+    Array.isArray(value) && value.every((item) => typeof item === "string")
+      ? (value as string[])
+      : undefined;
+  const labels = strings(data.labels);
+  if (!labels) return undefined;
+  const ids = strings(data.ids);
+  return ids ? { status: "known", labels, ids } : { status: "known", labels };
 }
 
 // Kimi snapshots cached before `shareOf` existed store `month_code` with only

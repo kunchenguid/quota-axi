@@ -51,6 +51,7 @@ export function computeWindowPace(
   options: PaceOptions = {},
 ): QuotaPace {
   if (options.stale) return unknownPace("stale");
+  if (window.notStarted) return unknownPace("not_started");
 
   const generatedAtMs = Date.parse(generatedAt);
   if (!Number.isFinite(generatedAtMs)) return unknownPace("invalid_cycle");

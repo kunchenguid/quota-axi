@@ -13,38 +13,10 @@ import type {
   QuotaWindow,
 } from "./types.js";
 
-export function markAgyStaleIfExpiredReset(
-  provider: ProviderQuota,
-  nowMs = Date.now(),
-): ProviderQuota {
-  const hasExpired = provider.windows.some((w) => {
-    if (!w.resetsAt) return false;
-    const ms = Date.parse(w.resetsAt);
-    return Number.isFinite(ms) && ms <= nowMs;
-  });
-  if (
-    hasExpired &&
-    (!provider.state.stale || provider.state.status !== "stale")
-  ) {
-    return {
-      ...provider,
-      state: {
-        ...provider.state,
-        status: "stale",
-        stale: true,
-      },
-    };
-  }
-  return provider;
-}
-
 export function withQuotaSemantics(
   provider: ProviderQuota,
   generatedAt: string,
 ): ProviderQuota {
-  if (provider.provider === "agy") {
-    provider = markAgyStaleIfExpiredReset(provider, Date.parse(generatedAt));
-  }
   const windows = provider.windows.map((window) => ({
     ...window,
     pace: computeWindowPace(window, generatedAt, {
@@ -988,40 +960,77 @@ function partialSemantics(
   };
 }
 
+const AGY_WINDOW_ID = /^(.+)_(?:5h|weekly)$/;
+
+/**
+ * One scope per agy group: the group's weekly and 5-hour windows jointly bound
+ * it. Any group agy names becomes its own scope; only a window with no known
+ * period stays unresolved. A used limit whose reset has already passed is not
+ * trusted, so it makes its own scope unknown and leaves the other scopes alone.
+ */
 function agySemantics(
   windows: QuotaWindow[],
   generatedAt: string,
 ): QuotaSemantics {
-  const gemini = windows.filter(
-    ({ id }) => id === "gemini_5h" || id === "gemini_weekly",
-  );
-  const claudeGpt = windows.filter(
-    ({ id }) => id === "claude_gpt_5h" || id === "claude_gpt_weekly",
-  );
-  const resolved = new Set([...gemini, ...claudeGpt]);
-  const unresolved = windows.filter((window) => !resolved.has(window));
-  const effectiveAvailability: EffectiveAvailability[] = [];
-  if (gemini.length > 0) {
-    effectiveAvailability.push(availability("gemini", gemini, generatedAt));
+  const scopes = new Map<string, QuotaWindow[]>();
+  const unresolved: QuotaWindow[] = [];
+  for (const window of windows) {
+    const scope = AGY_WINDOW_ID.exec(window.id)?.[1];
+    if (scope === undefined) {
+      unresolved.push(window);
+      continue;
+    }
+    scopes.set(scope, [...(scopes.get(scope) ?? []), window]);
   }
-  if (claudeGpt.length > 0) {
-    effectiveAvailability.push(
-      availability("claude_gpt", claudeGpt, generatedAt),
-    );
+  const effectiveAvailability: EffectiveAvailability[] = [];
+  for (const [scope, scopeWindows] of scopes) {
+    const entry = hasPassedReset(scopeWindows, generatedAt)
+      ? passedResetAvailability(scope, scopeWindows, generatedAt)
+      : availability(scope, scopeWindows, generatedAt);
+    const models = scopeWindows.find((window) => window.models)?.models;
+    effectiveAvailability.push(models ? { ...entry, models } : entry);
   }
   if (unresolved.length > 0) {
     return {
       status: effectiveAvailability.length > 0 ? "partial" : "unknown",
       description:
-        "Antigravity groups Gemini windows separately from Claude/GPT windows. Within a group, the weekly and 5-hour windows jointly bound that group. Unfamiliar windows are not folded into either bound, so they stay unresolved.",
+        "Antigravity publishes quota groups, and within a group the weekly and 5-hour windows jointly bound that group. Windows with no known period are not folded into any bound, so they stay unresolved.",
       effectiveAvailability,
       unresolvedWindowIds: unresolved.map(({ id }) => id),
     };
   }
   return knownSemantics(
     effectiveAvailability,
-    "Antigravity groups Gemini windows separately from Claude/GPT windows. Within a group, the weekly and 5-hour windows jointly bound that group, so that group's effective remaining percentage is the minimum across the named windows.",
+    "Antigravity publishes quota groups. Within a group, the weekly and 5-hour windows jointly bound that group, so that group's effective remaining percentage is the minimum across its windows.",
   );
+}
+
+function hasPassedReset(windows: QuotaWindow[], generatedAt: string): boolean {
+  const generatedAtMs = Date.parse(generatedAt);
+  return windows.some(({ resetsAt }) => {
+    if (!resetsAt) return false;
+    const resetMs = Date.parse(resetsAt);
+    return Number.isFinite(resetMs) && resetMs <= generatedAtMs;
+  });
+}
+
+function passedResetAvailability(
+  scope: string,
+  windows: QuotaWindow[],
+  generatedAt: string,
+): EffectiveAvailability {
+  const generatedAtMs = Date.parse(generatedAt);
+  const unmeasurableWindowIds = windows
+    .filter(({ resetsAt }) => resetsAt && Date.parse(resetsAt) <= generatedAtMs)
+    .map(({ id }) => id);
+  return {
+    scope,
+    status: "unknown",
+    boundedBy: windows.map(({ id }) => id),
+    pace: summarizeEffectivePace(windows),
+    runway: { status: "unknown", unmeasurableWindowIds },
+    selection: { status: "unknown", unmeasurableWindowIds },
+  };
 }
 
 function unknownSemantics(

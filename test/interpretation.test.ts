@@ -1558,7 +1558,67 @@ describe("per-scope selection signal", () => {
     ).toEqual({ status: "unknown", unmeasurableWindowIds: ["seven_day"] });
   });
 
-  it("marks agy reading stale when its resetsAt is in the past relative to generatedAt", () => {
+  it("renders agy not-started limits and scope models in the full output", () => {
+    const models = {
+      status: "known" as const,
+      labels: ["Gemini 4 Neon"],
+      ids: ["gemini-4-neon-medium"],
+    };
+    const result = withQuotaSemantics(
+      provider("agy", [
+        window("gemini_5h", "session", 100, {
+          windowSeconds: 18_000,
+          notStarted: true,
+          models,
+        }),
+        window("gemini_weekly", "weekly", 100, {
+          windowSeconds: WEEK_SECONDS,
+          notStarted: true,
+          models,
+        }),
+      ]),
+      GENERATED_AT,
+    );
+    const text = renderQuotaToon(
+      { generatedAt: GENERATED_AT, schemaVersion: 5, providers: [result] },
+      "quota-axi",
+      true,
+    );
+    expect(text).toContain(
+      "agy,gemini_5h,gemini_5h,100,not_started,not_started,",
+    );
+    expect(text).toContain("gemini-4-neon-medium");
+    expect(result.quotaSemantics?.effectiveAvailability[0]?.models).toEqual(
+      models,
+    );
+  });
+
+  it("keeps the agy scope list the same when the other scope has a passed reset", () => {
+    const result = withQuotaSemantics(
+      provider("agy", [
+        window("gemini_weekly", "weekly", 80, {
+          windowSeconds: WEEK_SECONDS,
+          resetsAt: offsetFromGeneratedAt(-60),
+        }),
+        window("claude_gpt_weekly", "weekly", 90, {
+          windowSeconds: WEEK_SECONDS,
+          resetsAt: offsetFromGeneratedAt(3 * 86_400),
+        }),
+      ]),
+      GENERATED_AT,
+    );
+    expect(
+      result.quotaSemantics?.effectiveAvailability.map(({ scope, status }) => [
+        scope,
+        status,
+      ]),
+    ).toEqual([
+      ["gemini", "unknown"],
+      ["claude_gpt", "known"],
+    ]);
+  });
+
+  it("makes only the agy scope with a passed reset unknown", () => {
     const agy = provider("agy", [
       window("gemini_5h", "session", 90, {
         windowSeconds: FIVE_HOURS_SECONDS,
@@ -1571,9 +1631,18 @@ describe("per-scope selection signal", () => {
     ]);
 
     const result = withQuotaSemantics(agy, GENERATED_AT);
-    expect(result.state.status).toBe("stale");
-    expect(result.state.stale).toBe(true);
-    expect(result.quotaSemantics?.status).toBe("unknown");
+    expect(result.state.status).not.toBe("stale");
+    expect(result.state.stale).toBeFalsy();
+    expect(result.quotaSemantics?.effectiveAvailability).toEqual([
+      expect.objectContaining({
+        scope: "gemini",
+        status: "unknown",
+        runway: {
+          status: "unknown",
+          unmeasurableWindowIds: ["gemini_5h"],
+        },
+      }),
+    ]);
   });
 
   it("bounds Higgsfield credits at included_credits and does not invent a model lane", () => {

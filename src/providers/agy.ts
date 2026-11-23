@@ -25,6 +25,7 @@ import type {
   ProviderOptions,
   ProviderQuota,
   ProviderStatus,
+  QuotaModelList,
   QuotaWindow,
   SourceAttempt,
 } from "../types.js";
@@ -52,6 +53,23 @@ const PROBE_BUDGET_MS = 10_000;
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 const FIVE_HOURS_SECONDS = 18_000;
 const WEEK_SECONDS = 7 * 24 * 60 * 60;
+const MODELS_TIMEOUT_MS = 5_000;
+/**
+ * agy reports an unused limit's reset as "now plus one period", measured at its
+ * own call time. This bounds how far that can sit from our read time.
+ */
+const PLACEHOLDER_RESET_TOLERANCE_MS = 120_000;
+const MODELS_PREFIX = /^models within this group:\s*/i;
+
+/** One `agy models` row: the CLI id and the label agy prints for it. */
+export type AgyModelCatalogEntry = { id: string; label: string };
+
+export type AgyNormalizeOptions = {
+  /** Read time, in epoch milliseconds. Defaults to the current time. */
+  nowMs?: number;
+  /** Rows of `agy models`, used to turn group model labels into CLI ids. */
+  catalog?: readonly AgyModelCatalogEntry[];
+};
 
 type AgyProcessSource = "agy" | "app";
 
@@ -292,7 +310,9 @@ async function fetchCliQuota(runtime: AgyProbeRuntime): Promise<{
   } catch {
     throw new AgyMalformedResponseError("agy /quota returned invalid JSON");
   }
-  const summary = normalizeAgyPrintUsage(parsed);
+  const summary = normalizeAgyPrintUsage(parsed, {
+    catalog: await readModelCatalog(runtime, commandPath),
+  });
   if (!summary || summary.windows.length === 0) {
     throw new AgyMalformedResponseError("agy /quota quota summary malformed");
   }
@@ -346,12 +366,52 @@ async function createOpenerGuard(): Promise<{
   }
 }
 
+/**
+ * Best effort: the catalog only adds CLI ids next to the model labels agy
+ * already prints in `/quota`, so a failed read leaves the quota reading intact.
+ */
+async function readModelCatalog(
+  runtime: AgyProbeRuntime,
+  commandPath: string,
+): Promise<AgyModelCatalogEntry[] | undefined> {
+  let openerGuard: Awaited<ReturnType<typeof createOpenerGuard>> | undefined;
+  try {
+    openerGuard = await createOpenerGuard();
+    const text = await runtime.execFileText(
+      commandPath,
+      ["models"],
+      MODELS_TIMEOUT_MS,
+      { env: openerGuard.env },
+    );
+    const catalog = parseAgyModelCatalog(text);
+    return catalog.length > 0 ? catalog : undefined;
+  } catch {
+    return undefined;
+  } finally {
+    await openerGuard?.dispose();
+  }
+}
+
+export function parseAgyModelCatalog(text: string): AgyModelCatalogEntry[] {
+  const entries: AgyModelCatalogEntry[] = [];
+  for (const line of text.split(/\r?\n/)) {
+    const [id, label] = line.split("\t").map((part) => part.trim());
+    if (id && label && /^[a-z0-9][a-z0-9._-]*$/i.test(id)) {
+      entries.push({ id, label });
+    }
+  }
+  return entries;
+}
+
 function isMissingCommandError(error: unknown): boolean {
   const code = (error as NodeJS.ErrnoException | undefined)?.code;
   return code === "ENOENT";
 }
 
-export function normalizeAgyQuotaSummary(raw: unknown):
+export function normalizeAgyQuotaSummary(
+  raw: unknown,
+  options: AgyNormalizeOptions = {},
+):
   | {
       windows: QuotaWindow[];
       refreshedAt: string;
@@ -359,14 +419,18 @@ export function normalizeAgyQuotaSummary(raw: unknown):
   | undefined {
   const payload = quotaSummaryPayload(raw);
   const groups = arrayValue(payload?.groups);
+  const nowMs = options.nowMs ?? Date.now();
   const windows = groups
-    .flatMap(normalizeQuotaSummaryGroup)
+    .flatMap((group) => normalizeQuotaSummaryGroup(group, nowMs, options))
     .sort(compareAgyWindows);
   if (windows.length === 0) return undefined;
   return { windows, refreshedAt: nowIso() };
 }
 
-export function normalizeAgyPrintUsage(raw: unknown):
+export function normalizeAgyPrintUsage(
+  raw: unknown,
+  options: AgyNormalizeOptions = {},
+):
   | {
       windows: QuotaWindow[];
       refreshedAt: string;
@@ -382,7 +446,11 @@ export function normalizeAgyPrintUsage(raw: unknown):
     name !== "/quota"
   )
     return undefined;
-  return normalizeAgyQuotaSummary(objectValue(command?.data));
+  const data = objectValue(command?.data);
+  const summary = normalizeAgyQuotaSummary(data, options);
+  return summary && isCutOffPlaceholder(data, summary.windows)
+    ? undefined
+    : summary;
 }
 
 export function normalizeAgyUserStatus(raw: unknown):
@@ -718,19 +786,89 @@ async function readListeningPorts(
   }
 }
 
-function normalizeQuotaSummaryGroup(raw: unknown): QuotaWindow[] {
+function normalizeQuotaSummaryGroup(
+  raw: unknown,
+  nowMs: number,
+  options: AgyNormalizeOptions,
+): QuotaWindow[] {
   const group = objectValue(raw);
   if (!group) return [];
   const groupName =
     stringValue(group.displayName) ?? stringValue(group.name) ?? "Quota";
+  const models = groupModelList(stringValue(group.description), options);
   return arrayValue(group.buckets)
-    .map((bucket) => normalizeQuotaSummaryBucket(groupName, bucket))
+    .map((bucket) =>
+      normalizeQuotaSummaryBucket(groupName, bucket, nowMs, models),
+    )
     .filter((window): window is QuotaWindow => Boolean(window));
+}
+
+/**
+ * agy names a group's models only in the group description, as
+ * "Models within this group: A, B (C), D". A description without that list
+ * (Argon's carries plan advice instead) leaves the models unknown.
+ */
+function groupModelList(
+  description: string | undefined,
+  options: AgyNormalizeOptions,
+): QuotaModelList {
+  if (!description || !MODELS_PREFIX.test(description)) {
+    return { status: "unknown" };
+  }
+  const labels = splitOutsideParentheses(
+    description.replace(MODELS_PREFIX, "").replace(/\.\s*$/, ""),
+  );
+  if (labels.length === 0) return { status: "unknown" };
+  if (!options.catalog) return { status: "known", labels };
+  const ids = labels.flatMap((label) => matchModelIds(label, options.catalog!));
+  return { status: "known", labels, ids };
+}
+
+function splitOutsideParentheses(text: string): string[] {
+  const parts: string[] = [];
+  let depth = 0;
+  let current = "";
+  for (const char of text) {
+    if (char === "(") depth += 1;
+    if (char === ")") depth = Math.max(0, depth - 1);
+    if (char === "," && depth === 0) {
+      parts.push(current);
+      current = "";
+    } else {
+      current += char;
+    }
+  }
+  parts.push(current);
+  return parts.map((part) => part.trim()).filter(Boolean);
+}
+
+/**
+ * A group label either equals a catalog label ("Orchestrator (Neon)") or is
+ * that label without its effort suffix ("Gemini 4 Neon" for
+ * "Gemini 4 Neon (Low|Medium|High|XHigh)").
+ */
+function matchModelIds(
+  label: string,
+  catalog: readonly AgyModelCatalogEntry[],
+): string[] {
+  const wanted = label.toLowerCase();
+  const exact = catalog.filter((entry) => entry.label.toLowerCase() === wanted);
+  if (exact.length > 0) return exact.map(({ id }) => id);
+  return catalog
+    .filter(
+      (entry) =>
+        entry.label
+          .replace(/\s*\((?:low|medium|high|xhigh)\)\s*$/i, "")
+          .toLowerCase() === wanted,
+    )
+    .map(({ id }) => id);
 }
 
 function normalizeQuotaSummaryBucket(
   groupName: string,
   raw: unknown,
+  nowMs: number,
+  models: QuotaModelList,
 ): QuotaWindow | undefined {
   const bucket = objectValue(raw);
   if (!bucket) return undefined;
@@ -751,6 +889,7 @@ function normalizeQuotaSummaryBucket(
     resetsAt:
       parseEpochOrIso(bucket.resetTime) ?? parseEpochOrIso(bucket.reset_time),
     resetText: stringValue(bucket.description),
+    models,
   };
   if (windowKind.windowSeconds !== undefined) {
     result.windowSeconds = windowKind.windowSeconds;
@@ -761,9 +900,57 @@ function normalizeQuotaSummaryBucket(
     result.percentUsed = percentUsed;
     result.percentRemaining = percentRemaining(percentUsed);
   }
+  applyUnusedLimit(result, nowMs);
   if (result.percentUsed === undefined && !result.resetsAt && !result.resetText)
     return undefined;
   return result;
+}
+
+/**
+ * A `/quota` request that agy cuts off can come back as an all-full
+ * placeholder. A real reading always carries group descriptions (agy puts them
+ * on groups, not buckets), so full unused limits with no description anywhere
+ * are not trusted. Upstream PR 382 rejects on bucket descriptions, which would
+ * also drop a genuine unused account; the group description is the safe signal.
+ */
+function isCutOffPlaceholder(
+  data: Record<string, unknown> | undefined,
+  windows: QuotaWindow[],
+): boolean {
+  const groups = arrayValue(data?.groups);
+  return (
+    windows.length > 0 &&
+    windows.every(({ notStarted }) => notStarted) &&
+    groups.every((group) => !stringValue(objectValue(group)?.description))
+  );
+}
+
+/**
+ * agy fills the reset of a limit that has not started with a placeholder: the
+ * Unix epoch, or "now plus one period". Neither is a real reset. A full
+ * allowance with such a reset has not started, so it keeps its 100% and drops
+ * the date. An epoch reset on a partly used limit is still not a real date and
+ * is dropped, but the limit is not called unstarted.
+ */
+function applyUnusedLimit(window: QuotaWindow, nowMs: number): void {
+  if (!window.resetsAt) return;
+  const resetMs = Date.parse(window.resetsAt);
+  if (!Number.isFinite(resetMs)) return;
+  const full = window.percentRemaining === 100;
+  if (resetMs <= 0) {
+    delete window.resetsAt;
+    if (full) window.notStarted = true;
+    return;
+  }
+  if (
+    full &&
+    window.windowSeconds !== undefined &&
+    Math.abs(resetMs - (nowMs + window.windowSeconds * 1000)) <=
+      PLACEHOLDER_RESET_TOLERANCE_MS
+  ) {
+    delete window.resetsAt;
+    window.notStarted = true;
+  }
 }
 
 function normalizeModelConfigWindows(raw: unknown): QuotaWindow[] {
@@ -820,20 +1007,18 @@ function agyWindowGroup(
   groupName: string,
   bucketId: string,
 ): { id: string; label: string; sortRank: number } {
-  const normalized = `${groupName} ${bucketId}`.toLowerCase();
+  const name = groupName.trim().toLowerCase();
   // Argon is its own quota on paid Pro plans, so it must not share the
   // `gemini_*` window ids or the Gemini bound.
-  if (normalized.includes("gemini") && normalized.includes("argon")) {
+  if (/argon/.test(`${name} ${bucketId.toLowerCase()}`)) {
     return { id: "gemini_argon", label: "Gemini Argon", sortRank: 2 };
   }
-  if (normalized.includes("gemini")) {
+  // The two groups agy has always published keep their established ids, which
+  // consumers already read. Any other group is its own scope under its own name.
+  if (/^gemini models?\b/.test(name)) {
     return { id: "gemini", label: "Gemini", sortRank: 0 };
   }
-  if (
-    normalized.includes("claude") ||
-    normalized.includes("gpt") ||
-    normalized.includes("3p")
-  ) {
+  if (/\b(?:claude|gpt)\b/.test(name)) {
     return { id: "claude_gpt", label: "Claude/GPT", sortRank: 1 };
   }
   const id = slugify(groupName) || "quota";
@@ -918,7 +1103,11 @@ function compareAgyWindows(left: QuotaWindow, right: QuotaWindow): number {
 }
 
 function windowGroupRank(id: string): number {
-  if (id.startsWith("gemini_")) return 0;
+  if (
+    id.startsWith("gemini_argon_") ||
+    /^gemini_(?:5h|weekly|unknown)$/.test(id)
+  )
+    return 0;
   if (id.startsWith("claude_gpt_")) return 1;
   return 2;
 }
