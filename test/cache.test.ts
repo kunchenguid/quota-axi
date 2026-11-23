@@ -416,134 +416,155 @@ describe("quota cache", () => {
     });
   });
 
-  it("reuses normalized Antigravity groups but not legacy grouped quota", () => {
-    useTempCache();
-    const now = Date.parse("2026-07-06T18:10:30Z");
-    const file = cacheFilePath();
-    const legacyWindow = {
-      id: "gemini_5h",
-      label: "Gemini 5-hour",
-      kind: "session" as const,
-      windowSeconds: 18_000,
-      percentUsed: 0,
-      percentRemaining: 100,
-      resetsAt: "2026-07-06T23:10:00Z",
-    };
-    const reading: ProviderQuota = {
-      ...quota("agy", 0),
-      source: "cli",
-      windows: [legacyWindow],
-    };
-    const inputs = tracedInputs();
-    stampReadingInputs(reading, inputs);
-    writeCachedProviders([reading], reading.state.refreshedAt);
+  it.each([true, false])(
+    "reuses normalized but not legacy Antigravity groups (unstarted: %s)",
+    (notStarted) => {
+      useTempCache();
+      const now = Date.parse("2026-07-06T18:10:30Z");
+      const file = cacheFilePath();
+      const legacyWindow = {
+        id: "gemini_5h",
+        label: "Gemini 5-hour",
+        kind: "session" as const,
+        windowSeconds: 18_000,
+        percentUsed: 0,
+        percentRemaining: 100,
+        resetsAt: "2026-07-06T23:10:00Z",
+      };
+      const reading: ProviderQuota = {
+        ...quota("agy", 0),
+        source: "cli",
+        windows: [legacyWindow],
+      };
+      const inputs = tracedInputs();
+      stampReadingInputs(reading, inputs);
+      writeCachedProviders([reading], reading.state.refreshedAt);
 
-    expect(readReusableProviders("agy", 90, now)).toBeUndefined();
-    expect(readSnapshotProviders(file, "agy", now)).toBe("expired");
-    expect(readCachedProvider("agy")?.windows).toEqual([legacyWindow]);
+      expect(readReusableProviders("agy", 90, now)).toBeUndefined();
+      expect(readSnapshotProviders(file, "agy", now)).toBe("expired");
+      expect(readCachedProvider("agy")?.windows).toEqual([legacyWindow]);
 
-    const normalizedWindow = {
-      ...legacyWindow,
-      resetsAt: undefined,
-      notStarted: true,
-    };
-    const reset = "2026-07-06T18:10:31Z";
-    const normalized: ProviderQuota = {
-      ...reading,
-      windows: [
-        normalizedWindow,
-        {
-          id: "gemini_weekly",
-          label: "Gemini weekly",
-          kind: "weekly",
-          percentRemaining: 20,
-          resetsAt: reset,
-        },
-        {
-          id: "claude_gpt_weekly",
-          label: "Claude/GPT weekly",
-          kind: "weekly",
-          percentRemaining: 90,
-        },
-      ],
-      [AGY_GROUPS]: [
-        {
-          id: "gemini",
-          name: "Gemini Models",
-          models: { status: "unknown" },
-          buckets: [
-            { id: "gemini-5h", windowId: "gemini_5h" },
-            { id: "gemini-weekly", windowId: "gemini_weekly" },
-          ],
-        },
-        {
-          id: "claude_gpt",
-          name: "Claude and GPT Models",
-          models: { status: "known", labels: ["Claude Sonnet"] },
-          buckets: [{ id: "3p-weekly", windowId: "claude_gpt_weekly" }],
-        },
-      ],
-    };
-    stampReadingInputs(normalized, inputs);
-    writeCachedProviders([normalized], reading.state.refreshedAt);
-
-    for (const reused of [
-      readReusableProviders("agy", 90, now),
-      readSnapshotProviders(file, "agy", now),
-      readSnapshotProviders(file, "agy", Date.parse(reset)),
-    ]) {
-      expect(reused).toMatchObject([
-        {
-          state: { status: "fresh", reused: true },
-          windows: [
-            { id: "gemini_5h", percentRemaining: 100, notStarted: true },
-            { id: "gemini_weekly", percentRemaining: 20 },
-            { id: "claude_gpt_weekly", percentRemaining: 90 },
-          ],
-        },
-      ]);
-      if (!Array.isArray(reused) || !reused[0])
-        throw new Error("Expected an Antigravity cache hit");
-      const result = withQuotaSemantics(reused[0], reset);
-      expect(result.state).toMatchObject({ reused: true, stale: false });
-      const report = annotateQuotaAdvice({
-        generatedAt: reset,
-        providers: [result],
-      });
-      for (const full of [false, true]) {
-        expect(
-          quotaJsonReport(report, full).providers[0]?.windows.map(
-            ({ id }) => id,
-          ),
-        ).toEqual(["gemini_5h", "claude_gpt_weekly"]);
-        expect(renderQuotaToon(report, "quota-axi", full)).not.toContain(
-          "agy,gemini_weekly,",
-        );
-      }
-      expect(result.quotaSemantics?.effectiveAvailability).toMatchObject([
-        {
-          scope: "gemini",
-          status: "unknown",
-          boundedBy: ["gemini_5h"],
-          runway: {
-            status: "unknown",
-            unmeasurableWindowIds: ["gemini_weekly"],
+      const normalizedWindow = {
+        ...legacyWindow,
+        resetsAt: notStarted ? undefined : "2026-07-06T19:10:00Z",
+        ...(notStarted ? { notStarted: true } : {}),
+      };
+      const reset = "2026-07-06T18:10:31Z";
+      const normalized: ProviderQuota = {
+        ...reading,
+        windows: [
+          normalizedWindow,
+          {
+            id: "gemini_weekly",
+            label: "Gemini weekly",
+            kind: "weekly",
+            percentRemaining: 20,
+            resetsAt: reset,
           },
-        },
-        {
-          scope: "claude_gpt",
-          status: "known",
-          effectivePercentRemaining: 90,
-          models: { status: "known", labels: ["Claude Sonnet"] },
-        },
-      ]);
+          {
+            id: "claude_gpt_weekly",
+            label: "Claude/GPT weekly",
+            kind: "weekly",
+            percentRemaining: 90,
+          },
+        ],
+        [AGY_GROUPS]: [
+          {
+            id: "gemini",
+            name: "Gemini Models",
+            models: { status: "unknown" },
+            buckets: [
+              { id: "gemini-5h", windowId: "gemini_5h" },
+              { id: "gemini-weekly", windowId: "gemini_weekly" },
+            ],
+          },
+          {
+            id: "claude_gpt",
+            name: "Claude and GPT Models",
+            models: { status: "known", labels: ["Claude Sonnet"] },
+            buckets: [{ id: "3p-weekly", windowId: "claude_gpt_weekly" }],
+          },
+        ],
+      };
+      stampReadingInputs(normalized, inputs);
+      writeCachedProviders([normalized], reading.state.refreshedAt);
+
+      for (const reused of [
+        readReusableProviders("agy", 90, now),
+        readSnapshotProviders(file, "agy", now),
+        readSnapshotProviders(file, "agy", Date.parse(reset)),
+      ]) {
+        expect(reused).toMatchObject([
+          {
+            state: { status: "fresh", reused: true },
+            windows: [
+              {
+                id: "gemini_5h",
+                percentRemaining: 100,
+                ...(notStarted
+                  ? { notStarted: true }
+                  : { resetsAt: "2026-07-06T19:10:00Z" }),
+              },
+              { id: "gemini_weekly", percentRemaining: 20 },
+              { id: "claude_gpt_weekly", percentRemaining: 90 },
+            ],
+          },
+        ]);
+        if (!Array.isArray(reused) || !reused[0])
+          throw new Error("Expected an Antigravity cache hit");
+        const result = withQuotaSemantics(reused[0], reset);
+        expect(result.state).toMatchObject({ reused: true, stale: false });
+        const report = annotateQuotaAdvice({
+          generatedAt: reset,
+          providers: [result],
+        });
+        for (const full of [false, true]) {
+          expect(
+            quotaJsonReport(report, full).providers[0]?.windows.map(
+              ({ id }) => id,
+            ),
+          ).toEqual(["gemini_5h", "claude_gpt_weekly"]);
+          expect(renderQuotaToon(report, "quota-axi", full)).not.toContain(
+            "agy,gemini_weekly,",
+          );
+        }
+        expect(result.quotaSemantics?.effectiveAvailability).toMatchObject([
+          {
+            scope: "gemini",
+            status: "unknown",
+            boundedBy: ["gemini_5h"],
+            pace: notStarted
+              ? {
+                  status: "unknown",
+                  unknownWindowIds: ["gemini_5h", "gemini_weekly"],
+                }
+              : {
+                  status: "behind",
+                  behindWindowIds: ["gemini_5h"],
+                  unknownWindowIds: ["gemini_weekly"],
+                },
+            runway: {
+              status: "unknown",
+              unmeasurableWindowIds: ["gemini_weekly"],
+            },
+          },
+          {
+            scope: "claude_gpt",
+            status: "known",
+            effectivePercentRemaining: 90,
+            models: { status: "known", labels: ["Claude Sonnet"] },
+          },
+        ]);
+        expect(
+          result.quotaSemantics?.effectiveAvailability[0]
+            ?.effectivePercentRemaining,
+        ).toBeUndefined();
+      }
       expect(
-        result.quotaSemantics?.effectiveAvailability[0]
-          ?.effectivePercentRemaining,
+        readReusableProviders("agy", 90, Date.parse(reset)),
       ).toBeUndefined();
-    }
-    expect(readReusableProviders("agy", 90, Date.parse(reset))).toBeUndefined();
-  });
+    },
+  );
 
   it.each(["group-only", "group reset only", "model reset only"] as const)(
     "keeps %s Antigravity diagnostics in snapshots but not live reuse",

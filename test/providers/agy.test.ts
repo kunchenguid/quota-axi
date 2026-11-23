@@ -785,7 +785,11 @@ describe("Antigravity quota parsing", () => {
       async (source) => {
         vi.useFakeTimers({ toFake: ["Date"] });
         vi.setSystemTime(NOW_MS);
-        const weekly = { bucketId: "weekly", remainingFraction: 0.9 };
+        const weekly = {
+          bucketId: "weekly",
+          remainingFraction: 0.9,
+          resetTime: new Date(NOW_MS + 167 * 3_600_000).toISOString(),
+        };
         const groups = [
           { name: "Gemini 4 Argon", buckets: [{ bucketId: "5h" }, weekly] },
           {
@@ -824,13 +828,17 @@ describe("Antigravity quota parsing", () => {
             generatedAt,
             providers: [withQuotaSemantics(saved, generatedAt)],
           });
-          const scopes = quotaJsonReport(report, true).providers[0]
+          const scopes = quotaJsonReport(report, false).providers[0]
             ?.quotaSemantics?.effectiveAvailability;
           expect(scopes).toMatchObject([
             {
               scope: "gemini_argon",
               status: "unknown",
               boundedBy: ["gemini_argon_weekly"],
+              pace: {
+                status: "ahead",
+                unknownWindowIds: ["gemini_argon_5h"],
+              },
               selection: {
                 status: "unknown",
                 unmeasurableWindowIds: ["gemini_argon_5h"],
@@ -839,7 +847,30 @@ describe("Antigravity quota parsing", () => {
             { scope: "gemini", status: "known", effectivePercentRemaining: 90 },
           ]);
           expect(scopes?.[0]?.effectivePercentRemaining).toBeUndefined();
+          expect(renderQuotaToon(report, "quota-axi", true)).toContain(
+            "agy,gemini_argon,gemini_argon_weekly,known,ahead,gemini_argon_weekly,none,none,gemini_argon_5h,",
+          );
         }
+        const stale = await fetchQuotaWithRuntime(
+          runtimeWith({
+            agyPath: "agy",
+            ps: "",
+            cliQuota: Object.assign(new Error("agy timed out"), {
+              code: "ETIMEDOUT",
+            }),
+          }),
+        );
+        expect(stale.state.status).toBe("stale");
+        const ids = ["gemini_argon_weekly", "gemini_argon_5h"];
+        expect(
+          withQuotaSemantics(stale, generatedAt).quotaSemantics
+            ?.effectiveAvailability[0],
+        ).toMatchObject({
+          scope: "gemini_argon",
+          pace: { status: "unknown", unknownWindowIds: ids },
+          runway: { status: "unknown", unmeasurableWindowIds: ids },
+          selection: { status: "unknown", unmeasurableWindowIds: ids },
+        });
       },
     );
 
@@ -1027,6 +1058,7 @@ describe("Antigravity quota parsing", () => {
       expect(scopes?.[0]).toMatchObject({
         scope: "gemini",
         status: "unknown",
+        pace: { unknownWindowIds: ["gemini_weekly", "gemini_5h"] },
         models: {
           status: "known",
           labels: [
@@ -1043,6 +1075,18 @@ describe("Antigravity quota parsing", () => {
           status: "unknown",
           boundedBy: [],
           models: { status: "unknown" },
+          pace: {
+            status: "unknown",
+            unknownWindowIds: ["gemini_argon_weekly"],
+          },
+          runway: {
+            status: "unknown",
+            unmeasurableWindowIds: ["gemini_argon_weekly"],
+          },
+          selection: {
+            status: "unknown",
+            unmeasurableWindowIds: ["gemini_argon_weekly"],
+          },
         },
         {
           scope: "claude_gpt",
@@ -1062,7 +1106,7 @@ describe("Antigravity quota parsing", () => {
       ).toEqual([undefined, undefined, undefined]);
       for (const full of [false, true]) {
         const toon = renderQuotaToon(report, "quota-axi", full);
-        expect(toon).not.toContain("gemini_argon_weekly");
+        expect(toon).not.toContain("agy,gemini_argon_weekly,");
         expect(toon).toContain("agy,gemini_argon,unknown");
         expect(toon).toContain(
           "agy,claude_gpt,claude-opus-5-5-low + Claude Sonnet 5.5 + GPT-OSS 120B",

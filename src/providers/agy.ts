@@ -921,6 +921,13 @@ function matchModelIds(
     .map(({ id }) => id);
 }
 
+export function agyBoundWindowId(
+  groupId: string,
+  period: "5h" | "weekly",
+): string {
+  return `${groupId}_${period}`;
+}
+
 function normalizeQuotaSummaryBucket(
   group: ReturnType<typeof agyWindowGroup>,
   bucket: Record<string, unknown>,
@@ -932,7 +939,7 @@ function normalizeQuotaSummaryBucket(
     id:
       windowKind.id === "unknown"
         ? `${group.id}:bucket:${encodeURIComponent(Buffer.from(bucketId).toString())}`
-        : `${group.id}_${windowKind.id}`,
+        : agyBoundWindowId(group.id, windowKind.id),
     label: `${group.label} ${windowKind.label}`,
     kind: windowKind.kind,
     resetsAt:

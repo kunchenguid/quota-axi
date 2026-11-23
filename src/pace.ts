@@ -261,6 +261,7 @@ export function computeEffectiveRunway(
 
 export function summarizeEffectivePace(
   windows: QuotaWindow[],
+  missingWindowIds: readonly string[] = [],
 ): EffectivePaceSummary {
   const aheadWindowIds: string[] = [];
   const behindWindowIds: string[] = [];
@@ -308,7 +309,10 @@ export function summarizeEffectivePace(
   if (aheadWindowIds.length > 0) summary.aheadWindowIds = aheadWindowIds;
   if (behindWindowIds.length > 0) summary.behindWindowIds = behindWindowIds;
   if (onPaceWindowIds.length > 0) summary.onPaceWindowIds = onPaceWindowIds;
-  if (unknownWindowIds.length > 0) summary.unknownWindowIds = unknownWindowIds;
+  if (unknownWindowIds.length > 0 || missingWindowIds.length > 0)
+    summary.unknownWindowIds = [
+      ...new Set([...unknownWindowIds, ...missingWindowIds]),
+    ];
   if (
     worstReservePercentPoints !== undefined &&
     worstReserveWindowId !== undefined

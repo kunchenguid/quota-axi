@@ -1,5 +1,5 @@
 import { degradedSources } from "./lib/source-attempts.js";
-import { agyStaleQuotaAt } from "./providers/agy.js";
+import { agyBoundWindowId, agyStaleQuotaAt } from "./providers/agy.js";
 import { failedProvider, hasCurrentPercentage } from "./providers/common.js";
 import {
   computeEffectiveRunway,
@@ -106,39 +106,35 @@ function staleSemantics(semantics: QuotaSemantics): QuotaSemantics {
     description:
       "The raw quota windows are stale diagnostic data, so effective remaining is unknown until the provider refreshes successfully.",
     effectiveAvailability: semantics.effectiveAvailability.map(
-      ({ scope, boundedBy, pace, models }) => ({
-        scope,
-        ...(models ? { models } : {}),
-        status: "unknown",
-        boundedBy,
-        runway: {
-          status: "unknown" as const,
-          ...(boundedBy.length > 0 ? { unmeasurableWindowIds: boundedBy } : {}),
-        },
-        selection: {
-          status: "unknown" as const,
-          ...(boundedBy.length > 0 ? { unmeasurableWindowIds: boundedBy } : {}),
-        },
-        ...(pace
-          ? {
-              pace: {
-                status: "unknown" as const,
-                ...(pace.unknownWindowIds
-                  ? { unknownWindowIds: pace.unknownWindowIds }
-                  : boundedBy.length > 0
-                    ? { unknownWindowIds: boundedBy }
-                    : {}),
-              },
-            }
-          : boundedBy.length > 0
+      ({ scope, boundedBy, pace, models, runway, selection }) => {
+        const missing = [
+          ...new Set([
+            ...boundedBy,
+            ...(pace?.unknownWindowIds ?? []),
+            ...(runway?.unmeasurableWindowIds ?? []),
+            ...(selection?.unmeasurableWindowIds ?? []),
+          ]),
+        ];
+        const unmeasurable = missing.length
+          ? { unmeasurableWindowIds: missing }
+          : {};
+        return {
+          scope,
+          ...(models ? { models } : {}),
+          status: "unknown",
+          boundedBy,
+          runway: { status: "unknown", ...unmeasurable },
+          selection: { status: "unknown", ...unmeasurable },
+          ...(pace || missing.length
             ? {
                 pace: {
-                  status: "unknown" as const,
-                  unknownWindowIds: boundedBy,
+                  status: "unknown",
+                  ...(missing.length ? { unknownWindowIds: missing } : {}),
                 },
               }
             : {}),
-      }),
+        };
+      },
     ),
     ...(semantics.unresolvedWindowIds
       ? { unresolvedWindowIds: semantics.unresolvedWindowIds }
@@ -1040,6 +1036,10 @@ function agySemantics(
     const unmeasurableWindowIds = [
       ...new Set([
         ...expiredBoundIds.filter((id) => windowIds.has(id)),
+        ...[
+          agyBoundWindowId(scope, "5h"),
+          agyBoundWindowId(scope, "weekly"),
+        ].filter((id) => windowIds.has(id) && !boundedBy.includes(id)),
         ...buckets.flatMap(({ unmeasuredBoundId }) =>
           unmeasuredBoundId ? [unmeasuredBoundId] : [],
         ),
@@ -1051,7 +1051,7 @@ function agySemantics(
             scope,
             status: "unknown",
             boundedBy,
-            pace: summarizeEffectivePace(bounds),
+            pace: summarizeEffectivePace(bounds, unmeasurableWindowIds),
             runway: { status: "unknown", unmeasurableWindowIds },
             selection: { status: "unknown", unmeasurableWindowIds },
           }
