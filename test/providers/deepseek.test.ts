@@ -69,6 +69,7 @@ describe("DeepSeek provider", () => {
       provider: "deepseek",
       source: "api",
       state: { status: "fresh", stale: false },
+      credits: { remaining: 12.5, unit: "usd" },
       creditBalances: [
         { remaining: 12.5, unit: "usd" },
         { remaining: 100, unit: "cny" },
@@ -109,6 +110,7 @@ describe("DeepSeek provider", () => {
 
     expect(report).toMatchObject({
       state: { status: "fresh", stale: false },
+      credits: { remaining: 10, unit: "cny" },
       creditBalances: [
         { remaining: 0, unit: "usd" },
         { remaining: 10, unit: "cny" },
@@ -123,6 +125,7 @@ describe("DeepSeek provider", () => {
     ]);
 
     expect(report).toMatchObject({
+      credits: { remaining: 0, unit: "usd" },
       creditBalances: [
         { remaining: 0, unit: "usd" },
         { remaining: 0, unit: "cny" },

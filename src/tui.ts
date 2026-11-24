@@ -623,7 +623,11 @@ function creditsOnlyHeadline(
 ): Line[] | undefined {
   if (provider.windows.length > 0) return undefined;
   const balances =
-    provider.creditBalances ?? (provider.credits ? [provider.credits] : []);
+    provider.provider === "deepseek" && provider.creditBalances
+      ? provider.creditBalances
+      : provider.credits
+        ? [provider.credits]
+        : [];
   if (balances.length === 0) return undefined;
   const amounts = balances
     .map((credits) =>

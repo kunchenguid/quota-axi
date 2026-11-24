@@ -228,10 +228,8 @@ function computeCredits(
   });
   if (balances.length === 0) return {};
   if (balances.length === 1) return { credits: balances[0] };
-  // Deliberate contract decision: multi-wallet reports publish only the
-  // authoritative list. The schema bump lets consumers distinguish it from
-  // the legacy scalar contract without selecting or repeating a wallet.
-  return { creditBalances: balances };
+  const summary = balances.find(({ remaining }) => remaining !== 0) ?? balances[0];
+  return { credits: summary, creditBalances: balances };
 }
 
 function objectValue(value: unknown): Record<string, unknown> | undefined {

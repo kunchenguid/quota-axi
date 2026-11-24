@@ -48,7 +48,9 @@ export function annotateQuotaAdvice(
     });
   });
   const help = providers.flatMap(providerHelpLines);
-  const multiWallet = providers.some((provider) => provider.creditBalances);
+  const multiWallet = providers.some(
+    (provider) => provider.provider === "deepseek" && provider.creditBalances,
+  );
   return {
     generatedAt: response.generatedAt,
     schemaVersion: multiWallet ? (expanded ? 8 : 7) : expanded ? 6 : 5,

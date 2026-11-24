@@ -117,7 +117,7 @@ export function renderQuotaToon(
     }),
     encode({ quota }),
     encode({ exhaustion }),
-    encode({ credits }),
+    ...(credits.length > 0 ? [encode({ credits })] : []),
     encode({ attention }),
   ];
 
@@ -172,7 +172,7 @@ function quotaBlocks(response: QuotaAxiResponse): ProviderBlocks {
       }
     }
 
-    const credits = creditRows(provider);
+    const credits = deepSeekCreditRows(provider);
     blocks.credits.push(...credits);
     blocks.attention.push(
       ...providerAttention(
@@ -227,10 +227,10 @@ function exhaustionRow(
 }
 
 /**
- * Provider-level facts. A provider with no `quota[]` or `credits[]` row always
- * ends up with at least one row across this block and its scope rows, so it can
- * never be silently absent, and it always states its auth fact - positive
- * included - rather than only a degraded one.
+ * Provider-level facts. A provider with no `quota[]` row always ends up with at
+ * least one row across this block and its scope rows, so it can never be
+ * silently absent, and it always states its auth fact - positive included -
+ * rather than only a degraded one.
  */
 function providerAttention(
   provider: ProviderQuota,
@@ -342,6 +342,17 @@ function providerStateRows(
     return rows;
   }
   if (hasCredits) return rows;
+  const legacyCredits = creditBalance(provider);
+  if (legacyCredits) {
+    rows.unshift({
+      ...providerColumns(provider),
+      scope: "all",
+      kind: "credits",
+      detail: `${legacyCredits}${suffix}`,
+      remedy: provider.state.remedyCommand ?? NONE,
+    });
+    return rows;
+  }
   // No status row to carry the auth fact. Emit one when there is an auth
   // status to state, or when nothing else would name this provider at all.
   if (suffix === "" && rows.length + scopeRows > 0) return rows;
@@ -355,10 +366,9 @@ function providerStateRows(
   return rows;
 }
 
-function creditRows(provider: ProviderQuota): CreditRow[] {
-  const balances =
-    provider.creditBalances ?? (provider.credits ? [provider.credits] : []);
-  return balances.map((balance) => ({
+function deepSeekCreditRows(provider: ProviderQuota): CreditRow[] {
+  if (provider.provider !== "deepseek" || !provider.creditBalances) return [];
+  return provider.creditBalances.map((balance) => ({
     ...providerColumns(provider),
     scope: "all",
     remaining:
@@ -367,6 +377,14 @@ function creditRows(provider: ProviderQuota): CreditRow[] {
         : (balance.remaining ?? "unknown"),
     unit: balance.unit ?? "credits",
   }));
+}
+
+function creditBalance(provider: ProviderQuota): string | undefined {
+  const credits = provider.credits;
+  if (!credits) return undefined;
+  if (credits.unlimited) return "credits unlimited";
+  if (credits.remaining === undefined) return undefined;
+  return `remaining ${credits.remaining} ${credits.unit ?? "credits"}`;
 }
 
 function primaryProviderRow(provider: ProviderQuota): AttentionRow | undefined {
