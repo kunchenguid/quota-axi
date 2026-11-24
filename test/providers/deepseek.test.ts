@@ -251,11 +251,16 @@ describe("DeepSeek provider", () => {
   });
 
   it("rejects wallet values that lose decimal precision", async () => {
-    await expect(
-      balanceReport([{ currency: "USD", total_balance: "9007199254740993" }]),
-    ).resolves.toMatchObject({
-      state: { status: "error", error: "invalid_amount:Total balance" },
-    });
+    for (const total_balance of [
+      "9007199254740993",
+      "1000000000000000100",
+    ]) {
+      await expect(
+        balanceReport([{ currency: "USD", total_balance }]),
+      ).resolves.toMatchObject({
+        state: { status: "error", error: "invalid_amount:Total balance" },
+      });
+    }
   });
 
   it("preserves exactly representable decimal wallet values", async () => {

@@ -248,9 +248,18 @@ function decimalAmount(value: unknown): value is string {
     value.length <= 64 &&
     value.length > 0 &&
     /^-?(?:0|[1-9]\d*)(?:\.\d+)?$/u.test(value) &&
-    Number.isFinite(Number(value)) &&
-    canonicalDecimal(value) === canonicalDecimal(String(Number(value)))
+    exactNumericDecimal(value)
   );
+}
+
+function exactNumericDecimal(value: string): boolean {
+  const numeric = Number(value);
+  if (
+    !Number.isFinite(numeric) ||
+    canonicalDecimal(value) !== canonicalDecimal(String(numeric))
+  )
+    return false;
+  return !Number.isInteger(numeric) || BigInt(numeric).toString() === canonicalDecimal(value);
 }
 
 function canonicalDecimal(value: string): string {
