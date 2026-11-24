@@ -317,6 +317,56 @@ describe("Codex home list", () => {
     ).toEqual([["codex-home"], ["openai-codex", "openai-codex-alias"]]);
   });
 
+  it("keeps native and Pi seats separate when their window sets differ", async () => {
+    writeCodexHome("selected", "native-seat-token");
+    writePiAccounts({
+      "openai-codex": {
+        token: "pi-seat-token",
+        accountId: "acct-shared-workspace",
+      },
+      "openai-codex-alias": {
+        token: "pi-seat-alias-token",
+        accountId: "acct-shared-workspace",
+      },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init: RequestInit) => {
+        const token = new Headers(init.headers).get("authorization") ?? "";
+        const native = token.includes("native-seat");
+        return new Response(
+          JSON.stringify({
+            plan_type: "plus",
+            account_id: "acct-shared-workspace",
+            rate_limit: {
+              primary_window: {
+                used_percent: native ? 10 : 20,
+                reset_after_seconds: 3600,
+              },
+              ...(native
+                ? {}
+                : {
+                    secondary_window: {
+                      used_percent: 30,
+                      reset_after_seconds: 604800,
+                    },
+                  }),
+            },
+          }),
+        );
+      }),
+    );
+
+    const result = await readCodex(["--provider", "codex", "--full", "--json"]);
+
+    expect(result.providers).toHaveLength(2);
+    expect(
+      result.providers.map((provider: { windows: { id: string }[] }) =>
+        provider.windows.map((window) => window.id),
+      ),
+    ).toEqual([["five_hour"], ["five_hour", "weekly"]]);
+  });
+
   it("folds native and Pi seats when one optional identity field is omitted", async () => {
     writeCodexHome("selected", "native-seat-token");
     writePiAccounts({

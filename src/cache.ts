@@ -19,6 +19,10 @@ import { isPiCodexSource } from "./providers/pi-codex-credential.js";
 import { fetchLockPath, withLockSync } from "./lib/fetch-lock.js";
 import { inputsDigest, type TracedInputs } from "./lib/input-trace.js";
 import { reuseContextId } from "./lib/reuse-context.js";
+import {
+  sameSubscription,
+  type SubscriptionIdentity,
+} from "./lib/subscription.js";
 import type {
   AccountLocator,
   DegradedSource,
@@ -252,30 +256,49 @@ export function subscriptionIdentitiesMatch(
     right.account?.identityStatus === "unverified"
   )
     return false;
-  const leftAccountId = left.account?.accountId?.trim();
-  const rightAccountId = right.account?.accountId?.trim();
-  if (!leftAccountId || !rightAccountId) return false;
   const leftScope = (left as ScopedSubscriptionQuota)[SUBSCRIPTION_SCOPE];
   const rightScope = (right as ScopedSubscriptionQuota)[SUBSCRIPTION_SCOPE];
   if (!leftScope || !rightScope) return false;
-  let leftFields: { plan?: string; email?: string };
-  let rightFields: { plan?: string; email?: string };
+  const leftFields = parseSubscriptionScope(leftScope);
+  const rightFields = parseSubscriptionScope(rightScope);
+  if (!leftFields || !rightFields) return false;
+  return sameSubscription(
+    { ...leftFields, accountId: left.account?.accountId?.trim() },
+    { ...rightFields, accountId: right.account?.accountId?.trim() },
+  );
+}
+
+export function mergeSubscriptionScopes(
+  left: ProviderQuota,
+  right: ProviderQuota,
+): string | undefined {
+  const leftScope = (left as ScopedSubscriptionQuota)[SUBSCRIPTION_SCOPE];
+  const rightScope = (right as ScopedSubscriptionQuota)[SUBSCRIPTION_SCOPE];
+  if (!leftScope && !rightScope) return undefined;
+  const leftFields = leftScope ? parseSubscriptionScope(leftScope) : undefined;
+  const rightFields = rightScope
+    ? parseSubscriptionScope(rightScope)
+    : undefined;
+  if (!leftFields && !rightFields) return undefined;
+  const fields = { ...(leftFields ?? {}), ...(rightFields ?? {}) };
+  return JSON.stringify(fields);
+}
+
+function parseSubscriptionScope(
+  scope: string,
+): Omit<SubscriptionIdentity, "accountId"> | undefined {
   try {
-    leftFields = JSON.parse(leftScope) as { plan?: string; email?: string };
-    rightFields = JSON.parse(rightScope) as { plan?: string; email?: string };
+    const parsed = JSON.parse(scope) as Partial<SubscriptionIdentity>;
+    if (!Array.isArray(parsed.windows)) return undefined;
+    return {
+      ...(parsed.plan ? { plan: parsed.plan } : {}),
+      ...(parsed.email ? { email: parsed.email } : {}),
+      ...(parsed.userId ? { userId: parsed.userId } : {}),
+      windows: parsed.windows,
+    };
   } catch {
-    return false;
+    return undefined;
   }
-  if (leftAccountId !== rightAccountId) return false;
-  for (const key of ["plan", "email"] as const) {
-    if (
-      leftFields[key] &&
-      rightFields[key] &&
-      leftFields[key] !== rightFields[key]
-    )
-      return false;
-  }
-  return true;
 }
 
 /**

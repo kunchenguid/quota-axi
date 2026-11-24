@@ -16,6 +16,10 @@ import {
   codexListedHomes,
 } from "../lib/codex-home.js";
 import { providerFetch } from "../lib/http.js";
+import {
+  sameSubscription,
+  type SubscriptionWindowIdentity,
+} from "../lib/subscription.js";
 import { findCommandPath, terminateChild } from "../lib/process.js";
 import { redactSecret } from "../lib/secret.js";
 import {
@@ -503,6 +507,7 @@ type CodexLaneIdentity = {
   accountId: string;
   plan?: string;
   email?: string;
+  windows: SubscriptionWindowIdentity[];
 };
 
 function laneIdentity(
@@ -520,6 +525,7 @@ function laneIdentity(
     ...(reading.account?.email?.trim()
       ? { email: reading.account.email.trim().toLowerCase() }
       : {}),
+    windows: reading.windows.map(({ id, kind }) => ({ id, kind })),
   };
 }
 
@@ -527,11 +533,7 @@ function sameCodexLane(
   left: CodexLaneIdentity,
   right: CodexLaneIdentity | undefined,
 ): boolean {
-  if (!right) return false;
-  for (const key of ["accountId", "plan", "email"] as const) {
-    if (left[key] && right[key] && left[key] !== right[key]) return false;
-  }
-  return true;
+  return right !== undefined && sameSubscription(left, right);
 }
 
 async function fetchCliAccountQuota(): Promise<ProviderQuota | undefined> {

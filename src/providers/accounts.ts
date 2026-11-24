@@ -8,6 +8,8 @@ import type {
 } from "../types.js";
 import {
   markSupersededReadings,
+  mergeSubscriptionScopes,
+  stampSubscriptionScope,
   subscriptionIdentitiesMatch,
   subscriptionIdentity,
   supersededReadings,
@@ -221,10 +223,15 @@ function mergeSubscriptionReadings(
   const attempts = mergedAttempts(earlier, later);
   const sourcesTried = mergedSourcesTried(earlier, later, attempts);
   const accountKeys = mergedAccountKeys(winner, loser);
-  return {
+  const scope = mergeSubscriptionScopes(earlier, later);
+  const merged = {
     ...winner,
     ...(accountKeys ? { accountKeys } : {}),
     ...(attempts ? { attempts } : {}),
+  };
+  if (scope !== undefined) stampSubscriptionScope(merged, scope);
+  return {
+    ...merged,
     state: {
       ...winner.state,
       ...(sourcesTried ? { sourcesTried } : {}),
