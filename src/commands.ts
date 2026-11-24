@@ -446,9 +446,9 @@ export async function fetchQuota(
       [`Point ${SNAPSHOT_ENV} at a quota-axi cache file, or unset it`],
     );
   }
+  validateCodexHomes(providers, options.credentialMode === "profile-only");
   if (!snapshot && !claudeSwapEnabled()) {
     validateClaudeProfiles(providers, options);
-    validateCodexHomes(providers, options.credentialMode === "profile-only");
   }
   const writesCache = options.credentialMode !== "profile-only" && !snapshot;
   // Providers a lock holder already cached, so the report-wide write below
