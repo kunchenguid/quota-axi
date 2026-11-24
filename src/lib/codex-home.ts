@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { delimiter, isAbsolute } from "node:path";
+import { realpathSync } from "node:fs";
+import { delimiter, isAbsolute, resolve } from "node:path";
 
 export const CODEX_HOMES_ENV = "QUOTA_AXI_CODEX_HOMES";
 
@@ -21,6 +22,15 @@ export function codexListedHomes(
   return dirs.length || invalid.length ? { dirs, invalid } : undefined;
 }
 
-export function codexHomeAccountKey(home: string): string {
-  return `codex-home:${createHash("sha256").update(home).digest("hex").slice(0, 24)}`;
+/** Canonical filesystem identity, with a stable fallback for absent homes. */
+export function codexHomeIdentity(home: string): string {
+  try {
+    return realpathSync(home);
+  } catch {
+    return resolve(home);
+  }
+}
+
+export function codexHomeAccountKey(identity: string): string {
+  return `codex-home:${createHash("sha256").update(identity).digest("hex").slice(0, 24)}`;
 }

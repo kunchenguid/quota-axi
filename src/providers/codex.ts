@@ -9,7 +9,11 @@ import {
   stampCodexStoredAccountId,
 } from "../cache.js";
 import { readJsonFileResult, type JsonFileReadResult } from "../lib/fs.js";
-import { codexHomeAccountKey, codexListedHomes } from "../lib/codex-home.js";
+import {
+  codexHomeAccountKey,
+  codexHomeIdentity,
+  codexListedHomes,
+} from "../lib/codex-home.js";
 import { providerFetch } from "../lib/http.js";
 import { findCommandPath, terminateChild } from "../lib/process.js";
 import { redactSecret } from "../lib/secret.js";
@@ -174,6 +178,7 @@ function codexCredentialKey(
 async function fetchSingleWinnerQuota(
   dependencies: CodexDependencies,
   options: ProviderOptions,
+  cacheKey?: string,
 ): Promise<ProviderQuota> {
   if (isProfileOnly(options))
     return fetchQuotaWithDependencies(dependencies, options);
@@ -192,6 +197,7 @@ async function fetchSingleWinnerQuota(
       nativeState,
       builtinResolution,
     },
+    cacheKey,
   );
   const ownKeys = report.accountKeys ?? [];
   const pairedKeys = [CODEX_HOME_ACCOUNT_KEY, PI_CODEX_BUILTIN_ID];
@@ -237,40 +243,41 @@ type CodexAccountContext =
       cacheKey: string;
     };
 
-async function discoverCodexHomeAccounts(
+type CodexHomeLocation = { path: string; identity: string };
+
+function selectedCodexHome(): CodexHomeLocation {
+  const path = process.env.CODEX_HOME ?? join(homedir(), ".codex");
+  return { path, identity: codexHomeIdentity(path) };
+}
+
+function listedCodexHomes(
+  listed: readonly string[],
+  selected: CodexHomeLocation,
+): CodexHomeLocation[] {
+  const seen = new Set([selected.identity]);
+  const homes: CodexHomeLocation[] = [];
+  for (const path of listed) {
+    const identity = codexHomeIdentity(path);
+    if (seen.has(identity)) continue;
+    seen.add(identity);
+    homes.push({ path, identity });
+  }
+  return homes;
+}
+
+function listedCodexHomeAccounts(
   dependencies: CodexDependencies,
-  listedHomes: readonly string[],
-): Promise<ProviderAccount[]> {
-  const selectedHome = process.env.CODEX_HOME ?? join(homedir(), ".codex");
-  const homes = [selectedHome, ...listedHomes].filter(
-    (home, index, all) => all.indexOf(home) === index,
-  );
-  const nativeAccount: Extract<CodexAccountContext, { kind: "native" }> = {
-    kind: "native",
-    includesBuiltinPi: true,
-  };
-  const accounts: ProviderAccount[] = [
-    {
-      accountKey: CODEX_HOME_ACCOUNT_KEY,
-      locator: {
-        kind: "codex-home",
-        path: selectedHome,
-        delegateEligible: true,
-      },
-      fetchQuota: (options) => fetchSingleWinnerQuota(dependencies, options),
-      inspectAuth: () =>
-        inspectAuthWithDependencies(dependencies, nativeAccount),
-    },
-  ];
-  for (const home of homes.slice(1)) {
+  homes: readonly CodexHomeLocation[],
+): ProviderAccount[] {
+  return homes.map(({ path, identity }) => {
     const account: Extract<CodexAccountContext, { kind: "home" }> = {
       kind: "home",
-      home,
-      cacheKey: codexHomeAccountKey(home),
+      home: path,
+      cacheKey: codexHomeAccountKey(identity),
     };
-    accounts.push({
+    return {
       accountKey: account.cacheKey,
-      locator: { kind: "codex-home", path: home, delegateEligible: false },
+      locator: { kind: "codex-home", path, delegateEligible: false },
       fetchQuota: async (options) => {
         const report = await fetchQuotaWithDependencies(
           dependencies,
@@ -280,17 +287,44 @@ async function discoverCodexHomeAccounts(
         return { ...report, accountKeys: [account.cacheKey] };
       },
       inspectAuth: () => inspectAuthWithDependencies(dependencies, account),
-    });
-  }
-  return accounts;
+    };
+  });
 }
 
 async function discoverCodexAccounts(
   dependencies: CodexDependencies,
 ): Promise<ProviderAccount[] | undefined> {
-  const listedHomes = codexListedHomes();
-  if (listedHomes)
-    return discoverCodexHomeAccounts(dependencies, listedHomes.dirs);
+  const listed = codexListedHomes();
+  const existing = await discoverCodexAccountLanes(dependencies);
+  if (!listed) return existing;
+  const selected = selectedCodexHome();
+  const homes = listedCodexHomes(listed.dirs, selected);
+  const additions = listedCodexHomeAccounts(dependencies, homes);
+  if (existing) return [...existing, ...additions];
+  const nativeAccount: Extract<CodexAccountContext, { kind: "native" }> = {
+    kind: "native",
+    includesBuiltinPi: true,
+  };
+  return [
+    {
+      accountKey: CODEX_HOME_ACCOUNT_KEY,
+      locator: {
+        kind: "codex-home",
+        path: selected.path,
+        delegateEligible: true,
+      },
+      fetchQuota: (options) =>
+        fetchSingleWinnerQuota(dependencies, options, CODEX_HOME_ACCOUNT_KEY),
+      inspectAuth: () =>
+        inspectAuthWithDependencies(dependencies, nativeAccount),
+    },
+    ...additions,
+  ];
+}
+
+async function discoverCodexAccountLanes(
+  dependencies: CodexDependencies,
+): Promise<ProviderAccount[] | undefined> {
   const ids = await listPiCodexProviderIds(dependencies);
   if (
     ids.length === 0 ||
@@ -629,11 +663,16 @@ async function fetchQuotaWithDependencies(
     nativeState: CredentialState;
     builtinResolution: PiCodexCredentialResolution;
   },
+  cacheKey?: string,
 ): Promise<ProviderQuota> {
   if (isProfileOnly(options)) return fetchProfileOnlyQuota();
   if (account?.kind === "pi") return fetchPiAccountQuota(dependencies, account);
 
   const attempts: SourceAttempt[] = [];
+  const laneCacheKey =
+    account?.kind === "home"
+      ? account.cacheKey
+      : (cacheKey ?? account?.cacheKey);
   let finalError = "Codex quota unavailable";
   // False once a source has recorded a real failure. Sources are consulted in
   // priority order, so a lower-priority one may only name the failure while
@@ -705,7 +744,7 @@ async function fetchQuotaWithDependencies(
       oauthSelection.retryAfter,
       attempts,
       "oauth",
-      account?.cacheKey,
+      laneCacheKey,
       accountIds,
     );
   }
@@ -718,7 +757,7 @@ async function fetchQuotaWithDependencies(
   }
 
   let piCredentialTried = false;
-  if (!account || account.kind === "native") {
+  if (!account || (account.kind === "native" && account.includesBuiltinPi)) {
     let piResolution = singleWinnerCredentials?.builtinResolution;
     if (!piResolution) {
       try {
@@ -794,7 +833,7 @@ async function fetchQuotaWithDependencies(
         piSelection.retryAfter,
         attempts,
         PI_CODEX_CREDENTIAL_SOURCE,
-        account?.cacheKey,
+        laneCacheKey,
         piAccountId ? [piAccountId] : [],
       );
     }
@@ -815,7 +854,7 @@ async function fetchQuotaWithDependencies(
       undefined,
       attempts,
       "oauth",
-      account.cacheKey,
+      laneCacheKey,
       accountIds,
     );
   }
@@ -850,7 +889,7 @@ async function fetchQuotaWithDependencies(
     undefined,
     attempts,
     undefined,
-    account?.cacheKey,
+    laneCacheKey,
     accountIds,
     oauthCandidates.length === 0 && piCredentialTried
       ? PI_CODEX_BUILTIN_ID

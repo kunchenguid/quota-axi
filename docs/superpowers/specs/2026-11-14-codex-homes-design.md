@@ -14,7 +14,7 @@ When `QUOTA_AXI_CODEX_HOMES` is set, quota-axi reports each listed absolute Code
 
 ## Approaches
 
-1. **Codex-specific broker per home (selected):** create a broker with an overridden `CODEX_HOME` environment for each listed directory and wrap it in a `ProviderAccount`. This mirrors Claude's profile lanes, limits the diff, and reuses Codex credential and quota logic.
+1. **Codex-specific lane per home (selected):** bind each listed directory to a `ProviderAccount` and reuse Codex's existing native credential reader and quota selection logic for that lane. This mirrors Claude's profile lanes, limits the diff, and avoids process-environment mutation.
 2. **Generalize credential brokers into a multi-home framework:** flexible, but expands scope and risks changing unrelated providers.
 3. **Temporarily mutate process environment while reading each home:** small surface, but unsafe for concurrent reads and difficult to reason about.
 
