@@ -295,10 +295,11 @@ async function discoverCodexAccounts(
   dependencies: CodexDependencies,
 ): Promise<ProviderAccount[] | undefined> {
   const listed = codexListedHomes();
-  const existing = await discoverCodexAccountLanes(dependencies);
-  if (!listed) return existing;
-  const selected = selectedCodexHome();
-  const homes = listedCodexHomes(listed.dirs, selected);
+  const selected = listed ? selectedCodexHome() : undefined;
+  const homes =
+    listed && selected ? listedCodexHomes(listed.dirs, selected) : [];
+  const existing = await discoverCodexAccountLanes(dependencies, homes.length);
+  if (!listed || !selected) return existing;
   const additions = listedCodexHomeAccounts(dependencies, homes);
   if (existing) return [...existing, ...additions];
   const nativeAccount: Extract<CodexAccountContext, { kind: "native" }> = {
@@ -324,6 +325,7 @@ async function discoverCodexAccounts(
 
 async function discoverCodexAccountLanes(
   dependencies: CodexDependencies,
+  listedHomeCount = 0,
 ): Promise<ProviderAccount[] | undefined> {
   const ids = await listPiCodexProviderIds(dependencies);
   if (
@@ -386,7 +388,7 @@ async function discoverCodexAccountLanes(
     }
   }
 
-  if ((hasNativeLane ? 1 : 0) + piLanes.length > 1) {
+  if ((hasNativeLane ? 1 : 0) + piLanes.length + listedHomeCount > 1) {
     nativeAccount.cacheKey = CODEX_HOME_ACCOUNT_KEY;
     for (const lane of piLanes) {
       lane.account.cacheKey = lane.account.piProviderId;

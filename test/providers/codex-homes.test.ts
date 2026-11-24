@@ -239,6 +239,29 @@ describe("Codex home list", () => {
     expect(result.providers[1].windows[0].percentRemaining).toBe(30);
   });
 
+  it("preserves a Pi lane's cached windows when listed homes expand the collection", async () => {
+    const listed = writeCodexHome("listed", "listed-token", "acct-listed");
+    writePiAccounts({
+      "openai-codex-team": { token: "pi-team", accountId: "acct-team" },
+    });
+    vi.stubEnv("QUOTA_AXI_CODEX_HOMES", listed);
+
+    await readCodex(["--provider", "codex", "--full", "--json"]);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(null, { status: 503 })),
+    );
+
+    const result = await readCodex(["--provider", "codex", "--full", "--json"]);
+
+    expect(result.providers).toHaveLength(2);
+    expect(result.providers[0].accountKey).toBe("openai-codex-team");
+    expect(result.providers[0].state.status).toBe("stale");
+    expect(result.providers[0].windows[0].percentRemaining).toBe(30);
+    expect(result.providers[1].state.status).toBe("stale");
+    expect(result.providers[1].windows[0].percentRemaining).toBe(90);
+  });
+
   it("deduplicates dangling filesystem aliases", async () => {
     const selected = join(root, "selected");
     const alias = join(root, "selected-alias");
