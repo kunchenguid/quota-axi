@@ -476,6 +476,20 @@ That Pi lane keeps its own reading when fresh, and shows the native reading when
 A proven sign-out retires only cached Codex snapshots whose stored account identity matches the rejected credential; a native login that coalesces into a Pi lane no longer removes the shared `codex-home` slot by name, so another account's snapshot cannot be discarded.
 `--profile-only` still reads one native Codex file and never opens Pi auth.
 
+### Codex homes
+
+Codex home lanes are opt-in. When `QUOTA_AXI_CODEX_HOMES` is absent, blank, or lists no entry, quota-axi keeps the existing single selected-home behavior.
+
+```sh
+QUOTA_AXI_CODEX_HOMES="/home/me/.codex-work:/home/me/.codex-team" quota-axi --provider codex --json
+QUOTA_AXI_CODEX_HOMES="/home/me/.codex-work:/home/me/.codex-team" quota-axi --provider codex --full --json  # adds accountLocator per lane
+```
+
+- The value lists absolute Codex home directories separated by the platform path delimiter (`:` on macOS and Linux, `;` on Windows). Empty entries are ignored, and a relative entry fails with `VALIDATION_ERROR` (exit 2) whenever `codex` is in scope. `--profile-only` ignores the variable.
+- The selected `$CODEX_HOME` lane remains first. Each listed home is read only from its own `auth.json`, gets its own quota windows and cache slot, and cannot use the selected home's token, Pi credentials, CLI fallback, or delegated refresh. Repeated entries for the selected home are reported once.
+- A listed home without usable credentials remains its own unavailable lane, so one missing, rejected, or exhausted home never hides another listed home. Tokens, refresh values, and file contents never appear in output.
+- Each listed lane uses `codex-home:` plus 24 hexadecimal characters of a one-way digest of its canonical filesystem identity as its account key. `--full` adds `accountLocator: { kind: "codex-home", path, delegateEligible }`; the locator is omitted from default JSON and ordinary output.
+
 ### Claude profiles
 
 Claude account lanes are opt-in. When `QUOTA_AXI_CLAUDE_SWAP` is not enabled and `QUOTA_AXI_CLAUDE_PROFILES` is absent, blank, or lists no entry, Claude reads only the profile this process selects, and the report, its schema, and the cache slot it uses are exactly what they are without these features: one keyless lane, quota schema 5, `accountKeys: ["default"]`. quota-axi never searches the home directory for other Claude profiles.
@@ -531,7 +545,7 @@ Every lane keeps its own cache slot: a coalesced lane that also read fresh has i
 So when that route fails on a later run, its snapshot still joins the other lane's reading instead of reappearing as a separate unavailable report, and when every route fails the subscription is still served once.
 A cached snapshot also records a SHA-256 hash of the verified subscription identity it was read from (never the id itself), so a stale reading served from one lane still coalesces with a fresh reading of the same subscription from another.
 Machine-readable output and the TUI share the same coalesced provider list.
-Codex still discovers and folds its own native and Pi lanes as described above; this collection step is the shared contract any multi-account provider goes through.
+Codex still discovers and folds its own native, Pi, and opt-in listed-home lanes as described above; this collection step is the shared contract any multi-account provider goes through.
 
 ### Account keys and compatibility
 
@@ -562,7 +576,7 @@ Consumers must honor the schema version; a legacy keyless row means the single s
 
 Account collection is shared in `src/providers/accounts.ts`.
 Adapters can implement `ProviderAdapter.discoverAccounts` with stable keys and bound quota/auth readers; collection preserves each account's success or failure.
-Codex Pi sibling entries are the first discovery implementation on this tree, opt-in Claude profiles the second, and opt-in claude-swap accounts the third. An adapter may also name each lane's local selector as `ProviderAccount.locator`; the collector publishes it as `accountLocator` on an expanded lane's row, in `--full` only.
+Codex Pi sibling entries and opt-in Codex home lanes are discovery implementations on this tree, alongside opt-in Claude profiles and opt-in claude-swap accounts. An adapter may also name each lane's local selector as `ProviderAccount.locator`; the collector publishes it as `accountLocator` on an expanded lane's row, in `--full` only.
 Other adapters retain their existing source-selection behavior.
 
 ## Output Model
@@ -921,7 +935,7 @@ Auth source entries can include `credentialPresent` when a source is not genuine
 | Muse | The Muse CLI's `${XDG_CONFIG_HOME:-~/.config}/muse/auth.json` `providers.meta.access_token` first, then - on macOS, where the file records `storage: "keychain"` - the login Keychain item `ai.meta.dev.credentials` / `meta`, then `$META_API_KEY`, each only when it holds a usable literal credential. Only the access token is read: an `auth.json` sibling `refresh_token` and the Keychain bundle's minted `api_key` are dropped while parsed, a bundle `refresh_token` is checked for presence only. The Keychain value read follows the `--allow-keychain-prompt` gate (presence checks never prompt). `quota-axi auth` never fetches the bundle unless that flag is on, even when a grant marker exists. Neither store carries a stored expiry quota-axi reads, so each is probed in declared order. |
 | Higgsfield | The local `higgsfield` CLI (`higgsfield account status --json`, plus read-only `account transactions` and `generate list`). quota-axi never reads Higgsfield credential files, never runs `higgsfield auth token`, and never publishes the account email the status payload includes. |
 
-The Claude and Codex rows describe default discovery; [`--profile-only`](#profile-only-quota-reads) narrows each to the one selected credential file.
+The Claude and Codex rows describe default discovery; Codex home expansion is documented under [Codex homes](#codex-homes). [`--profile-only`](#profile-only-quota-reads) narrows each to the one selected credential file.
 
 ### Provider notes
 
@@ -947,7 +961,7 @@ The Claude and Codex rows describe default discovery; [`--profile-only`](#profil
 
 **Codex**
 
-- Codex checks native `$CODEX_HOME/auth.json` or `~/.codex/auth.json` OAuth first.
+- Codex checks native `$CODEX_HOME/auth.json` or `~/.codex/auth.json` OAuth first. The opt-in `QUOTA_AXI_CODEX_HOMES` lanes are documented under [Codex homes](#codex-homes).
 
   If that does not return quota, it checks Pi ChatGPT subscription OAuth entries in `$PI_CODING_AGENT_DIR/auth.json` (default `~/.pi/agent/auth.json`) before the CLI fallback.
   The built-in key is `openai-codex`.

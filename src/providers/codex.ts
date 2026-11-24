@@ -9,6 +9,11 @@ import {
   stampCodexStoredAccountId,
 } from "../cache.js";
 import { readJsonFileResult, type JsonFileReadResult } from "../lib/fs.js";
+import {
+  codexHomeAccountKey,
+  codexHomeIdentity,
+  codexListedHomes,
+} from "../lib/codex-home.js";
 import { providerFetch } from "../lib/http.js";
 import { findCommandPath, terminateChild } from "../lib/process.js";
 import { redactSecret } from "../lib/secret.js";
@@ -173,6 +178,7 @@ function codexCredentialKey(
 async function fetchSingleWinnerQuota(
   dependencies: CodexDependencies,
   options: ProviderOptions,
+  cacheKey?: string,
 ): Promise<ProviderQuota> {
   if (isProfileOnly(options))
     return fetchQuotaWithDependencies(dependencies, options);
@@ -191,6 +197,7 @@ async function fetchSingleWinnerQuota(
       nativeState,
       builtinResolution,
     },
+    cacheKey,
   );
   const ownKeys = report.accountKeys ?? [];
   const pairedKeys = [CODEX_HOME_ACCOUNT_KEY, PI_CODEX_BUILTIN_ID];
@@ -229,10 +236,96 @@ type CodexAccountContext =
       piProviderId: string;
       cacheKey?: string;
       extraPiProviderIds?: string[];
+    }
+  | {
+      kind: "home";
+      home: string;
+      cacheKey: string;
     };
+
+type CodexHomeLocation = { path: string; identity: string };
+
+function selectedCodexHome(): CodexHomeLocation {
+  const path = process.env.CODEX_HOME || join(homedir(), ".codex");
+  return { path, identity: codexHomeIdentity(path) };
+}
+
+function listedCodexHomes(
+  listed: readonly string[],
+  selected: CodexHomeLocation,
+): CodexHomeLocation[] {
+  const seen = new Set([selected.identity]);
+  const homes: CodexHomeLocation[] = [];
+  for (const path of listed) {
+    const identity = codexHomeIdentity(path);
+    if (seen.has(identity)) continue;
+    seen.add(identity);
+    homes.push({ path, identity });
+  }
+  return homes;
+}
+
+function listedCodexHomeAccounts(
+  dependencies: CodexDependencies,
+  homes: readonly CodexHomeLocation[],
+): ProviderAccount[] {
+  return homes.map(({ path, identity }) => {
+    const account: Extract<CodexAccountContext, { kind: "home" }> = {
+      kind: "home",
+      home: path,
+      cacheKey: codexHomeAccountKey(identity),
+    };
+    return {
+      accountKey: account.cacheKey,
+      locator: { kind: "codex-home", path, delegateEligible: false },
+      fetchQuota: async (options) => {
+        const report = await fetchQuotaWithDependencies(
+          dependencies,
+          options,
+          account,
+        );
+        return { ...report, accountKeys: [account.cacheKey] };
+      },
+      inspectAuth: () => inspectAuthWithDependencies(dependencies, account),
+    };
+  });
+}
 
 async function discoverCodexAccounts(
   dependencies: CodexDependencies,
+): Promise<ProviderAccount[] | undefined> {
+  const listed = codexListedHomes();
+  const selected = listed ? selectedCodexHome() : undefined;
+  const homes =
+    listed && selected ? listedCodexHomes(listed.dirs, selected) : [];
+  const existing = await discoverCodexAccountLanes(dependencies, homes.length);
+  if (!listed || !selected) return existing;
+  const additions = listedCodexHomeAccounts(dependencies, homes);
+  if (existing) return [...existing, ...additions];
+  const nativeAccount: Extract<CodexAccountContext, { kind: "native" }> = {
+    kind: "native",
+    includesBuiltinPi: true,
+  };
+  return [
+    {
+      accountKey: CODEX_HOME_ACCOUNT_KEY,
+      locator: {
+        kind: "codex-home",
+        path: selected.path,
+        delegateEligible: true,
+      },
+      fetchQuota: (options) =>
+        fetchSingleWinnerQuota(dependencies, options, CODEX_HOME_ACCOUNT_KEY),
+      inspectAuth: () =>
+        inspectAuthWithDependencies(dependencies, nativeAccount),
+    },
+    ...additions,
+  ];
+}
+
+async function discoverCodexAccountLanes(
+  dependencies: CodexDependencies,
+  listedHomeCount = 0,
 ): Promise<ProviderAccount[] | undefined> {
   const ids = await listPiCodexProviderIds(dependencies);
   if (
@@ -295,7 +388,7 @@ async function discoverCodexAccounts(
     }
   }
 
-  if ((hasNativeLane ? 1 : 0) + piLanes.length > 1) {
+  if ((hasNativeLane ? 1 : 0) + piLanes.length + listedHomeCount > 1) {
     nativeAccount.cacheKey = CODEX_HOME_ACCOUNT_KEY;
     for (const lane of piLanes) {
       lane.account.cacheKey = lane.account.piProviderId;
@@ -348,6 +441,15 @@ async function discoverCodexAccounts(
   if (hasNativeLane) {
     accounts.push({
       accountKey: CODEX_HOME_ACCOUNT_KEY,
+      ...(codexListedHomes()
+        ? {
+            locator: {
+              kind: "codex-home",
+              path: selectedCodexHome().path,
+              delegateEligible: true,
+            },
+          }
+        : {}),
       fetchQuota: async (options) => {
         const reading = await readNative(options);
         if (!reading) return undefined;
@@ -572,11 +674,16 @@ async function fetchQuotaWithDependencies(
     nativeState: CredentialState;
     builtinResolution: PiCodexCredentialResolution;
   },
+  cacheKey?: string,
 ): Promise<ProviderQuota> {
   if (isProfileOnly(options)) return fetchProfileOnlyQuota();
   if (account?.kind === "pi") return fetchPiAccountQuota(dependencies, account);
 
   const attempts: SourceAttempt[] = [];
+  const laneCacheKey =
+    account?.kind === "home"
+      ? account.cacheKey
+      : (cacheKey ?? account?.cacheKey);
   let finalError = "Codex quota unavailable";
   // False once a source has recorded a real failure. Sources are consulted in
   // priority order, so a lower-priority one may only name the failure while
@@ -586,7 +693,10 @@ async function fetchQuotaWithDependencies(
   let errorIsDefault = true;
 
   const credentialState =
-    singleWinnerCredentials?.nativeState ?? readCredentialState();
+    singleWinnerCredentials?.nativeState ??
+    (account?.kind === "home"
+      ? readCredentialState(join(account.home, "auth.json"))
+      : readCredentialState());
   // The accounts whose credentials this reading has tried. A failure may only
   // serve a cached snapshot stamped with one of them: a credential never tried
   // cannot vouch for windows filed under the slot this reading shares.
@@ -645,7 +755,7 @@ async function fetchQuotaWithDependencies(
       oauthSelection.retryAfter,
       attempts,
       "oauth",
-      account?.cacheKey,
+      laneCacheKey,
       accountIds,
     );
   }
@@ -658,7 +768,7 @@ async function fetchQuotaWithDependencies(
   }
 
   let piCredentialTried = false;
-  if (!account || account.includesBuiltinPi) {
+  if (!account || (account.kind === "native" && account.includesBuiltinPi)) {
     let piResolution = singleWinnerCredentials?.builtinResolution;
     if (!piResolution) {
       try {
@@ -734,7 +844,7 @@ async function fetchQuotaWithDependencies(
         piSelection.retryAfter,
         attempts,
         PI_CODEX_CREDENTIAL_SOURCE,
-        account?.cacheKey,
+        laneCacheKey,
         piAccountId ? [piAccountId] : [],
       );
     }
@@ -747,6 +857,17 @@ async function fetchQuotaWithDependencies(
         errorIsDefault = false;
       }
     }
+  }
+
+  if (account?.kind === "home") {
+    return codexFailureReport(
+      finalError,
+      undefined,
+      attempts,
+      "oauth",
+      laneCacheKey,
+      accountIds,
+    );
   }
 
   attempts.push({ source: "cli-rpc", status: "failed" });
@@ -779,7 +900,7 @@ async function fetchQuotaWithDependencies(
     undefined,
     attempts,
     undefined,
-    account?.cacheKey,
+    laneCacheKey,
     accountIds,
     oauthCandidates.length === 0 && piCredentialTried
       ? PI_CODEX_BUILTIN_ID
@@ -999,6 +1120,12 @@ async function inspectAuthWithDependencies(
     return {
       provider: "codex",
       sources,
+    };
+  }
+  if (account?.kind === "home") {
+    return {
+      provider: "codex",
+      sources: [readCredentialState(join(account.home, "auth.json")).source],
     };
   }
   const authFile = codexAuthFile();

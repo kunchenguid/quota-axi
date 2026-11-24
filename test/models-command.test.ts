@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { main } from "../src/cli.js";
 import { PROVIDERS } from "../src/providers/index.js";
@@ -27,6 +27,7 @@ afterEach(() => {
   PROVIDERS.minimax = originalMinimax;
   PROVIDERS.mimo = originalMimo;
   process.exitCode = undefined;
+  vi.unstubAllEnvs();
 });
 
 describe("models command", () => {
@@ -144,6 +145,18 @@ describe("models command", () => {
     );
     expect(fetches).toBe(1);
     expect(json.unmatchedWindowIds).toEqual(["claude/model:unmapped"]);
+  });
+
+  it("validates Codex homes when Claude swap is enabled", async () => {
+    vi.stubEnv("QUOTA_AXI_CLAUDE_SWAP", "1");
+    vi.stubEnv("QUOTA_AXI_CODEX_HOMES", "relative-home");
+
+    const output = await capture(["models", "--provider", "codex"]);
+
+    expect(output).toContain("error:");
+    expect(output).toContain("QUOTA_AXI_CODEX_HOMES entry");
+    expect(output).toContain("is not an absolute path");
+    expect(process.exitCode).toBe(2);
   });
 
   it("fails when every catalog provider fails and rejects non-catalog scopes", async () => {

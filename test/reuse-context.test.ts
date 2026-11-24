@@ -44,7 +44,8 @@ const SELECTION_VALUE = "synthetic-selection-value";
  * absolute directories, so it gets one named after the same marker.
  */
 function selectionValue(name: string): string {
-  return name === "QUOTA_AXI_CLAUDE_PROFILES"
+  return name === "QUOTA_AXI_CLAUDE_PROFILES" ||
+    name === "QUOTA_AXI_CODEX_HOMES"
     ? join(tmpdir(), SELECTION_VALUE)
     : SELECTION_VALUE;
 }
