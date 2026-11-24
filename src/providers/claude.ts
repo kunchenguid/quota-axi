@@ -689,10 +689,13 @@ async function fetchProfileOnlyQuota(): Promise<ProviderQuota> {
       attempts,
     });
   } catch (error) {
-    const failure = profileOnlyClaudeFailureFor(
+    const rawFailure = profileOnlyClaudeFailureFor(
       error,
       state.credentials.accessToken,
     );
+    const failure = isRefreshableExpiry(rawFailure, state)
+      ? refreshableExpiryFailure()
+      : rawFailure;
     attempts[0] = {
       source: "oauth-file",
       status: "failed",
@@ -727,7 +730,7 @@ function profileOnlyFailure(
   failure: ClaudeFailure,
   attempts: SourceAttempt[],
 ): ProviderQuota {
-  return failedProvider({
+  const report = failedProvider({
     provider: "claude",
     label: "Claude",
     status: failure.status,
@@ -736,6 +739,8 @@ function profileOnlyFailure(
     sourcesTried: sourceNames(attempts),
     attempts,
   });
+  if (failure.authStatus) report.state.authStatus = failure.authStatus;
+  return report;
 }
 
 /**
@@ -817,6 +822,15 @@ function isLiveClaudeCodeProcess(commandLine: string): boolean {
     return true;
   }
   return commandLine.includes("@anthropic-ai/claude-code/");
+}
+
+function isRefreshableExpiry(
+  failure: ClaudeFailure,
+  state: AvailableCredentialState | AdvisoryExpiredCredentialState,
+): boolean {
+  return (
+    failure.definitiveAuth && state.status === "expired" && state.refreshable
+  );
 }
 
 /**
@@ -965,10 +979,7 @@ async function attemptClaudeQuota(
         return { kind: "success", report };
       } catch (error) {
         let failure = claudeFailureFor(error);
-        const softRefreshable =
-          failure.definitiveAuth &&
-          state.status === "expired" &&
-          state.refreshable;
+        const softRefreshable = isRefreshableExpiry(failure, state);
         if (softRefreshable) failure = refreshableExpiryFailure();
         attempts[attempts.length - 1] = {
           source: credential.source,
