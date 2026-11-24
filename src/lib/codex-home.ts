@@ -1,6 +1,13 @@
 import { createHash } from "node:crypto";
 import { readlinkSync, realpathSync } from "node:fs";
-import { basename, delimiter, dirname, isAbsolute, join, resolve } from "node:path";
+import {
+  basename,
+  delimiter,
+  dirname,
+  isAbsolute,
+  join,
+  resolve,
+} from "node:path";
 
 export const CODEX_HOMES_ENV = "QUOTA_AXI_CODEX_HOMES";
 
