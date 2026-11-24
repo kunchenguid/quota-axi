@@ -247,6 +247,7 @@ function decimalAmount(value: unknown): value is string {
     typeof value === "string" &&
     value.length <= 64 &&
     value.length > 0 &&
-    /^-?(?:0|[1-9]\d*)(?:\.\d+)?$/u.test(value)
+    /^-?(?:0|[1-9]\d*)(?:\.\d+)?$/u.test(value) &&
+    Number.isFinite(Number(value))
   );
 }

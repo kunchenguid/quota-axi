@@ -549,7 +549,7 @@ Codex still discovers and folds its own native, Pi, and opt-in listed-home lanes
 
 ### Account keys and compatibility
 
-When a provider expands to multiple accounts, the report uses quota `schemaVersion: 6` (auth and models use version 2).
+When a provider expands to multiple accounts, the report uses quota `schemaVersion: 6` (auth and models use version 2), except DeepSeek multi-wallet reports, which use quota `schemaVersion: 8` when account expansion also applies.
 Every provider record then has an `accountKey`; providers still using one selected account use the literal `default`.
 Every quota-axi output quota row, in schema 5 and schema 6 alike, has `accountKeys`: the credential keys that one row covers, own `accountKey` first, then any keys folded into it in the order the provider recorded them. The exported `ProviderQuota.accountKeys` type remains optional so package consumers can construct reports without it; quota-axi output sets it on every quota row.
 A row covering one credential lists just its own key. A consumer that holds a credential key binds the row whose `accountKeys` contains that key. Matching `accountKey` alone misses a key that was folded into another row.
@@ -653,7 +653,7 @@ An unknown or stale scope deliberately gets **no** `quota[]` row: the absence of
 
 Everything a consumer branches on stays in the default tier: `accountKey` and `accountKeys` on an account row; `state.status`, `stale`, `authStatus`, `error`, `reason`, `remedyCommand`, `retryAfter`, `untrustedWindowIds`, and `degradedSources`, plus `reused` and a reused reading's `refreshedAt`; window `pace.status`, `reason`, `reservePercentPoints`, `burnMultiple`, and `shareOf` together with that share window's `percentUsed`; `quotaSemantics.status` and `unresolvedWindowIds`; every scope's `effectivePercentRemaining`, `boundedBy`, `limitingWindowIds`, `boundConflict`, `runway`, `selection`, and pace `aheadWindowIds` / `unknownWindowIds` / `worstReservePercentPoints`; provider `jobs` counts; and sparse `notSetUp`. `credits` also stays, so a consumer can avoid misreading it as exhaustion.
 
-`notSetUp: true` is present only on a provider lane that has positive evidence of absence (the same `providerPresence` classification the human report uses). Every provider stays in `providers[]` on both default `--json` and `--full`; omitting entries would change downstream consumers that look a provider up by id. The field is additive, so `schemaVersion` stays 5, or 6 when a provider expands to multiple accounts. Default TOON is the only output that omits these providers.
+`notSetUp: true` is present only on a provider lane that has positive evidence of absence (the same `providerPresence` classification the human report uses). Every provider stays in `providers[]` on both default `--json` and `--full`; omitting entries would change downstream consumers that look a provider up by id. The field is additive, so `schemaVersion` stays 5, or 6 when a provider expands to multiple accounts; DeepSeek multi-wallet reports remain the documented 7/8 exception. Default TOON is the only output that omits these providers.
 
 `--tui` renders from the complete in-memory model, so demotion never changes what the human report draws. Demotion happens only in the renderer (`quotaJsonReport` and `renderQuotaToon` in `src/render.ts`). Presence for an absence marker and for a TOON omission is classified in `quotaCommand` before redaction.
 
