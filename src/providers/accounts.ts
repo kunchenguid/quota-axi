@@ -8,6 +8,7 @@ import type {
 } from "../types.js";
 import {
   markSupersededReadings,
+  subscriptionIdentitiesMatch,
   subscriptionIdentity,
   supersededReadings,
 } from "../cache.js";
@@ -184,7 +185,7 @@ export function coalesceVerifiedSubscriptions(
         : result.findIndex(
             (candidate) =>
               candidate.provider === report.provider &&
-              subscriptionIdentity(candidate) === identity,
+              subscriptionIdentitiesMatch(candidate, report),
           );
     if (existingIndex < 0) {
       result.push(report);

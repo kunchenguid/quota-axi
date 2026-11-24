@@ -234,6 +234,51 @@ export function subscriptionIdentity(
 }
 
 /**
+ * Live Codex scope fields are partial evidence: only two non-empty conflicting
+ * fields prove that the readings name different subscriptions. Cached readings
+ * retain their opaque stamp and continue to require exact identity equality.
+ */
+export function subscriptionIdentitiesMatch(
+  left: ProviderQuota,
+  right: ProviderQuota,
+): boolean {
+  const leftIdentity = subscriptionIdentity(left);
+  const rightIdentity = subscriptionIdentity(right);
+  if (leftIdentity === rightIdentity && leftIdentity !== undefined) return true;
+  if (left.provider !== "codex" || right.provider !== "codex") return false;
+
+  if (
+    left.account?.identityStatus === "unverified" ||
+    right.account?.identityStatus === "unverified"
+  )
+    return false;
+  const leftAccountId = left.account?.accountId?.trim();
+  const rightAccountId = right.account?.accountId?.trim();
+  if (!leftAccountId || !rightAccountId) return false;
+  const leftScope = (left as ScopedSubscriptionQuota)[SUBSCRIPTION_SCOPE];
+  const rightScope = (right as ScopedSubscriptionQuota)[SUBSCRIPTION_SCOPE];
+  if (!leftScope || !rightScope) return false;
+  let leftFields: { plan?: string; email?: string };
+  let rightFields: { plan?: string; email?: string };
+  try {
+    leftFields = JSON.parse(leftScope) as { plan?: string; email?: string };
+    rightFields = JSON.parse(rightScope) as { plan?: string; email?: string };
+  } catch {
+    return false;
+  }
+  if (leftAccountId !== rightAccountId) return false;
+  for (const key of ["plan", "email"] as const) {
+    if (
+      leftFields[key] &&
+      rightFields[key] &&
+      leftFields[key] !== rightFields[key]
+    )
+      return false;
+  }
+  return true;
+}
+
+/**
  * Where one account id holds more than one subscription, the reading names
  * which one it measured. A Claude login can belong to several organizations
  * (a personal plan and a team seat), and a Codex account can expose distinct
