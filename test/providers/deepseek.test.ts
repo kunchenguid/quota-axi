@@ -9,9 +9,7 @@ import {
 const OPTIONS = { allowKeychainPrompt: false, refreshCredentials: false };
 const KEY = "synthetic-deepseek-key";
 
-async function balanceReport(
-  balance_infos: { currency: string; total_balance: string }[],
-) {
+async function rawBalanceReport(payload: unknown) {
   return createDeepSeekAdapter({
     credential: () => ({
       status: "available" as const,
@@ -19,10 +17,17 @@ async function balanceReport(
       source: "env:DEEPSEEK_API_KEY" as const,
     }),
     fetch: async () =>
-      new Response(JSON.stringify({ is_available: true, balance_infos }), {
+      new Response(JSON.stringify(payload), {
         headers: { "content-type": "application/json" },
       }),
   }).fetchQuota(OPTIONS);
+}
+
+async function balanceReport(
+  balance_infos: { currency: string; total_balance: unknown }[],
+  is_available = true,
+) {
+  return rawBalanceReport({ is_available, balance_infos });
 }
 
 describe("DeepSeek provider", () => {
@@ -64,7 +69,6 @@ describe("DeepSeek provider", () => {
       provider: "deepseek",
       source: "api",
       state: { status: "fresh", stale: false },
-      credits: { remaining: 12.5, unit: "usd" },
       creditBalances: [
         { remaining: 12.5, unit: "usd" },
         { remaining: 100, unit: "cny" },
@@ -105,7 +109,6 @@ describe("DeepSeek provider", () => {
 
     expect(report).toMatchObject({
       state: { status: "fresh", stale: false },
-      credits: { remaining: 10, unit: "cny" },
       creditBalances: [
         { remaining: 0, unit: "usd" },
         { remaining: 10, unit: "cny" },
@@ -120,7 +123,6 @@ describe("DeepSeek provider", () => {
     ]);
 
     expect(report).toMatchObject({
-      credits: { remaining: 0, unit: "usd" },
       creditBalances: [
         { remaining: 0, unit: "usd" },
         { remaining: 0, unit: "cny" },
@@ -209,6 +211,51 @@ describe("DeepSeek provider", () => {
         ],
       }),
     ).toThrow("invalid_amount");
+  });
+
+  it("rejects numeric wallet amounts", async () => {
+    await expect(
+      balanceReport([
+        { currency: "USD", total_balance: 0 },
+        { currency: "CNY", total_balance: 10 },
+      ]),
+    ).resolves.toMatchObject({
+      state: { status: "error", error: "invalid_amount:Total balance" },
+    });
+  });
+
+  it("rejects unknown currencies and malformed wallet rows", async () => {
+    await expect(
+      balanceReport([{ currency: "XYZ", total_balance: "10.00" }]),
+    ).resolves.toMatchObject({
+      state: { status: "error", error: "unsupported_currency" },
+    });
+    await expect(
+      rawBalanceReport({ is_available: true, balance_infos: [null] }),
+    ).resolves.toMatchObject({
+      state: { status: "error", error: "invalid_balance_row" },
+    });
+  });
+
+  it("keeps an unavailable account with no wallets absent", async () => {
+    const report = await balanceReport([], false);
+    expect(report).toMatchObject({
+      state: { status: "fresh" },
+      windows: [],
+    });
+    expect(report.credits).toBeUndefined();
+    expect(report.creditBalances).toBeUndefined();
+  });
+
+  it("preserves decimal wallet values without rounding", async () => {
+    const report = await balanceReport([
+      { currency: "USD", total_balance: "0.123456789012345678" },
+      { currency: "CNY", total_balance: "10.005" },
+    ]);
+    expect(report.creditBalances).toEqual([
+      { remaining: 0.12345678901234568, unit: "usd" },
+      { remaining: 10.005, unit: "cny" },
+    ]);
   });
 
   it("reports a negative balance as negative remaining credits", async () => {

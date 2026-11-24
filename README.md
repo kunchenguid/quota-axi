@@ -581,13 +581,13 @@ Other adapters retain their existing source-selection behavior.
 
 ## Output Model
 
-The `quota` command's `--json` emits `schemaVersion: 5`, or `6` when a provider expands to multiple accounts.
+The `quota` command's `--json` emits `schemaVersion: 5`, or `6` when a provider expands to multiple accounts. DeepSeek multi-wallet reports use `schemaVersion: 7`, or `8` when account expansion and multi-wallet output both apply.
 
 ### Normalized schema contract
 
 The package publishes TypeScript declarations from its package root, so consumers can use `import type { QuotaAxiResponse, ModelsResponse } from "quota-axi"`. The adapter contract is `ProviderAdapter` in and normalized `ProviderQuota` out: adapters report observed quota data, never rank, mint credentials, or retain raw responses. The narrowly bounded vendor-owned renewal path is documented under [Delegated credential refresh](#delegated-credential-refresh).
 
-`schemaVersion` is command-specific. Additive fields do not bump it. A semantic or incompatible shape change does. The legacy single-account `quota` report is version 5, `auth` is version 1, and `models` is version 1. When account discovery expands a provider, those versions are 6, 2, and 2 respectively. For quota row membership, see [Account keys and compatibility](#account-keys-and-compatibility).
+`schemaVersion` is command-specific. Additive fields do not bump it unless they change a provider's published contract. The legacy single-account `quota` report is version 5, `auth` is version 1, and `models` is version 1. When account discovery expands a provider, those versions are 6, 2, and 2 respectively. DeepSeek's multi-wallet contract is version 7 for a single lane and version 8 when account discovery also expands the report. This deliberate bump lets consumers distinguish the per-currency wallet list and the CNY-unit correction from the old scalar-only contract. For quota row membership, see [Account keys and compatibility](#account-keys-and-compatibility).
 
 ### Default report blocks
 
@@ -597,6 +597,7 @@ Default TOON is organized by the reading agent's decision rather than by quota-a
 | -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `quota[]`      | One row per **measurable** scope: `provider`, optional `accountKey`, `scope`, `effectivePercentRemaining`, `spendPriority`, `runway`, `confidence`, `limitedBy`, `resetsAt`. Every column is populated on every row. `limitedBy` is the scope's `limitingWindowIds`, and `resetsAt` is that binding window's own reset. |
 | `exhaustion[]` | **Sparse.** One row per scope with a finite exhaustion point: `usableRunwaySeconds`, `projectedExhaustedAt`, `limitingWindowId`. `exhaustion[0]:` means nothing is projected to run out.                                                                                                                                |
+| `credits[]`    | **Nominal.** Raw provider balances with no measurable quota scope: `provider`, optional `accountKey`, `scope`, `remaining`, `unit`.                                                                                                                                                                                     |
 | `attention[]`  | **Sparse.** Every non-nominal fact: `provider`, optional `accountKey`, `scope`, `kind`, `detail`, `remedy`.                                                                                                                                                                                                             |
 
 A `quota[]` row whose `runway` is `projected_exhaustion` or `exhausted_now` has exactly one matching `exhaustion[]` row, joined on `provider` + `scope` (plus `accountKey` in an account-expanded report). A row with `through_reset` or `unknown` has none, by definition: `through_reset` deliberately has no deadline and `unknown` has none to state.
@@ -608,7 +609,7 @@ A `quota[]` row whose `runway` is `projected_exhaustion` or `exhausted_now` has 
 | `stale`                                                 | `all`   | The report is stale diagnostic data. `detail` names the last refresh, `fetch failed` plus `state.error` when a usage fetch failed, and any `state.reason`; no scope gets a `quota[]` row.                                                                         |
 | `auth_required`, `rate_limited`, `unavailable`, `error` | `all`   | The provider state status. `detail` is `state.error`, any `state.reason`, plus the retry-after instant when `state.retryAfter` is set.                                                                                                                            |
 | `no_quota`                                              | `all`   | The provider reported no measurable scope and no raw credit balance. Emitted when nothing else names it or when needed to preserve `state.authStatus`.                                                                                                            |
-| `credits`                                               | `all`   | The provider reported a raw credit balance but no measurable scope. `detail` states that balance verbatim; no percentage or bound is derived from it.                                                                                                             |
+| `credits`                                               | `all`   | Legacy attention kind for providers that report a raw credit balance but no measurable scope. DeepSeek nominal balances use `credits[]` instead; no percentage or bound is derived from either representation.                                                    |
 | `jobs`                                                  | `all`   | A PHI-safe sample of vendor job outcomes. `detail` is `sampled N · completed N · failed N · other N`. JSON also carries structured `jobs.{sampled,completed,failed,other}`.                                                                                       |
 | `unresolved_windows`                                    | `all`   | `quotaSemantics.unresolvedWindowIds`: unfamiliar vendor windows not folded into any bound.                                                                                                                                                                        |
 | `untrusted_windows`                                     | `all`   | `state.untrustedWindowIds`: limits that could not be parsed authoritatively.                                                                                                                                                                                      |
@@ -623,7 +624,7 @@ A `quota[]` row whose `runway` is `projected_exhaustion` or `exhausted_now` has 
 
 Two invariants hold for every report:
 
-- **Every requested provider appears at least once**, in `quota[]` or `attention[]`, except providers with positive evidence of absence, which default TOON omits and counts in a help line; `--full` and `--provider` name them. A provider that remains in the report with no `quota[]` row always states its `state.authStatus` - including a positive `usable` - as `(auth <status>)` in its `attention[]` detail. In an account-expanded report a provider is omitted only when every one of its lanes is absent.
+- **Every requested provider appears at least once**, in `quota[]`, `credits[]`, or `attention[]`, except providers with positive evidence of absence, which default TOON omits and counts in a help line; `--full` and `--provider` name them. A provider that remains in the report with no `quota[]` row always states its `state.authStatus` - including a positive `usable` - as `(auth <status>)` in its `attention[]` detail. In an account-expanded report a provider is omitted only when every one of its lanes is absent.
 - **`quota[]` rows stay in provider-declaration order**, never sorted by any metric. A compact table with a `spendPriority` column must never read as a published ranking.
 
 The omission help line sits after any situational advice and before the tier hint:

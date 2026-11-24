@@ -1803,12 +1803,12 @@ describe("new provider public quota output", () => {
     ) as QuotaAxiResponse;
 
     expect(fetch).toHaveBeenCalledTimes(1);
+    expect(json.schemaVersion).toBe(7);
     expect(json.providers).toEqual([
       expect.objectContaining({
         provider: "deepseek",
         source: "api",
         windows: [],
-        credits: { remaining: 10, unit: "cny" },
         creditBalances: [
           { remaining: 0, unit: "usd" },
           { remaining: 10, unit: "cny" },
@@ -1821,7 +1821,15 @@ describe("new provider public quota output", () => {
         attempts: [{ source: "env:DEEPSEEK_API_KEY", status: "success" }],
       }),
     ]);
+    expect(json.providers[0]).not.toHaveProperty("credits");
     expect(JSON.stringify(json)).not.toContain(key);
+
+    const toon = await capture(["--provider", "deepseek"]);
+    expect(toon).toContain("credits[2]{provider,scope,remaining,unit}:");
+    expect(toon).toContain("deepseek,all,0,usd");
+    expect(toon).toContain("deepseek,all,10,cny");
+    expect(toon).not.toContain("attention[1]");
+    expect(toon).not.toContain("deepseek,all,credits,");
     expect(process.exitCode).toBeUndefined();
   });
 
@@ -2570,17 +2578,19 @@ describe("default TOON decision blocks", () => {
       ]);
 
       expect(
-        toonRows(output, "attention").filter((row) => row[0] === "commandcode"),
+        toonRows(output, "credits").filter((row) => row[0] === "commandcode"),
       ).toEqual([
         [
           "commandcode",
           ...(expanded ? ["default"] : []),
           "all",
+          "12.5",
           "credits",
-          "remaining 12.5 credits (auth usable)",
-          "none",
         ],
       ]);
+      expect(
+        toonRows(output, "attention").filter((row) => row[0] === "commandcode"),
+      ).toEqual([]);
     },
   );
 

@@ -48,9 +48,10 @@ export function annotateQuotaAdvice(
     });
   });
   const help = providers.flatMap(providerHelpLines);
+  const multiWallet = providers.some((provider) => provider.creditBalances);
   return {
     generatedAt: response.generatedAt,
-    schemaVersion: providers.some((provider) => provider.accountKey) ? 6 : 5,
+    schemaVersion: multiWallet ? (expanded ? 8 : 7) : expanded ? 6 : 5,
     providers,
     ...(help.length > 0 ? { help } : {}),
   };

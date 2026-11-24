@@ -30,6 +30,28 @@ function remedy(provider: ProviderQuota): string | undefined {
     .providers[0]?.state.remedyCommand;
 }
 
+describe("quota schema versions", () => {
+  it("versions a multi-wallet account-expanded quota report", () => {
+    const response = annotateQuotaAdvice({
+      generatedAt: "",
+      providers: [
+        {
+          provider: "deepseek",
+          accountKey: "default",
+          windows: [],
+          creditBalances: [
+            { remaining: 0, unit: "usd" },
+            { remaining: 10, unit: "cny" },
+          ],
+          state: { status: "fresh", stale: false },
+        },
+      ],
+    });
+
+    expect(response.schemaVersion).toBe(8);
+  });
+});
+
 describe("Claude sibling profile lane advice", () => {
   it("shell-quotes a config directory with spaces or metacharacters", () => {
     expect(

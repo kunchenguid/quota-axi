@@ -829,6 +829,31 @@ describe("cards for providers with no combinable bound", () => {
     expect(emptyTrack).toHaveLength(0);
   });
 
+  it("keeps multi-wallet balance lines within the card width", () => {
+    const deepseek: ProviderQuota = {
+      provider: "deepseek",
+      label: "DeepSeek",
+      source: "api",
+      windows: [],
+      creditBalances: [
+        { remaining: 0.12345678901234568, unit: "usd" },
+        { remaining: 10.005, unit: "cny" },
+      ],
+      state: { status: "fresh", stale: false },
+    };
+    const lines = renderQuotaTui(
+      { generatedAt: GENERATED_AT, schemaVersion: 7, providers: [deepseek] },
+      { timeZone: "America/Los_Angeles" },
+    ).split("\n");
+    const balanceLines = lines
+      .map(stripAnsi)
+      .filter((line) => line.includes("remaining"));
+
+    expect(balanceLines).toHaveLength(2);
+    for (const line of balanceLines)
+      expect(line.length).toBeLessThanOrEqual(49);
+  });
+
   it("renders Cursor's jointly bounded card with its effective bar", () => {
     const cursor = withQuotaSemantics(
       {

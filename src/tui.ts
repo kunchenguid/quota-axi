@@ -625,7 +625,7 @@ function creditsOnlyHeadline(
   const balances =
     provider.creditBalances ?? (provider.credits ? [provider.credits] : []);
   if (balances.length === 0) return undefined;
-  const amount = balances
+  const amounts = balances
     .map((credits) =>
       credits.unlimited === true
         ? "unlimited"
@@ -633,21 +633,20 @@ function creditsOnlyHeadline(
           ? undefined
           : `${credits.remaining} ${credits.unit ?? "credits"} remaining`,
     )
-    .filter((balance): balance is string => balance !== undefined)
-    .join(" + ");
-  if (amount === "") return undefined;
-  return [
+    .filter((balance): balance is string => balance !== undefined);
+  if (amounts.length === 0) return undefined;
+  return amounts.map((amount, index) =>
     interior(
       [
         { text: "   " },
         {
-          text: stale ? `stale · ${amount}` : amount,
+          text: index === 0 && stale ? `stale · ${amount}` : amount,
           style: "dimBold",
         },
       ],
       border,
     ),
-  ];
+  );
 }
 
 /**

@@ -404,7 +404,7 @@ export type ProviderQuota = {
 
 export type QuotaAxiResponse = {
   generatedAt: string;
-  schemaVersion: 5 | 6;
+  schemaVersion: 5 | 6 | 7 | 8;
   providers: ProviderQuota[];
   help?: string[];
 };

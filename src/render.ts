@@ -68,9 +68,18 @@ type AttentionRow = {
   remedy: string;
 };
 
+type CreditRow = {
+  provider: ProviderId;
+  accountKey?: string;
+  scope: string;
+  remaining: number | string;
+  unit: string;
+};
+
 type ProviderBlocks = {
   quota: QuotaRow[];
   exhaustion: ExhaustionRow[];
+  credits: CreditRow[];
   attention: AttentionRow[];
 };
 
@@ -98,7 +107,7 @@ export function renderQuotaToon(
             (provider) => !omit.has(provider.provider),
           ),
         };
-  const { quota, exhaustion, attention } = quotaBlocks(shown);
+  const { quota, exhaustion, credits, attention } = quotaBlocks(shown);
   const blocks = [
     encode({
       bin: collapseHome(binPath),
@@ -108,6 +117,7 @@ export function renderQuotaToon(
     }),
     encode({ quota }),
     encode({ exhaustion }),
+    encode({ credits }),
     encode({ attention }),
   ];
 
@@ -122,7 +132,12 @@ export function renderQuotaToon(
  * TOON omission of not-set-up providers happens before this runs.
  */
 function quotaBlocks(response: QuotaAxiResponse): ProviderBlocks {
-  const blocks: ProviderBlocks = { quota: [], exhaustion: [], attention: [] };
+  const blocks: ProviderBlocks = {
+    quota: [],
+    exhaustion: [],
+    credits: [],
+    attention: [],
+  };
   for (const provider of response.providers) {
     const scopes = provider.quotaSemantics?.effectiveAvailability ?? [];
     const scopeAttention: AttentionRow[] = [];
@@ -157,8 +172,15 @@ function quotaBlocks(response: QuotaAxiResponse): ProviderBlocks {
       }
     }
 
+    const credits = creditRows(provider);
+    blocks.credits.push(...credits);
     blocks.attention.push(
-      ...providerAttention(provider, measured, scopeAttention.length),
+      ...providerAttention(
+        provider,
+        measured,
+        scopeAttention.length,
+        credits.length > 0,
+      ),
     );
     blocks.attention.push(...shareRows(provider));
     blocks.attention.push(...jobRows(provider));
@@ -205,20 +227,21 @@ function exhaustionRow(
 }
 
 /**
- * Provider-level facts. A provider with no `quota[]` row always ends up with at
- * least one row across this block and its scope rows, so it can never be
- * silently absent, and it always states its auth fact - positive included -
- * rather than only a degraded one.
+ * Provider-level facts. A provider with no `quota[]` or `credits[]` row always
+ * ends up with at least one row across this block and its scope rows, so it can
+ * never be silently absent, and it always states its auth fact - positive
+ * included - rather than only a degraded one.
  */
 function providerAttention(
   provider: ProviderQuota,
   measured: boolean,
   scopeRows: number,
+  hasCredits: boolean,
 ): AttentionRow[] {
   // Degraded sources are appended, never counted: they name the provider but
   // not why a scope is missing, so they must not suppress the `no_quota` row.
   return [
-    ...providerStateRows(provider, measured, scopeRows),
+    ...providerStateRows(provider, measured, scopeRows, hasCredits),
     ...degradedSourceRows(provider),
   ];
 }
@@ -276,6 +299,7 @@ function providerStateRows(
   provider: ProviderQuota,
   measured: boolean,
   scopeRows: number,
+  hasCredits: boolean,
 ): AttentionRow[] {
   const rows: AttentionRow[] = [];
   const primary = primaryProviderRow(provider);
@@ -317,17 +341,7 @@ function providerStateRows(
     primary.detail += suffix;
     return rows;
   }
-  const credits = creditBalance(provider);
-  if (credits) {
-    rows.unshift({
-      ...providerColumns(provider),
-      scope: "all",
-      kind: "credits",
-      detail: `${credits}${suffix}`,
-      remedy: provider.state.remedyCommand ?? NONE,
-    });
-    return rows;
-  }
+  if (hasCredits) return rows;
   // No status row to carry the auth fact. Emit one when there is an auth
   // status to state, or when nothing else would name this provider at all.
   if (suffix === "" && rows.length + scopeRows > 0) return rows;
@@ -341,26 +355,18 @@ function providerStateRows(
   return rows;
 }
 
-/**
- * A provider that reports a raw credit balance but no measurable scope has a
- * real number to state. Naming it keeps the default report from contradicting
- * the same run's `credits` with a bare `no_quota`, without inventing a
- * percentage or a routing bound from a balance that has no cap.
- */
-function creditBalance(provider: ProviderQuota): string | undefined {
+function creditRows(provider: ProviderQuota): CreditRow[] {
   const balances =
     provider.creditBalances ?? (provider.credits ? [provider.credits] : []);
-  if (balances.length === 0) return undefined;
-  return (
-    balances
-      .map((credits) => {
-        if (credits.unlimited) return "credits unlimited";
-        if (credits.remaining === undefined) return undefined;
-        return `remaining ${credits.remaining} ${credits.unit ?? "credits"}`;
-      })
-      .filter((balance): balance is string => balance !== undefined)
-      .join(" + ") || undefined
-  );
+  return balances.map((balance) => ({
+    ...providerColumns(provider),
+    scope: "all",
+    remaining:
+      balance.unlimited === true
+        ? "unlimited"
+        : (balance.remaining ?? "unknown"),
+    unit: balance.unit ?? "credits",
+  }));
 }
 
 function primaryProviderRow(provider: ProviderQuota): AttentionRow | undefined {
