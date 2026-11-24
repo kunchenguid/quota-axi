@@ -7,6 +7,7 @@ import {
   readCachedCodexProvider,
   readCachedProvider,
   stampCodexStoredAccountId,
+  stampSubscriptionScope,
 } from "../cache.js";
 import { readJsonFileResult, type JsonFileReadResult } from "../lib/fs.js";
 import {
@@ -986,6 +987,7 @@ function codexSuccessReport(
     sourcesTried: sourceNames(attempts),
     attempts,
   });
+  stampSubscriptionScope(report, codexSubscriptionScope(quota));
   stampCodexStoredAccountId(
     report,
     storedAccountId ?? quota.account?.accountId,
@@ -993,6 +995,27 @@ function codexSuccessReport(
   const credentialKey = codexCredentialKey(source);
   if (credentialKey) report.accountKeys = [credentialKey];
   return report;
+}
+
+/**
+ * ChatGPT account ids can cover more than one paid quota context. The
+ * account's stable user identity and entitlement shape distinguish those
+ * contexts without using a credential or a live usage value.
+ */
+function codexSubscriptionScope(quota: NormalizedCodexQuota): string {
+  const windows = quota.windows
+    .map(({ id, label, kind, windowSeconds }) => ({
+      id,
+      label,
+      kind,
+      ...(windowSeconds !== undefined ? { windowSeconds } : {}),
+    }))
+    .sort((left, right) => left.id.localeCompare(right.id));
+  return JSON.stringify({
+    email: quota.account?.email?.trim().toLowerCase() ?? null,
+    plan: quota.plan ?? null,
+    windows,
+  });
 }
 
 /**

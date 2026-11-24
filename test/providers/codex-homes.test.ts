@@ -216,6 +216,61 @@ describe("Codex home list", () => {
     });
   });
 
+  it("keeps seats with one account id but different quota contexts separate", async () => {
+    writeCodexHome("selected", "personal-seat-token");
+    const listed = writeCodexHome("listed", "team-seat-token");
+    vi.stubEnv("QUOTA_AXI_CODEX_HOMES", listed);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init: RequestInit) => {
+        const token = new Headers(init.headers).get("authorization") ?? "";
+        const team = token.includes("team-seat");
+        return new Response(
+          JSON.stringify({
+            plan_type: team ? "team" : "self_serve_business_prolite",
+            email: team ? "team@example.invalid" : "personal@example.invalid",
+            account_id: "acct-shared-workspace",
+            rate_limit: team
+              ? {
+                  primary_window: {
+                    used_percent: 100,
+                    reset_after_seconds: 18_000,
+                  },
+                  secondary_window: {
+                    used_percent: 40,
+                    reset_after_seconds: 604_800,
+                  },
+                }
+              : {
+                  secondary_window: {
+                    used_percent: 92,
+                    reset_after_seconds: 604_800,
+                  },
+                },
+          }),
+        );
+      }),
+    );
+
+    const result = await readCodex(["--provider", "codex", "--full", "--json"]);
+
+    expect(result.providers).toHaveLength(2);
+    expect(
+      result.providers.map((provider: { plan?: string }) => provider.plan),
+    ).toEqual(["self_serve_business_prolite", "team"]);
+    expect(
+      result.providers.map((provider: { windows: { id: string }[] }) =>
+        provider.windows.map((window) => window.id),
+      ),
+    ).toEqual([["weekly"], ["five_hour", "weekly"]]);
+    expect(
+      result.providers.map(
+        (provider: { windows: { percentRemaining?: number }[] }) =>
+          provider.windows.map((window) => window.percentRemaining),
+      ),
+    ).toEqual([[8], [0, 60]]);
+  });
+
   it("serves each home's own cached windows after a transient failure", async () => {
     const selected = writeCodexHome(
       "selected",
