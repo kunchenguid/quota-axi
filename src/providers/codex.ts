@@ -9,6 +9,7 @@ import {
   stampCodexStoredAccountId,
 } from "../cache.js";
 import { readJsonFileResult, type JsonFileReadResult } from "../lib/fs.js";
+import { codexHomeAccountKey, codexListedHomes } from "../lib/codex-home.js";
 import { providerFetch } from "../lib/http.js";
 import { findCommandPath, terminateChild } from "../lib/process.js";
 import { redactSecret } from "../lib/secret.js";
@@ -229,11 +230,68 @@ type CodexAccountContext =
       piProviderId: string;
       cacheKey?: string;
       extraPiProviderIds?: string[];
+    }
+  | {
+      kind: "home";
+      home: string;
+      cacheKey: string;
     };
+
+async function discoverCodexHomeAccounts(
+  dependencies: CodexDependencies,
+  listedHomes: readonly string[],
+): Promise<ProviderAccount[]> {
+  const selectedHome = process.env.CODEX_HOME ?? join(homedir(), ".codex");
+  const homes = [selectedHome, ...listedHomes].filter(
+    (home, index, all) => all.indexOf(home) === index,
+  );
+  const nativeAccount: Extract<CodexAccountContext, { kind: "native" }> = {
+    kind: "native",
+    includesBuiltinPi: true,
+  };
+  const accounts: ProviderAccount[] = [
+    {
+      accountKey: CODEX_HOME_ACCOUNT_KEY,
+      locator: {
+        kind: "codex-home",
+        path: selectedHome,
+        delegateEligible: true,
+      },
+      fetchQuota: (options) =>
+        fetchQuotaWithDependencies(dependencies, options, nativeAccount),
+      inspectAuth: () =>
+        inspectAuthWithDependencies(dependencies, nativeAccount),
+    },
+  ];
+  for (const home of homes.slice(1)) {
+    const account: Extract<CodexAccountContext, { kind: "home" }> = {
+      kind: "home",
+      home,
+      cacheKey: codexHomeAccountKey(home),
+    };
+    accounts.push({
+      accountKey: account.cacheKey,
+      locator: { kind: "codex-home", path: home, delegateEligible: false },
+      fetchQuota: async (options) => {
+        const report = await fetchQuotaWithDependencies(
+          dependencies,
+          options,
+          account,
+        );
+        return { ...report, accountKeys: [account.cacheKey] };
+      },
+      inspectAuth: () => inspectAuthWithDependencies(dependencies, account),
+    });
+  }
+  return accounts;
+}
 
 async function discoverCodexAccounts(
   dependencies: CodexDependencies,
 ): Promise<ProviderAccount[] | undefined> {
+  const listedHomes = codexListedHomes();
+  if (listedHomes)
+    return discoverCodexHomeAccounts(dependencies, listedHomes.dirs);
   const ids = await listPiCodexProviderIds(dependencies);
   if (
     ids.length === 0 ||
@@ -586,7 +644,10 @@ async function fetchQuotaWithDependencies(
   let errorIsDefault = true;
 
   const credentialState =
-    singleWinnerCredentials?.nativeState ?? readCredentialState();
+    singleWinnerCredentials?.nativeState ??
+    (account?.kind === "home"
+      ? readCredentialState(join(account.home, "auth.json"))
+      : readCredentialState());
   // The accounts whose credentials this reading has tried. A failure may only
   // serve a cached snapshot stamped with one of them: a credential never tried
   // cannot vouch for windows filed under the slot this reading shares.
@@ -658,7 +719,7 @@ async function fetchQuotaWithDependencies(
   }
 
   let piCredentialTried = false;
-  if (!account || account.includesBuiltinPi) {
+  if (!account || account.kind === "native") {
     let piResolution = singleWinnerCredentials?.builtinResolution;
     if (!piResolution) {
       try {
@@ -747,6 +808,17 @@ async function fetchQuotaWithDependencies(
         errorIsDefault = false;
       }
     }
+  }
+
+  if (account?.kind === "home") {
+    return codexFailureReport(
+      finalError,
+      undefined,
+      attempts,
+      "oauth",
+      account.cacheKey,
+      accountIds,
+    );
   }
 
   attempts.push({ source: "cli-rpc", status: "failed" });
@@ -999,6 +1071,12 @@ async function inspectAuthWithDependencies(
     return {
       provider: "codex",
       sources,
+    };
+  }
+  if (account?.kind === "home") {
+    return {
+      provider: "codex",
+      sources: [readCredentialState(join(account.home, "auth.json")).source],
     };
   }
   const authFile = codexAuthFile();

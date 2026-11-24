@@ -476,6 +476,20 @@ That Pi lane keeps its own reading when fresh, and shows the native reading when
 A proven sign-out retires only cached Codex snapshots whose stored account identity matches the rejected credential; a native login that coalesces into a Pi lane no longer removes the shared `codex-home` slot by name, so another account's snapshot cannot be discarded.
 `--profile-only` still reads one native Codex file and never opens Pi auth.
 
+### Codex homes
+
+Codex home lanes are opt-in. When `QUOTA_AXI_CODEX_HOMES` is absent, blank, or lists no entry, quota-axi keeps the existing single selected-home behavior.
+
+```sh
+QUOTA_AXI_CODEX_HOMES="/home/me/.codex-work:/home/me/.codex-team" quota-axi --provider codex --json
+QUOTA_AXI_CODEX_HOMES="/home/me/.codex-work:/home/me/.codex-team" quota-axi --provider codex --full --json  # adds accountLocator per lane
+```
+
+- The value lists absolute Codex home directories separated by the platform path delimiter (`:` on macOS and Linux, `;` on Windows). Empty entries are ignored, and a relative entry fails with `VALIDATION_ERROR` (exit 2) whenever `codex` is in scope. `--profile-only` ignores the variable.
+- The selected `$CODEX_HOME` lane remains first. Each listed home is read only from its own `auth.json`, gets its own quota windows and cache slot, and cannot use the selected home's token, Pi credentials, CLI fallback, or delegated refresh. Repeated entries for the selected home are reported once.
+- A listed home without usable credentials remains its own unavailable lane, so one missing, rejected, or exhausted home never hides another listed home. Tokens, refresh values, and file contents never appear in output.
+- Each listed lane uses `codex-home:` plus 24 hexadecimal characters of a one-way digest of its absolute home path as its account key. `--full` adds `accountLocator: { kind: "codex-home", path, delegateEligible }`; the locator is omitted from default JSON and ordinary output.
+
 ### Claude profiles
 
 Claude account lanes are opt-in. When `QUOTA_AXI_CLAUDE_SWAP` is not enabled and `QUOTA_AXI_CLAUDE_PROFILES` is absent, blank, or lists no entry, Claude reads only the profile this process selects, and the report, its schema, and the cache slot it uses are exactly what they are without these features: one keyless lane, quota schema 5, `accountKeys: ["default"]`. quota-axi never searches the home directory for other Claude profiles.

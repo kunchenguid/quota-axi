@@ -20,6 +20,7 @@ import {
   CLAUDE_PROFILES_ENV,
   claudeListedProfiles,
 } from "./lib/claude-profile.js";
+import { CODEX_HOMES_ENV, codexListedHomes } from "./lib/codex-home.js";
 import { takeFetchTurn } from "./lib/fetch-lock.js";
 import { withInputTrace } from "./lib/input-trace.js";
 import { withQuotaSemantics } from "./interpretation.js";
@@ -77,6 +78,7 @@ export async function quotaCommand(
   const flags = parseFlags(args);
   validateProfileOnly(flags);
   validateClaudeInference(flags);
+  validateCodexHomes(flags.providers, flags.profileOnly);
   const options: ProviderOptions = {
     allowKeychainPrompt: flags.profileOnly ? false : flags.allowKeychainPrompt,
     refreshCredentials: flags.profileOnly ? false : !flags.noCredentialRefresh,
@@ -444,8 +446,10 @@ export async function fetchQuota(
       [`Point ${SNAPSHOT_ENV} at a quota-axi cache file, or unset it`],
     );
   }
-  if (!snapshot && !claudeSwapEnabled())
+  if (!snapshot && !claudeSwapEnabled()) {
     validateClaudeProfiles(providers, options);
+    validateCodexHomes(providers, options.credentialMode === "profile-only");
+  }
   const writesCache = options.credentialMode !== "profile-only" && !snapshot;
   // Providers a lock holder already cached, so the report-wide write below
   // does not stamp them a second time
@@ -599,6 +603,7 @@ async function inspectAuth(
   options: ProviderOptions,
 ): Promise<AuthProviderReport[]> {
   validateClaudeProfiles(providers, options);
+  validateCodexHomes(providers, options.credentialMode === "profile-only");
   const reports = (
     await Promise.all(
       providers.map((provider) =>
@@ -620,6 +625,20 @@ async function inspectAuth(
  * the raw path to name its Keychain item, so quota-axi cannot guess which
  * directory was meant. `--profile-only` ignores the variable entirely.
  */
+function validateCodexHomes(
+  providers: ProviderId[],
+  profileOnly: boolean,
+): void {
+  if (!providers.includes("codex") || profileOnly) return;
+  const [invalid] = codexListedHomes()?.invalid ?? [];
+  if (invalid === undefined) return;
+  throw new AxiError(
+    `${CODEX_HOMES_ENV} entry ${JSON.stringify(invalid)} is not an absolute path`,
+    "VALIDATION_ERROR",
+    [`List each Codex home as an absolute path, separated by "${delimiter}"`],
+  );
+}
+
 function validateClaudeProfiles(
   providers: ProviderId[],
   options: ProviderOptions,
