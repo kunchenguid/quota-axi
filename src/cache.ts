@@ -205,8 +205,9 @@ type SubscriptionStampedQuota = ProviderQuota & {
 
 /**
  * One comparable subscription identity per reading: the verified
- * `account.accountId` a live reading reports, else the stamp a cached snapshot
- * carried. Missing or unverified identity yields nothing, never a guess.
+ * `account.accountId` a live reading reports, combined with a provider-specific
+ * scope when one is required, else the stamp a cached snapshot carried. Missing
+ * or unverified identity yields nothing, never a guess.
  */
 export function subscriptionIdentity(
   report: ProviderQuota,
@@ -235,10 +236,11 @@ export function subscriptionIdentity(
 /**
  * Where one account id holds more than one subscription, the reading names
  * which one it measured. A Claude login can belong to several organizations
- * (a personal plan and a team seat), each with its own limits, so the user id
- * alone would fold two quota pools into one row. `null` says the reading could
- * not name its subscription, which leaves its identity incomparable rather
- * than guessed. A symbol key keeps it off every serialized surface.
+ * (a personal plan and a team seat), and a Codex account can expose distinct
+ * quota contexts, each with its own limits, so the user id alone would fold
+ * two quota pools into one row. `null` says the reading could not name its
+ * subscription, which leaves its identity incomparable rather than guessed. A
+ * symbol key keeps it off every serialized surface.
  */
 const SUBSCRIPTION_SCOPE = Symbol("subscriptionScope");
 
