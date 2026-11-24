@@ -246,7 +246,7 @@ type CodexAccountContext =
 type CodexHomeLocation = { path: string; identity: string };
 
 function selectedCodexHome(): CodexHomeLocation {
-  const path = process.env.CODEX_HOME ?? join(homedir(), ".codex");
+  const path = process.env.CODEX_HOME || join(homedir(), ".codex");
   return { path, identity: codexHomeIdentity(path) };
 }
 
@@ -439,6 +439,15 @@ async function discoverCodexAccountLanes(
   if (hasNativeLane) {
     accounts.push({
       accountKey: CODEX_HOME_ACCOUNT_KEY,
+      ...(codexListedHomes()
+        ? {
+            locator: {
+              kind: "codex-home",
+              path: selectedCodexHome().path,
+              delegateEligible: true,
+            },
+          }
+        : {}),
       fetchQuota: async (options) => {
         const reading = await readNative(options);
         if (!reading) return undefined;

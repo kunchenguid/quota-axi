@@ -12,6 +12,10 @@ beforeEach(() => {
   vi.stubEnv("QUOTA_AXI_CODEX_HOMES", undefined);
   vi.stubEnv("PI_CODING_AGENT_DIR", join(root, "pi"));
   vi.stubEnv("XDG_CACHE_HOME", join(root, "cache"));
+  vi.doMock("node:os", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("node:os")>()),
+    homedir: () => join(root, "default-home"),
+  }));
   vi.doMock("../../src/lib/process.js", async (importOriginal) => ({
     ...(await importOriginal<typeof import("../../src/lib/process.js")>()),
     findCommandPath: vi.fn(async () => undefined),
@@ -42,6 +46,7 @@ afterEach(() => {
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
   vi.doUnmock("../../src/lib/process.js");
+  vi.doUnmock("node:os");
   rmSync(root, { recursive: true, force: true });
 });
 
@@ -166,6 +171,23 @@ describe("Codex home list", () => {
     ).toBe(true);
   });
 
+  it("deduplicates the default home when CODEX_HOME is empty", async () => {
+    vi.stubEnv("CODEX_HOME", "");
+    vi.stubEnv("QUOTA_AXI_CODEX_HOMES", join(root, "default-home", ".codex"));
+    writePiAccounts({
+      "openai-codex": { token: "pi-personal", accountId: "acct-personal" },
+      "openai-codex-team": { token: "pi-team", accountId: "acct-team" },
+    });
+
+    const result = await readCodex(["--provider", "codex", "--full", "--json"]);
+    expect(result.providers).toHaveLength(2);
+    expect(
+      result.providers.every(
+        (p: { accountKey: string }) => p.accountKey !== "codex-home",
+      ),
+    ).toBe(true);
+  });
+
   it("appends listed homes without hiding existing Pi lanes", async () => {
     writeCodexHome("selected", "native-token", "acct-native");
     const listed = writeCodexHome("listed", "listed-token", "acct-listed");
@@ -187,6 +209,11 @@ describe("Codex home list", () => {
       "acct-pi-team",
       "acct-listed-token",
     ]);
+    expect(result.providers[0].accountLocator).toEqual({
+      kind: "codex-home",
+      path: join(root, "selected"),
+      delegateEligible: true,
+    });
   });
 
   it("serves each home's own cached windows after a transient failure", async () => {
