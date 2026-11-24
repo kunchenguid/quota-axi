@@ -252,6 +252,36 @@ describe("Codex home list", () => {
     expect(result.providers).toHaveLength(1);
   });
 
+  it("reuses each expanded home lane from its own fresh cache slot", async () => {
+    writeCodexHome("selected", "selected-token", "acct-selected");
+    const listed = writeCodexHome("listed", "team-token", "acct-listed");
+    vi.stubEnv("QUOTA_AXI_CODEX_HOMES", listed);
+    const args = [
+      "--provider",
+      "codex",
+      "--json",
+      "--no-credential-refresh",
+      "--max-age",
+      "90s",
+    ];
+    const first = await readCodex(args);
+    const callsAfterFirst = vi.mocked(fetch).mock.calls.length;
+    const second = await readCodex(args);
+    expect(vi.mocked(fetch).mock.calls.length).toBe(callsAfterFirst);
+    expect(
+      first.providers.map(
+        (p: { windows: { percentRemaining?: number }[] }) =>
+          p.windows[0]?.percentRemaining,
+      ),
+    ).toEqual([90, 30]);
+    expect(
+      second.providers.map(
+        (p: { windows: { percentRemaining?: number }[] }) =>
+          p.windows[0]?.percentRemaining,
+      ),
+    ).toEqual([90, 30]);
+  });
+
   it("deduplicates filesystem aliases and keeps the first locator spelling", async () => {
     const selected = writeCodexHome(
       "selected",
