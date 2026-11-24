@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { realpathSync } from "node:fs";
-import { delimiter, isAbsolute, resolve } from "node:path";
+import { readlinkSync, realpathSync } from "node:fs";
+import { basename, delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 
 export const CODEX_HOMES_ENV = "QUOTA_AXI_CODEX_HOMES";
 
@@ -24,10 +24,27 @@ export function codexListedHomes(
 
 /** Canonical filesystem identity, with a stable fallback for absent homes. */
 export function codexHomeIdentity(home: string): string {
+  return canonicalCodexHome(resolve(home), new Set());
+}
+
+function canonicalCodexHome(home: string, seen: Set<string>): string {
   try {
     return realpathSync(home);
   } catch {
-    return resolve(home);
+    const parent = dirname(home);
+    if (parent === home) return home;
+    const canonicalParent = canonicalCodexHome(parent, seen);
+    const candidate = join(canonicalParent, basename(home));
+    if (seen.has(candidate)) return candidate;
+    seen.add(candidate);
+    try {
+      return canonicalCodexHome(
+        resolve(dirname(candidate), readlinkSync(candidate)),
+        seen,
+      );
+    } catch {
+      return candidate;
+    }
   }
 }
 

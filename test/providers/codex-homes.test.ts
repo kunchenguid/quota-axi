@@ -239,6 +239,19 @@ describe("Codex home list", () => {
     expect(result.providers[1].windows[0].percentRemaining).toBe(90);
   });
 
+  it("deduplicates dangling filesystem aliases", async () => {
+    const selected = join(root, "selected");
+    const alias = join(root, "selected-alias");
+    const { symlinkSync } = await import("node:fs");
+    symlinkSync(selected, alias);
+    vi.stubEnv("CODEX_HOME", selected);
+    vi.stubEnv("QUOTA_AXI_CODEX_HOMES", alias);
+
+    const result = await readCodex(["--provider", "codex", "--full", "--json"]);
+
+    expect(result.providers).toHaveLength(1);
+  });
+
   it("deduplicates filesystem aliases and keeps the first locator spelling", async () => {
     const selected = writeCodexHome(
       "selected",
