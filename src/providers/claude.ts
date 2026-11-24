@@ -1,4 +1,10 @@
-import { chmodSync, existsSync, renameSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  readFileSync,
+  renameSync,
+  writeFileSync,
+} from "node:fs";
 import { userInfo } from "node:os";
 import { join } from "node:path";
 import {
@@ -142,6 +148,7 @@ type ClaudeIdentityResult = {
   error?: string;
 };
 type ClaudeProfileLocations = {
+  configDir: string;
   credentialFile?: string;
   keychainAccount: string;
   keychainService: string;
@@ -527,7 +534,7 @@ async function fetchClaudeProfileQuota(
   // Soft expiry the Claude CLI can fix: hand the rotation to the CLI that owns
   // the credential store, then read back the session it rewrote.
   if (shouldDelegateClaudeRefresh(options, pass)) {
-    const blocker = await liveClaudeRefreshBlocker();
+    const blocker = await liveClaudeRefreshBlocker(locations.configDir);
     if (blocker) {
       attempts.push({
         source: CLAUDE_CLI_REFRESH_DELEGATE.source,
@@ -759,36 +766,106 @@ function shouldDelegateClaudeRefresh(
 /**
  * A best-effort concurrency check on top of
  * {@link shouldDelegateClaudeRefresh}: quota-axi proceeds past this check only
- * when its process snapshot shows no Claude Code process already running.
+ * when no live Claude Code process has same-profile or unknown ownership.
  *
  * Claude Code owns its own session and refreshes it on its own schedule, and
  * the refresh token behind that session is single-use. A second refresher
- * racing a live session is how one holder ends up presenting a spent token, so
- * when the snapshot contains a live Claude Code process, quota-axi's
- * `claude doctor` is at best redundant and at worst the thing that signs the
- * user out. A quota reader loses nothing by standing down: the process that
- * owns the store is already doing the work, and the next read picks up the
- * session it wrote.
+ * racing a live session using the same store is how one holder ends up
+ * presenting a spent token. A same-profile session therefore owns the work;
+ * the next quota read picks up the session it wrote. Only session records
+ * proving another known profile's ownership can rule out that collision.
  *
- * Not knowing is treated the same as knowing a session is live, so an
- * unlistable process table (Windows, no effective uid, no `ps`) stays read-only
- * rather than guessing. The check and spawn are not atomic: a Claude Code
- * session starting after the check or another concurrent quota-axi read can
- * still overlap the delegate. This narrows the common repeated five-minute
- * `--tui` versus live-session collision and, together with never signaling the
- * delegate, is strictly safer than force-killing without adding a failure mode
- * beyond the pre-existing vendor-owned race. The skipped reason is recorded so
- * `--full` shows why no refresh happened.
+ * Unknown ownership or an unlistable process table (Windows, no effective uid,
+ * no `ps`) stays read-only rather than guessing. The check and spawn are not
+ * atomic: a Claude Code session starting after the check or another concurrent
+ * quota-axi read can still overlap the delegate. This narrows the common
+ * repeated five-minute `--tui` versus live-session collision and, together
+ * with never signaling the delegate, is strictly safer than force-killing
+ * without adding a failure mode beyond the pre-existing vendor-owned race.
+ * The skipped reason is recorded so `--full` shows why no refresh happened.
  */
-async function liveClaudeRefreshBlocker(): Promise<string | undefined> {
+async function liveClaudeRefreshBlocker(
+  profileConfigDir: string,
+): Promise<string | undefined> {
   const processes = await listRunningCommandLines();
   if (processes.status === "unavailable") return REFRESH_VENDOR_UNKNOWN;
-  return processes.processes.some(
-    ({ pid, commandLine }) =>
-      pid !== process.pid && isLiveClaudeCodeProcess(commandLine),
-  )
-    ? REFRESH_LIVE_VENDOR_PROCESS
-    : undefined;
+  const siblingDirs = new Set([
+    claudeProfileLocations({}).configDir,
+    ...(claudeListedProfiles()?.dirs ?? []).map(
+      (dir) => claudeProfileLocations({ CLAUDE_CONFIG_DIR: dir }).configDir,
+    ),
+  ]);
+  siblingDirs.delete(profileConfigDir);
+  for (const { pid, commandLine } of processes.processes) {
+    if (pid === process.pid || !isLiveClaudeCodeProcess(commandLine)) continue;
+    if (
+      process.platform !== "darwin" ||
+      claudeSessionRecord(profileConfigDir, pid) !== "missing"
+    )
+      return REFRESH_LIVE_VENDOR_PROCESS;
+    let liveStart: string;
+    try {
+      liveStart = (
+        await execFileText("ps", ["-o", "lstart=", "-p", String(pid)], 4_000, {
+          env: { ...process.env, TZ: "UTC", LC_ALL: "C" },
+        })
+      )
+        .trim()
+        .replace(/\s+/g, " ");
+    } catch {
+      return REFRESH_LIVE_VENDOR_PROCESS;
+    }
+    if (!liveStart) return REFRESH_LIVE_VENDOR_PROCESS;
+    let ownedBySibling = false;
+    for (const dir of siblingDirs) {
+      const record = claudeSessionRecord(dir, pid);
+      if (record === "missing") continue;
+      if (
+        record === "unknown" ||
+        record.procStart?.trim().replace(/\s+/g, " ") !== liveStart
+      )
+        return REFRESH_LIVE_VENDOR_PROCESS;
+      ownedBySibling = true;
+    }
+    if (!ownedBySibling) return REFRESH_LIVE_VENDOR_PROCESS;
+  }
+  return undefined;
+}
+
+function claudeSessionRecord(
+  configDir: string,
+  pid: number,
+): { procStart: string | undefined } | "missing" | "unknown" {
+  let text: string;
+  try {
+    text = readFileSync(join(configDir, "sessions", `${pid}.json`), "utf8");
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT"
+      ? "missing"
+      : "unknown";
+  }
+  try {
+    const record: unknown = JSON.parse(text, (key, value: unknown) =>
+      key === "" ||
+      (key === "pid" && typeof value === "number") ||
+      (key === "procStart" && typeof value === "string")
+        ? value
+        : undefined,
+    );
+    return record &&
+      typeof record === "object" &&
+      "pid" in record &&
+      record.pid === pid
+      ? {
+          procStart:
+            "procStart" in record && typeof record.procStart === "string"
+              ? record.procStart
+              : undefined,
+        }
+      : "unknown";
+  } catch {
+    return "unknown";
+  }
 }
 
 /**
@@ -1830,6 +1907,7 @@ function resolveClaudeProfileLocations(
   } = profile;
   const keychainAccount = claudeKeychainAccount();
   return {
+    configDir,
     credentialFile:
       secureStorageSelected && process.platform === "darwin"
         ? undefined
