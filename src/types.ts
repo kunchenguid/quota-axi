@@ -346,6 +346,12 @@ export type ProviderQuota = {
     unlimited?: boolean;
     unit?: "usd" | "cny" | "credits";
   };
+  /** Every raw credit wallet when a provider reports more than one. */
+  creditBalances?: {
+    remaining?: number;
+    unlimited?: boolean;
+    unit?: "usd" | "cny" | "credits";
+  }[];
   /**
    * PHI-safe job-outcome sample from a vendor list command. Counts only;
    * never prompts, URLs, ids, or account identity. Restored on cache reuse

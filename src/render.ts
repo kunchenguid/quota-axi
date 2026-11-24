@@ -348,11 +348,19 @@ function providerStateRows(
  * percentage or a routing bound from a balance that has no cap.
  */
 function creditBalance(provider: ProviderQuota): string | undefined {
-  const credits = provider.credits;
-  if (!credits) return undefined;
-  if (credits.unlimited) return "credits unlimited";
-  if (credits.remaining === undefined) return undefined;
-  return `remaining ${credits.remaining} ${credits.unit ?? "credits"}`;
+  const balances =
+    provider.creditBalances ?? (provider.credits ? [provider.credits] : []);
+  if (balances.length === 0) return undefined;
+  return (
+    balances
+      .map((credits) => {
+        if (credits.unlimited) return "credits unlimited";
+        if (credits.remaining === undefined) return undefined;
+        return `remaining ${credits.remaining} ${credits.unit ?? "credits"}`;
+      })
+      .filter((balance): balance is string => balance !== undefined)
+      .join(" + ") || undefined
+  );
 }
 
 function primaryProviderRow(provider: ProviderQuota): AttentionRow | undefined {

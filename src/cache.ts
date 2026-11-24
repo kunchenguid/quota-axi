@@ -920,6 +920,7 @@ function toCacheProvider(provider: ProviderQuota): CachedProvider | undefined {
       plan: provider.plan,
       windows: provider.windows,
       credits: provider.credits,
+      creditBalances: provider.creditBalances,
       jobs: provider.jobs,
       state: {
         status: provider.state.status,
@@ -1102,6 +1103,7 @@ function normalizeCachedProvider(
   const refreshedAt = stringValue(state.refreshedAt);
   const untrustedWindowIds = stringArrayValue(state.untrustedWindowIds);
   const credits = normalizeCachedCredits(data.credits);
+  const creditBalances = normalizeCachedCreditBalances(data.creditBalances);
   const jobs = normalizeCachedJobs(data.jobs);
   if (data.jobs !== undefined && !jobs) return undefined;
   if (plan) snapshot.plan = plan;
@@ -1109,6 +1111,7 @@ function normalizeCachedProvider(
   if (untrustedWindowIds)
     snapshot.state.untrustedWindowIds = untrustedWindowIds;
   if (credits) snapshot.credits = credits;
+  if (creditBalances) snapshot.creditBalances = creditBalances;
   const subscription = stringValue(data.subscription);
   if (subscription && CREDENTIAL_CONTEXT_ID.test(subscription))
     (snapshot as SubscriptionStampedQuota)[SUBSCRIPTION_IDENTITY] =
@@ -1321,6 +1324,20 @@ function normalizeCachedCredits(
     unlimited,
     unit,
   };
+}
+
+function normalizeCachedCreditBalances(
+  raw: unknown,
+): ProviderQuota["creditBalances"] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const balances = raw
+    .map((value) => normalizeCachedCredits(value))
+    .filter((value): value is NonNullable<ProviderQuota["credits"]> =>
+      Boolean(value),
+    );
+  return balances.length === raw.length && balances.length > 0
+    ? balances
+    : undefined;
 }
 
 function normalizeCachedJobs(raw: unknown): ProviderQuota["jobs"] | undefined {

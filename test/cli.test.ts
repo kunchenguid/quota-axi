@@ -1780,9 +1780,15 @@ describe("new provider public quota output", () => {
             balance_infos: [
               {
                 currency: "USD",
-                total_balance: "12.50",
-                granted_balance: "10.00",
-                topped_up_balance: "2.50",
+                total_balance: "0.00",
+                granted_balance: "0.00",
+                topped_up_balance: "0.00",
+              },
+              {
+                currency: "CNY",
+                total_balance: "10.00",
+                granted_balance: "0.00",
+                topped_up_balance: "10.00",
               },
             ],
           }),
@@ -1802,7 +1808,11 @@ describe("new provider public quota output", () => {
         provider: "deepseek",
         source: "api",
         windows: [],
-        credits: { remaining: 12.5, unit: "usd" },
+        credits: { remaining: 10, unit: "cny" },
+        creditBalances: [
+          { remaining: 0, unit: "usd" },
+          { remaining: 10, unit: "cny" },
+        ],
         state: expect.objectContaining({
           status: "fresh",
           stale: false,

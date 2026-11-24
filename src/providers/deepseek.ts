@@ -122,7 +122,7 @@ async function fetchQuota(dependencies: Dependencies): Promise<ProviderQuota> {
         label: LABEL,
         source: "api",
         windows: [],
-        credits: computeCredits(normalized.metrics),
+        ...computeCredits(normalized.metrics),
         refreshedAt: new Date(dependencies.now()).toISOString(),
         sourcesTried: sourceNames(attempts),
         attempts,
@@ -215,26 +215,22 @@ export function normalizeDeepSeekPayload(
 
 function computeCredits(
   metrics: NormalizedDeepSeekPayload["metrics"],
-): ProviderQuota["credits"] | undefined {
-  const usdTotal = metrics.find(
-    (m) => m.currency === "USD" && m.id === "usd-total",
-  );
-  if (usdTotal) {
-    const value = Number(usdTotal.value);
-    if (Number.isFinite(value)) {
-      return { remaining: value, unit: "usd" };
-    }
-  }
-  const cnyTotal = metrics.find(
-    (m) => m.currency === "CNY" && m.id === "cny-total",
-  );
-  if (cnyTotal) {
-    const value = Number(cnyTotal.value);
-    if (Number.isFinite(value)) {
-      return { remaining: value, unit: "credits" };
-    }
-  }
-  return undefined;
+): Pick<ProviderQuota, "credits" | "creditBalances"> {
+  const balances = metrics.flatMap((metric) => {
+    const remaining = Number(metric.value);
+    if (!Number.isFinite(remaining)) return [];
+    return [
+      {
+        remaining,
+        unit: metric.currency === "USD" ? ("usd" as const) : ("cny" as const),
+      },
+    ];
+  });
+  if (balances.length === 0) return {};
+  if (balances.length === 1) return { credits: balances[0] };
+  const summary =
+    balances.find(({ remaining }) => remaining !== 0) ?? balances[0];
+  return { credits: summary, creditBalances: balances };
 }
 
 function objectValue(value: unknown): Record<string, unknown> | undefined {

@@ -622,15 +622,20 @@ function creditsOnlyHeadline(
   border: CardBorder,
 ): Line[] | undefined {
   if (provider.windows.length > 0) return undefined;
-  const credits = provider.credits;
-  if (!credits) return undefined;
-  const amount =
-    credits.unlimited === true
-      ? "unlimited"
-      : credits.remaining === undefined
-        ? undefined
-        : `${credits.remaining} ${credits.unit ?? "credits"} remaining`;
-  if (amount === undefined) return undefined;
+  const balances =
+    provider.creditBalances ?? (provider.credits ? [provider.credits] : []);
+  if (balances.length === 0) return undefined;
+  const amount = balances
+    .map((credits) =>
+      credits.unlimited === true
+        ? "unlimited"
+        : credits.remaining === undefined
+          ? undefined
+          : `${credits.remaining} ${credits.unit ?? "credits"} remaining`,
+    )
+    .filter((balance): balance is string => balance !== undefined)
+    .join(" + ");
+  if (amount === "") return undefined;
   return [
     interior(
       [

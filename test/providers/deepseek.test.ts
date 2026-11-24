@@ -9,6 +9,22 @@ import {
 const OPTIONS = { allowKeychainPrompt: false, refreshCredentials: false };
 const KEY = "synthetic-deepseek-key";
 
+async function balanceReport(
+  balance_infos: { currency: string; total_balance: string }[],
+) {
+  return createDeepSeekAdapter({
+    credential: () => ({
+      status: "available" as const,
+      key: KEY,
+      source: "env:DEEPSEEK_API_KEY" as const,
+    }),
+    fetch: async () =>
+      new Response(JSON.stringify({ is_available: true, balance_infos }), {
+        headers: { "content-type": "application/json" },
+      }),
+  }).fetchQuota(OPTIONS);
+}
+
 describe("DeepSeek provider", () => {
   it("reads USD and CNY balances from the first-party API", async () => {
     const request = vi.fn(async () => {
@@ -49,6 +65,10 @@ describe("DeepSeek provider", () => {
       source: "api",
       state: { status: "fresh", stale: false },
       credits: { remaining: 12.5, unit: "usd" },
+      creditBalances: [
+        { remaining: 12.5, unit: "usd" },
+        { remaining: 100, unit: "cny" },
+      ],
       attempts: [{ source: "env:DEEPSEEK_API_KEY", status: "success" }],
     });
     expect(report.windows).toEqual([]);
@@ -58,6 +78,76 @@ describe("DeepSeek provider", () => {
     expect(new Headers(init?.headers).get("authorization")).toBe(
       "Bearer " + KEY,
     );
+  });
+
+  it("preserves every wallet when USD is empty and CNY is funded", async () => {
+    const request = vi.fn(async () => {
+      return new Response(
+        JSON.stringify({
+          is_available: true,
+          balance_infos: [
+            { currency: "USD", total_balance: "0.00" },
+            { currency: "CNY", total_balance: "10.00" },
+          ],
+        }),
+        { headers: { "content-type": "application/json" } },
+      );
+    });
+
+    const report = await createDeepSeekAdapter({
+      credential: () => ({
+        status: "available",
+        key: KEY,
+        source: "env:DEEPSEEK_API_KEY",
+      }),
+      fetch: request,
+    }).fetchQuota(OPTIONS);
+
+    expect(report).toMatchObject({
+      state: { status: "fresh", stale: false },
+      credits: { remaining: 10, unit: "cny" },
+      creditBalances: [
+        { remaining: 0, unit: "usd" },
+        { remaining: 10, unit: "cny" },
+      ],
+    });
+  });
+
+  it("preserves both empty wallets without declaring a singular balance", async () => {
+    const report = await balanceReport([
+      { currency: "USD", total_balance: "0.00" },
+      { currency: "CNY", total_balance: "0.00" },
+    ]);
+
+    expect(report).toMatchObject({
+      credits: { remaining: 0, unit: "usd" },
+      creditBalances: [
+        { remaining: 0, unit: "usd" },
+        { remaining: 0, unit: "cny" },
+      ],
+    });
+  });
+
+  it("keeps a USD-only wallet in the legacy credits field", async () => {
+    const report = await balanceReport([
+      { currency: "USD", total_balance: "7.50" },
+    ]);
+
+    expect(report).toMatchObject({
+      credits: { remaining: 7.5, unit: "usd" },
+    });
+    expect(report.creditBalances).toBeUndefined();
+  });
+
+  it("preserves the CNY unit for a CNY-only wallet", async () => {
+    const report = await balanceReport([
+      { currency: "CNY", total_balance: "10.00" },
+    ]);
+
+    expect(report).toMatchObject({
+      credits: { remaining: 10, unit: "cny" },
+    });
+    expect(report.creditBalances).toBeUndefined();
   });
 
   it("tries Pi auth after an environment key is rejected", async () => {
