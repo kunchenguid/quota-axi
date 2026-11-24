@@ -257,8 +257,7 @@ async function discoverCodexHomeAccounts(
         path: selectedHome,
         delegateEligible: true,
       },
-      fetchQuota: (options) =>
-        fetchQuotaWithDependencies(dependencies, options, nativeAccount),
+      fetchQuota: (options) => fetchSingleWinnerQuota(dependencies, options),
       inspectAuth: () =>
         inspectAuthWithDependencies(dependencies, nativeAccount),
     },
