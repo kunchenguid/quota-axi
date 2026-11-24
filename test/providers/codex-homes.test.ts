@@ -222,7 +222,7 @@ describe("Codex home list", () => {
       "selected-token",
       "acct-selected",
     );
-    const listed = writeCodexHome("listed", "listed-token", "acct-listed");
+    const listed = writeCodexHome("listed", "team-token", "acct-listed");
     vi.stubEnv("QUOTA_AXI_CODEX_HOMES", listed);
     await readCodex(["--provider", "codex", "--full", "--json"]);
     vi.stubGlobal(
@@ -236,7 +236,7 @@ describe("Codex home list", () => {
     expect(result.providers[0].windows[0].percentRemaining).toBe(90);
     expect(result.providers[1].accountLocator.path).toBe(listed);
     expect(result.providers[1].state.status).toBe("stale");
-    expect(result.providers[1].windows[0].percentRemaining).toBe(90);
+    expect(result.providers[1].windows[0].percentRemaining).toBe(30);
   });
 
   it("deduplicates dangling filesystem aliases", async () => {
