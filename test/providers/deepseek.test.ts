@@ -250,13 +250,21 @@ describe("DeepSeek provider", () => {
     expect(report.creditBalances).toBeUndefined();
   });
 
-  it("preserves decimal wallet values without rounding", async () => {
+  it("rejects wallet values that lose decimal precision", async () => {
+    await expect(
+      balanceReport([{ currency: "USD", total_balance: "9007199254740993" }]),
+    ).resolves.toMatchObject({
+      state: { status: "error", error: "invalid_amount:Total balance" },
+    });
+  });
+
+  it("preserves exactly representable decimal wallet values", async () => {
     const report = await balanceReport([
-      { currency: "USD", total_balance: "0.123456789012345678" },
+      { currency: "USD", total_balance: "0.125" },
       { currency: "CNY", total_balance: "10.005" },
     ]);
     expect(report.creditBalances).toEqual([
-      { remaining: 0.12345678901234568, unit: "usd" },
+      { remaining: 0.125, unit: "usd" },
       { remaining: 10.005, unit: "cny" },
     ]);
   });

@@ -248,6 +248,30 @@ function decimalAmount(value: unknown): value is string {
     value.length <= 64 &&
     value.length > 0 &&
     /^-?(?:0|[1-9]\d*)(?:\.\d+)?$/u.test(value) &&
-    Number.isFinite(Number(value))
+    Number.isFinite(Number(value)) &&
+    canonicalDecimal(value) === canonicalDecimal(String(Number(value)))
   );
+}
+
+function canonicalDecimal(value: string): string {
+  const negative = value.startsWith("-");
+  const unsigned = negative ? value.slice(1) : value;
+  const [coefficient, exponentPart] = unsigned.split(/[eE]/u);
+  const exponent = exponentPart ? Number(exponentPart) : 0;
+  const [integer, fraction = ""] = coefficient.split(".");
+  const rawDigits = integer + fraction;
+  const leadingZeros = rawDigits.search(/[^0]/u);
+  if (leadingZeros === -1) return "0";
+  const digits = rawDigits.slice(leadingZeros);
+  const decimalIndex = integer.length + exponent - leadingZeros;
+  let result: string;
+  if (decimalIndex <= 0) {
+    result = `0.${"0".repeat(-decimalIndex)}${digits}`;
+  } else if (decimalIndex >= digits.length) {
+    result = `${digits}${"0".repeat(decimalIndex - digits.length)}`;
+  } else {
+    result = `${digits.slice(0, decimalIndex)}.${digits.slice(decimalIndex)}`;
+  }
+  if (result.includes(".")) result = result.replace(/0+$/u, "").replace(/\.$/u, "");
+  return negative ? `-${result}` : result;
 }
