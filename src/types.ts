@@ -12,6 +12,7 @@ export type ProviderId =
   | "commandcode"
   | "minimax"
   | "mimo"
+  | "mistral"
   | "deepseek"
   | "openrouter"
   | "elevenlabs"
@@ -33,6 +34,7 @@ export const PROVIDER_IDS = [
   "commandcode",
   "minimax",
   "mimo",
+  "mistral",
   "deepseek",
   "openrouter",
   "elevenlabs",
@@ -151,7 +153,8 @@ export type EffectivePaceSummary = {
 export const SELECTION_SCALAR_KEY = "spendPriority";
 
 /**
- * Advisory per-scope selection data derived only from already-reported windows.
+ * Advisory per-scope selection data derived from already-reported windows, or
+ * a documented fixed scalar.
  *
  * When `status` is `known`, the scalar keyed by `SELECTION_SCALAR_KEY` is the
  * cycle-weighted mean, across the scope's bounding windows, of
@@ -162,6 +165,12 @@ export const SELECTION_SCALAR_KEY = "spendPriority";
  * and negative means it is overdrawn against the reset clock. At
  * `burnMultiple` 1 each term reduces to the window's `reservePercentPoints`
  * over the same denominator.
+ *
+ * A window-less, credential-only scope with no read-only usage source (today
+ * only Mistral `all_models`) instead publishes a fixed scalar of `0` while its
+ * credential is usable: not measured utilization, but a lane neither on track
+ * to forfeit allowance nor heading to exhaustion. See the Mistral provider
+ * notes in the README.
  *
  * It is comparative data, not a ranking, an ordering, or a recommendation, and
  * it never supersedes `runway` as the completion-risk gate.

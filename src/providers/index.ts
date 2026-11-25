@@ -13,6 +13,7 @@ import { kimiAdapter } from "./kimi.js";
 import { opencodeGoAdapter } from "./opencode-go.js";
 import { minimaxAdapter } from "./minimax.js";
 import { mimoAdapter } from "./mimo.js";
+import { mistralAdapter } from "./mistral.js";
 import { museAdapter } from "./muse.js";
 import { deepseekAdapter } from "./deepseek.js";
 import { openrouterAdapter } from "./openrouter.js";
@@ -37,6 +38,7 @@ export const PROVIDERS: Record<ProviderId, ProviderAdapter> = {
   commandcode: commandCodeAdapter,
   minimax: minimaxAdapter,
   mimo: mimoAdapter,
+  mistral: mistralAdapter,
   deepseek: deepseekAdapter,
   openrouter: openrouterAdapter,
   elevenlabs: elevenLabsAdapter,

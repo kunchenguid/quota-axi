@@ -60,6 +60,7 @@
   "dependencies": {
     "@toon-format/toon": "2.1.0",
     "axi-sdk-js": "^0.1.10",
+    "js-yaml": "^4.1.1",
     "proxy-from-env": "2.1.0",
     "undici": "6.29.1"
   },
@@ -70,7 +71,6 @@
     "@types/proxy-from-env": "1.0.4",
     "eslint": "10.1.0",
     "globals": "17.7.0",
-    "js-yaml": "^4.1.1",
     "prettier": "3.8.1",
     "tsx": "4.23.1",
     "typescript": "6.0.3",
