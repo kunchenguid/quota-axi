@@ -228,18 +228,26 @@ export function subscriptionIdentity(
         .digest("hex");
     const scope = scoped[SUBSCRIPTION_SCOPE];
     if (!scope) return undefined;
-    const parsedScope = parseSubscriptionScope(scope);
-    if (!parsedScope) return undefined;
+    const canonicalScope =
+      report.provider === "codex"
+        ? (() => {
+            const parsedScope = parseSubscriptionScope(scope);
+            return parsedScope
+              ? canonicalCodexSubscriptionScope({
+                  ...parsedScope,
+                  accountId: undefined,
+                })
+              : undefined;
+          })()
+        : scope;
+    if (!canonicalScope) return undefined;
     return createHash("sha256")
       .update(
         JSON.stringify([
           "subscription-v1",
           report.provider,
           accountId,
-          canonicalCodexSubscriptionScope({
-            ...parsedScope,
-            accountId: undefined,
-          }),
+          canonicalScope,
         ]),
       )
       .digest("hex");
@@ -993,6 +1001,7 @@ function parseCacheProviders(raw: unknown): CachedProvider[] | undefined {
     !payload ||
     (schemaVersion !== 1 &&
       schemaVersion !== 2 &&
+      schemaVersion !== 3 &&
       schemaVersion !== CACHE_SCHEMA_VERSION) ||
     !Array.isArray(payload.providers)
   )
