@@ -349,13 +349,24 @@ describe("Magpie subscription quota", () => {
     expect((await read("agy", ["--full"])).providers[0].source).toBe("cli");
     expect(http).toHaveBeenCalledTimes(2);
   });
-  it("rejects relative explicit and XDG-derived config paths without gateway requests", async () => {
+  it("rejects a relative explicit config path without gateway requests", async () => {
     const http = gateway();
     vi.stubEnv("QUOTA_AXI_MAGPIE_CONFIG", "config");
     await expect(read()).rejects.toThrow("configuration path must be absolute");
+    expect(http).not.toHaveBeenCalled();
+  });
+  it("keeps native readings when XDG_CONFIG_HOME is relative and no Magpie config is set", async () => {
+    const http = gateway();
     vi.stubEnv("QUOTA_AXI_MAGPIE_CONFIG", undefined);
     vi.stubEnv("XDG_CONFIG_HOME", "relative-config");
-    await expect(read()).rejects.toThrow("configuration path must be absolute");
+    vi.mocked(PROVIDERS.agy.fetchQuota).mockResolvedValue({
+      provider: "agy",
+      source: "cli",
+      windows: [],
+      state: { status: "fresh", stale: false },
+    });
+    const report = await read("agy", ["--full"]);
+    expect(report.providers.map((row) => row.source)).toEqual(["cli"]);
     expect(http).not.toHaveBeenCalled();
   });
   it("distinguishes token file failures without leaking file contents or making requests", async () => {

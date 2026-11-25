@@ -63,8 +63,7 @@ function selectionValue(name: string, home: string): string {
     return path;
   }
   return name === "QUOTA_AXI_CLAUDE_PROFILES" ||
-    name === "QUOTA_AXI_CODEX_HOMES" ||
-    name === "XDG_CONFIG_HOME"
+    name === "QUOTA_AXI_CODEX_HOMES"
     ? join(tmpdir(), SELECTION_VALUE)
     : SELECTION_VALUE;
 }
