@@ -22,6 +22,8 @@ export type ProviderFetchNetworkOptions = {
    * host cannot reach.
    */
   retryOverIpv4?: boolean;
+  /** Keep a loopback gateway credential on the local connection. */
+  direct?: boolean;
 };
 
 /**
@@ -46,6 +48,7 @@ const proxyTransports =
     | undefined) ?? new Map<string, Promise<ProxyTransport>>();
 sharedGlobals[PROXY_TRANSPORTS] = proxyTransports;
 
+const DIRECT_TRANSPORT = Symbol.for("quota-axi.direct-transport");
 const IPV4_TRANSPORT = Symbol.for("quota-axi.ipv4-transport");
 
 function requestUrl(input: string | URL | Request): string {
@@ -68,18 +71,19 @@ function configuredProxyTransport(
   return transport;
 }
 
-function ipv4Transport(): Promise<ProxyTransport> {
-  const existing = sharedGlobals[IPV4_TRANSPORT] as
-    | Promise<ProxyTransport>
-    | undefined;
+function directTransport(ipv4 = false): Promise<ProxyTransport> {
+  const key = ipv4 ? IPV4_TRANSPORT : DIRECT_TRANSPORT;
+  const existing = sharedGlobals[key] as Promise<ProxyTransport> | undefined;
   if (existing) return existing;
   const transport = import("undici").then(({ Agent, fetch }) => ({
     // Undici passes this partial net.connect option through at runtime, but its
     // intersection type incorrectly requires the destination port here.
-    dispatcher: new Agent({ connect: { family: 4 } as never }),
+    dispatcher: ipv4
+      ? new Agent({ connect: { family: 4 } as never })
+      : new Agent(),
     fetch,
   }));
-  sharedGlobals[IPV4_TRANSPORT] = transport;
+  sharedGlobals[key] = transport;
   return transport;
 }
 
@@ -101,17 +105,22 @@ export async function providerFetch(
   init: RequestInit = {},
   network: ProviderFetchNetworkOptions = {},
 ): Promise<Response> {
-  const configured = configuredProxyTransport(input);
-  if (!configured) {
-    if (!network.retryOverIpv4) return fetch(input, init);
-    try {
-      return await fetch(input, init);
-    } catch (error) {
-      if (!isConnectFailure(error)) throw error;
-      return await dispatchedFetch(await ipv4Transport(), input, init);
-    }
+  const configured = network.direct
+    ? undefined
+    : configuredProxyTransport(input);
+  if (configured) return dispatchedFetch(await configured, input, init);
+  // Node's global fetch can inherit a startup proxy even when this caller
+  // bypasses proxy discovery. An explicit Agent connects to the target.
+  const response = network.direct
+    ? dispatchedFetch(await directTransport(), input, init)
+    : fetch(input, init);
+  if (!network.retryOverIpv4) return response;
+  try {
+    return await response;
+  } catch (error) {
+    if (!isConnectFailure(error)) throw error;
+    return dispatchedFetch(await directTransport(true), input, init);
   }
-  return dispatchedFetch(await configured, input, init);
 }
 
 async function dispatchedFetch(

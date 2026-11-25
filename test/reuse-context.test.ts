@@ -40,12 +40,31 @@ const NOT_SELECTING = new Set([
 const SELECTION_VALUE = "synthetic-selection-value";
 
 /**
- * The synthetic value for one variable. The Claude profile list accepts only
- * absolute directories, so it gets one named after the same marker.
+ * Use valid selectors so each change reaches the cache decision. The Magpie
+ * config selects a Claude account with no gateway key in the synthetic home.
  */
-function selectionValue(name: string): string {
+function selectionValue(name: string, home: string): string {
+  if (name === "QUOTA_AXI_MAGPIE_CONFIG") {
+    const path = join(home, SELECTION_VALUE);
+    writeFileSync(
+      path,
+      JSON.stringify({
+        endpoint: "http://127.0.0.1:3425/v1",
+        tokenFile: join(home, "missing-gateway-key"),
+        accounts: [
+          {
+            provider: "claude",
+            accountKey: "magpie-fixture",
+            magpieAccountId: "claude/fixture",
+          },
+        ],
+      }),
+    );
+    return path;
+  }
   return name === "QUOTA_AXI_CLAUDE_PROFILES" ||
-    name === "QUOTA_AXI_CODEX_HOMES"
+    name === "QUOTA_AXI_CODEX_HOMES" ||
+    name === "XDG_CONFIG_HOME"
     ? join(tmpdir(), SELECTION_VALUE)
     : SELECTION_VALUE;
 }
@@ -214,7 +233,8 @@ describe("fresh-reuse credential selection", () => {
       const reusedAcross: string[] = [];
       for (const name of selecting) {
         const { reused, cache } = await reusedAfter(
-          (environment) => (environment[name] = selectionValue(name)),
+          (environment) =>
+            (environment[name] = selectionValue(name, environment.HOME!)),
         );
         if (reused) reusedAcross.push(name);
         expect(cache, name).not.toContain(SELECTION_VALUE);

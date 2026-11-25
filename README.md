@@ -490,6 +490,32 @@ QUOTA_AXI_CODEX_HOMES="/home/me/.codex-work:/home/me/.codex-team" quota-axi --pr
 - A listed home without usable credentials remains its own unavailable lane, so one missing, rejected, or exhausted home never hides another listed home. Tokens, refresh values, and file contents never appear in output.
 - Each listed lane uses `codex-home:` plus 24 hexadecimal characters of a one-way digest of its canonical filesystem identity as its account key. `--full` adds `accountLocator: { kind: "codex-home", path, delegateEligible }`; the locator is omitted from default JSON and ordinary output.
 
+### Magpie subscription accounts
+
+Create `$XDG_CONFIG_HOME/quota-axi/magpie.json` (default `~/.config/quota-axi/magpie.json`) to read Claude, Codex or Antigravity subscriptions from a Magpie gateway. Set `QUOTA_AXI_MAGPIE_CONFIG` to an absolute path to select a different file or set it to an empty string to disable Magpie for a process. A configured `XDG_CONFIG_HOME` must also be absolute. Each configured provider uses only the listed accounts. Other providers use their usual sources. The native cache, `auth`, `--profile-only` and `QUOTA_AXI_SNAPSHOT` operate independently of Magpie.
+
+```json
+{
+  "endpoint": "http://127.0.0.1:3425/v1",
+  "tokenFile": "/absolute/path/to/magpie-gateway-key",
+  "maxReadingAgeSeconds": 300,
+  "accounts": [
+    {
+      "provider": "agy",
+      "accountKey": "magpie-google-work",
+      "magpieAccountId": "agy-cli/example-id",
+      "label": "Google work subscription"
+    }
+  ]
+}
+```
+
+Use the exact account `pin` from the gateway's `GET /v1/magpie/accounts` as `magpieAccountId`. Give each subscription a stable `accountKey` that starts with `magpie-` followed by a local identifier. Keys must be unique across all configured providers. The accepted provider names are `claude`, `codex` and `agy`. Magpie calls the last provider `agy-cli`. The plain-text key in `tokenFile` must have access to both `GET /v1/magpie/accounts` and `GET /v1/magpie/quotas`. HTTPS is required for remote endpoints. Loopback requests connect directly and redirects are refused.
+
+Run `quota-axi --provider claude,codex,agy --full --json` to see the accounts and their windows. Each pin must identify one enabled account, and the provider and user must match one subscription reading. Ambiguous or missing identities yield an unavailable row. Claude's Fable window adds a model-specific bound. Codex image allowances are excluded from coding quota. Gemini models, including Neon, use the `gemini` scope. The `claude_gpt` scope reports the separate Claude and GPT pool.
+
+`state.refreshedAt` is Magpie's `readAt` in UTC. A reading older than `maxReadingAgeSeconds` (default 300), deferred by Magpie, or returned as a cached substitute is stale. Expired windows are omitted. Stale readings have no usable selection score. Every call checks the gateway, including calls using `--max-age`. Gateway credentials, user identities and raw responses stay out of quota-axi's cache and reports. [Magpie quota response fields](https://pkg.go.dev/github.com/yetone/magpie/internal/provider#Quota)
+
 ### Claude profiles
 
 Claude account lanes are opt-in. When `QUOTA_AXI_CLAUDE_SWAP` is not enabled and `QUOTA_AXI_CLAUDE_PROFILES` is absent, blank, or lists no entry, Claude reads only the profile this process selects, and the report, its schema, and the cache slot it uses are exactly what they are without these features: one keyless lane, quota schema 5, `accountKeys: ["default"]`. quota-axi never searches the home directory for other Claude profiles.
@@ -650,7 +676,7 @@ An unknown or stale scope deliberately gets **no** `quota[]` row: the absence of
 | `effectiveAvailability[].pace.behindWindowIds`, `onPaceWindowIds`                                                                              |
 | Account identity (`account`), account-lane `accountLocator`, and per-source `attempts`                                                         |
 
-Everything a consumer branches on stays in the default tier: `accountKey` and `accountKeys` on an account row; `state.status`, `stale`, `authStatus`, `error`, `reason`, `remedyCommand`, `retryAfter`, `untrustedWindowIds`, and `degradedSources`, plus `reused` and a reused reading's `refreshedAt`; window `pace.status`, `reason`, `reservePercentPoints`, `burnMultiple`, and `shareOf` together with that share window's `percentUsed`; `quotaSemantics.status` and `unresolvedWindowIds`; every scope's `effectivePercentRemaining`, `boundedBy`, `limitingWindowIds`, `boundConflict`, `runway`, `selection`, and pace `aheadWindowIds` / `unknownWindowIds` / `worstReservePercentPoints`; provider `jobs` counts; and sparse `notSetUp`. `credits` also stays, so a consumer can avoid misreading it as exhaustion.
+Everything a consumer branches on stays in the default tier: `accountKey` and `accountKeys` on an account row; `state.status`, `stale`, `authStatus`, `error`, `reason`, `remedyCommand`, `retryAfter`, `untrustedWindowIds`, and `degradedSources`, plus `reused` and `refreshedAt` for reused or Magpie readings; window `pace.status`, `reason`, `reservePercentPoints`, `burnMultiple`, and `shareOf` together with that share window's `percentUsed`; `quotaSemantics.status` and `unresolvedWindowIds`; every scope's `effectivePercentRemaining`, `boundedBy`, `limitingWindowIds`, `boundConflict`, `runway`, `selection`, and pace `aheadWindowIds` / `unknownWindowIds` / `worstReservePercentPoints`; provider `jobs` counts; and sparse `notSetUp`. `credits` also stays, so a consumer can avoid misreading it as exhaustion.
 
 `notSetUp: true` is present only on a provider lane that has positive evidence of absence (the same `providerPresence` classification the human report uses). Every provider stays in `providers[]` on both default `--json` and `--full`; omitting entries would change downstream consumers that look a provider up by id. The field is additive, so `schemaVersion` stays 5, or 6 when a provider expands to multiple accounts. Default TOON is the only output that omits these providers.
 
@@ -675,7 +701,7 @@ Claude `identityStatus` is `verified` only when Anthropic returns an authoritati
 | `status`             | Provider status                                                                                                                                             |
 | `stale`              | Whether the provider report is stale                                                                                                                        |
 | `sourcesTried`       | Sources tried for the provider (`--full`)                                                                                                                   |
-| `refreshedAt`        | Optional refresh timestamp (`--full`)                                                                                                                       |
+| `refreshedAt`        | Optional observation timestamp. Present in default JSON for reused and Magpie readings, and in `--full` for all sources.                                    |
 | `error`              | Optional error                                                                                                                                              |
 | `retryAfter`         | Optional retry-after state                                                                                                                                  |
 | `reason`             | Optional reason                                                                                                                                             |
@@ -840,20 +866,20 @@ A bounding window with no `resetsAt` at all has not been triggered yet (e.g. a Z
 
 ### Quota enums
 
-| Name                             | Values                                                                                                                   |
-| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| Provider statuses                | `fresh`, `stale`, `unavailable`, `auth_required`, `rate_limited`, or `error`                                             |
-| Provider sources                 | `oauth`, `pi:openai-codex`, `pi:openai-codex-*` sibling keys, `cli-rpc`, `cli`, `api`, `web`, `cache`, or `unavailable`  |
-| Current provider adapter sources | `oauth`, `pi:openai-codex`, `pi:openai-codex-*` sibling keys, `cli-rpc`, `cli`, `api`, `web`, `cache`, and `unavailable` |
-| Window kinds                     | `session`, `weekly`, `monthly`, `model`, `credits`, or `unknown`                                                         |
-| Window pace statuses             | `ahead`, `on_pace`, `behind`, or `unknown`                                                                               |
-| Effective pace statuses          | `ahead`, `on_pace`, `behind`, `mixed`, or `unknown`                                                                      |
-| Effective runway statuses        | `exhausted_now`, `projected_exhaustion`, `through_reset`, or `unknown`                                                   |
-| Effective selection statuses     | `known` or `unknown`                                                                                                     |
-| Pace projection confidence       | `early` or `established`                                                                                                 |
-| Pace cycle basis                 | `starts_at_resets_at` or `window_seconds`                                                                                |
-| Quota relationship statuses      | `known`, `partial`, or `unknown`                                                                                         |
-| Source attempt statuses          | `success`, `failed`, or `skipped`                                                                                        |
+| Name                             | Values                                                                                                                             |
+| -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| Provider statuses                | `fresh`, `stale`, `unavailable`, `auth_required`, `rate_limited`, or `error`                                                       |
+| Provider sources                 | `oauth`, `pi:openai-codex`, `pi:openai-codex-*` sibling keys, `cli-rpc`, `cli`, `api`, `web`, `magpie`, `cache`, or `unavailable`  |
+| Current provider adapter sources | `oauth`, `pi:openai-codex`, `pi:openai-codex-*` sibling keys, `cli-rpc`, `cli`, `api`, `web`, `magpie`, `cache`, and `unavailable` |
+| Window kinds                     | `session`, `weekly`, `monthly`, `model`, `credits`, or `unknown`                                                                   |
+| Window pace statuses             | `ahead`, `on_pace`, `behind`, or `unknown`                                                                                         |
+| Effective pace statuses          | `ahead`, `on_pace`, `behind`, `mixed`, or `unknown`                                                                                |
+| Effective runway statuses        | `exhausted_now`, `projected_exhaustion`, `through_reset`, or `unknown`                                                             |
+| Effective selection statuses     | `known` or `unknown`                                                                                                               |
+| Pace projection confidence       | `early` or `established`                                                                                                           |
+| Pace cycle basis                 | `starts_at_resets_at` or `window_seconds`                                                                                          |
+| Quota relationship statuses      | `known`, `partial`, or `unknown`                                                                                                   |
+| Source attempt statuses          | `success`, `failed`, or `skipped`                                                                                                  |
 
 Source attempts can include `credentialPresent` when a source is not genuinely absent, including when a read failure prevents a more precise classification. They can also carry an explicit `degraded` flag that overrides the derived classification in either direction: `false` when a non-success attempt is not a broken credential source, and `true` when a skipped source was itself unreadable without establishing that a credential is present. Otherwise fresh reports derive `state.degradedSources` from failed attempts and skipped attempts with `credentialPresent`.
 
