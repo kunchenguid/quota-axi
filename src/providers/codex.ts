@@ -2,6 +2,7 @@ import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { spawn } from "node:child_process";
 import {
+  canonicalCodexSubscriptionScope,
   retireCodexAccount,
   retireCachedSlot,
   readCachedCodexProvider,
@@ -1036,18 +1037,10 @@ function codexSuccessReport(
  * contexts without using a credential or a live usage value.
  */
 function codexSubscriptionScope(quota: NormalizedCodexQuota): string {
-  const windows = quota.windows
-    .map(({ id, label, kind, windowSeconds }) => ({
-      id,
-      label,
-      kind,
-      ...(windowSeconds !== undefined ? { windowSeconds } : {}),
-    }))
-    .sort((left, right) => left.id.localeCompare(right.id));
-  return JSON.stringify({
-    email: quota.account?.email?.trim().toLowerCase() ?? null,
-    plan: quota.plan ?? null,
-    windows,
+  return canonicalCodexSubscriptionScope({
+    email: quota.account?.email?.trim().toLowerCase(),
+    plan: quota.plan,
+    windows: quota.windows.map(({ id, kind }) => ({ id, kind })),
   });
 }
 

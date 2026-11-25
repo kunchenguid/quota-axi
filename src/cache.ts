@@ -61,7 +61,7 @@ const WINDOW_KINDS = [
   "credits",
   "unknown",
 ] as const satisfies readonly QuotaWindow["kind"][];
-const CACHE_SCHEMA_VERSION = 3;
+const CACHE_SCHEMA_VERSION = 4;
 /**
  * The filler an expanded report stamps on providers that selected one account.
  * It describes that report, not the snapshot, so it is never persisted: a stale
@@ -228,9 +228,19 @@ export function subscriptionIdentity(
         .digest("hex");
     const scope = scoped[SUBSCRIPTION_SCOPE];
     if (!scope) return undefined;
+    const parsedScope = parseSubscriptionScope(scope);
+    if (!parsedScope) return undefined;
     return createHash("sha256")
       .update(
-        JSON.stringify(["subscription-v1", report.provider, accountId, scope]),
+        JSON.stringify([
+          "subscription-v1",
+          report.provider,
+          accountId,
+          canonicalCodexSubscriptionScope({
+            ...parsedScope,
+            accountId: undefined,
+          }),
+        ]),
       )
       .digest("hex");
   }
@@ -280,8 +290,31 @@ export function mergeSubscriptionScopes(
     ? parseSubscriptionScope(rightScope)
     : undefined;
   if (!leftFields && !rightFields) return undefined;
-  const fields = { ...(leftFields ?? {}), ...(rightFields ?? {}) };
-  return JSON.stringify(fields);
+  const fields: SubscriptionIdentity = {
+    accountId: undefined,
+    plan: leftFields?.plan ?? rightFields?.plan,
+    email: leftFields?.email ?? rightFields?.email,
+    userId: leftFields?.userId ?? rightFields?.userId,
+    windows: leftFields?.windows ?? rightFields?.windows ?? [],
+  };
+  return canonicalCodexSubscriptionScope(fields);
+}
+
+export function canonicalCodexSubscriptionScope(
+  scope: SubscriptionIdentity,
+): string {
+  return JSON.stringify({
+    email: scope.email ?? null,
+    plan: scope.plan ?? null,
+    userId: scope.userId ?? null,
+    windows: [...scope.windows]
+      .map(({ id, kind }) => ({ id, kind: kind ?? null }))
+      .sort((left, right) =>
+        `${left.id}\u0000${left.kind ?? ""}`.localeCompare(
+          `${right.id}\u0000${right.kind ?? ""}`,
+        ),
+      ),
+  });
 }
 
 function parseSubscriptionScope(
@@ -291,9 +324,9 @@ function parseSubscriptionScope(
     const parsed = JSON.parse(scope) as Partial<SubscriptionIdentity>;
     if (!Array.isArray(parsed.windows)) return undefined;
     return {
-      ...(parsed.plan ? { plan: parsed.plan } : {}),
-      ...(parsed.email ? { email: parsed.email } : {}),
-      ...(parsed.userId ? { userId: parsed.userId } : {}),
+      plan: parsed.plan,
+      email: parsed.email,
+      userId: parsed.userId,
       windows: parsed.windows,
     };
   } catch {

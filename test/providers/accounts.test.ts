@@ -6,6 +6,7 @@ import { annotateQuotaAdvice } from "../../src/advice.js";
 import {
   readCachedProvider,
   stampSubscriptionScope,
+  subscriptionIdentity,
   writeCachedProviders,
 } from "../../src/cache.js";
 import { withQuotaSemantics } from "../../src/interpretation.js";
@@ -135,6 +136,28 @@ describe("verified subscription coalescing", () => {
 
     expect(reports).toHaveLength(2);
     expect(percentages(reports)).toEqual([20, 60]);
+  });
+
+  it("keeps one Codex subscription stamp through live, merged, and cached readings", async () => {
+    const liveReading = scopedCodex("acct-a", "plus", "same@example.invalid");
+    const mergedReadings = await fetchAccountQuotas(
+      adapter([
+        ["codex-a", scopedCodex("acct-a", "plus")],
+        ["codex-b", liveReading],
+      ]),
+      OPTIONS,
+    );
+    expect(mergedReadings).toHaveLength(1);
+    const mergedReading = mergedReadings[0]!;
+    writeCachedProviders([mergedReading]);
+    const cachedReading = readCachedProvider("codex", mergedReading.accountKey);
+
+    expect(subscriptionIdentity(liveReading)).toBe(
+      subscriptionIdentity(mergedReading),
+    );
+    expect(subscriptionIdentity(mergedReading)).toBe(
+      subscriptionIdentity(cachedReading!),
+    );
   });
 
   it("keeps matching account readings together when one omits email", async () => {

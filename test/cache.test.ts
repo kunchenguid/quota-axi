@@ -287,7 +287,7 @@ describe("quota cache", () => {
     const payload = JSON.parse(readFileSync(cacheFilePath(), "utf8")) as {
       schemaVersion: number;
     };
-    expect(payload.schemaVersion).toBe(3);
+    expect(payload.schemaVersion).toBe(4);
   });
 
   it("keeps an expanded report's filler key out of a later unexpanded report", () => {
@@ -561,7 +561,7 @@ describe("quota cache", () => {
       providers: Array<{ credentialContext?: string }>;
     };
     const contextId = payload.providers[0]?.credentialContext;
-    expect(payload.schemaVersion).toBe(3);
+    expect(payload.schemaVersion).toBe(4);
     expect(contextId).toMatch(/^[a-f0-9]{64}$/);
     expect(JSON.stringify(payload)).not.toContain(contextDir);
     expect(readCachedClaudeProvider(claudeCredentialContextId())).toBeDefined();
@@ -874,7 +874,7 @@ oauth_host = "https://auth.kimi.ai"
       file,
       JSON.stringify({
         generatedAt: "2026-07-06T18:10:00Z",
-        schemaVersion: 3,
+        schemaVersion: 4,
         providers: [
           {
             provider: "kimi",
