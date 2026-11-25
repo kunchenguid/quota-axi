@@ -1314,12 +1314,19 @@ function normalizeCachedCredits(
   const remaining = numberValue(data.remaining);
   const unlimited = booleanValue(data.unlimited);
   const unit = literalValue(data.unit, ["usd", "cny", "credits"] as const);
-  if (remaining === undefined && unlimited === undefined && unit === undefined)
+  const available = booleanValue(data.available);
+  if (
+    remaining === undefined &&
+    unlimited === undefined &&
+    unit === undefined &&
+    available === undefined
+  )
     return undefined;
   return {
     remaining,
     unlimited,
     unit,
+    ...(available === undefined ? {} : { available }),
   };
 }
 

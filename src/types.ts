@@ -165,6 +165,12 @@ export const SELECTION_SCALAR_KEY = "spendPriority";
  *
  * It is comparative data, not a ranking, an ordering, or a recommendation, and
  * it never supersedes `runway` as the completion-risk gate.
+ *
+ * The one scope with no bounding windows is the credit-balance scope
+ * (`credits`), whose only evidence is a prepaid balance with no cycle to
+ * project against. It publishes the fixed credit-balance convention from
+ * `summarizeCreditBalance` in `src/pace.ts` instead of the window formula,
+ * and never an `effectivePercentRemaining`.
  */
 export type EffectiveSelection = Partial<
   Record<typeof SELECTION_SCALAR_KEY, number>
@@ -345,6 +351,11 @@ export type ProviderQuota = {
     remaining?: number;
     unlimited?: boolean;
     unit?: "usd" | "cny" | "credits";
+    /**
+     * Vendor-reported usability of the balance. `false` means the vendor
+     * refuses requests on it whatever the amount; absent when not reported.
+     */
+    available?: boolean;
   };
   /**
    * PHI-safe job-outcome sample from a vendor list command. Counts only;

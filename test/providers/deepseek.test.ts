@@ -48,7 +48,7 @@ describe("DeepSeek provider", () => {
       provider: "deepseek",
       source: "api",
       state: { status: "fresh", stale: false },
-      credits: { remaining: 12.5, unit: "usd" },
+      credits: { remaining: 12.5, unit: "usd", available: true },
       attempts: [{ source: "env:DEEPSEEK_API_KEY", status: "success" }],
     });
     expect(report.windows).toEqual([]);
@@ -100,7 +100,7 @@ describe("DeepSeek provider", () => {
         },
         { source: "pi:deepseek", status: "success" },
       ],
-      credits: { remaining: 7.5, unit: "usd" },
+      credits: { remaining: 7.5, unit: "usd", available: true },
     });
     expect(request).toHaveBeenCalledTimes(2);
   });
@@ -151,8 +151,57 @@ describe("DeepSeek provider", () => {
 
     expect(report).toMatchObject({
       state: { status: "fresh" },
-      credits: { remaining: -4.25, unit: "usd" },
+      credits: { remaining: -4.25, unit: "usd", available: false },
     });
+  });
+
+  it.each([
+    {
+      name: "reports a funded CNY wallet when the USD wallet is zero",
+      body: {
+        is_available: true,
+        balance_infos: [
+          { currency: "USD", total_balance: "0.00" },
+          { currency: "CNY", total_balance: "200.00" },
+        ],
+      },
+      credits: { remaining: 200, unit: "credits", available: true },
+    },
+    {
+      name: "keeps the USD figure when every wallet is at or below zero",
+      body: {
+        is_available: true,
+        balance_infos: [
+          { currency: "USD", total_balance: "0.00" },
+          { currency: "CNY", total_balance: "0.00" },
+        ],
+      },
+      credits: { remaining: 0, unit: "usd", available: true },
+    },
+    {
+      name: "keeps the vendor's unavailable flag beside a positive balance",
+      body: {
+        is_available: false,
+        balance_infos: [{ currency: "USD", total_balance: "5.00" }],
+      },
+      credits: { remaining: 5, unit: "usd", available: false },
+    },
+  ])("$name", async ({ body, credits }) => {
+    const report = await createDeepSeekAdapter({
+      credential: () => ({
+        status: "available",
+        key: KEY,
+        source: "env:DEEPSEEK_API_KEY",
+      }),
+      fetch: vi.fn(
+        async () =>
+          new Response(JSON.stringify(body), {
+            headers: { "content-type": "application/json" },
+          }),
+      ),
+      now: () => Date.parse("2026-09-01T00:00:00.000Z"),
+    }).fetchQuota(OPTIONS);
+    expect(report.credits).toEqual(credits);
   });
 
   it("reports unusable local credentials as auth_required", async () => {
