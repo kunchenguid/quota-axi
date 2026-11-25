@@ -29,7 +29,7 @@ import type {
   ProviderStatus,
   QuotaWindow,
 } from "./types.js";
-import { PROVIDER_IDS } from "./types.js";
+import { isAccountKey, PROVIDER_IDS } from "./types.js";
 
 const PROVIDER_SOURCES = [
   "oauth",
@@ -1081,9 +1081,7 @@ function normalizeCachedProvider(
   const accountKey = stringValue(data.accountKey);
   if (
     data.accountKey !== undefined &&
-    (schemaVersion < 3 ||
-      !accountKey ||
-      !/^[a-z0-9][a-z0-9:_-]{0,95}$/.test(accountKey))
+    (schemaVersion < 3 || !isAccountKey(accountKey))
   )
     return undefined;
   const snapshot: ProviderQuota = {

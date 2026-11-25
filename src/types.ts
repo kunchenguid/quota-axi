@@ -42,6 +42,7 @@ export const PROVIDER_IDS = [
 ] as const satisfies readonly ProviderId[];
 
 export type ProviderSource =
+  | "magpie"
   | "oauth"
   | "pi:openai-codex"
   | `pi:openai-codex-${string}`
@@ -296,6 +297,10 @@ export type AccountLocator = {
    */
   delegateEligible?: boolean;
 };
+
+export function isAccountKey(value: unknown): value is string {
+  return typeof value === "string" && /^[a-z0-9][a-z0-9:_-]{0,95}$/.test(value);
+}
 
 export type ProviderAccount = {
   /** Opaque local lane identity, stable across refresh and discovery order. */
