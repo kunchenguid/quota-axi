@@ -492,7 +492,7 @@ QUOTA_AXI_CODEX_HOMES="/home/me/.codex-work:/home/me/.codex-team" quota-axi --pr
 
 ### Magpie subscription accounts
 
-Create `$XDG_CONFIG_HOME/quota-axi/magpie.json` (default `~/.config/quota-axi/magpie.json`) to read Claude, Codex or Antigravity subscriptions from a Magpie gateway. Set `QUOTA_AXI_MAGPIE_CONFIG` to an absolute path to select a different file or set it to an empty string to disable Magpie for a process. A configured `XDG_CONFIG_HOME` must also be absolute. Each configured provider uses only the listed accounts. Other providers use their usual sources. The native cache, `auth`, `--profile-only` and `QUOTA_AXI_SNAPSHOT` operate independently of Magpie.
+Create `$XDG_CONFIG_HOME/quota-axi/magpie.json` (default `~/.config/quota-axi/magpie.json`) to read Claude, Codex or Antigravity subscriptions from a Magpie gateway. Set `QUOTA_AXI_MAGPIE_CONFIG` to an absolute path to select a different file or set it to an empty string to disable Magpie for a process. When `XDG_CONFIG_HOME` is relative, the default file is not read and Magpie stays off unless `QUOTA_AXI_MAGPIE_CONFIG` names a file. Each configured provider uses only the listed accounts. Other providers use their usual sources. The native cache, `auth`, `--profile-only` and `QUOTA_AXI_SNAPSHOT` operate independently of Magpie.
 
 ```json
 {

@@ -48,7 +48,10 @@ export function magpieConfigFor(providers: ProviderId[]): Config | undefined {
     return;
   const path =
     explicitPath ?? join(dirname(userConfigFilePath()), "magpie.json");
-  if (!isAbsolute(path)) configError("configuration path must be absolute");
+  if (!isAbsolute(path)) {
+    if (explicitPath === undefined) return;
+    configError("configuration path must be absolute");
+  }
   const result = readJsonFileResult(path);
   if (explicitPath === undefined && result.status === "missing") return;
   const data = result.status === "success" ? result.value : undefined;
