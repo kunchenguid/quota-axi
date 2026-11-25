@@ -918,6 +918,8 @@ function toCacheProvider(provider: ProviderQuota): CachedProvider | undefined {
       label: provider.label,
       source: provider.source,
       plan: provider.plan,
+      // Manual resets can be spent independently of usage windows. Neither
+      // their count nor their grant details are persisted or served on reuse.
       windows: provider.windows,
       credits: provider.credits,
       jobs: provider.jobs,

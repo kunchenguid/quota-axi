@@ -2515,7 +2515,7 @@ describe("Claude credential-state reporting", () => {
 
     expect(result.state.status).toBe("fresh");
     expect(fetchMock).toHaveBeenCalledWith(
-      "https://api.anthropic.com/api/oauth/usage",
+      "https://api.anthropic.com/api/oauth/usage?cedar_ember=1&skip_spend=1",
       expect.objectContaining({
         headers: expect.objectContaining({
           "User-Agent": expect.stringMatching(/^claude-code\/\d+\.\d+\.\d+/),
@@ -2807,7 +2807,7 @@ describe("Claude credential-state reporting", () => {
     expect(result.state.status).toBe("fresh");
     expect(result.source).toBe("oauth");
     expect(fetchMock).toHaveBeenCalledWith(
-      "https://api.anthropic.com/api/oauth/usage",
+      "https://api.anthropic.com/api/oauth/usage?cedar_ember=1&skip_spend=1",
       expect.objectContaining({
         headers: expect.objectContaining({
           authorization: "Bearer fresh-keychain-token",
@@ -3039,7 +3039,7 @@ describe("Claude credential-state reporting", () => {
       execFileText.mock.calls.some(([, args]) => args.includes("unknown")),
     ).toBe(false);
     expect(fetchMock).toHaveBeenCalledWith(
-      "https://api.anthropic.com/api/oauth/usage",
+      "https://api.anthropic.com/api/oauth/usage?cedar_ember=1&skip_spend=1",
       expect.objectContaining({
         headers: expect.objectContaining({
           authorization: "Bearer current-user-keychain-token",
@@ -3128,7 +3128,7 @@ describe("Claude credential-state reporting", () => {
         expect.any(Number),
       );
       expect(fetchMock).toHaveBeenCalledWith(
-        "https://api.anthropic.com/api/oauth/usage",
+        "https://api.anthropic.com/api/oauth/usage?cedar_ember=1&skip_spend=1",
         expect.objectContaining({
           headers: expect.objectContaining({
             authorization: "Bearer current-user-keychain-token",

@@ -1,6 +1,42 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { createRequire } from "node:module";
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { afterAll } from "vitest";
+
+// The gate's fixed `pnpm test` command must be safe in its daemon environment,
+// as well as in a caller-provided sandbox. Discard inherited provider selectors
+// and credentials by name only; never read their values.
+const testHome = mkdtempSync(join(tmpdir(), "quota-axi-test-home-"));
+process.env.HOME = testHome;
+process.env.USERPROFILE = testHome;
+process.env.APPDATA = join(testHome, "AppData", "Roaming");
+process.env.LOCALAPPDATA = join(testHome, "AppData", "Local");
+for (const name of Object.keys(process.env)) {
+  if (
+    /^(QUOTA_AXI_|CLAUDE_|CODEX_|CURSOR_|COPILOT_|ANTHROPIC_|OPENAI_|GROK_|XAI_|KIMI_|ZAI_|DASHSCOPE_|ALIBABA_|OPENCODE_|AGY_|ANTIGRAVITY_|COMMANDCODE_|COMMAND_CODE_|MINIMAX_|MMX_|MIMO_|DEEPSEEK_|OPENROUTER_|ELEVENLABS_|DEVIN_|MUSE_|HIGGSFIELD_|PI_)/.test(
+      name.toUpperCase(),
+    ) ||
+    [
+      "GH_TOKEN",
+      "GITHUB_TOKEN",
+      "GITHUB_COPILOT_APPS_JSON",
+      "META_API_KEY",
+    ].includes(name.toUpperCase())
+  )
+    delete process.env[name];
+}
+const networkGuard = join(
+  import.meta.dirname,
+  "fixtures",
+  "offline-network.cjs",
+);
+createRequire(import.meta.url)(networkGuard);
+// Use a CommonJS preload: an ESM preload changes how Node loads the synthetic
+// Windows .exe fixtures. Explicit child environments still own their transport.
+process.env.NODE_OPTIONS = `--require=${JSON.stringify(networkGuard)}`;
+afterAll(() => rmSync(testHome, { recursive: true, force: true }));
 
 for (const name of [
   "HTTP_PROXY",

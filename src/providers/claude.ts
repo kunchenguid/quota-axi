@@ -72,7 +72,8 @@ import { withUsageFetchFailure } from "./usage-fetch-failure.js";
 import { fetchClaudeNativeQuota } from "./claude-native-quota.js";
 import { traceInput } from "../lib/input-trace.js";
 
-const API_URL = "https://api.anthropic.com/api/oauth/usage";
+const API_URL =
+  "https://api.anthropic.com/api/oauth/usage?cedar_ember=1&skip_spend=1";
 const PROFILE_API_URL = "https://api.anthropic.com/api/oauth/profile";
 const OAUTH_BETA = "oauth-2025-04-20";
 const CLAUDE_CODE_USER_AGENT = "claude-code/2.1.202";
@@ -684,6 +685,7 @@ async function fetchProfileOnlyQuota(): Promise<ProviderQuota> {
       plan: quota.plan,
       account: quota.account,
       windows: quota.windows,
+      ...claudeResetFields(quota),
       refreshedAt: quota.refreshedAt,
       sourcesTried: sourceNames(attempts),
       attempts,
@@ -969,6 +971,7 @@ async function attemptClaudeQuota(
           plan: quota.plan,
           account: quota.account,
           windows: quota.windows,
+          ...claudeResetFields(quota),
           refreshedAt: quota.refreshedAt,
           sourcesTried: sourceNames(attempts),
           attempts,
@@ -1312,7 +1315,12 @@ async function inspectClaudeProfileAuth(
 export function normalizeClaudeApiUsage(
   raw: unknown,
   plan?: string,
-): { plan?: string; windows: QuotaWindow[]; refreshedAt: string } | undefined {
+):
+  | ({ plan?: string; windows: QuotaWindow[]; refreshedAt: string } & Pick<
+      ProviderQuota,
+      "resetsAvailable" | "resetGrants"
+    >)
+  | undefined {
   if (!raw || typeof raw !== "object") return undefined;
   const data = raw as Record<string, unknown>;
 
@@ -1339,7 +1347,88 @@ export function normalizeClaudeApiUsage(
   if (extraUsage) windows.push(extraUsage);
 
   if (windows.length === 0) return undefined;
-  return { plan, windows, refreshedAt: nowIso() };
+  return {
+    plan,
+    windows,
+    refreshedAt: nowIso(),
+    ...normalizeClaudeResets(data.cedar_ember),
+  };
+}
+
+/** Keep the optional extension sparse, including through successProvider. */
+function claudeResetFields(
+  quota: Pick<ProviderQuota, "resetsAvailable" | "resetGrants">,
+): Pick<ProviderQuota, "resetsAvailable" | "resetGrants"> {
+  return quota.resetsAvailable === undefined
+    ? {}
+    : {
+        resetsAvailable: quota.resetsAvailable,
+        resetGrants: quota.resetGrants,
+      };
+}
+
+/**
+ * Client-contract inventory only. Do not copy grant IDs, event properties, or
+ * redemption metadata. A malformed extension must not change the usage read.
+ */
+function normalizeClaudeResets(
+  raw: unknown,
+): Pick<ProviderQuota, "resetsAvailable" | "resetGrants"> {
+  const block = objectValue(raw);
+  if (block?.eligible !== true || !Array.isArray(block.grants)) return {};
+  const resetGrants: NonNullable<ProviderQuota["resetGrants"]> = [];
+  let resetsAvailable = 0;
+  for (const rawGrant of block.grants) {
+    const grant = objectValue(rawGrant);
+    const remaining = grant?.resets_left;
+    if (
+      typeof remaining !== "number" ||
+      !Number.isSafeInteger(remaining) ||
+      remaining < 0 ||
+      !Number.isSafeInteger(resetsAvailable + remaining)
+    )
+      return {};
+    if (
+      (grant?.type != null && typeof grant.type !== "string") ||
+      (grant?.gives_back_weekly != null &&
+        typeof grant.gives_back_weekly !== "boolean") ||
+      (grant?.clears != null &&
+        (!Array.isArray(grant.clears) ||
+          !grant.clears.every((value) => typeof value === "string")))
+    )
+      return {};
+    const expiresAt = grant?.ends_at;
+    if (
+      expiresAt !== undefined &&
+      expiresAt !== null &&
+      (typeof expiresAt !== "string" || !Number.isFinite(Date.parse(expiresAt)))
+    )
+      return {};
+    resetsAvailable += remaining;
+    if (remaining === 0) continue;
+    const clears = Array.isArray(grant?.clears) ? grant.clears : [];
+    const type =
+      stringValue(grant?.type) ??
+      (clears.includes("five_hour") && clears.includes("seven_day")
+        ? "full"
+        : clears.includes("seven_day")
+          ? "weekly"
+          : clears.includes("five_hour")
+            ? "session"
+            : "unknown");
+    const kind =
+      grant?.gives_back_weekly === true
+        ? "fable"
+        : type === "session" || type === "weekly" || type === "full"
+          ? type
+          : "unknown";
+    resetGrants.push({
+      kind,
+      remaining,
+      ...(typeof expiresAt === "string" ? { expiresAt } : {}),
+    });
+  }
+  return { resetsAvailable, resetGrants };
 }
 
 export function normalizeClaudeProfile(
@@ -1962,6 +2051,8 @@ async function fetchOauthUsage(credentials: ClaudeCredentials): Promise<{
   identityError?: string;
   windows: QuotaWindow[];
   refreshedAt: string;
+  resetsAvailable?: number;
+  resetGrants?: ProviderQuota["resetGrants"];
 }> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
