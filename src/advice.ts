@@ -49,7 +49,10 @@ export function annotateQuotaAdvice(
   });
   const help = providers.flatMap(providerHelpLines);
   const multiWallet = providers.some(
-    (provider) => provider.provider === "deepseek" && provider.creditBalances,
+    (provider) =>
+      provider.provider === "deepseek" &&
+      (provider.creditBalances !== undefined ||
+        provider.credits?.unit === "cny"),
   );
   return {
     generatedAt: response.generatedAt,

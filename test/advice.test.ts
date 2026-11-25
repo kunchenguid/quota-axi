@@ -31,24 +31,40 @@ function remedy(provider: ProviderQuota): string | undefined {
 }
 
 describe("quota schema versions", () => {
-  it("versions a multi-wallet account-expanded quota report", () => {
+  it.each([
+    ["single-account CNY wallet", 7, undefined],
+    ["account-expanded CNY wallet", 8, "default"],
+  ])("versions a %s as the DeepSeek schema", (_label, expected, accountKey) => {
     const response = annotateQuotaAdvice({
       generatedAt: "",
       providers: [
         {
           provider: "deepseek",
-          accountKey: "default",
+          ...(accountKey ? { accountKey } : {}),
           windows: [],
-          creditBalances: [
-            { remaining: 0, unit: "usd" },
-            { remaining: 10, unit: "cny" },
-          ],
+          credits: { remaining: 10, unit: "cny" },
           state: { status: "fresh", stale: false },
         },
       ],
     });
 
-    expect(response.schemaVersion).toBe(8);
+    expect(response.schemaVersion).toBe(expected);
+  });
+
+  it("keeps a legacy credits-unit report on the legacy schema", () => {
+    const response = annotateQuotaAdvice({
+      generatedAt: "",
+      providers: [
+        {
+          provider: "deepseek",
+          windows: [],
+          credits: { remaining: 10, unit: "credits" },
+          state: { status: "fresh", stale: false },
+        },
+      ],
+    });
+
+    expect(response.schemaVersion).toBe(5);
   });
 });
 
