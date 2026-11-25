@@ -334,15 +334,16 @@ describe("Claude credential-state reporting", () => {
       source: "unavailable",
       windows: [],
       state: {
-        status: "auth_required",
+        status: "unavailable",
         stale: false,
-        error: "Claude sign-in required",
+        error: "Claude access token expired",
+        authStatus: "expired_refreshable",
       },
       attempts: [
         {
           source: "oauth-file",
           status: "failed",
-          error: "Claude sign-in required",
+          error: "Claude access token expired",
         },
       ],
     });
