@@ -228,7 +228,8 @@ function computeCredits(
   });
   if (balances.length === 0) return {};
   if (balances.length === 1) return { credits: balances[0] };
-  const summary = balances.find(({ remaining }) => remaining !== 0) ?? balances[0];
+  const summary =
+    balances.find(({ remaining }) => remaining !== 0) ?? balances[0];
   return { credits: summary, creditBalances: balances };
 }
 
@@ -259,7 +260,10 @@ function exactNumericDecimal(value: string): boolean {
     canonicalDecimal(value) !== canonicalDecimal(String(numeric))
   )
     return false;
-  return !Number.isInteger(numeric) || BigInt(numeric).toString() === canonicalDecimal(value);
+  return (
+    !Number.isInteger(numeric) ||
+    BigInt(numeric).toString() === canonicalDecimal(value)
+  );
 }
 
 function canonicalDecimal(value: string): string {
@@ -281,6 +285,7 @@ function canonicalDecimal(value: string): string {
   } else {
     result = `${digits.slice(0, decimalIndex)}.${digits.slice(decimalIndex)}`;
   }
-  if (result.includes(".")) result = result.replace(/0+$/u, "").replace(/\.$/u, "");
+  if (result.includes("."))
+    result = result.replace(/0+$/u, "").replace(/\.$/u, "");
   return negative ? `-${result}` : result;
 }

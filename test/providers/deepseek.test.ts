@@ -251,10 +251,7 @@ describe("DeepSeek provider", () => {
   });
 
   it("rejects wallet values that lose decimal precision", async () => {
-    for (const total_balance of [
-      "9007199254740993",
-      "1000000000000000100",
-    ]) {
+    for (const total_balance of ["9007199254740993", "1000000000000000100"]) {
       await expect(
         balanceReport([{ currency: "USD", total_balance }]),
       ).resolves.toMatchObject({
