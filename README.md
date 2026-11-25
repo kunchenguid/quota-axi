@@ -569,7 +569,7 @@ A key the report cannot publish (malformed or repeated) costs only its own lane:
 The provider normally falls back to its single selected account only when no usable lane remains; a source-owned failure lane, such as enabled claude-swap being unavailable, keeps that source's failure instead.
 `--full` adds the vendor identity the usage endpoint supplied, when any.
 
-If no provider expands, existing fields retain their shape and order, while quota JSON adds `accountKeys`: quota schema 5, auth/models schema 1, and no account column.
+If no provider expands, existing fields retain their shape and order, while quota JSON adds `accountKeys`: quota schema 5, auth/models schema 1, and no account column. DeepSeek multi-wallet quota reports are the exception: they use schema 7 without account expansion and schema 8 when account expansion also applies.
 A sole discovered Pi sibling uses that legacy representation.
 Expansion follows the lanes discovered rather than the rows published, so when a native login and a Pi sibling turn out to be one account the single surviving row still carries its key and the report stays schema 6.
 Consumers must honor the schema version; a legacy keyless row means the single selected lane, and keys must never be inferred from row position.
@@ -639,7 +639,7 @@ An unknown or stale scope deliberately gets **no** `quota[]` row: the absence of
 
 ### Output tiers
 
-`--full` adds; it never subtracts. Default TOON carries the three decision blocks; `--full` TOON adds the `providers[]`, `windows[]`, `scopeAudit[]`, `accounts[]`, and `attempts[]` audit blocks. Default `--json` carries the normalized model with derivation inputs demoted; `--full` restores them with **no renames and no re-nesting** - a demoted field is simply absent until `--full`, in the exact position and under the exact name it has there.
+`--full` adds; it never subtracts. Default TOON carries the four decision blocks (`quota[]`, `exhaustion[]`, `credits[]`, and `attention[]`); `--full` TOON adds the `providers[]`, `windows[]`, `scopeAudit[]`, `accounts[]`, and `attempts[]` audit blocks. Default `--json` carries the normalized model with derivation inputs demoted; `--full` restores them with **no renames and no re-nesting** - a demoted field is simply absent until `--full`, in the exact position and under the exact name it has there.
 
 | Demoted to `--full` in `--json`                                                                                                                |
 | ---------------------------------------------------------------------------------------------------------------------------------------------- |
