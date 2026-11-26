@@ -143,6 +143,36 @@ afterEach(() => {
   process.exitCode = undefined;
 });
 describe("Magpie subscription quota", () => {
+  it.each([["--json"], ["--tui", "--once"]])(
+    "ignores invalid native Codex homes for managed quota reads with %j",
+    async (...flags) => {
+      vi.stubEnv("QUOTA_AXI_CODEX_HOMES", "relative-codex-home");
+      const http = gateway();
+      const result = await quotaCommand(
+        ["--provider", "codex", ...flags],
+        undefined,
+      );
+      expect(result).toContain("75");
+      expect(http).toHaveBeenCalledTimes(2);
+      expect(PROVIDERS.codex.fetchQuota).not.toHaveBeenCalled();
+      expect(PROVIDERS.codex.discoverAccounts).not.toHaveBeenCalled();
+    },
+  );
+
+  it("still rejects invalid Codex homes when only another family is managed", async () => {
+    config.accounts = bindings.filter(
+      (account) => account.provider === "claude",
+    );
+    saveConfig();
+    vi.stubEnv("QUOTA_AXI_CODEX_HOMES", "relative-codex-home");
+    const http = gateway();
+    await expect(read("codex")).rejects.toMatchObject({
+      code: "VALIDATION_ERROR",
+    });
+    expect(http).not.toHaveBeenCalled();
+    expect(PROVIDERS.codex.fetchQuota).not.toHaveBeenCalled();
+  });
+
   it("joins six subscriptions by exact identity, preserves bounds and bypasses native caches", async () => {
     // Native multi-account selectors must not add lanes to managed families.
     vi.stubEnv("QUOTA_AXI_CODEX_HOMES", join(dir, "native-codex"));

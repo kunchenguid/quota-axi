@@ -79,7 +79,16 @@ export async function quotaCommand(
   const flags = parseFlags(args);
   validateProfileOnly(flags);
   validateClaudeInference(flags);
-  validateCodexHomes(flags.providers, flags.profileOnly);
+  const managed =
+    flags.profileOnly || snapshotFile()
+      ? []
+      : (magpieConfigFor(flags.providers)?.accounts ?? []);
+  validateCodexHomes(
+    flags.providers.filter(
+      (p) => !managed.some((account) => account.provider === p),
+    ),
+    flags.profileOnly,
+  );
   const options: ProviderOptions = {
     allowKeychainPrompt: flags.profileOnly ? false : flags.allowKeychainPrompt,
     refreshCredentials: flags.profileOnly ? false : !flags.noCredentialRefresh,
