@@ -219,3 +219,58 @@ describe("--tui account labels", () => {
     }
   }, 60_000);
 });
+
+describe("--tui card order", () => {
+  const order = (entries: string[]): string =>
+    JSON.stringify({
+      tui: {
+        accountLabels: { "~/.claude": "personal", "~/.claude-work": "work" },
+        order: entries,
+      },
+    });
+  const titles = (stdout: string): string[] =>
+    [...stdout.matchAll(/╭─ ● (claude · [a-z]+)/g)].map((match) => match[1]);
+
+  it("draws the cards in the order tui.order lists them", () => {
+    const cli = builtCli();
+    const declared = cli.run(["--tui", "--once"], order([]));
+    const reordered = cli.run(
+      ["--tui", "--once"],
+      order(["~/.claude-work", "~/.claude"]),
+    );
+
+    expect(declared.status, declared.stderr).toBe(0);
+    expect(titles(declared.stdout)).toEqual([
+      "claude · personal",
+      "claude · work",
+    ]);
+    expect(reordered.status, reordered.stderr).toBe(0);
+    expect(titles(reordered.stdout)).toEqual([
+      "claude · work",
+      "claude · personal",
+    ]);
+  }, 30_000);
+
+  it("draws a lane listed by key and later by path at the key's place", () => {
+    const reordered = builtCli().run(
+      ["--tui", "--once"],
+      order(["profile:bbbbbbbbbbbbbbbbbbbbbbbb", "claude", "~/.claude-work"]),
+    );
+
+    expect(reordered.status, reordered.stderr).toBe(0);
+    expect(titles(reordered.stdout)).toEqual([
+      "claude · work",
+      "claude · personal",
+    ]);
+  }, 30_000);
+
+  it("leaves TOON and JSON byte-identical whatever it says", () => {
+    const cli = builtCli();
+    const config = order(["~/.claude-work", "~/.claude"]);
+    for (const flags of [[], ["--full"], ["--json"], ["--json", "--full"]]) {
+      const baseline = cli.run(flags);
+      expect(baseline.status, baseline.stderr).toBe(0);
+      expect(cli.run(flags, config), flags.join(" ")).toEqual(baseline);
+    }
+  }, 60_000);
+});
