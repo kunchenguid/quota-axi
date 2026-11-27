@@ -40,6 +40,9 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          # Read-only token, used solely to fetch provenance facts about commits
+          # from the upstream repository - never from the PR's own checkout.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -eu
           files=$(git diff --name-only "${BASE_SHA}...${HEAD_SHA}")
@@ -51,7 +54,17 @@ jobs:
               # A PR that creates it for the first time (e.g. wiring up
               # release-please) is not hand-editing bot-owned content.
               if git cat-file -e "${BASE_SHA}:${path}" 2>/dev/null; then
-                violated="${violated} ${path}"
+                # Inherited upstream release content (a fork sync) is not a hand
+                # edit. The exemption is granted only when every commit touching
+                # this path is proven to be an upstream release commit via the
+                # upstream GitHub API; see the script for the exact criteria. It
+                # fails closed, so a hand edit still lands in "violated".
+                if .github/scripts/verify-upstream-release-provenance.sh \
+                  "${BASE_SHA}" "${HEAD_SHA}" "${path}"; then
+                  echo "Exempt: ${path} carries only verified upstream release commits."
+                else
+                  violated="${violated} ${path}"
+                fi
               fi
             fi
           done
