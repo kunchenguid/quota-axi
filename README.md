@@ -638,6 +638,8 @@ An unknown or stale scope deliberately gets **no** `quota[]` row: the absence of
 
 ### Output tiers
 
+Default TOON, `--full` TOON, and both `--json` tiers publish window and effective percent-remaining values as numbers with at most two decimal places. A positive remainder that rounds to 0 is published as 0.01, and a partial allowance that rounds to 100 is published as 99.99. Exact 0 and 100 are preserved. Calculations and the cache use the original measurements.
+
 `--full` adds; it never subtracts. Default TOON carries the three decision blocks; `--full` TOON adds the `providers[]`, `windows[]`, `scopeAudit[]`, `accounts[]`, and `attempts[]` audit blocks. Default `--json` carries the normalized model with derivation inputs demoted; `--full` restores them with **no renames and no re-nesting** - a demoted field is simply absent until `--full`, in the exact position and under the exact name it has there.
 
 | Demoted to `--full` in `--json`                                                                                                                |
