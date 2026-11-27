@@ -6,10 +6,25 @@ import type { ProviderSource } from "../types.js";
 import { traceInput } from "../lib/input-trace.js";
 
 export const PI_CODEX_BUILTIN_ID = "openai-codex";
+/**
+ * Pi's `openai` provider stores a "Sign in with ChatGPT" token for the OpenAI
+ * API. The Codex usage endpoint does not accept that token (HTTP 401 from
+ * `wham/usage` and 403 from `codex/usage` on 2026-10-15), so it is never
+ * probed, whatever fields the entry carries.
+ */
+export const PI_OPENAI_CHATGPT_TOKEN_UNMEASURED =
+  "pi_openai_chatgpt_token_unmeasured";
 const AUTH_FILE_LIMIT_BYTES = 64 * 1024;
-const PI_CODEX_PROVIDER_ID = /^openai-codex(?:-[a-z0-9]+(?:-[a-z0-9]+)*)?$/;
-const PI_CODEX_SOURCE = /^pi:openai-codex(?:-[a-z0-9]+(?:-[a-z0-9]+)*)?$/;
+// Pi's built-in `openai-codex` and `openai` ids, plus the `-<suffix>` siblings
+// that tools such as pi-codex-accounts add beside them.
+const PI_CODEX_PROVIDER_ID = /^openai(?:-[a-z0-9]+)*$/;
+const PI_CODEX_SOURCE = /^pi:openai-codex(?:-[a-z0-9]+)*$/;
+const PI_CODEX_FAMILY_ID = /^openai-codex(?:-[a-z0-9]+)*$/;
 const MINIMUM_MILLISECOND_EPOCH = 1_000_000_000_000;
+
+export type PiCodexUnsupportedError =
+  | "unsupported_credential_type"
+  | typeof PI_OPENAI_CHATGPT_TOKEN_UNMEASURED;
 
 export type PiCodexCredentials = {
   /** Present only for an in-memory quota probe; never log, render, or cache. */
@@ -22,7 +37,7 @@ export type PiCodexCredentialResolution =
   | { status: "available"; credentials: PiCodexCredentials }
   | { status: "missing" }
   | { status: "invalid" }
-  | { status: "unsupported" }
+  | { status: "unsupported"; error: PiCodexUnsupportedError }
   | {
       status: "expired";
       refreshable: boolean;
@@ -106,11 +121,7 @@ async function inspectCredential(
     };
   }
   if (resolution.status === "unsupported") {
-    return {
-      path,
-      status: "unsupported",
-      error: "unsupported_credential_type",
-    };
+    return { path, status: "unsupported", error: resolution.error };
   }
   if (resolution.status === "invalid") {
     return { path, status: "invalid", error: "invalid_credential" };
@@ -171,7 +182,12 @@ async function listProviderIds(
 }
 
 function piCodexProviderIds(parsed: Record<string, unknown>): string[] {
-  const ids = Object.keys(parsed).filter(isPiCodexProviderId);
+  // Pi also stores a plain OpenAI API key under `openai`, which is no sign-in.
+  const ids = Object.keys(parsed).filter(
+    (id) =>
+      PI_CODEX_FAMILY_ID.test(id) ||
+      (isPiCodexProviderId(id) && isOAuthEntry(parsed[id])),
+  );
   ids.sort((left, right) => {
     if (left === PI_CODEX_BUILTIN_ID) return -1;
     if (right === PI_CODEX_BUILTIN_ID) return 1;
@@ -195,11 +211,16 @@ async function resolveCredential(
   const { entry } = classified;
 
   const type = stringValue(entry.type)?.toLowerCase();
-  if (type === "api_key") return { status: "unsupported" };
+  if (type === "api_key") {
+    return { status: "unsupported", error: "unsupported_credential_type" };
+  }
   if (type !== "oauth") {
     return type === undefined
       ? { status: "invalid" }
-      : { status: "unsupported" };
+      : { status: "unsupported", error: "unsupported_credential_type" };
+  }
+  if (!PI_CODEX_FAMILY_ID.test(providerId)) {
+    return { status: "unsupported", error: PI_OPENAI_CHATGPT_TOKEN_UNMEASURED };
   }
 
   const accessToken = usableLiteral(entry.access);
@@ -224,6 +245,15 @@ async function resolveCredential(
     status: "available",
     credentials: { accessToken, accountId, expiresAtMs },
   };
+}
+
+function isOAuthEntry(value: unknown): boolean {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    stringValue((value as Record<string, unknown>).type)?.toLowerCase() ===
+      "oauth"
+  );
 }
 
 function authFilePath(dependencies: BrokerDependencies): string {

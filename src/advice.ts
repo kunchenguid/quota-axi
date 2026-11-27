@@ -5,11 +5,13 @@ import {
   REFRESH_SPAWN_FAILED,
 } from "./providers/delegated-refresh.js";
 import { grokCliRefreshNeeded } from "./providers/grok.js";
+import { PI_OPENAI_CHATGPT_TOKEN_UNMEASURED } from "./providers/pi-codex-credential.js";
 import {
   CLAUDE_KEYCHAIN_SERVICE,
   CLAUDE_PROFILES_ENV,
 } from "./lib/claude-profile.js";
 import type {
+  AuthProviderReport,
   ProviderQuota,
   QuotaAxiResponse,
   SourceAttempt,
@@ -29,6 +31,8 @@ export const INFERENCE_OPT_IN_REASON = "inference_opt_in_required";
 export const CLAUDE_INFERENCE_REMEDY_COMMAND =
   "quota-axi --provider claude --allow-claude-inference";
 const CLAUDE_ENV_SCOPE_DENIAL_ERROR = "claude_env_usage_scope_unavailable";
+export const CODEX_SIGN_IN_REASON = "codex_sign_in_required";
+export const CODEX_SIGN_IN_REMEDY_COMMAND = "codex login";
 
 export function annotateQuotaAdvice(
   response: Omit<QuotaAxiResponse, "schemaVersion">,
@@ -137,6 +141,16 @@ function annotateProviderAdvice(provider: ProviderQuota): ProviderQuota {
       },
     };
   }
+  if (needsCodexSignInAdvice(provider)) {
+    return {
+      ...provider,
+      state: {
+        ...provider.state,
+        reason: CODEX_SIGN_IN_REASON,
+        remedyCommand: CODEX_SIGN_IN_REMEDY_COMMAND,
+      },
+    };
+  }
   const kimiRemedy = kimiTokenRefreshRemedy(provider);
   if (kimiRemedy) {
     return {
@@ -149,6 +163,53 @@ function annotateProviderAdvice(provider: ProviderQuota): ProviderQuota {
     };
   }
   return provider;
+}
+
+/**
+ * A Codex lane whose only credential is Pi's "Sign in with ChatGPT" token.
+ * The usage endpoint does not accept that token (HTTP 401 from `wham/usage`
+ * and 403 from `codex/usage` on 2026-10-15), so the lane stays unmeasured
+ * and the remedy names the Codex sign-in quota-axi can read.
+ */
+function needsCodexSignInAdvice(provider: ProviderQuota): boolean {
+  return (
+    provider.provider === "codex" &&
+    provider.state.status !== "fresh" &&
+    unmeasuredPiChatGptEntry(provider.attempts ?? []) !== undefined
+  );
+}
+
+/** The Pi provider id behind the skipped ChatGPT sign-in attempt, if any. */
+function unmeasuredPiChatGptEntry(
+  attempts: SourceAttempt[],
+): string | undefined {
+  const attempt = attempts.find(
+    (candidate) =>
+      candidate.status === "skipped" &&
+      candidate.error === PI_OPENAI_CHATGPT_TOKEN_UNMEASURED &&
+      candidate.source.startsWith("pi:"),
+  );
+  return attempt?.source.slice("pi:".length);
+}
+
+/**
+ * The quota help line for every Pi ChatGPT sign-in `quota-axi auth` lists as
+ * skipped, once per entry, so the auth listing and the quota read agree.
+ */
+export function authHelpLines(reports: AuthProviderReport[]): string[] {
+  const entries = new Set<string>();
+  for (const report of reports) {
+    for (const source of report.sources) {
+      if (
+        source.status === "skipped" &&
+        source.error === PI_OPENAI_CHATGPT_TOKEN_UNMEASURED &&
+        source.source.startsWith("pi:")
+      ) {
+        entries.add(source.source.slice("pi:".length));
+      }
+    }
+  }
+  return [...entries].map(codexSignInHelpLine);
 }
 
 /**
@@ -392,7 +453,24 @@ function providerHelpLines(provider: ProviderQuota): string[] {
   if (hasClaudeInferenceAdvice(provider)) return [claudeInferenceHelpLine()];
   if (hasKimiTokenRefreshAdvice(provider))
     return [kimiTokenRefreshHelpLine(provider.state.remedyCommand)];
+  if (hasCodexSignInAdvice(provider)) {
+    return [
+      codexSignInHelpLine(
+        unmeasuredPiChatGptEntry(provider.attempts ?? []) ??
+          provider.accountKey ??
+          "openai",
+      ),
+    ];
+  }
   return [];
+}
+
+function hasCodexSignInAdvice(provider: ProviderQuota): boolean {
+  return (
+    provider.provider === "codex" &&
+    provider.state.reason === CODEX_SIGN_IN_REASON &&
+    provider.state.remedyCommand === CODEX_SIGN_IN_REMEDY_COMMAND
+  );
 }
 
 function hasClaudeInferenceAdvice(provider: ProviderQuota): boolean {
@@ -474,6 +552,10 @@ function kimiTokenRefreshHelpLine(remedy: string | undefined): string {
     return "Tell your user: run a Kimi Code session with `kimi` once so Kimi Code refreshes its own session token. quota-axi stays read-only and never rotates Kimi credentials.";
   }
   return "Tell your user: use a Kimi model in `pi` once so Pi refreshes its own Kimi session token; Pi refreshes a provider's token only when that provider is used. quota-axi stays read-only and never rotates Kimi credentials.";
+}
+
+function codexSignInHelpLine(entry: string): string {
+  return `Tell your user: Pi's \`${entry}\` entry is a "Sign in with ChatGPT" token for the OpenAI API, which the Codex usage endpoint does not accept, so quota-axi cannot measure it. To see Codex quota, sign in to Codex itself: run \`${CODEX_SIGN_IN_REMEDY_COMMAND}\` for the Codex CLI, or run \`/login\` inside \`pi\` and pick \`openai-codex\`. quota-axi measures both and never signs in for you.`;
 }
 
 function grokTokenRefreshHelpLine(): string {
