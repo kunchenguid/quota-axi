@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { withQuotaSemantics } from "../../src/interpretation.js";
+import { renderQuotaToon } from "../../src/render.js";
 import {
   createCommandCodeAdapter,
   COMMANDCODE_API_ORIGIN,
@@ -321,6 +322,146 @@ describe("Command Code payload normalization", () => {
     expect(normalized.windows).toHaveLength(2);
   });
 
+  it("reads the nested credits envelope the live API returns", () => {
+    const normalized = normalizeCommandCodePayload({
+      credits: { monthlyCredits: 0, purchasedCredits: 0, freeCredits: 0 },
+      windowLimits: {
+        limited: true,
+        exceeded: null,
+        fiveHour: { used: 0, cap: 90, exceeded: false, resetAt: 0 },
+        weekly: { used: 0, cap: 180, exceeded: false, resetAt: 0 },
+      },
+    });
+    expect(normalized.credits).toEqual({ remaining: 0, unit: "credits" });
+    expect(normalized.windows.map(({ id }) => id)).toEqual([
+      "five_hour",
+      "weekly",
+      "credits",
+    ]);
+  });
+
+  it("reads spent included credits as exhausted while purchased credits remain", () => {
+    const normalized = normalizeCommandCodePayload({
+      credits: { monthlyCredits: 0, purchasedCredits: 50, freeCredits: 0 },
+      windowLimits: {
+        limited: true,
+        exceeded: null,
+        fiveHour: { used: 0, cap: 90, resetAt: 0 },
+        weekly: { used: 0, cap: 180, resetAt: 0 },
+      },
+    });
+    expect(normalized.credits).toEqual({ remaining: 50, unit: "credits" });
+    const semantics = withQuotaSemantics(
+      {
+        provider: "commandcode",
+        label: "Command Code",
+        source: "api",
+        credits: normalized.credits,
+        windows: normalized.windows,
+        state: {
+          status: "fresh",
+          stale: false,
+          untrustedWindowIds: normalized.untrustedWindowIds,
+        },
+      },
+      "2026-09-14T12:00:00.000Z",
+    ).quotaSemantics;
+    expect(semantics).toMatchObject({
+      status: "known",
+      effectiveAvailability: [
+        {
+          scope: "included_credits",
+          effectivePercentRemaining: 0,
+          boundedBy: ["credits"],
+          limitingWindowIds: ["credits"],
+          runway: { status: "exhausted_now" },
+        },
+      ],
+    });
+  });
+
+  it("publishes no credits window while included credits remain", () => {
+    const normalized = normalizeCommandCodePayload({
+      credits: { monthlyCredits: 5, purchasedCredits: 0, freeCredits: 0 },
+      windowLimits: {
+        limited: true,
+        fiveHour: { used: 0, cap: 90, resetAt: 0 },
+        weekly: { used: 0, cap: 180, resetAt: 0 },
+      },
+    });
+    expect(normalized.windows.map(({ id }) => id)).toEqual([
+      "five_hour",
+      "weekly",
+    ]);
+  });
+
+  it.each([null, false])(
+    "treats windowLimits.exceeded %s as a state flag rather than a window",
+    (exceeded) => {
+      const normalized = normalizeCommandCodePayload({
+        monthlyCredits: 5,
+        purchasedCredits: 0,
+        freeCredits: 0,
+        windowLimits: {
+          limited: true,
+          exceeded,
+          fiveHour: { used: 0, cap: 90, resetAt: 0 },
+          weekly: { used: 0, cap: 180, resetAt: 0 },
+        },
+      });
+      expect(normalized.windows.map(({ id }) => id)).toEqual([
+        "five_hour",
+        "weekly",
+      ]);
+      expect(normalized.untrustedWindowIds ?? []).not.toContain(
+        "window:exceeded",
+      );
+    },
+  );
+
+  it.each([true, "weekly", { scope: "weekly" }])(
+    "keeps a windowLimits.exceeded verdict %j untrusted",
+    (exceeded) => {
+      const normalized = normalizeCommandCodePayload({
+        monthlyCredits: 5,
+        purchasedCredits: 0,
+        freeCredits: 0,
+        windowLimits: {
+          limited: true,
+          exceeded,
+          fiveHour: { used: 0, cap: 90, resetAt: 0 },
+          weekly: { used: 0, cap: 180, resetAt: 0 },
+        },
+      });
+      expect(normalized.untrustedWindowIds).toContain("window:exceeded");
+      expect(normalized.diagnostics).toContainEqual({
+        code: "unknown_window",
+        id: "window:exceeded",
+      });
+    },
+  );
+
+  it("reads the vendor exceeded flag as spent whatever the counters say", () => {
+    const windows = normalizeCommandCodePayload({
+      monthlyCredits: 10,
+      purchasedCredits: 0,
+      freeCredits: 0,
+      windowLimits: {
+        limited: true,
+        fiveHour: { used: 0, cap: 90, exceeded: true },
+        weekly: { used: 0, cap: 180, exceeded: false },
+      },
+    }).windows;
+    expect(windows.find(({ id }) => id === "five_hour")).toMatchObject({
+      percentUsed: 100,
+      percentRemaining: 0,
+    });
+    expect(windows.find(({ id }) => id === "weekly")).toMatchObject({
+      percentUsed: 0,
+      percentRemaining: 100,
+    });
+  });
+
   it("clamps over-cap usage to exhausted rather than a negative remainder", () => {
     const [window] = normalizeCommandCodePayload({
       monthlyCredits: 1,
@@ -395,6 +536,33 @@ describe("Command Code payload normalization", () => {
     ).quotaSemantics;
     expect(semantics?.effectiveAvailability).toEqual([]);
     expect(semantics?.status).not.toBe("known");
+  });
+
+  it("keeps a credit-only answer with no windowLimits as a credits attention row", async () => {
+    const report = await testAdapter({
+      fetch: sequentialFetch([
+        jsonResponse({ org: { id: "org_fixture" } }),
+        jsonResponse({
+          monthlyCredits: 0,
+          purchasedCredits: 20,
+          freeCredits: 0,
+        }),
+      ]),
+    }).fetchQuota(OPTIONS);
+    expect(report.windows).toEqual([]);
+    expect(report.credits).toEqual({ remaining: 20, unit: "credits" });
+    expect(report.state).toMatchObject({ status: "fresh" });
+    const toon = renderQuotaToon(
+      {
+        generatedAt: "2026-09-14T12:00:00.000Z",
+        schemaVersion: 5,
+        providers: [withQuotaSemantics(report, "2026-09-14T12:00:00.000Z")],
+      },
+      "quota-axi",
+      false,
+    );
+    expect(toon).toMatch(/commandcode,all,credits,[^\n]*20 credits/);
+    expect(toon).not.toContain("exhausted_now");
   });
 
   it("omits leftover rolling windows when limited is false", () => {
@@ -485,6 +653,114 @@ describe("Command Code payload normalization", () => {
 });
 
 describe("Command Code effective availability", () => {
+  it("reads a zeroed credits window as exhausted however fresh the rate limits look", () => {
+    const report: ProviderQuota = {
+      provider: "commandcode",
+      label: "Command Code",
+      source: "api",
+      credits: { remaining: 0, unit: "credits" },
+      windows: [
+        {
+          id: "credits",
+          label: "credits",
+          kind: "credits",
+          percentUsed: 100,
+          percentRemaining: 0,
+        },
+        {
+          id: "five_hour",
+          label: "5-hour",
+          kind: "session",
+          percentUsed: 0,
+          percentRemaining: 100,
+          windowSeconds: 18_000,
+        },
+        {
+          id: "weekly",
+          label: "Weekly",
+          kind: "weekly",
+          percentUsed: 0,
+          percentRemaining: 100,
+          windowSeconds: 604_800,
+        },
+      ],
+      state: { status: "fresh", stale: false },
+    };
+    const semantics = withQuotaSemantics(
+      report,
+      "2026-09-14T12:00:00.000Z",
+    ).quotaSemantics;
+    expect(semantics).toMatchObject({
+      status: "known",
+      effectiveAvailability: [
+        {
+          scope: "included_credits",
+          status: "known",
+          effectivePercentRemaining: 0,
+          boundedBy: ["credits"],
+          limitingWindowIds: ["credits"],
+          runway: { status: "exhausted_now", usableRunwaySeconds: 0 },
+        },
+      ],
+    });
+  });
+
+  it("keeps an untrusted limit partial while the zeroed credits window still reads exhausted", () => {
+    const report: ProviderQuota = {
+      provider: "commandcode",
+      label: "Command Code",
+      source: "api",
+      credits: { remaining: 0, unit: "credits" },
+      windows: [
+        {
+          id: "credits",
+          label: "credits",
+          kind: "credits",
+          percentUsed: 100,
+          percentRemaining: 0,
+        },
+        {
+          id: "five_hour",
+          label: "5-hour",
+          kind: "session",
+          percentUsed: 0,
+          percentRemaining: 100,
+          windowSeconds: 18_000,
+        },
+        {
+          id: "weekly",
+          label: "Weekly",
+          kind: "weekly",
+          percentUsed: 0,
+          percentRemaining: 100,
+          windowSeconds: 604_800,
+        },
+      ],
+      state: {
+        status: "fresh",
+        stale: false,
+        untrustedWindowIds: ["window:exceeded"],
+      },
+    };
+    const semantics = withQuotaSemantics(
+      report,
+      "2026-09-14T12:00:00.000Z",
+    ).quotaSemantics;
+    expect(semantics).toMatchObject({
+      status: "partial",
+      unresolvedWindowIds: ["window:exceeded"],
+      effectiveAvailability: [
+        {
+          scope: "included_credits",
+          effectivePercentRemaining: 0,
+          boundedBy: ["credits"],
+          limitingWindowIds: ["credits"],
+          runway: { status: "exhausted_now", usableRunwaySeconds: 0 },
+        },
+      ],
+    });
+  });
+
   it("publishes included_credits as the minimum of the trusted rolling windows", () => {
     const report: ProviderQuota = {
       provider: "commandcode",
