@@ -67,9 +67,11 @@ export function resolveVeniceCredentials(
     SOURCE,
     path,
     (value) => {
-      const entry = object(object(value)?.venice);
-      if (!entry) return { status: "missing", source: SOURCE, path };
-      const key = usableLiteralSecret(entry.key);
+      const store = object(value);
+      if (!store) return { status: "invalid", source: SOURCE, path };
+      if (store.venice === undefined)
+        return { status: "missing", source: SOURCE, path };
+      const key = usableLiteralSecret(object(store.venice)?.key);
       return key
         ? { status: "available", key, source: SOURCE, path }
         : { status: "invalid", source: SOURCE, path };
