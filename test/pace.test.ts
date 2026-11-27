@@ -576,6 +576,10 @@ describe("computeEffectiveRunway", () => {
       ).toISOString(),
     });
     futureAccount.pace = computeWindowPace(futureAccount, GENERATED_AT);
+    expect(futureAccount.pace).toEqual({
+      status: "unknown",
+      reason: "future_cycle_start",
+    });
     const establishedAccount = pacedWindow("seven_day", 90, 0.5);
 
     expect(
@@ -584,6 +588,12 @@ describe("computeEffectiveRunway", () => {
       status: "unknown",
       unmeasurableWindowIds: ["five_hour"],
     });
+    expect(
+      summarizeEffectiveSelection(
+        [establishedAccount, futureAccount],
+        GENERATED_AT,
+      ),
+    ).toEqual({ status: "unknown", unmeasurableWindowIds: ["five_hour"] });
   });
 
   it.each([
@@ -1096,5 +1106,217 @@ describe("summarizeEffectiveSelection", () => {
       status: "unknown",
       unmeasurableWindowIds: ["five_hour"],
     });
+  });
+});
+
+describe("provably unopened non-model bounds", () => {
+  const MONTH_SECONDS = 31 * 86_400;
+  /** A first monthly cycle whose start is still hours ahead of the snapshot. */
+  const START_AHEAD_SECONDS = 10 * 60 * 60;
+
+  function liveFiveHour(extra: Partial<QuotaWindow> = {}): QuotaWindow {
+    const value = window({
+      id: "five_hour",
+      kind: "session",
+      percentUsed: 0,
+      percentRemaining: 100,
+      windowSeconds: FIVE_HOURS_SECONDS,
+      resetsAt: resetsAfter(0.4, FIVE_HOURS_SECONDS),
+      ...extra,
+    });
+    return { ...value, pace: computeWindowPace(value, GENERATED_AT) };
+  }
+
+  function unopenedMonth(
+    extra: Partial<QuotaWindow> = {},
+    startAheadSeconds = START_AHEAD_SECONDS,
+  ): QuotaWindow {
+    const startsAtMs = Date.parse(GENERATED_AT) + startAheadSeconds * 1000;
+    const value = window({
+      id: "month_total",
+      label: "month",
+      kind: "monthly",
+      percentUsed: 0,
+      percentRemaining: 100,
+      startsAt: new Date(startsAtMs).toISOString(),
+      resetsAt: new Date(startsAtMs + MONTH_SECONDS * 1000).toISOString(),
+      ...extra,
+    });
+    return { ...value, pace: computeWindowPace(value, GENERATED_AT) };
+  }
+
+  /** The scope scalar with the month at its cycle's first instant (gap 1). */
+  function expectedSpendPriority(fiveHour: QuotaWindow): number {
+    const fiveHourGap =
+      100 / fiveHour.pace!.timeRemainingPercent! - fiveHour.pace!.burnMultiple!;
+    return (
+      (fiveHourGap * FIVE_HOURS_SECONDS + MONTH_SECONDS) /
+      (FIVE_HOURS_SECONDS + MONTH_SECONDS)
+    );
+  }
+
+  it("lets an unused monthly bound whose first cycle opens later defer to the live bounds", () => {
+    const fiveHour = liveFiveHour();
+    const month = unopenedMonth();
+    expect(month.pace).toEqual({
+      status: "unknown",
+      reason: "future_cycle_start",
+    });
+
+    expect(computeEffectiveRunway([fiveHour, month], GENERATED_AT)).toEqual({
+      status: "through_reset",
+      projectionConfidence: "established",
+    });
+    const selection = summarizeEffectiveSelection(
+      [fiveHour, month],
+      GENERATED_AT,
+    );
+    expect(selection.status).toBe("known");
+    expect(selection[SELECTION_SCALAR_KEY]).toBeCloseTo(
+      expectedSpendPriority(fiveHour),
+      4,
+    );
+    // The month's whole cycle dominates the weight, so the scalar stays near
+    // the fresh-cycle term instead of tracking the five-hour clock alone.
+    expect(selection[SELECTION_SCALAR_KEY]).toBeLessThan(
+      summarizeEffectiveSelection([fiveHour])[SELECTION_SCALAR_KEY]!,
+    );
+  });
+
+  it("admits a start exactly one cycle ahead", () => {
+    const fiveHour = liveFiveHour();
+    const month = unopenedMonth({}, MONTH_SECONDS);
+
+    expect(computeEffectiveRunway([fiveHour, month], GENERATED_AT)).toEqual({
+      status: "through_reset",
+      projectionConfidence: "established",
+    });
+    expect(
+      summarizeEffectiveSelection([fiveHour, month], GENERATED_AT).status,
+    ).toBe("known");
+  });
+
+  it.each([
+    {
+      name: "partially used",
+      month: () => unopenedMonth({ percentUsed: 1, percentRemaining: 99 }),
+    },
+    {
+      name: "missing explicit usage",
+      month: () => unopenedMonth({ percentUsed: undefined }),
+    },
+    {
+      name: "started more than one cycle ahead",
+      month: () => unopenedMonth({}, MONTH_SECONDS + 1),
+    },
+    {
+      name: "claiming a future start that has already passed",
+      month: () => ({
+        ...unopenedMonth({}, -START_AHEAD_SECONDS),
+        pace: {
+          status: "unknown" as const,
+          reason: "future_cycle_start" as const,
+        },
+      }),
+    },
+    {
+      name: "carrying an unparseable startsAt",
+      month: () => unopenedMonth({ startsAt: "not-a-timestamp" }),
+    },
+    {
+      name: "carrying a malformed resetsAt",
+      month: () => unopenedMonth({ resetsAt: "not-a-timestamp" }),
+    },
+    {
+      name: "stale",
+      month: () => ({
+        ...unopenedMonth(),
+        pace: { status: "unknown" as const, reason: "stale" as const },
+      }),
+    },
+  ])("keeps a monthly bound $name unmeasurable", ({ month }) => {
+    const fiveHour = liveFiveHour();
+    const blocked = month();
+
+    expect(computeEffectiveRunway([fiveHour, blocked], GENERATED_AT)).toEqual({
+      status: "unknown",
+      unmeasurableWindowIds: ["month_total"],
+    });
+    expect(
+      summarizeEffectiveSelection([fiveHour, blocked], GENERATED_AT),
+    ).toEqual({ status: "unknown", unmeasurableWindowIds: ["month_total"] });
+  });
+
+  it("keeps an unopened bound unmeasurable when it is the scope's only bound", () => {
+    const month = unopenedMonth();
+
+    expect(computeEffectiveRunway([month], GENERATED_AT)).toEqual({
+      status: "unknown",
+      unmeasurableWindowIds: ["month_total"],
+    });
+    expect(summarizeEffectiveSelection([month], GENERATED_AT)).toEqual({
+      status: "unknown",
+      unmeasurableWindowIds: ["month_total"],
+    });
+  });
+
+  it("keeps an unopened bound unmeasurable when the other bounds cannot establish runway", () => {
+    const staleFiveHour = {
+      ...liveFiveHour(),
+      pace: { status: "unknown" as const, reason: "stale" as const },
+    };
+    const month = unopenedMonth();
+
+    expect(
+      computeEffectiveRunway([staleFiveHour, month], GENERATED_AT),
+    ).toEqual({
+      status: "unknown",
+      unmeasurableWindowIds: ["five_hour", "month_total"],
+    });
+    expect(
+      summarizeEffectiveSelection([staleFiveHour, month], GENERATED_AT),
+    ).toEqual({
+      status: "unknown",
+      unmeasurableWindowIds: ["five_hour", "month_total"],
+    });
+  });
+
+  it("gives a monthly bound with no reset no fresh-cycle term", () => {
+    const fiveHour = liveFiveHour();
+    const untriggered = unopenedMonth({ resetsAt: undefined });
+
+    expect(
+      summarizeEffectiveSelection([fiveHour, untriggered], GENERATED_AT),
+    ).toEqual(summarizeEffectiveSelection([fiveHour]));
+  });
+
+  it("keeps the declared-duration rule for a named-model window that carries a start", () => {
+    const startsAtMs = Date.parse(GENERATED_AT) + START_AHEAD_SECONDS * 1000;
+    const model = window({
+      id: "model:minimax",
+      kind: "model",
+      percentUsed: 0,
+      percentRemaining: 100,
+      windowSeconds: MONTH_SECONDS,
+      startsAt: new Date(startsAtMs).toISOString(),
+      resetsAt: new Date(startsAtMs + MONTH_SECONDS * 1000).toISOString(),
+    });
+    model.pace = computeWindowPace(model, GENERATED_AT);
+    const account = window({
+      id: "seven_day",
+      percentUsed: 10,
+      percentRemaining: 90,
+      windowSeconds: WEEK_SECONDS,
+      resetsAt: resetsAfter(0.5),
+    });
+    account.pace = computeWindowPace(account, GENERATED_AT);
+
+    expect(computeEffectiveRunway([account, model], GENERATED_AT)).toEqual({
+      status: "unknown",
+      unmeasurableWindowIds: ["model:minimax"],
+    });
+    expect(summarizeEffectiveSelection([account, model], GENERATED_AT)).toEqual(
+      { status: "unknown", unmeasurableWindowIds: ["model:minimax"] },
+    );
   });
 });
