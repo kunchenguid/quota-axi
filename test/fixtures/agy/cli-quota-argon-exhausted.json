@@ -1,0 +1,49 @@
+{
+  "status": "SUCCESS",
+  "command": {
+    "name": "quota",
+    "data": {
+      "groups": [
+        {
+          "name": "Gemini Models (Flash, Pro)",
+          "buckets": [
+            {
+              "id": "gemini-5h",
+              "window": "5h",
+              "remaining_fraction": 1,
+              "reset_time": "2026-10-25T17:00:00Z"
+            },
+            {
+              "id": "gemini-weekly",
+              "window": "weekly",
+              "remaining_fraction": 1,
+              "reset_time": "2026-10-29T00:00:00Z"
+            }
+          ]
+        },
+        {
+          "name": "Gemini 4 Argon",
+          "buckets": [
+            {
+              "id": "gemini-argon-wtu-weekly",
+              "window": "weekly",
+              "remaining_fraction": 0,
+              "reset_time": "2026-10-29T00:00:00Z"
+            }
+          ]
+        },
+        {
+          "name": "Claude and GPT models",
+          "buckets": [
+            {
+              "id": "3p-weekly",
+              "window": "weekly",
+              "remaining_fraction": 1,
+              "reset_time": "2026-10-29T00:00:00Z"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
