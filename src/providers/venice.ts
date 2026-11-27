@@ -176,16 +176,10 @@ async function fetchQuota(deps: Dependencies): Promise<ProviderQuota> {
         }
         windows.push(window);
       }
-      if (bundled !== undefined)
-        windows.push({
-          id: "bundled-credits",
-          label: "Bundled credits",
-          kind: "credits",
-          remainingCredits: bundled,
-          creditUnit: "bundled credits",
-        });
-      const wallets: { remaining: number; unit: "usd" | "credits" }[] = [];
+      const wallets: { remaining: number; unit: "usd" | "diem" | "credits" }[] =
+        [];
       if (usd !== undefined) wallets.push({ remaining: usd, unit: "usd" });
+      if (diem !== undefined) wallets.push({ remaining: diem, unit: "diem" });
       if (bundled !== undefined)
         wallets.push({ remaining: bundled, unit: "credits" });
       const funded =

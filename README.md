@@ -1071,7 +1071,7 @@ The Claude and Codex rows describe default discovery; Codex home expansion is do
 **Venice**
 
 - Reads `VENICE_API_KEY`, then OpenCode's `venice` key in `$XDG_DATA_HOME/opencode/auth.json` (default `~/.local/share/opencode/auth.json`). It sends a read-only request to Venice's `/api/v1/api_keys/rate_limits` endpoint.
-- Reports USD and bundled credits as separate balances, and DIEM and bundled credits as credit windows. The DIEM reset comes from `nextEpochBegins`. An optional `VENICE_ADMIN_KEY` reads `/api/v1/billing/balance` for the DIEM allocation and percentage; supply an admin key for the same account as the inference key. If that request fails, balances still appear without the percentage. No key is refreshed or written.
+- Reports USD, DIEM, and bundled credits as separate `credits.balances` wallets with units `usd`, `diem`, and `credits`, and DIEM as a credit window. The DIEM reset comes from `nextEpochBegins`. An optional `VENICE_ADMIN_KEY` reads `/api/v1/billing/balance` for the DIEM allocation and percentage; supply an admin key for the same account as the inference key. If that request fails, balances still appear without the percentage. No key is refreshed or written.
 
 **OpenRouter**
 

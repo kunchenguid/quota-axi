@@ -8,6 +8,11 @@ import {
   VENICE_BALANCE_URL,
   VENICE_RATE_LIMITS_URL,
 } from "../src/providers/venice.js";
+import { withQuotaSemantics } from "../src/interpretation.js";
+import { renderQuotaToon } from "../src/render.js";
+import { renderQuotaTui } from "../src/tui.js";
+
+const GENERATED_AT = "2030-01-01T12:00:00.000Z";
 
 const credential = () => ({
   status: "available" as const,
@@ -36,6 +41,7 @@ describe("Venice balance provider", () => {
       unit: "usd",
       balances: [
         { remaining: 12.5, unit: "usd" },
+        { remaining: 25, unit: "diem" },
         { remaining: 7, unit: "credits" },
       ],
     });
@@ -48,14 +54,29 @@ describe("Venice balance provider", () => {
         creditUnit: "DIEM",
         resetsAt: "2030-01-02T00:00:00.000Z",
       },
-      {
-        id: "bundled-credits",
-        label: "Bundled credits",
-        kind: "credits",
-        remainingCredits: 7,
-        creditUnit: "bundled credits",
-      },
     ]);
+  });
+  it("shows every inference-key balance in TOON and the TUI without a percentage", async () => {
+    const quota = await createVeniceAdapter({
+      credential,
+      adminKey: () => undefined,
+      fetch: vi.fn(async () => Response.json(ratePayload)),
+      now: () => Date.parse(GENERATED_AT),
+    }).fetchQuota({ refreshCredentials: false });
+    const response = {
+      generatedAt: GENERATED_AT,
+      schemaVersion: 5,
+      providers: [withQuotaSemantics(quota, GENERATED_AT)],
+    } as const;
+    const balances = "12.5 usd · 25 diem · 7 credits";
+    for (const full of [false, true]) {
+      const toon = renderQuotaToon(response, "quota-axi", full);
+      expect(toon).toContain(`venice,all,credits,remaining ${balances},none`);
+      expect(toon).toContain("quota[0]:");
+    }
+    const tui = renderQuotaTui(response, { columns: 60, timeZone: "UTC" });
+    expect(tui).toContain(`${balances} remaining`);
+    expect(tui).not.toMatch(/\d%/);
   });
   it("uses the optional admin allocation to calculate the DIEM percentage", async () => {
     const fetch = vi.fn(async (url: string | URL | Request) =>

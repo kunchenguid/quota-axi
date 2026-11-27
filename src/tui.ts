@@ -613,8 +613,8 @@ function effectiveHeadline(
 }
 
 /**
- * A windowless reading that reports a raw credit balance has no combined bound
- * and no percentage to draw, so its card states the balance instead of an empty
+ * A reading that reports a raw credit balance and no window percentage has no
+ * combined bound and no percentage to draw, so its card states the balance instead of an empty
  * effective bar whose zero fill would read as a failure. The balance is shown
  * exactly as the vendor reports it, never converted into a percentage.
  */
@@ -623,7 +623,14 @@ function creditsOnlyHeadline(
   stale: boolean,
   border: CardBorder,
 ): Line[] | undefined {
-  if (provider.windows.length > 0) return undefined;
+  if (
+    provider.windows.some(
+      (window) =>
+        window.percentRemaining !== undefined ||
+        window.percentUsed !== undefined,
+    )
+  )
+    return undefined;
   const credits = provider.credits;
   if (!credits) return undefined;
   const balances = credits.balances;

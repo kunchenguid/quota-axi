@@ -346,7 +346,7 @@ export type ProviderQuota = {
   credits?: {
     remaining?: number;
     unlimited?: boolean;
-    unit?: "usd" | "cny" | "credits";
+    unit?: "usd" | "cny" | "diem" | "credits";
     /**
      * Every wallet a vendor reports when it reports more than one, one entry
      * per currency with its own unit. `remaining`/`unit` above mirror the
@@ -356,7 +356,7 @@ export type ProviderQuota = {
      */
     balances?: {
       remaining: number;
-      unit: "usd" | "cny" | "credits";
+      unit: "usd" | "cny" | "diem" | "credits";
     }[];
   };
   /**

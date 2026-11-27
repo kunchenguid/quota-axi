@@ -1313,7 +1313,12 @@ function normalizeCachedCredits(
   if (!data) return undefined;
   const remaining = numberValue(data.remaining);
   const unlimited = booleanValue(data.unlimited);
-  const unit = literalValue(data.unit, ["usd", "cny", "credits"] as const);
+  const unit = literalValue(data.unit, [
+    "usd",
+    "cny",
+    "diem",
+    "credits",
+  ] as const);
   const balances = normalizeCachedBalances(data.balances);
   if (
     remaining === undefined &&
@@ -1361,7 +1366,12 @@ function normalizeCachedBalances(
     const data = objectValue(entry);
     if (!data) return [];
     const remaining = numberValue(data.remaining);
-    const unit = literalValue(data.unit, ["usd", "cny", "credits"] as const);
+    const unit = literalValue(data.unit, [
+      "usd",
+      "cny",
+      "diem",
+      "credits",
+    ] as const);
     return remaining === undefined || unit === undefined
       ? []
       : [{ remaining, unit }];

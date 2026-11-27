@@ -228,6 +228,21 @@ describe("quota cache", () => {
     });
   });
 
+  it("retains a cached Venice DIEM wallet", () => {
+    useTempCache();
+    const credits = {
+      remaining: 0,
+      unit: "usd" as const,
+      balances: [
+        { remaining: 0, unit: "usd" as const },
+        { remaining: 25, unit: "diem" as const },
+      ],
+    };
+    writeCachedProviders([{ ...quota("copilot", 20), credits }]);
+
+    expect(readCachedProvider("copilot")?.credits).toEqual(credits);
+  });
+
   it("invalidates Codex identities that do not exactly match duration", () => {
     useTempCache();
     const file = cacheFilePath();
