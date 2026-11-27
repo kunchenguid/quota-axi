@@ -64,6 +64,8 @@ delete process.env.QUOTA_AXI_SNAPSHOT;
 // A host that exports its Claude profile list would otherwise turn every
 // Claude read into several lanes; profile tests opt in themselves.
 delete process.env.QUOTA_AXI_CLAUDE_PROFILES;
+
+process.env.QUOTA_AXI_MAGPIE_CONFIG = "";
 // Theme tests inject the OS probe and opt in themselves; never inherit a
 // system-theme request that would read the developer's appearance settings.
 delete process.env.QUOTA_AXI_THEME;

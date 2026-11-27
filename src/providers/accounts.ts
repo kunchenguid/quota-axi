@@ -1,3 +1,4 @@
+import { isAccountKey } from "../types.js";
 import type {
   AuthProviderReport,
   ProviderAccount,
@@ -37,10 +38,7 @@ async function accountsFor(
   if (!accounts?.length) return undefined;
   const keys = new Set<string>();
   const usable = accounts.filter((account) => {
-    if (
-      !/^[a-z0-9][a-z0-9:_-]{0,95}$/.test(account.accountKey) ||
-      keys.has(account.accountKey)
-    )
+    if (!isAccountKey(account.accountKey) || keys.has(account.accountKey))
       return false;
     keys.add(account.accountKey);
     return true;

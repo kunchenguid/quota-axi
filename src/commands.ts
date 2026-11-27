@@ -39,6 +39,7 @@ import {
 } from "./providers/accounts.js";
 import { failedProvider } from "./providers/common.js";
 import { claudeSwapEnabled } from "./providers/claude-swap.js";
+import { magpieConfigFor, magpieReadings } from "./providers/magpie.js";
 import { PROVIDERS } from "./providers/index.js";
 import {
   quotaJsonReport,
@@ -78,7 +79,16 @@ export async function quotaCommand(
   const flags = parseFlags(args);
   validateProfileOnly(flags);
   validateClaudeInference(flags);
-  validateCodexHomes(flags.providers, flags.profileOnly);
+  const managed =
+    flags.profileOnly || snapshotFile()
+      ? []
+      : (magpieConfigFor(flags.providers)?.accounts ?? []);
+  validateCodexHomes(
+    flags.providers.filter(
+      (p) => !managed.some((account) => account.provider === p),
+    ),
+    flags.profileOnly,
+  );
   const options: ProviderOptions = {
     allowKeychainPrompt: flags.profileOnly ? false : flags.allowKeychainPrompt,
     refreshCredentials: flags.profileOnly ? false : !flags.noCredentialRefresh,
@@ -446,39 +456,56 @@ export async function fetchQuota(
       [`Point ${SNAPSHOT_ENV} at a quota-axi cache file, or unset it`],
     );
   }
-  validateCodexHomes(providers, options.credentialMode === "profile-only");
-  if (!snapshot && !claudeSwapEnabled()) {
-    validateClaudeProfiles(providers, options);
-  }
   const writesCache = options.credentialMode !== "profile-only" && !snapshot;
+  const config = writesCache ? magpieConfigFor(providers) : undefined;
+  const bindings = config?.accounts ?? [];
+  const managed = new Set<ProviderId>(bindings.map((a) => a.provider));
+  const nativeProviders = providers.filter((p) => !managed.has(p));
+  validateCodexHomes(
+    nativeProviders,
+    options.credentialMode === "profile-only",
+  );
+  if (!snapshot && !claudeSwapEnabled())
+    validateClaudeProfiles(nativeProviders, options);
   // Providers a lock holder already cached, so the report-wide write below
   // does not stamp them a second time
   const cached = new Set<ProviderId>();
-  const fetched = (
-    await Promise.all(
-      providers.map((provider) =>
-        snapshot
-          ? snapshotReadings(provider, snapshot)
-          : readProvider(
-              provider,
-              options,
-              writesCache ? maxAgeSeconds : 0,
-              () => cached.add(provider),
-            ),
-      ),
-    )
-  ).flat();
+  const [gateway, native] = await Promise.all([
+    config && bindings.length ? magpieReadings(config) : undefined,
+    Promise.all(
+      providers.map((provider) => {
+        if (managed.has(provider)) return [];
+        if (snapshot) return snapshotReadings(provider, snapshot);
+        return readProvider(
+          provider,
+          options,
+          writesCache ? maxAgeSeconds : 0,
+          () => cached.add(provider),
+        );
+      }),
+    ),
+  ]);
   // Stamp after every fetch returns: a vendor that computes a reset at
   // response time implies a cycle start no earlier than that instant, so a
   // stamp taken before the request would read an unopened window as
   // `future_cycle_start` by the request latency.
   const generatedAt = nowIso();
+  const fetched = providers.flatMap((provider, index) =>
+    gateway && managed.has(provider)
+      ? bindings
+          .filter((a) => a.provider === provider)
+          .map((a) => gateway(a, Date.parse(generatedAt)))
+      : native[index],
+  );
   const results = fetched.map((provider) =>
     withQuotaSemantics(provider, generatedAt),
   );
   if (writesCache) {
     writeCachedProvidersBestEffort(
-      results.filter((provider) => !cached.has(provider.provider)),
+      results.filter(
+        (provider) =>
+          !managed.has(provider.provider) && !cached.has(provider.provider),
+      ),
       generatedAt,
     );
   }

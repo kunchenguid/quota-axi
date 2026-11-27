@@ -672,10 +672,11 @@ export function quotaJsonReport(
         : {}),
       state: {
         ...provider.state,
-        // A reused reading's age is load-bearing, so its fetch time stays.
-        refreshedAt: provider.state.reused
-          ? provider.state.refreshedAt
-          : undefined,
+        // Both the local cache and the gateway can return earlier observations.
+        refreshedAt:
+          provider.state.reused || provider.source === "magpie"
+            ? provider.state.refreshedAt
+            : undefined,
         sourcesTried: undefined,
       },
     })),

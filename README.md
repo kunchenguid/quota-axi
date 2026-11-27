@@ -18,8 +18,8 @@ Vendor dashboards are not shaped for shell automation, and local CLIs expose dif
 quota-axi reports local Claude, Codex, Cursor, GitHub Copilot, Grok, Kimi, Z.AI, Alibaba, OpenCode Go, Antigravity (`agy`), Command Code, MiniMax, MiMo, DeepSeek, OpenRouter, ElevenLabs, Devin, Muse, and Higgsfield quota windows in one [AXI](https://axi.md)-shaped call.
 It is data only: it never routes, recommends a provider, model, harness, credential, or route, proxies, intercepts, logs in, imports browser cookies, or mints or rotates a credential. Muse's only quota read also issues an API key server-side, which quota-axi discards unread and rate-bounds ([Muse provider notes](#provider-notes)). When the same stored access token is expired, carries a refresh token, and is definitively rejected, quota-axi may delegate renewal to that vendor's own non-interactive CLI command and re-read the result ([Delegated credential refresh](#delegated-credential-refresh)). Default output has no ordering preference. The opt-in `models --sort runway` surface applies only its documented deterministic comparator to quota evidence, preserves all evidence and explicit ties, and is not a recommendation. It publishes one derived per-scope comparative selection signal, [`selection`](#per-scope-selection-signal), as data computed from figures it already reports; the consumer, not quota-axi, does any routing or ranking with it.
 
-- **Official sources** - quota-axi reads local provider auth sources and calls first-party quota, usage, billing, entitlement, local loopback, or read-only credential-liveness endpoints used by the local agents, with read-only CLI probes where applicable. Vendor-command boundaries and the explicit inference exception are documented under [Safety guarantees](#safety-guarantees).
-- **Local first** - quota and auth reports run on the machine that holds the credentials; their network calls go to first-party provider endpoints, never a third-party relay.
+- **Official sources** - quota-axi reads local provider auth sources and calls first-party quota, usage, billing, entitlement, local loopback, or read-only credential-liveness endpoints used by the local agents, or an opted-in [Magpie gateway](#magpie-subscription-accounts), with read-only CLI probes where applicable. Vendor-command boundaries and the explicit inference exception are documented under [Safety guarantees](#safety-guarantees).
+- **Local first** - native quota and auth reports run on the machine that holds the provider credentials and call first-party provider endpoints. The optional [Magpie gateway](#magpie-subscription-accounts) is an exception: configured subscription quota reads go to that gateway, which may run locally or remotely and retains ownership of the provider credentials.
   The separate `update` command contacts npm only when the user runs it.
 - **Token efficient** - default stdout is compact TOON so agents spend fewer tokens parsing quota state, with `--json` available when a caller needs the normalized model.
 
@@ -318,7 +318,7 @@ It is generated from `src/skill.ts` as a minimal stub: discovery frontmatter, wh
 ```
 
 - **Live first** - provider HTTP calls and Antigravity's structured print command use 15 second timeouts, Codex JSON-RPC and Antigravity loopback reads use shorter per-call timeouts, and stale cache fallback is per provider.
-- **Host network policy** - Claude, Codex, Copilot, Cursor, Grok, Z.AI, Command Code, MiniMax, DeepSeek, OpenRouter, ElevenLabs, Devin, and Muse outbound HTTP calls honor standard `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` environment variables (including lowercase forms). This only follows the user's configured egress path; quota-axi does not expose a proxy service or print proxy URLs. New remote fetches go through `src/lib/http.ts` rather than global `fetch`. The proxy path pairs the installed `undici` build's `ProxyAgent` with that same build's `fetch`, because Node's global fetch only accepts a dispatcher from the undici build Node bundles.
+- **Host network policy** - Claude, Codex, Copilot, Cursor, Grok, Z.AI, Command Code, MiniMax, DeepSeek, OpenRouter, ElevenLabs, Devin, Muse, and remote Magpie gateway outbound HTTP calls honor standard `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` environment variables (including lowercase forms). This only follows the user's configured egress path; quota-axi does not expose a proxy service or print proxy URLs. New remote fetches go through `src/lib/http.ts` rather than global `fetch`. The proxy path pairs the installed `undici` build's `ProxyAgent` with that same build's `fetch`, because Node's global fetch only accepts a dispatcher from the undici build Node bundles.
 - **Opt-in secure-store access** - macOS Claude, Cursor CLI, Copilot CLI, and Muse Keychain value reads, plus Windows Copilot Credential Manager reads, are skipped on plain calls until `--allow-keychain-prompt` succeeds once for that source, then future quota calls reuse the corresponding grant.
 - **Delegated refresh, never minted** - when the same stored access token is expired, carries a refresh token, and is definitively rejected, quota-axi may run that vendor CLI's own smallest non-interactive refresh command and re-read the store the CLI rewrote. quota-axi never performs a refresh-token exchange itself. See [Delegated credential refresh](#delegated-credential-refresh).
 - **Partial success is success** - one provider can fail while another returns fresh or stale data, and the process still exits 0. Exit code 1 means every provider failed and the report is still rendered. Exit code 2 is a usage error (`VALIDATION_ERROR`). `quota` is the implicit default command: a bare call or a flag-first call is read as `quota`, while `auth`, `update`, a single-token `--help`, and a version flag stay with the SDK. Slow-path routing, help, exit framing, and `update` come from `axi-sdk-js` `runAxiCli`; machine TOON/JSON stays in `src/render.ts` and command bodies in `src/commands.ts`. A bare `-v`/`-V`/`--version` is answered by `axi-sdk-js/fast-path` plus the leaf `src/version.ts` (node builtins only), which imports the CLI only on the slow path so the provider graph never loads. Keep `src/version.ts` leaf-clean.
@@ -485,10 +485,36 @@ QUOTA_AXI_CODEX_HOMES="/home/me/.codex-work:/home/me/.codex-team" quota-axi --pr
 QUOTA_AXI_CODEX_HOMES="/home/me/.codex-work:/home/me/.codex-team" quota-axi --provider codex --full --json  # adds accountLocator per lane
 ```
 
-- The value lists absolute Codex home directories separated by the platform path delimiter (`:` on macOS and Linux, `;` on Windows). Empty entries are ignored, and a relative entry fails with `VALIDATION_ERROR` (exit 2) whenever `codex` is in scope. `--profile-only` ignores the variable.
+- The value lists absolute Codex home directories separated by the platform path delimiter (`:` on macOS and Linux, `;` on Windows). Empty entries are ignored, and a relative entry fails with `VALIDATION_ERROR` (exit 2) whenever `codex` is in scope. `--profile-only` and a [Magpie-managed](#magpie-subscription-accounts) Codex read ignore the variable.
 - The selected `$CODEX_HOME` lane remains first. Each listed home is read only from its own `auth.json`, gets its own quota windows and cache slot, and cannot use the selected home's token, Pi credentials, CLI fallback, or delegated refresh. Repeated entries for the selected home are reported once.
 - A listed home without usable credentials remains its own unavailable lane, so one missing, rejected, or exhausted home never hides another listed home. Tokens, refresh values, and file contents never appear in output.
 - Each listed lane uses `codex-home:` plus 24 hexadecimal characters of a one-way digest of its canonical filesystem identity as its account key. `--full` adds `accountLocator: { kind: "codex-home", path, delegateEligible }`; the locator is omitted from default JSON and ordinary output.
+
+### Magpie subscription accounts
+
+Create `$XDG_CONFIG_HOME/quota-axi/magpie.json` (default `~/.config/quota-axi/magpie.json`) to read Claude, Codex or Antigravity subscriptions from a Magpie gateway. Set `QUOTA_AXI_MAGPIE_CONFIG` to an absolute path to select a different file or set it to an empty string to disable Magpie for a process. When `XDG_CONFIG_HOME` is relative, the default file is not read and Magpie stays off unless `QUOTA_AXI_MAGPIE_CONFIG` names a file. Each configured provider uses only the listed accounts. Other providers use their usual sources. The native cache, `auth`, `--profile-only` and `QUOTA_AXI_SNAPSHOT` operate independently of Magpie.
+
+```json
+{
+  "endpoint": "http://127.0.0.1:3425/v1",
+  "tokenFile": "/absolute/path/to/magpie-gateway-key",
+  "maxReadingAgeSeconds": 300,
+  "accounts": [
+    {
+      "provider": "agy",
+      "accountKey": "magpie-google-work",
+      "magpieAccountId": "agy-cli/example-id",
+      "label": "Google work subscription"
+    }
+  ]
+}
+```
+
+Use the exact account `pin` from the gateway's `GET /v1/magpie/accounts` as `magpieAccountId`. Give each subscription a stable `accountKey` that starts with `magpie-` followed by a local identifier. Keys must be unique across all configured providers. The accepted provider names are `claude`, `codex` and `agy`. Magpie calls the last provider `agy-cli`. The plain-text key in `tokenFile` must have access to both `GET /v1/magpie/accounts` and `GET /v1/magpie/quotas`. HTTPS is required for remote endpoints. Loopback requests connect directly and redirects are refused.
+
+Run `quota-axi --provider claude,codex,agy --full --json` to see the accounts and their windows. Each pin must identify one enabled account, and the provider and user must match one subscription reading. Ambiguous or missing identities yield an unavailable row. Claude's Fable window adds a model-specific bound. Codex image allowances are excluded from coding quota. Gemini models, including Neon, use the `gemini` scope. The `claude_gpt` scope reports the separate Claude and GPT pool.
+
+`state.refreshedAt` is Magpie's `readAt` in UTC. A reading older than `maxReadingAgeSeconds` (default 300), deferred by Magpie, or returned as a cached substitute is stale. Expired windows are omitted. Stale readings have no usable selection score. Every call checks the gateway, including calls using `--max-age`. Gateway credentials, user identities and raw responses stay out of quota-axi's cache and reports. [Magpie quota response fields](https://pkg.go.dev/github.com/yetone/magpie/internal/provider#Quota)
 
 ### Claude profiles
 
@@ -499,7 +525,7 @@ QUOTA_AXI_CLAUDE_PROFILES="$HOME/.claude-work:$HOME/.claude-team" quota-axi --pr
 QUOTA_AXI_CLAUDE_PROFILES="$HOME/.claude-work:$HOME/.claude-team" quota-axi --provider claude --full --json  # adds accountLocator per lane
 ```
 
-- The value lists Claude config directories separated by the platform path delimiter (`:` on macOS and Linux, `;` on Windows). Write each one exactly as you would set `CLAUDE_CONFIG_DIR`: Claude Code hashes the raw path to name a profile's Keychain item, so quota-axi does not trim entries, expand `~`, or resolve relative paths. Empty entries are ignored, and a relative entry fails the read with `VALIDATION_ERROR` (exit 2) whenever `claude` is in scope, like a malformed `QUOTA_AXI_MAX_AGE`.
+- The value lists Claude config directories separated by the platform path delimiter (`:` on macOS and Linux, `;` on Windows). Write each one exactly as you would set `CLAUDE_CONFIG_DIR`: Claude Code hashes the raw path to name a profile's Keychain item, so quota-axi does not trim entries, expand `~`, or resolve relative paths. Empty entries are ignored, and a relative entry fails the read with `VALIDATION_ERROR` (exit 2) whenever `claude` is in scope, like a malformed `QUOTA_AXI_MAX_AGE`. A [Magpie-managed](#magpie-subscription-accounts) Claude quota read ignores the variable.
 - Lanes are reported in this order: the process-selected profile first (`CLAUDE_CONFIG_DIR`, `CLAUDE_SECURESTORAGE_CONFIG_DIR`, `CLAUDE_CODE_OAUTH_TOKEN`; exactly the lane a run without the variable reports), then the default profile (`~/.claude` with no `CLAUDE_CONFIG_DIR`, whose macOS Keychain service is the unsuffixed `Claude Code-credentials`), then each listed directory in order. Profiles that read the same credential store are reported once, at their first position: on macOS the same config directory and Keychain service, elsewhere the same real directory.
 - The selected profile and every listed directory always get a lane, because the user named them, including a listed directory that is also the default profile. A listed directory with no credential reports that as its own reading through the same rules as the selected profile (for example `auth_required` with `credentials_missing`, marked `notSetUp: true` in JSON and drawn as an attention row in TOON) instead of silently disappearing. The default profile was not named, so it joins only on positive evidence that it holds a credential: its native `.credentials.json` (off macOS, or with no secure-storage selector), or its exact Keychain item, found from metadata without reading a value or prompting.
 - Each lane reads only its own store. Only the selected lane consults `CLAUDE_CODE_OAUTH_TOKEN` and may run the delegated `claude doctor` refresh; every other lane is read-only and never uses a sibling's token. A lane never takes another listed profile's Keychain item for its own opaque default item.
@@ -650,7 +676,7 @@ An unknown or stale scope deliberately gets **no** `quota[]` row: the absence of
 | `effectiveAvailability[].pace.behindWindowIds`, `onPaceWindowIds`                                                                              |
 | Account identity (`account`), account-lane `accountLocator`, and per-source `attempts`                                                         |
 
-Everything a consumer branches on stays in the default tier: `accountKey` and `accountKeys` on an account row; `state.status`, `stale`, `authStatus`, `error`, `reason`, `remedyCommand`, `retryAfter`, `untrustedWindowIds`, and `degradedSources`, plus `reused` and a reused reading's `refreshedAt`; window `pace.status`, `reason`, `reservePercentPoints`, `burnMultiple`, and `shareOf` together with that share window's `percentUsed`; `quotaSemantics.status` and `unresolvedWindowIds`; every scope's `effectivePercentRemaining`, `boundedBy`, `limitingWindowIds`, `boundConflict`, `runway`, `selection`, and pace `aheadWindowIds` / `unknownWindowIds` / `worstReservePercentPoints`; provider `jobs` counts; and sparse `notSetUp`. `credits` also stays, so a consumer can avoid misreading it as exhaustion.
+Everything a consumer branches on stays in the default tier: `accountKey` and `accountKeys` on an account row; `state.status`, `stale`, `authStatus`, `error`, `reason`, `remedyCommand`, `retryAfter`, `untrustedWindowIds`, and `degradedSources`, plus `reused` and `refreshedAt` for reused or Magpie readings; window `pace.status`, `reason`, `reservePercentPoints`, `burnMultiple`, and `shareOf` together with that share window's `percentUsed`; `quotaSemantics.status` and `unresolvedWindowIds`; every scope's `effectivePercentRemaining`, `boundedBy`, `limitingWindowIds`, `boundConflict`, `runway`, `selection`, and pace `aheadWindowIds` / `unknownWindowIds` / `worstReservePercentPoints`; provider `jobs` counts; and sparse `notSetUp`. `credits` also stays, so a consumer can avoid misreading it as exhaustion.
 
 `notSetUp: true` is present only on a provider lane that has positive evidence of absence (the same `providerPresence` classification the human report uses). Every provider stays in `providers[]` on both default `--json` and `--full`; omitting entries would change downstream consumers that look a provider up by id. The field is additive, so `schemaVersion` stays 5, or 6 when a provider expands to multiple accounts. Default TOON is the only output that omits these providers.
 
@@ -677,7 +703,7 @@ Claude `identityStatus` is `verified` only when Anthropic returns an authoritati
 | `status`             | Provider status                                                                                                                                             |
 | `stale`              | Whether the provider report is stale                                                                                                                        |
 | `sourcesTried`       | Sources tried for the provider (`--full`)                                                                                                                   |
-| `refreshedAt`        | Optional refresh timestamp (`--full`)                                                                                                                       |
+| `refreshedAt`        | Optional observation timestamp. Present in default JSON for reused and Magpie readings, and in `--full` for all sources.                                    |
 | `error`              | Optional error                                                                                                                                              |
 | `retryAfter`         | Optional retry-after state                                                                                                                                  |
 | `reason`             | Optional reason                                                                                                                                             |
@@ -842,20 +868,20 @@ A bounding window with no `resetsAt` at all has not been triggered yet (e.g. a Z
 
 ### Quota enums
 
-| Name                             | Values                                                                                                                   |
-| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| Provider statuses                | `fresh`, `stale`, `unavailable`, `auth_required`, `rate_limited`, or `error`                                             |
-| Provider sources                 | `oauth`, `pi:openai-codex`, `pi:openai-codex-*` sibling keys, `cli-rpc`, `cli`, `api`, `web`, `cache`, or `unavailable`  |
-| Current provider adapter sources | `oauth`, `pi:openai-codex`, `pi:openai-codex-*` sibling keys, `cli-rpc`, `cli`, `api`, `web`, `cache`, and `unavailable` |
-| Window kinds                     | `session`, `weekly`, `monthly`, `model`, `credits`, or `unknown`                                                         |
-| Window pace statuses             | `ahead`, `on_pace`, `behind`, or `unknown`                                                                               |
-| Effective pace statuses          | `ahead`, `on_pace`, `behind`, `mixed`, or `unknown`                                                                      |
-| Effective runway statuses        | `exhausted_now`, `projected_exhaustion`, `through_reset`, or `unknown`                                                   |
-| Effective selection statuses     | `known` or `unknown`                                                                                                     |
-| Pace projection confidence       | `early` or `established`                                                                                                 |
-| Pace cycle basis                 | `starts_at_resets_at` or `window_seconds`                                                                                |
-| Quota relationship statuses      | `known`, `partial`, or `unknown`                                                                                         |
-| Source attempt statuses          | `success`, `failed`, or `skipped`                                                                                        |
+| Name                             | Values                                                                                                                             |
+| -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| Provider statuses                | `fresh`, `stale`, `unavailable`, `auth_required`, `rate_limited`, or `error`                                                       |
+| Provider sources                 | `oauth`, `pi:openai-codex`, `pi:openai-codex-*` sibling keys, `cli-rpc`, `cli`, `api`, `web`, `magpie`, `cache`, or `unavailable`  |
+| Current provider adapter sources | `oauth`, `pi:openai-codex`, `pi:openai-codex-*` sibling keys, `cli-rpc`, `cli`, `api`, `web`, `magpie`, `cache`, and `unavailable` |
+| Window kinds                     | `session`, `weekly`, `monthly`, `model`, `credits`, or `unknown`                                                                   |
+| Window pace statuses             | `ahead`, `on_pace`, `behind`, or `unknown`                                                                                         |
+| Effective pace statuses          | `ahead`, `on_pace`, `behind`, `mixed`, or `unknown`                                                                                |
+| Effective runway statuses        | `exhausted_now`, `projected_exhaustion`, `through_reset`, or `unknown`                                                             |
+| Effective selection statuses     | `known` or `unknown`                                                                                                               |
+| Pace projection confidence       | `early` or `established`                                                                                                           |
+| Pace cycle basis                 | `starts_at_resets_at` or `window_seconds`                                                                                          |
+| Quota relationship statuses      | `known`, `partial`, or `unknown`                                                                                                   |
+| Source attempt statuses          | `success`, `failed`, or `skipped`                                                                                                  |
 
 Source attempts can include `credentialPresent` when a source is not genuinely absent, including when a read failure prevents a more precise classification. They can also carry an explicit `degraded` flag that overrides the derived classification in either direction: `false` when a non-success attempt is not a broken credential source, and `true` when a skipped source was itself unreadable without establishing that a credential is present. Otherwise fresh reports derive `state.degradedSources` from failed attempts and skipped attempts with `credentialPresent`.
 
@@ -1170,8 +1196,8 @@ Providers with no established non-interactive rotation command stay read-only on
 
 ### Safety guarantees
 
-- Quota and auth HTTP requests go only to first-party provider usage, quota, billing, entitlement, or read-only credential-liveness endpoints with the user's local credentials; quota-axi's direct Antigravity requests stay on 127.0.0.1 loopback.
-- The user-initiated `update` command is the only outbound non-provider network surface, and it is not part of quota measurement.
+- Quota and auth HTTP requests go only to first-party provider usage, quota, billing, entitlement, or read-only credential-liveness endpoints with the user's local credentials; quota-axi's direct Antigravity requests stay on 127.0.0.1 loopback. The one exception is an opted-in [Magpie gateway](#magpie-subscription-accounts), which receives only its own gateway key and only read requests to its accounts and quotas endpoints.
+- Apart from a configured Magpie gateway, the user-initiated `update` command is the only outbound non-provider network surface, and it is not part of quota measurement.
 - It sends credential values only to the first-party provider request they authenticate.
 - It never prints, logs, or caches credential values.
 - It never mints, rotates, or writes a credential, and never performs a refresh-token exchange. Credential renewal is always delegated to the vendor CLI that owns the store (see [Delegated credential refresh](#delegated-credential-refresh)). Muse is the one provider whose only quota read, the Muse CLI's own startup request, also returns an API key; that read is verified to return the account's standing key rather than mint a fresh one, quota-axi discards the key while parsing, never stores or prints it, and bounds how often it sends the request (see [Muse provider notes](#provider-notes)).
