@@ -72,6 +72,7 @@ describe("Venice balance provider", () => {
       remainingCredits: 25,
       limitCredits: 100,
       usedCredits: 75,
+      percentUsed: 75,
       percentRemaining: 25,
     });
     expect(fetch).toHaveBeenCalledTimes(2);
@@ -154,7 +155,7 @@ describe("Venice credential sources", () => {
     });
   });
 
-  it("hands over from an invalid env key to a live auth.json key and marks it degraded", async () => {
+  it("hands over from an invalid env key to a live auth.json key, reporting fresh with the failed env attempt recorded", async () => {
     writeStore({ venice: { type: "api", key: "synthetic-opencode" } });
     const bearers: string[] = [];
     const fetch = vi.fn(async (_url: unknown, init?: RequestInit) => {

@@ -167,6 +167,7 @@ async function fetchQuota(deps: Dependencies): Promise<ProviderQuota> {
             ) {
               window.limitCredits = allocation;
               window.usedCredits = allocation - diem;
+              window.percentUsed = (100 * (allocation - diem)) / allocation;
               window.percentRemaining = (100 * diem) / allocation;
             }
           } catch {
