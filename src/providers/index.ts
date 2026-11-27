@@ -1,5 +1,6 @@
 import { agyAdapter } from "./agy.js";
 import { alibabaAdapter } from "./alibaba.js";
+import { bobAdapter } from "./bob.js";
 import { claudeAdapter } from "./claude.js";
 import { commandCodeAdapter } from "./commandcode.js";
 import { codexAdapter } from "./codex.js";
@@ -43,6 +44,7 @@ export const PROVIDERS: Record<ProviderId, ProviderAdapter> = {
   devin: devinAdapter,
   muse: museAdapter,
   higgsfield: higgsfieldAdapter,
+  bob: bobAdapter,
 };
 
 export function parseProviders(value: string | undefined): ProviderId[] {

@@ -196,7 +196,59 @@ function semanticsFor(
       );
     case "higgsfield":
       return higgsfieldSemantics(provider.windows, generatedAt);
+    case "bob":
+      return bobSemantics(
+        provider.windows,
+        provider.state.untrustedWindowIds ?? [],
+        generatedAt,
+      );
   }
+}
+
+/**
+ * Bob meters one monthly Bobcoin budget. Without overage that budget stops every
+ * model, so it bounds `all_models`. With overage opted in, usage bills past the
+ * budget, so it bounds `included_credits` only: a zeroed window means the
+ * included allowance is spent, not that requests stop. A budget on a plan with
+ * no established reset or cycle (`plan_budget`), or any window the adapter could
+ * not read as that shape, stays unresolved rather than bounding a scope.
+ */
+function bobSemantics(
+  windows: QuotaWindow[],
+  untrustedWindowIds: string[],
+  generatedAt: string,
+): QuotaSemantics {
+  const monthly = windows.filter(({ id }) => id === "monthly_budget");
+  const included = windows.filter(({ id }) => id === "included_monthly");
+  const [scope, bounds] =
+    included.length > 0
+      ? ["included_credits", included]
+      : ["all_models", monthly];
+  const unresolvedWindowIds = [
+    ...new Set([
+      ...windows
+        .filter((window) => !bounds.includes(window))
+        .map(({ id }) => id),
+      ...untrustedWindowIds,
+    ]),
+  ];
+  const description =
+    "Bob meters one monthly Bobcoin budget. It bounds all_models when overage is off and the included_credits scope when overage is on, because usage then bills past the budget. No session, weekly, or per-model limit is reported.";
+  if (unresolvedWindowIds.length > 0) {
+    return {
+      status: "partial",
+      description,
+      effectiveAvailability:
+        bounds.length > 0
+          ? [unresolvedAvailability(scope, bounds, unresolvedWindowIds)]
+          : [],
+      unresolvedWindowIds,
+    };
+  }
+  return knownSemantics(
+    bounds.length > 0 ? [availability(scope, bounds, generatedAt)] : [],
+    description,
+  );
 }
 
 /**

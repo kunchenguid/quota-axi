@@ -123,6 +123,9 @@ const ENV_KEYS = [
   "MMX_CONFIG_DIR",
   "WINDSURF_API_KEY",
   "WINDSURF_API_SERVER_URL",
+  "BOB_API_KEY",
+  "BOBSHELL_API_KEY",
+  "BOB_GATEWAY_URL",
   "QUOTA_AXI_OPENCODE_GO_PI_AUTH",
   "COPILOT_HOME",
 ] as const;
@@ -168,6 +171,9 @@ beforeEach(() => {
   process.env.XDG_CONFIG_HOME = join(tempDir, "config");
   delete process.env.WINDSURF_API_KEY;
   delete process.env.WINDSURF_API_SERVER_URL;
+  delete process.env.BOB_API_KEY;
+  delete process.env.BOBSHELL_API_KEY;
+  delete process.env.BOB_GATEWAY_URL;
   mkdirSync(process.env.CODEX_HOME, { recursive: true });
   vi.doMock("../src/lib/process.js", async (importOriginal) => ({
     ...(await importOriginal<typeof import("../src/lib/process.js")>()),
@@ -785,6 +791,165 @@ describe("credential source contract", { timeout: 30_000 }, () => {
       expect(api.keys).toEqual(["elevenlabs-probe-fixture"]);
       expect(bearers).toEqual([""]);
       expect(result.state.status).toBe("auth_required");
+    });
+  });
+
+  /**
+   * Bob has two key variables, which carry no expiry. Unset or blank is absence;
+   * a non-blank value that is not a usable secret, or two different values, is
+   * a credential that exists and is never sent. A usable key goes out under
+   * Bob's own `apikey` scheme, never as a bearer.
+   */
+  describe("bob", () => {
+    const source = "env:BOB_API_KEY";
+    const legacySource = "env:BOBSHELL_API_KEY";
+
+    // Native home lookups must never reach this machine's real Bob settings.
+    beforeEach(() => {
+      vi.stubEnv("HOME", tempDir);
+      vi.stubEnv("USERPROFILE", tempDir);
+    });
+
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    function stubRejectingApiKey(): { authorizations: string[] } {
+      const authorizations: string[] = [];
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (_input: unknown, init?: RequestInit) => {
+          authorizations.push(
+            new Headers(init?.headers).get("authorization") ?? "",
+          );
+          return Response.json({ error: "unauthorized" }, { status: 401 });
+        }),
+      );
+      return { authorizations };
+    }
+
+    it("leaves unset variables unmarked, so nothing reads as degraded", async () => {
+      const api = stubRejectingApiKey();
+
+      const result = await readQuota("bob");
+
+      for (const name of [source, legacySource]) {
+        const attempts = attemptsFor(result, name);
+        expect(attempts.length).toBeGreaterThan(0);
+        for (const attempt of attempts) {
+          expect(attempt.credentialPresent).toBeUndefined();
+        }
+      }
+      expect(api.authorizations).toEqual([]);
+      expect(result.state.status).toBe("auth_required");
+    });
+
+    it.each([
+      ["an environment reference", "$BOB_API_KEY"],
+      ["a command reference", "!op read op://vault/key"],
+      ["a control byte", "bob-\u0007-fixture"],
+    ])("never sends %s as a header value", async (_label, value) => {
+      process.env.BOB_API_KEY = value;
+      const api = stubRejectingApiKey();
+
+      const result = await readQuota("bob");
+
+      expect(api.authorizations).toEqual([]);
+      expect(result.state.status).toBe("auth_required");
+      for (const attempt of attemptsFor(result, source)) {
+        expect(attempt.credentialPresent).toBe(true);
+      }
+    });
+
+    it("marks two different keys as credentials that exist and sends neither", async () => {
+      process.env.BOB_API_KEY = "bob-probe-fixture";
+      process.env.BOBSHELL_API_KEY = "bob-other-fixture";
+      const api = stubRejectingApiKey();
+
+      const result = await readQuota("bob");
+
+      expect(api.authorizations).toEqual([]);
+      for (const name of [source, legacySource]) {
+        for (const attempt of attemptsFor(result, name)) {
+          expect(attempt.credentialPresent).toBe(true);
+        }
+      }
+    });
+
+    it("probes a usable key with the apikey scheme, never as a bearer", async () => {
+      process.env.BOB_API_KEY = "bob-probe-fixture";
+      const api = stubRejectingApiKey();
+
+      const result = await readQuota("bob");
+
+      expect(api.authorizations).toEqual(["apikey bob-probe-fixture"]);
+      expect(result.state.status).toBe("auth_required");
+    });
+
+    /**
+     * Bob's browser sign-in is a stored bearer with an advisory expiry, read only
+     * when no key variable is usable or the key was definitively rejected.
+     */
+    function writeLogin(expiresAt: number): void {
+      mkdirSync(join(tempDir, ".bob", "settings"), { recursive: true });
+      writeFileSync(
+        join(tempDir, ".bob", "settings", "auth-secrets.json"),
+        JSON.stringify({
+          "bob.auth.tokens-https://api.us-east.bob.ibm.com": JSON.stringify({
+            token: "bob-login-fixture",
+            refreshToken: "bob-refresh-fixture",
+            userId: "bob-user-fixture",
+            expiresAt,
+          }),
+        }),
+      );
+    }
+
+    it("probes a stored sign-in as a bearer and marks the source", async () => {
+      writeLogin(Date.now() / 1000 + 3600);
+      const api = stubRejectingApiKey();
+
+      const result = await readQuota("bob");
+
+      expect(api.authorizations).toEqual(["Bearer bob-login-fixture"]);
+      expect(result.state.status).toBe("auth_required");
+      expect(attemptsFor(result, "file:bob-auth")).toEqual([
+        {
+          source: "file:bob-auth",
+          status: "failed",
+          error: "provider_auth_rejected",
+        },
+      ]);
+    });
+
+    it("probes an expired stored sign-in and names the rejection", async () => {
+      writeLogin(Date.now() / 1000 - 5);
+      const api = stubRejectingApiKey();
+
+      const result = await readQuota("bob");
+
+      expect(api.authorizations).toEqual(["Bearer bob-login-fixture"]);
+      expect(result.state.error).toBe("bob_login_expired");
+      expect(attemptsFor(result, "file:bob-auth")).toEqual([
+        {
+          source: "file:bob-auth",
+          status: "failed",
+          error: "bob_login_expired",
+        },
+      ]);
+    });
+
+    it("tries a stored sign-in only after the key is rejected", async () => {
+      writeLogin(Date.now() / 1000 + 3600);
+      process.env.BOB_API_KEY = "bob-probe-fixture";
+      const api = stubRejectingApiKey();
+
+      await readQuota("bob");
+
+      expect(api.authorizations).toEqual([
+        "apikey bob-probe-fixture",
+        "Bearer bob-login-fixture",
+      ]);
     });
   });
 
