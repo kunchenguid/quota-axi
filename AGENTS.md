@@ -1,5 +1,7 @@
 # Project agent memory
 
+- When a repository's documentation and its existing code disagree, follow the conventions used in the existing code, and in your final reply point out each inconsistency you found between the documentation and the code.
+
 This file is the project's committed home for project-intrinsic agent knowledge: build, test, release, architecture, and sharp-edge notes that should travel with the code.
 
 Provider windows, credentials, cache identity, output tiers, and the TUI are owned by [README.md](README.md). Follow the section named below instead of restating it here.
@@ -30,6 +32,8 @@ pnpm run build:skill -- --check
 ```
 
 After a dependency change, run `pnpm exec prettier --write pnpm-lock.yaml`. Do not hand-edit `skills/quota-axi/SKILL.md`, `CHANGELOG.md`, or `.release-please-manifest.json`.
+
+- Use `rg` (ripgrep) for file content search, never `grep -rn`. Use `fd` for filename/directory search, never `find`. `rg` and `fd` ignore `.git`, `.gitignore`, and binary files by default. Pass `--hidden` (or `-H`) when searching hidden directories like `.github/`, `.beads/`, or `.config/`. Use `rg --max-columns 200` to prevent wide minified files from blowing up the context window. Plain `grep` remains fine for simple pipe filters (`cmd | grep pattern`).
 
 ## Release and the contribution gate
 
