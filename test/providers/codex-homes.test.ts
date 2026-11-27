@@ -216,6 +216,232 @@ describe("Codex home list", () => {
     });
   });
 
+  it("keeps seats with one account id but different quota contexts separate", async () => {
+    writeCodexHome("selected", "personal-seat-token");
+    const listed = writeCodexHome("listed", "team-seat-token");
+    vi.stubEnv("QUOTA_AXI_CODEX_HOMES", listed);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init: RequestInit) => {
+        const token = new Headers(init.headers).get("authorization") ?? "";
+        const team = token.includes("team-seat");
+        return new Response(
+          JSON.stringify({
+            plan_type: team ? "team" : "self_serve_business_prolite",
+            email: team ? "team@example.invalid" : "personal@example.invalid",
+            account_id: "acct-shared-workspace",
+            rate_limit: team
+              ? {
+                  primary_window: {
+                    used_percent: 100,
+                    reset_after_seconds: 18_000,
+                  },
+                  secondary_window: {
+                    used_percent: 40,
+                    reset_after_seconds: 604_800,
+                  },
+                }
+              : {
+                  secondary_window: {
+                    used_percent: 92,
+                    reset_after_seconds: 604_800,
+                  },
+                },
+          }),
+        );
+      }),
+    );
+
+    const result = await readCodex(["--provider", "codex", "--full", "--json"]);
+
+    expect(result.providers).toHaveLength(2);
+    expect(
+      result.providers.map((provider: { plan?: string }) => provider.plan),
+    ).toEqual(["self_serve_business_prolite", "team"]);
+    expect(
+      result.providers.map((provider: { windows: { id: string }[] }) =>
+        provider.windows.map((window) => window.id),
+      ),
+    ).toEqual([["weekly"], ["five_hour", "weekly"]]);
+    expect(
+      result.providers.map(
+        (provider: { windows: { percentRemaining?: number }[] }) =>
+          provider.windows.map((window) => window.percentRemaining),
+      ),
+    ).toEqual([[8], [0, 60]]);
+  });
+
+  it("keeps native and Pi seats separate when their live contexts differ", async () => {
+    writeCodexHome("selected", "native-seat-token");
+    writePiAccounts({
+      "openai-codex": {
+        token: "pi-seat-token",
+        accountId: "acct-shared-workspace",
+      },
+      "openai-codex-alias": {
+        token: "pi-seat-alias-token",
+        accountId: "acct-shared-workspace",
+      },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init: RequestInit) => {
+        const token = new Headers(init.headers).get("authorization") ?? "";
+        const native = token.includes("native-seat");
+        return new Response(
+          JSON.stringify({
+            plan_type: native ? "plus" : "team",
+            email: native ? "personal@example.invalid" : "team@example.invalid",
+            account_id: "acct-shared-workspace",
+            rate_limit: {
+              primary_window: {
+                used_percent: native ? 10 : 20,
+                reset_after_seconds: 3600,
+              },
+            },
+          }),
+        );
+      }),
+    );
+
+    const result = await readCodex(["--provider", "codex", "--full", "--json"]);
+
+    expect(result.providers).toHaveLength(2);
+    expect(
+      result.providers.map((provider: { plan?: string }) => provider.plan),
+    ).toEqual(["plus", "team"]);
+    expect(
+      result.providers.map(
+        (provider: { accountKeys: string[] }) => provider.accountKeys,
+      ),
+    ).toEqual([["codex-home"], ["openai-codex", "openai-codex-alias"]]);
+  });
+
+  it("keeps native and Pi seats separate when their window sets differ", async () => {
+    writeCodexHome("selected", "native-seat-token");
+    writePiAccounts({
+      "openai-codex": {
+        token: "pi-seat-token",
+        accountId: "acct-shared-workspace",
+      },
+      "openai-codex-alias": {
+        token: "pi-seat-alias-token",
+        accountId: "acct-shared-workspace",
+      },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init: RequestInit) => {
+        const token = new Headers(init.headers).get("authorization") ?? "";
+        const native = token.includes("native-seat");
+        return new Response(
+          JSON.stringify({
+            plan_type: "plus",
+            account_id: "acct-shared-workspace",
+            rate_limit: {
+              primary_window: {
+                used_percent: native ? 10 : 20,
+                reset_after_seconds: 3600,
+              },
+              ...(native
+                ? {}
+                : {
+                    secondary_window: {
+                      used_percent: 30,
+                      reset_after_seconds: 604800,
+                    },
+                  }),
+            },
+          }),
+        );
+      }),
+    );
+
+    const result = await readCodex(["--provider", "codex", "--full", "--json"]);
+
+    expect(result.providers).toHaveLength(2);
+    expect(
+      result.providers.map((provider: { windows: { id: string }[] }) =>
+        provider.windows.map((window) => window.id),
+      ),
+    ).toEqual([["five_hour"], ["five_hour", "weekly"]]);
+  });
+
+  it("folds native and Pi seats when one optional identity field is omitted", async () => {
+    writeCodexHome("selected", "native-seat-token");
+    writePiAccounts({
+      "openai-codex": {
+        token: "pi-seat-token",
+        accountId: "acct-shared-workspace",
+      },
+      "openai-codex-alias": {
+        token: "pi-seat-alias-token",
+        accountId: "acct-shared-workspace",
+      },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init: RequestInit) => {
+        const token = new Headers(init.headers).get("authorization") ?? "";
+        const native = token.includes("native-seat");
+        return new Response(
+          JSON.stringify({
+            plan_type: "plus",
+            ...(native ? { email: "personal@example.invalid" } : {}),
+            account_id: "acct-shared-workspace",
+            rate_limit: {
+              primary_window: {
+                used_percent: native ? 10 : 20,
+                reset_after_seconds: 3600,
+              },
+            },
+          }),
+        );
+      }),
+    );
+
+    const result = await readCodex(["--provider", "codex", "--full", "--json"]);
+
+    expect(result.providers).toHaveLength(1);
+    expect(result.providers[0].accountKeys).toEqual([
+      "openai-codex",
+      "openai-codex-alias",
+      "codex-home",
+    ]);
+  });
+
+  it("coalesces matching homes when one optional identity field is omitted", async () => {
+    writeCodexHome("selected", "personal-seat-token");
+    const listed = writeCodexHome("listed", "team-seat-token");
+    vi.stubEnv("QUOTA_AXI_CODEX_HOMES", listed);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init: RequestInit) => {
+        const token = new Headers(init.headers).get("authorization") ?? "";
+        const selected = token.includes("personal-seat");
+        return new Response(
+          JSON.stringify({
+            plan_type: "plus",
+            ...(selected ? { email: "same@example.invalid" } : {}),
+            account_id: "acct-shared-workspace",
+            rate_limit: {
+              primary_window: {
+                used_percent: selected ? 10 : 20,
+                reset_after_seconds: 3600,
+              },
+            },
+          }),
+        );
+      }),
+    );
+
+    const result = await readCodex(["--provider", "codex", "--full", "--json"]);
+
+    expect(result.providers).toHaveLength(1);
+    expect(result.providers[0].accountKeys).toHaveLength(2);
+    expect(result.providers[0].accountKeys[0]).toBe("codex-home");
+  });
+
   it("serves each home's own cached windows after a transient failure", async () => {
     const selected = writeCodexHome(
       "selected",

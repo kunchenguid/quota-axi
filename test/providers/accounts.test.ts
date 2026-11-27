@@ -3,7 +3,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { annotateQuotaAdvice } from "../../src/advice.js";
-import { readCachedProvider, writeCachedProviders } from "../../src/cache.js";
+import {
+  readCachedProvider,
+  stampSubscriptionScope,
+  subscriptionIdentity,
+  writeCachedProviders,
+} from "../../src/cache.js";
 import { withQuotaSemantics } from "../../src/interpretation.js";
 import { fetchAccountQuotas } from "../../src/providers/accounts.js";
 import { staleFromCache } from "../../src/providers/common.js";
@@ -131,6 +136,82 @@ describe("verified subscription coalescing", () => {
 
     expect(reports).toHaveLength(2);
     expect(percentages(reports)).toEqual([20, 60]);
+  });
+
+  it("keeps one Codex subscription stamp through live, merged, and cached readings", async () => {
+    const liveReading = scopedCodex("acct-a", "plus", "same@example.invalid");
+    const mergedReadings = await fetchAccountQuotas(
+      adapter([
+        ["codex-a", scopedCodex("acct-a", "plus")],
+        ["codex-b", liveReading],
+      ]),
+      OPTIONS,
+    );
+    expect(mergedReadings).toHaveLength(1);
+    const mergedReading = mergedReadings[0]!;
+    writeCachedProviders([mergedReading]);
+    const cachedReading = readCachedProvider("codex", mergedReading.accountKey);
+
+    expect(subscriptionIdentity(liveReading)).toBe(
+      subscriptionIdentity(mergedReading),
+    );
+    expect(subscriptionIdentity(mergedReading)).toBe(
+      subscriptionIdentity(cachedReading!),
+    );
+  });
+
+  it("keeps matching account readings together when one omits email", async () => {
+    const reports = await fetchAccountQuotas(
+      adapter([
+        ["codex-a", scopedCodex("acct-a", "plus")],
+        ["codex-b", scopedCodex("acct-a", "plus", "same@example.invalid")],
+      ]),
+      OPTIONS,
+    );
+
+    expect(reports).toHaveLength(1);
+  });
+
+  it("keeps matching identity readings with different windows separate", async () => {
+    const first = scopedCodex("acct-a", "plus");
+    const second = scopedCodex("acct-a", "plus");
+    second.windows = [
+      windowAt(20),
+      { ...windowAt(30), id: "weekly", kind: "weekly" },
+    ];
+    stampSubscriptionScope(
+      second,
+      JSON.stringify({
+        plan: "plus",
+        windows: [
+          { id: "five_hour", kind: "session" },
+          { id: "weekly", kind: "weekly" },
+        ],
+      }),
+    );
+
+    const reports = await fetchAccountQuotas(
+      adapter([
+        ["codex-a", first],
+        ["codex-b", second],
+      ]),
+      OPTIONS,
+    );
+
+    expect(reports).toHaveLength(2);
+  });
+
+  it("does not merge later conflicting emails through an email-less member", async () => {
+    const reports = await fetchAccountQuotas(
+      adapter([
+        ["codex-a", scopedCodex("acct-a", "plus")],
+        ["codex-b", scopedCodex("acct-a", "plus", "one@example.invalid")],
+        ["codex-c", scopedCodex("acct-a", "plus", "two@example.invalid")],
+      ]),
+      OPTIONS,
+    );
+
+    expect(reports).toHaveLength(2);
   });
 
   it("keeps distinct account ids separate even when the email matches", async () => {
@@ -642,6 +723,24 @@ function live(
     },
     attempts: [{ source, status: "success" }],
   };
+}
+
+function scopedCodex(
+  accountId: string,
+  plan: string,
+  email?: string,
+): ProviderQuota {
+  const report = live(accountId, 20, "oauth", email, undefined, "codex");
+  report.plan = plan;
+  stampSubscriptionScope(
+    report,
+    JSON.stringify({
+      ...(email !== undefined ? { email } : {}),
+      plan,
+      windows: report.windows.map(({ id, kind }) => ({ id, kind })),
+    }),
+  );
+  return report;
 }
 
 function refreshedAt(report: ProviderQuota, at: string): ProviderQuota {

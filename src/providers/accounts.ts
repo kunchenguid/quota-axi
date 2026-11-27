@@ -8,6 +8,9 @@ import type {
 } from "../types.js";
 import {
   markSupersededReadings,
+  mergeSubscriptionScopes,
+  stampSubscriptionScope,
+  subscriptionIdentitiesMatch,
   subscriptionIdentity,
   supersededReadings,
 } from "../cache.js";
@@ -184,7 +187,7 @@ export function coalesceVerifiedSubscriptions(
         : result.findIndex(
             (candidate) =>
               candidate.provider === report.provider &&
-              subscriptionIdentity(candidate) === identity,
+              subscriptionIdentitiesMatch(candidate, report),
           );
     if (existingIndex < 0) {
       result.push(report);
@@ -220,10 +223,15 @@ function mergeSubscriptionReadings(
   const attempts = mergedAttempts(earlier, later);
   const sourcesTried = mergedSourcesTried(earlier, later, attempts);
   const accountKeys = mergedAccountKeys(winner, loser);
-  return {
+  const scope = mergeSubscriptionScopes(earlier, later);
+  const merged = {
     ...winner,
     ...(accountKeys ? { accountKeys } : {}),
     ...(attempts ? { attempts } : {}),
+  };
+  if (scope !== undefined) stampSubscriptionScope(merged, scope);
+  return {
+    ...merged,
     state: {
       ...winner.state,
       ...(sourcesTried ? { sourcesTried } : {}),

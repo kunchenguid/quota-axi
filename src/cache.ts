@@ -19,6 +19,10 @@ import { isPiCodexSource } from "./providers/pi-codex-credential.js";
 import { fetchLockPath, withLockSync } from "./lib/fetch-lock.js";
 import { inputsDigest, type TracedInputs } from "./lib/input-trace.js";
 import { reuseContextId } from "./lib/reuse-context.js";
+import {
+  sameSubscription,
+  type SubscriptionIdentity,
+} from "./lib/subscription.js";
 import type {
   AccountLocator,
   DegradedSource,
@@ -57,7 +61,7 @@ const WINDOW_KINDS = [
   "credits",
   "unknown",
 ] as const satisfies readonly QuotaWindow["kind"][];
-const CACHE_SCHEMA_VERSION = 3;
+const CACHE_SCHEMA_VERSION = 4;
 /**
  * The filler an expanded report stamps on providers that selected one account.
  * It describes that report, not the snapshot, so it is never persisted: a stale
@@ -205,8 +209,9 @@ type SubscriptionStampedQuota = ProviderQuota & {
 
 /**
  * One comparable subscription identity per reading: the verified
- * `account.accountId` a live reading reports, else the stamp a cached snapshot
- * carried. Missing or unverified identity yields nothing, never a guess.
+ * `account.accountId` a live reading reports, combined with a provider-specific
+ * scope when one is required, else the stamp a cached snapshot carried. Missing
+ * or unverified identity yields nothing, never a guess.
  */
 export function subscriptionIdentity(
   report: ProviderQuota,
@@ -223,9 +228,27 @@ export function subscriptionIdentity(
         .digest("hex");
     const scope = scoped[SUBSCRIPTION_SCOPE];
     if (!scope) return undefined;
+    const canonicalScope =
+      report.provider === "codex"
+        ? (() => {
+            const parsedScope = parseSubscriptionScope(scope);
+            return parsedScope
+              ? canonicalCodexSubscriptionScope({
+                  ...parsedScope,
+                  accountId: undefined,
+                })
+              : undefined;
+          })()
+        : scope;
+    if (!canonicalScope) return undefined;
     return createHash("sha256")
       .update(
-        JSON.stringify(["subscription-v1", report.provider, accountId, scope]),
+        JSON.stringify([
+          "subscription-v1",
+          report.provider,
+          accountId,
+          canonicalScope,
+        ]),
       )
       .digest("hex");
   }
@@ -233,12 +256,100 @@ export function subscriptionIdentity(
 }
 
 /**
+ * Live Codex scope fields are partial evidence: only two non-empty conflicting
+ * fields prove that the readings name different subscriptions. Cached readings
+ * retain their opaque stamp and continue to require exact identity equality.
+ */
+export function subscriptionIdentitiesMatch(
+  left: ProviderQuota,
+  right: ProviderQuota,
+): boolean {
+  const leftIdentity = subscriptionIdentity(left);
+  const rightIdentity = subscriptionIdentity(right);
+  if (leftIdentity === rightIdentity && leftIdentity !== undefined) return true;
+  if (left.provider !== "codex" || right.provider !== "codex") return false;
+
+  if (
+    left.account?.identityStatus === "unverified" ||
+    right.account?.identityStatus === "unverified"
+  )
+    return false;
+  const leftScope = (left as ScopedSubscriptionQuota)[SUBSCRIPTION_SCOPE];
+  const rightScope = (right as ScopedSubscriptionQuota)[SUBSCRIPTION_SCOPE];
+  if (!leftScope || !rightScope) return false;
+  const leftFields = parseSubscriptionScope(leftScope);
+  const rightFields = parseSubscriptionScope(rightScope);
+  if (!leftFields || !rightFields) return false;
+  return sameSubscription(
+    { ...leftFields, accountId: left.account?.accountId?.trim() },
+    { ...rightFields, accountId: right.account?.accountId?.trim() },
+  );
+}
+
+export function mergeSubscriptionScopes(
+  left: ProviderQuota,
+  right: ProviderQuota,
+): string | undefined {
+  const leftScope = (left as ScopedSubscriptionQuota)[SUBSCRIPTION_SCOPE];
+  const rightScope = (right as ScopedSubscriptionQuota)[SUBSCRIPTION_SCOPE];
+  if (!leftScope && !rightScope) return undefined;
+  const leftFields = leftScope ? parseSubscriptionScope(leftScope) : undefined;
+  const rightFields = rightScope
+    ? parseSubscriptionScope(rightScope)
+    : undefined;
+  if (!leftFields && !rightFields) return undefined;
+  const fields: SubscriptionIdentity = {
+    accountId: undefined,
+    plan: leftFields?.plan ?? rightFields?.plan,
+    email: leftFields?.email ?? rightFields?.email,
+    userId: leftFields?.userId ?? rightFields?.userId,
+    windows: leftFields?.windows ?? rightFields?.windows ?? [],
+  };
+  return canonicalCodexSubscriptionScope(fields);
+}
+
+export function canonicalCodexSubscriptionScope(
+  scope: SubscriptionIdentity,
+): string {
+  return JSON.stringify({
+    email: scope.email ?? null,
+    plan: scope.plan ?? null,
+    userId: scope.userId ?? null,
+    windows: [...scope.windows]
+      .map(({ id, kind }) => ({ id, kind: kind ?? null }))
+      .sort((left, right) =>
+        `${left.id}\u0000${left.kind ?? ""}`.localeCompare(
+          `${right.id}\u0000${right.kind ?? ""}`,
+        ),
+      ),
+  });
+}
+
+function parseSubscriptionScope(
+  scope: string,
+): Omit<SubscriptionIdentity, "accountId"> | undefined {
+  try {
+    const parsed = JSON.parse(scope) as Partial<SubscriptionIdentity>;
+    if (!Array.isArray(parsed.windows)) return undefined;
+    return {
+      plan: parsed.plan,
+      email: parsed.email,
+      userId: parsed.userId,
+      windows: parsed.windows,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Where one account id holds more than one subscription, the reading names
  * which one it measured. A Claude login can belong to several organizations
- * (a personal plan and a team seat), each with its own limits, so the user id
- * alone would fold two quota pools into one row. `null` says the reading could
- * not name its subscription, which leaves its identity incomparable rather
- * than guessed. A symbol key keeps it off every serialized surface.
+ * (a personal plan and a team seat), and a Codex account can expose distinct
+ * quota contexts, each with its own limits, so the user id alone would fold
+ * two quota pools into one row. `null` says the reading could not name its
+ * subscription, which leaves its identity incomparable rather than guessed. A
+ * symbol key keeps it off every serialized surface.
  */
 const SUBSCRIPTION_SCOPE = Symbol("subscriptionScope");
 
@@ -890,6 +1001,7 @@ function parseCacheProviders(raw: unknown): CachedProvider[] | undefined {
     !payload ||
     (schemaVersion !== 1 &&
       schemaVersion !== 2 &&
+      schemaVersion !== 3 &&
       schemaVersion !== CACHE_SCHEMA_VERSION) ||
     !Array.isArray(payload.providers)
   )

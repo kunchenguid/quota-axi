@@ -2,11 +2,13 @@ import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { spawn } from "node:child_process";
 import {
+  canonicalCodexSubscriptionScope,
   retireCodexAccount,
   retireCachedSlot,
   readCachedCodexProvider,
   readCachedProvider,
   stampCodexStoredAccountId,
+  stampSubscriptionScope,
 } from "../cache.js";
 import { readJsonFileResult, type JsonFileReadResult } from "../lib/fs.js";
 import {
@@ -15,6 +17,10 @@ import {
   codexListedHomes,
 } from "../lib/codex-home.js";
 import { providerFetch } from "../lib/http.js";
+import {
+  sameSubscription,
+  type SubscriptionWindowIdentity,
+} from "../lib/subscription.js";
 import { findCommandPath, terminateChild } from "../lib/process.js";
 import { redactSecret } from "../lib/secret.js";
 import {
@@ -415,14 +421,14 @@ async function discoverCodexAccountLanes(
     options: ProviderOptions,
   ): Promise<ProviderQuota> => {
     const report = await readPi(lane, options);
-    const accountId = laneIdentity(report, lane.storedAccountId);
-    if (report.state.status === "fresh" || !hasNativeLane || !accountId) {
+    const identity = laneIdentity(report, lane.storedAccountId);
+    if (report.state.status === "fresh" || !hasNativeLane || !identity) {
       return report;
     }
     const reading = await readNative(options);
     if (
       !reading ||
-      laneIdentity(reading, nativeStoredAccountId) !== accountId ||
+      !sameCodexLane(identity, laneIdentity(reading, nativeStoredAccountId)) ||
       !(
         reading.state.status === "fresh" ||
         (reading.state.stale && !report.state.stale)
@@ -456,11 +462,16 @@ async function discoverCodexAccountLanes(
         const accountKeys = nativeAccount.includesBuiltinPi
           ? [CODEX_HOME_ACCOUNT_KEY, PI_CODEX_BUILTIN_ID]
           : [CODEX_HOME_ACCOUNT_KEY];
-        const accountId = laneIdentity(reading, nativeStoredAccountId);
-        if (!accountId) return { ...reading, accountKeys };
+        const identity = laneIdentity(reading, nativeStoredAccountId);
+        if (!identity) return { ...reading, accountKeys };
         for (const lane of piLanes) {
           const piReading = await readPi(lane, options);
-          if (laneIdentity(piReading, lane.storedAccountId) !== accountId) {
+          if (
+            !sameCodexLane(
+              identity,
+              laneIdentity(piReading, lane.storedAccountId),
+            )
+          ) {
             continue;
           }
           lane.nativeAccountKeys = accountKeys;
@@ -493,13 +504,37 @@ async function discoverCodexAccountLanes(
   return accounts.length > 0 ? accounts : undefined;
 }
 
+type CodexLaneIdentity = {
+  accountId: string;
+  plan?: string;
+  email?: string;
+  windows: SubscriptionWindowIdentity[];
+};
+
 function laneIdentity(
   reading: ProviderQuota,
   storedAccountId: string | undefined,
-): string | undefined {
-  return reading.state.status === "fresh"
-    ? (reading.account?.accountId ?? storedAccountId)
-    : storedAccountId;
+): CodexLaneIdentity | undefined {
+  const accountId =
+    reading.state.status === "fresh"
+      ? (reading.account?.accountId ?? storedAccountId)
+      : storedAccountId;
+  if (!accountId?.trim()) return undefined;
+  return {
+    accountId: accountId.trim(),
+    ...(reading.plan?.trim() ? { plan: reading.plan.trim() } : {}),
+    ...(reading.account?.email?.trim()
+      ? { email: reading.account.email.trim().toLowerCase() }
+      : {}),
+    windows: reading.windows.map(({ id, kind }) => ({ id, kind })),
+  };
+}
+
+function sameCodexLane(
+  left: CodexLaneIdentity,
+  right: CodexLaneIdentity | undefined,
+): boolean {
+  return right !== undefined && sameSubscription(left, right);
 }
 
 async function fetchCliAccountQuota(): Promise<ProviderQuota | undefined> {
@@ -986,6 +1021,7 @@ function codexSuccessReport(
     sourcesTried: sourceNames(attempts),
     attempts,
   });
+  stampSubscriptionScope(report, codexSubscriptionScope(quota));
   stampCodexStoredAccountId(
     report,
     storedAccountId ?? quota.account?.accountId,
@@ -993,6 +1029,19 @@ function codexSuccessReport(
   const credentialKey = codexCredentialKey(source);
   if (credentialKey) report.accountKeys = [credentialKey];
   return report;
+}
+
+/**
+ * ChatGPT account ids can cover more than one paid quota context. The
+ * account's stable user identity and entitlement shape distinguish those
+ * contexts without using a credential or a live usage value.
+ */
+function codexSubscriptionScope(quota: NormalizedCodexQuota): string {
+  return canonicalCodexSubscriptionScope({
+    email: quota.account?.email?.trim().toLowerCase(),
+    plan: quota.plan,
+    windows: quota.windows.map(({ id, kind }) => ({ id, kind })),
+  });
 }
 
 /**

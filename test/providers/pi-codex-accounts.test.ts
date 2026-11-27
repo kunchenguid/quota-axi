@@ -1839,10 +1839,11 @@ describe("Codex Pi sibling account lanes", () => {
         },
       },
       [
+        { accountKey: "codex-home", accountKeys: ["codex-home"] },
         { accountKey: "openai-codex", accountKeys: ["openai-codex"] },
         {
           accountKey: "openai-codex-work",
-          accountKeys: ["openai-codex-work", "codex-home"],
+          accountKeys: ["openai-codex-work"],
         },
       ],
     );
@@ -1915,8 +1916,12 @@ describe("Codex Pi sibling account lanes", () => {
       },
       [
         {
+          accountKey: "codex-home",
+          accountKeys: ["codex-home", "openai-codex"],
+        },
+        {
           accountKey: "openai-codex-work",
-          accountKeys: ["openai-codex-work", "codex-home", "openai-codex"],
+          accountKeys: ["openai-codex-work"],
         },
       ],
     );
@@ -2387,7 +2392,12 @@ function codexCliChild(
               : {
                   account: {
                     type: "chatgpt",
-                    email: "cli@example.invalid",
+                    email:
+                      fixture.accountId === "acct-work"
+                        ? "work@example.invalid"
+                        : fixture.accountId === "acct-personal"
+                          ? "personal@example.invalid"
+                          : "cli@example.invalid",
                     planType: "plus",
                   },
                   requiresOpenaiAuth: true,
