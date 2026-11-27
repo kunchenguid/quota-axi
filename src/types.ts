@@ -211,6 +211,12 @@ export type QuotaWindow = {
   startsAt?: string;
   resetsAt?: string;
   resetText?: string;
+  /**
+   * `false` when the provider reports a rolling window that is full and has no
+   * running reset clock yet (e.g. an Antigravity 5-hour bucket reading "Quota
+   * available"). No `resetsAt` is invented for it. Omitted when unknown.
+   */
+  started?: boolean;
   windowSeconds?: number;
   spentUsd?: number;
   limitUsd?: number;
