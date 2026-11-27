@@ -78,6 +78,43 @@ describe("Venice balance provider", () => {
     expect(tui).toContain(`${balances} remaining`);
     expect(tui).not.toMatch(/\d%/);
   });
+  it("keeps fractional balances inside the TUI card and shows every wallet", async () => {
+    const payload = {
+      data: {
+        balances: {
+          USD: 27.93776568,
+          DIEM: 1.78822939,
+          BUNDLED_CREDITS: 123.45678912,
+        },
+        nextEpochBegins: "2030-01-02T00:00:00Z",
+      },
+    };
+    const quota = await createVeniceAdapter({
+      credential,
+      adminKey: () => undefined,
+      fetch: vi.fn(async () => Response.json(payload)),
+      now: () => Date.parse(GENERATED_AT),
+    }).fetchQuota({ refreshCredentials: false });
+    const response = {
+      generatedAt: GENERATED_AT,
+      schemaVersion: 5,
+      providers: [withQuotaSemantics(quota, GENERATED_AT)],
+    } as const;
+    const lines = renderQuotaTui(response, {
+      columns: 60,
+      timeZone: "UTC",
+    }).split("\n");
+    for (const amount of [
+      "27.93776568 usd",
+      "1.78822939 diem",
+      "123.45678912 credits",
+    ])
+      expect(lines.join("\n")).toContain(amount);
+    for (const line of lines.filter((line) => line.startsWith("│"))) {
+      expect(line.endsWith("│")).toBe(true);
+      expect(line.length).toBe(49);
+    }
+  });
   it("uses the optional admin allocation to calculate the DIEM percentage", async () => {
     const fetch = vi.fn(async (url: string | URL | Request) =>
       Response.json(

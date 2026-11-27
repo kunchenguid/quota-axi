@@ -645,18 +645,30 @@ function creditsOnlyHeadline(
           ? undefined
           : `${credits.remaining} ${credits.unit ?? "credits"} remaining`;
   if (amount === undefined) return undefined;
-  return [
+  const text = stale ? `stale · ${amount}` : amount;
+  const width = CARD_INTERIOR - 3;
+  if (displayWidth(text) <= width) {
+    return [interior([{ text: "   " }, { text, style: "dimBold" }], border)];
+  }
+  const parts = text.split(" · ");
+  const rows: string[] = [];
+  let row = "";
+  for (const part of parts) {
+    const combined = row ? `${row} · ${part}` : part;
+    if (displayWidth(combined) > width && row) {
+      rows.push(row);
+      row = part;
+    } else {
+      row = combined;
+    }
+  }
+  if (row) rows.push(row);
+  return rows.map((line) =>
     interior(
-      [
-        { text: "   " },
-        {
-          text: stale ? `stale · ${amount}` : amount,
-          style: "dimBold",
-        },
-      ],
+      [{ text: "   " }, { text: truncate(line, width), style: "dimBold" }],
       border,
     ),
-  ];
+  );
 }
 
 /**
