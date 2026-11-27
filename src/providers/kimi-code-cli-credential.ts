@@ -23,9 +23,10 @@ export type KimiCodeCliCredentialResolution =
   | {
       status: "expired";
       /**
-       * True when the same record carries a `refresh_token`, so this soft
-       * expiry has a rotation path the vendor CLI owns. Presence only: the
-       * value is never read, rendered, or exchanged here.
+       * True when the same record carries a nonempty string `refresh_token`,
+       * so this soft expiry has a rotation path the vendor CLI owns. The value
+       * is classified only (string, not blank) and never retained, rendered,
+       * or exchanged here.
        */
       refreshable: boolean;
       /**
@@ -186,12 +187,21 @@ async function resolveCredential(
   if (expiresAt <= dependencies.now() / 1_000 + MINIMUM_FRESHNESS_SECONDS) {
     return {
       status: "expired",
-      refreshable: Object.hasOwn(credential, "refresh_token"),
+      refreshable: hasRefreshValue(credential.refresh_token),
       accessToken,
       baseUrl: environment.baseUrl,
     };
   }
   return { status: "available", accessToken, baseUrl: environment.baseUrl };
+}
+
+/**
+ * An empty, blank, or non-string `refresh_token` gives the vendor CLI nothing
+ * to rotate with, so it is no refresh path. Classification only: the value is
+ * not retained.
+ */
+function hasRefreshValue(value: unknown): boolean {
+  return typeof value === "string" && value.trim().length > 0;
 }
 
 function kimiCodeHome(

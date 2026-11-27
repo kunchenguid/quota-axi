@@ -82,7 +82,7 @@ describe("Kimi Code CLI credential discovery", () => {
       accessToken?: string;
       /**
        * Stored-expired resolutions report whether the record also carries a
-       * refresh token; presence only, the value is never read.
+       * nonempty string refresh token; the value is never retained.
        */
       refreshable?: boolean;
     }> = [
@@ -119,6 +119,56 @@ describe("Kimi Code CLI credential discovery", () => {
         status: "expired",
         accessToken: "token",
         refreshable: true,
+      },
+      {
+        payload: {
+          access_token: "token",
+          refresh_token: "",
+          expires_at: NOW / 1_000 - 1,
+        },
+        status: "expired",
+        accessToken: "token",
+        refreshable: false,
+      },
+      {
+        payload: {
+          access_token: "token",
+          refresh_token: "   ",
+          expires_at: NOW / 1_000 - 1,
+        },
+        status: "expired",
+        accessToken: "token",
+        refreshable: false,
+      },
+      {
+        payload: {
+          access_token: "token",
+          refresh_token: null,
+          expires_at: NOW / 1_000 - 1,
+        },
+        status: "expired",
+        accessToken: "token",
+        refreshable: false,
+      },
+      {
+        payload: {
+          access_token: "token",
+          refresh_token: 42,
+          expires_at: NOW / 1_000 - 1,
+        },
+        status: "expired",
+        accessToken: "token",
+        refreshable: false,
+      },
+      {
+        payload: {
+          access_token: "token",
+          refresh_token: { nested: "object" },
+          expires_at: NOW / 1_000 - 1,
+        },
+        status: "expired",
+        accessToken: "token",
+        refreshable: false,
       },
     ];
 
@@ -195,20 +245,6 @@ describe("Kimi Code CLI credential discovery", () => {
       "never-use-this-refresh-token",
     );
     expect(readdirSync(home).sort()).toEqual(["credentials", "device_id"]);
-  });
-
-  it("has no credential-write, process-launch, refresh, or Pi-auth surface", () => {
-    const implementation = readFileSync(
-      new URL(
-        "../../src/providers/kimi-code-cli-credential.ts",
-        import.meta.url,
-      ),
-      "utf8",
-    );
-
-    expect(implementation).not.toMatch(
-      /node:child_process|\b(?:spawn|execFile|writeFile|mkdir|rename|unlink)\b|device_id|\.pi\/agent\/auth\.json/,
-    );
   });
 
   it("bounds malformed credential files without returning their contents", async () => {

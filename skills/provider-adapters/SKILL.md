@@ -94,8 +94,7 @@ This reference details the credential sources, endpoint contracts, quota window 
   - `src/providers/kimi-code-config.ts` reads `config.toml` (`storage`, `key`, `oauth_host`, `base_url`).
   - Region allowlist restricts requests to Kimi Code's two official deployments (global vs mainland China). Never pair one deployment's token with another's host origin.
   - If configuration cannot be parsed conclusively, mark `environment_unconfirmed` and open no credential to avoid cross-environment cache corruption.
-- **Pi Source & Expiry**:
-  - Pi `kimi-coding` entry (api_key or oauth). Refreshable expired credentials produce non-definitive failures preserving cache. Refresh token values are never read or exchanged.
+- **Credential Sources & Expiry**: See the Kimi section in [README Provider notes](../../README.md#provider-notes) for credential discovery, refreshability, cache preservation, and soft-expiry advice.
 
 ---
 

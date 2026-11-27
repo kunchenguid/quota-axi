@@ -112,7 +112,7 @@ async function resolveCredential(
     if (expiresMs !== undefined && expiresMs <= dependencies.now()) {
       return {
         status: "expired",
-        refreshable: Object.hasOwn(entry, "refresh"),
+        refreshable: hasRefreshValue(entry.refresh),
         credential: access,
       };
     }
@@ -120,6 +120,14 @@ async function resolveCredential(
   }
   if (type === undefined) return { status: "invalid" };
   return { status: "unsupported" };
+}
+
+/**
+ * An empty, blank, or non-string `refresh` gives Pi nothing to rotate with, so
+ * it is no refresh path. Classification only: the value is not retained.
+ */
+function hasRefreshValue(value: unknown): boolean {
+  return typeof value === "string" && value.trim().length > 0;
 }
 
 function authFilePath(dependencies: BrokerDependencies): string {
