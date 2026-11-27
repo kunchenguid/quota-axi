@@ -14,6 +14,7 @@ export type ProviderId =
   | "mimo"
   | "deepseek"
   | "openrouter"
+  | "venice"
   | "elevenlabs"
   | "devin"
   | "muse"
@@ -35,6 +36,7 @@ export const PROVIDER_IDS = [
   "mimo",
   "deepseek",
   "openrouter",
+  "venice",
   "elevenlabs",
   "devin",
   "muse",

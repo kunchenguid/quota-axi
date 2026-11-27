@@ -15,6 +15,7 @@ import { minimaxAdapter } from "./minimax.js";
 import { mimoAdapter } from "./mimo.js";
 import { museAdapter } from "./muse.js";
 import { deepseekAdapter } from "./deepseek.js";
+import { veniceAdapter } from "./venice.js";
 import { openrouterAdapter } from "./openrouter.js";
 import { zaiAdapter } from "./zai.js";
 import {
@@ -39,6 +40,7 @@ export const PROVIDERS: Record<ProviderId, ProviderAdapter> = {
   mimo: mimoAdapter,
   deepseek: deepseekAdapter,
   openrouter: openrouterAdapter,
+  venice: veniceAdapter,
   elevenlabs: elevenLabsAdapter,
   devin: devinAdapter,
   muse: museAdapter,

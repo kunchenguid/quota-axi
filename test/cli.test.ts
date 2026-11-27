@@ -37,6 +37,7 @@ const originalMinimaxProvider = PROVIDERS.minimax;
 const originalMimoProvider = PROVIDERS.mimo;
 const originalDeepSeekProvider = PROVIDERS.deepseek;
 const originalOpenRouterProvider = PROVIDERS.openrouter;
+const originalVeniceProvider = PROVIDERS.venice;
 const originalElevenLabsProvider = PROVIDERS.elevenlabs;
 const originalDevinProvider = PROVIDERS.devin;
 const originalMuseProvider = PROVIDERS.muse;
@@ -71,6 +72,7 @@ afterEach(() => {
   PROVIDERS.mimo = originalMimoProvider;
   PROVIDERS.deepseek = originalDeepSeekProvider;
   PROVIDERS.openrouter = originalOpenRouterProvider;
+  PROVIDERS.venice = originalVeniceProvider;
   PROVIDERS.elevenlabs = originalElevenLabsProvider;
   PROVIDERS.devin = originalDevinProvider;
   PROVIDERS.muse = originalMuseProvider;
@@ -113,6 +115,7 @@ describe("CLI flag parsing", () => {
       "mimo",
       "deepseek",
       "openrouter",
+      "venice",
       "elevenlabs",
       "devin",
       "muse",
@@ -189,6 +192,7 @@ describe("CLI flag parsing", () => {
           "mimo",
           "deepseek",
           "openrouter",
+          "venice",
           "elevenlabs",
           "devin",
           "muse",
@@ -1495,13 +1499,13 @@ describe("human report folding for providers that are not set up", () => {
 
     expect(output.trimEnd().split("\n").slice(-3)).toEqual([
       "  ○ not set up  cursor · copilot · grok · kimi · zai · agy · alibaba · opencode-go · commandcode",
-      "                minimax · mimo · deepseek · openrouter · elevenlabs · devin · muse · higgsfield",
-      "                quota-axi auth shows where each is read",
+      "                minimax · mimo · deepseek · openrouter · venice · elevenlabs · devin · muse",
+      "                higgsfield   quota-axi auth shows where each is read",
     ]);
     expect(output).not.toMatch(/╭─ ○ (agy|alibaba|commandcode) /);
 
     expect(output).toMatch(
-      /· 1 live · 0 stale · 1 needs attention · 17 not set up\n/,
+      /· 1 live · 0 stale · 1 needs attention · 18 not set up\n/,
     );
     expect(output).toContain("╭─ ● codex ");
     expect(output).toContain("╭─ ○ claude ");
@@ -1514,7 +1518,7 @@ describe("human report folding for providers that are not set up", () => {
     stubFoldFleet();
     const output = await capture(["--tui", "--once", "--all"]);
 
-    expect(output).toContain("  ○ not set up · 17\n");
+    expect(output).toContain("  ○ not set up · 18\n");
     expect(output).toContain("╭─ ○ copilot ");
     expect(output).toContain("╭─ ○ elevenlabs ");
     expect(output).toContain("╭─ ○ higgsfield ");
@@ -1580,7 +1584,7 @@ describe("human report folding for providers that are not set up", () => {
 
       process.stdin.emit("data", Buffer.from("a"));
       await settle("a hide not set up");
-      expect(lastFrame()).toContain("  ○ not set up · 17");
+      expect(lastFrame()).toContain("  ○ not set up · 18");
       expect(lastFrame()).toContain("╭─ ○ zai ");
 
       process.stdin.emit("data", Buffer.from("q"));
@@ -2252,6 +2256,7 @@ describe("default TOON decision blocks", () => {
     PROVIDERS.openrouter = providerWithQuota(
       emptyFreshQuota("openrouter", "OpenRouter"),
     );
+    PROVIDERS.venice = providerWithQuota(emptyFreshQuota("venice", "Venice"));
     PROVIDERS.elevenlabs = providerWithQuota(freshElevenLabsQuota());
     PROVIDERS.devin = providerWithQuota(freshDevinQuota());
     PROVIDERS.muse = providerWithQuota(emptyFreshQuota("muse", "Muse"));
@@ -2282,6 +2287,7 @@ describe("default TOON decision blocks", () => {
       "muse",
       "opencode-go",
       "openrouter",
+      "venice",
       "zai",
     ]);
     expect(output).not.toContain("omitted");
