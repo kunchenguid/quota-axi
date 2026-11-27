@@ -13,23 +13,29 @@ import {
   execFileText,
   type ExecFileTextOptions,
 } from "../lib/process.js";
-import {
-  clampPercent,
-  nowIso,
-  parseEpochOrIso,
-  percentRemaining,
-} from "../lib/time.js";
+import { clampPercent, nowIso } from "../lib/time.js";
+import { AGY_GROUPS } from "../types.js";
 import type {
+  AgyQuotaGroup,
   AuthProviderReport,
   ProviderAdapter,
   ProviderOptions,
   ProviderQuota,
   ProviderStatus,
+  QuotaModelList,
   QuotaWindow,
   SourceAttempt,
 } from "../types.js";
 import {
+  AGY_MODEL_ID,
+  agyBoundWindowId,
+  agyUnrecognizedWindowId,
+} from "./agy-identity.js";
+import { agyResetTimestamp } from "./agy-reset.js";
+import {
   failedProvider,
+  hasCurrentAgyPercentage,
+  servableStaleWindows,
   sourceNames,
   staleFromCache,
   statusFromError,
@@ -52,6 +58,44 @@ const PROBE_BUDGET_MS = 10_000;
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 const FIVE_HOURS_SECONDS = 18_000;
 const WEEK_SECONDS = 7 * 24 * 60 * 60;
+const MODELS_TIMEOUT_MS = 5_000;
+/**
+ * agy reports an unused limit's reset as "now plus one period", measured at its
+ * own call time. This bounds how far that can sit from our read time.
+ */
+const PLACEHOLDER_RESET_TOLERANCE_MS = 120_000;
+const MODELS_PREFIX = /^models within this group:\s*/i;
+
+/** One `agy models` row: the CLI id and the label agy prints for it. */
+type AgyModelCatalogEntry = { id: string; label: string };
+
+type AgyQuotaReading = {
+  plan?: string;
+  account?: ProviderQuota["account"];
+  windows: QuotaWindow[];
+  [AGY_GROUPS]?: AgyQuotaGroup[];
+  refreshedAt: string;
+};
+
+type AgyGroupedReading = AgyQuotaReading & { [AGY_GROUPS]: AgyQuotaGroup[] };
+
+const AGY_STALE_FAILURE = Symbol("agyStaleFailure");
+type AgyProviderQuota = ProviderQuota & { [AGY_STALE_FAILURE]?: ProviderQuota };
+
+export function agyStaleQuotaAt(
+  provider: AgyProviderQuota,
+  now: number,
+): ProviderQuota {
+  const failure = provider[AGY_STALE_FAILURE];
+  if (!failure) return provider;
+  const windows = servableStaleWindows(provider, now);
+  return windows.length > 0 ? { ...provider, windows } : failure;
+}
+
+export type AgyNormalizeOptions = {
+  /** Read time, in epoch milliseconds. Defaults to the current time. */
+  nowMs?: number;
+};
 
 type AgyProcessSource = "agy" | "app";
 
@@ -127,22 +171,13 @@ export async function fetchQuotaWithRuntime(
 ): Promise<ProviderQuota> {
   const attempts: SourceAttempt[] = [{ source: "cli", status: "failed" }];
   let finalFailure: unknown;
+  let cli: AgyCliReading | undefined;
 
   try {
-    const quota = await fetchCliQuota(runtime);
+    cli = await fetchCliQuota(runtime);
     attempts[0] = { source: "cli", status: "success" };
-    const provider = successProvider({
-      provider: "agy",
-      label: "Antigravity",
-      source: "cli",
-      plan: quota.plan,
-      account: quota.account,
-      windows: quota.windows,
-      refreshedAt: quota.refreshedAt,
-      sourcesTried: sourceNames(attempts),
-      attempts,
-    });
-    return provider;
+    if (hasCurrentAgyPercentage(cli.windows))
+      return reportAgyReading(runtime, cli, "cli", attempts, cli.commandPath);
   } catch (error) {
     finalFailure = error;
     const skipped =
@@ -159,18 +194,8 @@ export async function fetchQuotaWithRuntime(
   try {
     const quota = await fetchLoopbackQuota(runtime);
     attempts[attempts.length - 1] = { source: "loopback", status: "success" };
-    const provider = successProvider({
-      provider: "agy",
-      label: "Antigravity",
-      source: "cli-rpc",
-      plan: quota.plan,
-      account: quota.account,
-      windows: quota.windows,
-      refreshedAt: quota.refreshedAt,
-      sourcesTried: sourceNames(attempts),
-      attempts,
-    });
-    return provider;
+    if (!cli || hasCurrentAgyPercentage(quota.windows))
+      return reportAgyReading(runtime, quota, "cli-rpc", attempts);
   } catch (error) {
     const skipped =
       error instanceof AgyUnavailableError || isMissingCommandError(error);
@@ -187,7 +212,19 @@ export async function fetchQuotaWithRuntime(
     };
   }
 
+  if (cli)
+    return reportAgyReading(runtime, cli, "cli", attempts, cli.commandPath);
+
   const finalError = errorMessage(finalFailure);
+  const sourcesTried = sourceNames(attempts);
+  const failure = failedProvider({
+    provider: "agy",
+    label: "Antigravity",
+    status: statusForFailure(finalFailure),
+    error: finalError,
+    sourcesTried,
+    attempts,
+  });
   if (isDefinitelyUninstalled(attempts)) {
     try {
       retireCachedSlot("agy");
@@ -197,9 +234,15 @@ export async function fetchQuotaWithRuntime(
   } else if (staleEligibleFailure(finalFailure)) {
     const cached = readCachedProvider("agy");
     const stale = cached
-      ? staleFromCache(cached, finalError, sourceNames(attempts), attempts)
+      ? staleFromCache(cached, finalError, sourcesTried, attempts)
       : undefined;
-    if (stale) return stale;
+    if (stale) {
+      const report: AgyProviderQuota = {
+        ...stale,
+        [AGY_STALE_FAILURE]: failure,
+      };
+      return report;
+    }
   } else if (isDefinitiveAuthFailure(finalFailure)) {
     try {
       deleteCachedProvider("agy");
@@ -208,11 +251,27 @@ export async function fetchQuotaWithRuntime(
     }
   }
 
-  return failedProvider({
+  return failure;
+}
+
+async function reportAgyReading(
+  runtime: AgyProbeRuntime,
+  quota: AgyQuotaReading,
+  source: "cli" | "cli-rpc",
+  attempts: SourceAttempt[],
+  commandPath?: string,
+): Promise<ProviderQuota> {
+  const { [AGY_GROUPS]: groups, plan, account, windows, refreshedAt } = quota;
+  await resolveGroupModels(runtime, groups, commandPath);
+  return successProvider({
     provider: "agy",
     label: "Antigravity",
-    status: statusForFailure(finalFailure),
-    error: finalError,
+    source,
+    plan,
+    account,
+    windows,
+    refreshedAt,
+    ...(groups ? { [AGY_GROUPS]: groups } : {}),
     sourcesTried: sourceNames(attempts),
     attempts,
   });
@@ -255,12 +314,9 @@ export async function inspectAuthWithRuntime(
   }
 }
 
-async function fetchCliQuota(runtime: AgyProbeRuntime): Promise<{
-  plan?: string;
-  account?: ProviderQuota["account"];
-  windows: QuotaWindow[];
-  refreshedAt: string;
-}> {
+type AgyCliReading = AgyGroupedReading & { commandPath: string };
+
+async function fetchCliQuota(runtime: AgyProbeRuntime): Promise<AgyCliReading> {
   let commandPath: string | undefined;
   try {
     commandPath = await runtime.findCommandPath("agy");
@@ -293,10 +349,10 @@ async function fetchCliQuota(runtime: AgyProbeRuntime): Promise<{
     throw new AgyMalformedResponseError("agy /quota returned invalid JSON");
   }
   const summary = normalizeAgyPrintUsage(parsed);
-  if (!summary || summary.windows.length === 0) {
+  if (!summary) {
     throw new AgyMalformedResponseError("agy /quota quota summary malformed");
   }
-  return summary;
+  return { ...summary, commandPath };
 }
 
 async function createOpenerGuard(): Promise<{
@@ -346,32 +402,122 @@ async function createOpenerGuard(): Promise<{
   }
 }
 
+/**
+ * Best effort: the catalog only adds CLI ids next to the model labels agy
+ * already prints in `/quota`, so a failed read leaves the quota reading intact.
+ */
+async function readModelCatalog(
+  runtime: AgyProbeRuntime,
+  commandPath: string,
+): Promise<AgyModelCatalogEntry[] | undefined> {
+  let openerGuard: Awaited<ReturnType<typeof createOpenerGuard>> | undefined;
+  try {
+    openerGuard = await createOpenerGuard();
+    const text = await runtime.execFileText(
+      commandPath,
+      ["models"],
+      MODELS_TIMEOUT_MS,
+      { env: openerGuard.env },
+    );
+    const catalog = parseAgyModelCatalog(text);
+    return catalog.length > 0 ? catalog : undefined;
+  } catch {
+    return undefined;
+  } finally {
+    await openerGuard?.dispose();
+  }
+}
+
+async function resolveGroupModels(
+  runtime: AgyProbeRuntime,
+  groups: AgyQuotaGroup[] | undefined,
+  commandPath?: string,
+): Promise<void> {
+  const modelLists = groups
+    ?.map(({ models }) => models)
+    .filter((models) => models.status === "known");
+  if (!modelLists?.length) return;
+  commandPath ??= await runtime.findCommandPath("agy").catch(() => undefined);
+  if (!commandPath) return;
+  const catalog = await readModelCatalog(runtime, commandPath);
+  if (!catalog) return;
+  for (const models of modelLists) {
+    const ids = new Set<string>();
+    const unmatchedLabels: string[] = [];
+    for (const label of models.labels) {
+      const matches = matchModelIds(label, catalog);
+      if (matches.length === 0) unmatchedLabels.push(label);
+      else for (const id of matches) ids.add(id);
+    }
+    if (ids.size === 0) continue;
+    models.ids = [...ids];
+    if (unmatchedLabels.length > 0) models.unmatchedLabels = unmatchedLabels;
+  }
+}
+
+function parseAgyModelCatalog(text: string): AgyModelCatalogEntry[] {
+  const entries: AgyModelCatalogEntry[] = [];
+  for (const line of text.split(/\r?\n/)) {
+    const [id, label] = line.split("\t").map((part) => part.trim());
+    if (id && label && AGY_MODEL_ID.test(id)) {
+      entries.push({ id, label });
+    }
+  }
+  return entries;
+}
+
 function isMissingCommandError(error: unknown): boolean {
   const code = (error as NodeJS.ErrnoException | undefined)?.code;
   return code === "ENOENT";
 }
 
-export function normalizeAgyQuotaSummary(raw: unknown):
-  | {
-      windows: QuotaWindow[];
-      refreshedAt: string;
-    }
-  | undefined {
+export function normalizeAgyQuotaSummary(
+  raw: unknown,
+  options: AgyNormalizeOptions = {},
+): AgyGroupedReading | undefined {
   const payload = quotaSummaryPayload(raw);
-  const groups = arrayValue(payload?.groups);
-  const windows = groups
-    .flatMap(normalizeQuotaSummaryGroup)
-    .sort(compareAgyWindows);
-  if (windows.length === 0) return undefined;
-  return { windows, refreshedAt: nowIso() };
+  const nowMs = options.nowMs ?? Date.now();
+  const namedGroups = arrayValue(payload?.groups).flatMap((rawGroup) => {
+    const group = objectValue(rawGroup);
+    const name = stringValue(group?.displayName) ?? stringValue(group?.name);
+    return group && name?.trim()
+      ? [{ group, name, identity: agyWindowGroup(name) }]
+      : [];
+  });
+  if (namedGroups.length === 0) return undefined;
+  const counts = new Map<string, number>();
+  for (const { identity } of namedGroups)
+    counts.set(identity.id, (counts.get(identity.id) ?? 0) + 1);
+  const windows: QuotaWindow[] = [];
+  const groups: AgyQuotaGroup[] = [];
+  const groupIds = new Set<string>();
+  for (const { group, name, identity } of namedGroups) {
+    const scoped =
+      counts.get(identity.id) === 1 ? identity : encodedAgyWindowGroup(name);
+    if (groupIds.has(scoped.id)) return undefined;
+    groupIds.add(scoped.id);
+    const normalized = normalizeQuotaSummaryGroup(
+      group,
+      name,
+      scoped,
+      nowMs,
+      windows,
+    );
+    if (!normalized) return undefined;
+    groups.push(normalized);
+  }
+  groups.sort((left, right) => groupRank(left.id) - groupRank(right.id));
+  return {
+    [AGY_GROUPS]: groups,
+    windows: windows.sort(compareAgyWindows),
+    refreshedAt: nowIso(),
+  };
 }
 
-export function normalizeAgyPrintUsage(raw: unknown):
-  | {
-      windows: QuotaWindow[];
-      refreshedAt: string;
-    }
-  | undefined {
+export function normalizeAgyPrintUsage(
+  raw: unknown,
+  options: AgyNormalizeOptions = {},
+): AgyGroupedReading | undefined {
   const root = objectValue(raw);
   const command = objectValue(root?.command);
   const name = stringValue(command?.name);
@@ -382,7 +528,7 @@ export function normalizeAgyPrintUsage(raw: unknown):
     name !== "/quota"
   )
     return undefined;
-  return normalizeAgyQuotaSummary(objectValue(command?.data));
+  return normalizeAgyQuotaSummary(command?.data, options);
 }
 
 export function normalizeAgyUserStatus(raw: unknown):
@@ -450,12 +596,9 @@ export function portsFromLsof(output: string): number[] {
   return [...ports];
 }
 
-async function fetchLoopbackQuota(runtime: AgyProbeRuntime): Promise<{
-  plan?: string;
-  account?: ProviderQuota["account"];
-  windows: QuotaWindow[];
-  refreshedAt: string;
-}> {
+async function fetchLoopbackQuota(
+  runtime: AgyProbeRuntime,
+): Promise<AgyQuotaReading> {
   const deadline = createProbeDeadline();
   const { endpoints, confirmedNoProcess, processDiscoveryUnavailable } =
     await discoverAgyEndpoints(runtime, deadline);
@@ -469,15 +612,19 @@ async function fetchLoopbackQuota(runtime: AgyProbeRuntime): Promise<{
     );
 
   let lastError: unknown;
+  let diagnostic: AgyQuotaReading | undefined;
   for (const endpoint of endpoints) {
     try {
       if (endpoint.requiresUnleashProbe)
         await probeEndpoint(runtime, endpoint, deadline);
-      return await fetchEndpointQuota(runtime, endpoint, deadline);
+      const reading = await fetchEndpointQuota(runtime, endpoint, deadline);
+      if (hasCurrentAgyPercentage(reading.windows)) return reading;
+      diagnostic ??= reading;
     } catch (error) {
       lastError = strongerFailure(lastError, error);
     }
   }
+  if (diagnostic) return diagnostic;
 
   throw lastError instanceof Error
     ? lastError
@@ -596,45 +743,63 @@ async function fetchEndpointQuota(
   runtime: AgyProbeRuntime,
   endpoint: AgyConnectionEndpoint,
   deadline: number,
-): Promise<{
-  plan?: string;
-  account?: ProviderQuota["account"];
-  windows: QuotaWindow[];
-  refreshedAt: string;
-}> {
+): Promise<AgyQuotaReading> {
   let summaryError: unknown;
+  let summary: AgyGroupedReading | undefined;
   try {
-    const summary = normalizeAgyQuotaSummary(
+    summary = normalizeAgyQuotaSummary(
       await withinProbeBudget(deadline, REQUEST_TIMEOUT_MS, (timeoutMs) =>
         runtime.requestJson(endpoint, QUOTA_SUMMARY_PATH, timeoutMs),
       ),
     );
-    if (summary) {
-      const identity = await fetchEndpointIdentity(runtime, endpoint, deadline);
-      return {
-        ...summary,
-        plan: identity?.plan,
-        account: identity?.account,
-      };
-    }
-    summaryError = new AgyMalformedResponseError(
-      "Antigravity quota summary malformed",
-    );
+    if (!summary)
+      summaryError = new AgyMalformedResponseError(
+        "Antigravity quota summary malformed",
+      );
   } catch (error) {
-    summaryError = strongerFailure(summaryError, error);
+    summaryError = error;
   }
 
+  let userStatus: AgyQuotaReading | undefined;
+  let diagnostic: AgyQuotaReading | undefined;
   for (const path of [USER_STATUS_PATH, COMMAND_MODEL_CONFIGS_PATH]) {
+    let fallback: AgyQuotaReading | undefined;
     try {
-      const fallback = normalizeAgyUserStatus(
+      fallback = normalizeAgyUserStatus(
         await withinProbeBudget(deadline, REQUEST_TIMEOUT_MS, (timeoutMs) =>
           runtime.requestJson(endpoint, path, timeoutMs),
         ),
       );
-      if (fallback && fallback.windows.length > 0) return fallback;
     } catch (error) {
       summaryError = strongerFailure(summaryError, error);
     }
+    if (path === USER_STATUS_PATH) userStatus = fallback;
+    if (summary && hasCurrentAgyPercentage(summary.windows)) {
+      return {
+        ...summary,
+        plan: userStatus?.plan,
+        account: userStatus?.account,
+      };
+    }
+    if (fallback && hasCurrentAgyPercentage(fallback.windows)) {
+      return summary
+        ? {
+            ...fallback,
+            [AGY_GROUPS]: summary[AGY_GROUPS],
+            windows: [...summary.windows, ...fallback.windows],
+          }
+        : fallback;
+    }
+    if (fallback?.windows.length) diagnostic ??= fallback;
+  }
+  if (!isDefinitiveAuthFailure(summaryError)) {
+    if (summary)
+      return {
+        ...summary,
+        plan: userStatus?.plan,
+        account: userStatus?.account,
+      };
+    if (diagnostic) return diagnostic;
   }
 
   throw summaryError instanceof Error
@@ -650,28 +815,6 @@ async function probeEndpoint(
   await withinProbeBudget(deadline, REQUEST_TIMEOUT_MS, (timeoutMs) =>
     runtime.requestJson(endpoint, UNLEASH_PATH, timeoutMs),
   );
-}
-
-async function fetchEndpointIdentity(
-  runtime: AgyProbeRuntime,
-  endpoint: AgyConnectionEndpoint,
-  deadline: number,
-): Promise<
-  | {
-      plan?: string;
-      account?: ProviderQuota["account"];
-    }
-  | undefined
-> {
-  try {
-    return normalizeAgyUserStatus(
-      await withinProbeBudget(deadline, REQUEST_TIMEOUT_MS, (timeoutMs) =>
-        runtime.requestJson(endpoint, USER_STATUS_PATH, timeoutMs),
-      ),
-    );
-  } catch {
-    return undefined;
-  }
 }
 
 async function readProcessList(
@@ -718,52 +861,186 @@ async function readListeningPorts(
   }
 }
 
-function normalizeQuotaSummaryGroup(raw: unknown): QuotaWindow[] {
-  const group = objectValue(raw);
-  if (!group) return [];
-  const groupName =
-    stringValue(group.displayName) ?? stringValue(group.name) ?? "Quota";
-  return arrayValue(group.buckets)
-    .map((bucket) => normalizeQuotaSummaryBucket(groupName, bucket))
-    .filter((window): window is QuotaWindow => Boolean(window));
+function normalizeQuotaSummaryGroup(
+  group: Record<string, unknown>,
+  name: string,
+  identity: ReturnType<typeof agyWindowGroup>,
+  nowMs: number,
+  windows: QuotaWindow[],
+): AgyQuotaGroup | undefined {
+  const buckets = arrayValue(group.buckets).flatMap<
+    AgyQuotaGroup["buckets"][number]
+  >((rawBucket) => {
+    const bucket = objectValue(rawBucket);
+    if (!bucket) return [];
+    const id =
+      stringValue(bucket.bucketId) ??
+      stringValue(bucket.bucket_id) ??
+      stringValue(bucket.id);
+    if (!id) return [];
+    if (booleanValue(bucket.disabled)) return [{ id }];
+    const window = normalizeQuotaSummaryBucket(identity, bucket, id, nowMs);
+    if (
+      window.percentUsed === undefined &&
+      !window.resetsAt &&
+      !window.resetText
+    )
+      return [
+        window.kind === "unknown"
+          ? { id }
+          : { id, unmeasuredBoundId: window.id },
+      ];
+    windows.push(window);
+    return [{ id, windowId: window.id }];
+  });
+  const links = buckets.flatMap(({ windowId, unmeasuredBoundId }) => {
+    const link = windowId ?? unmeasuredBoundId;
+    return link ? [link] : [];
+  });
+  if (
+    new Set(buckets.map(({ id }) => id)).size !== buckets.length ||
+    new Set(links).size !== links.length
+  )
+    return undefined;
+  return {
+    id: identity.id,
+    name,
+    models: groupModelList(stringValue(group.description)),
+    buckets,
+  };
+}
+
+/**
+ * agy names a group's models only in the group description, as
+ * "Models within this group: A, B (C), D". A description without that list
+ * (Argon's carries plan advice instead) leaves the models unknown.
+ */
+function groupModelList(description: string | undefined): QuotaModelList {
+  if (!description || !MODELS_PREFIX.test(description)) {
+    return { status: "unknown" };
+  }
+  const labels = splitOutsideParentheses(
+    description.replace(MODELS_PREFIX, "").replace(/\.\s*$/, ""),
+  );
+  if (labels.length === 0) return { status: "unknown" };
+  return { status: "known", labels };
+}
+
+function splitOutsideParentheses(text: string): string[] {
+  const parts: string[] = [];
+  let depth = 0;
+  let current = "";
+  for (const char of text) {
+    if (char === "(") depth += 1;
+    if (char === ")") depth = Math.max(0, depth - 1);
+    if (char === "," && depth === 0) {
+      parts.push(current);
+      current = "";
+    } else {
+      current += char;
+    }
+  }
+  parts.push(current);
+  return parts.map((part) => part.trim()).filter(Boolean);
+}
+
+/**
+ * A group label either equals a catalog label ("Orchestrator (Neon)") or is
+ * that label without its effort suffix ("Gemini 4 Neon" for
+ * "Gemini 4 Neon (Low|Medium|High|XHigh)").
+ */
+function matchModelIds(
+  label: string,
+  catalog: readonly AgyModelCatalogEntry[],
+): string[] {
+  return catalog
+    .filter(({ id, label: candidate }) => {
+      if (candidate === label) return true;
+      const effort = /\s*\((low|medium|high|xhigh)\)$/i.exec(candidate);
+      return (
+        effort !== null &&
+        candidate.slice(0, effort.index) === label &&
+        id.endsWith(`-${effort[1].toLowerCase()}`)
+      );
+    })
+    .map(({ id }) => id);
+}
+
+function parseAgyReset({
+  resetTime,
+  reset_time,
+}: Record<string, unknown>): string | undefined {
+  for (const value of [resetTime, reset_time]) {
+    if (value === undefined) continue;
+    const timestamp =
+      typeof value === "number"
+        ? value * 1000
+        : typeof value === "string"
+          ? agyResetTimestamp(value)
+          : Number.NaN;
+    const reset = new Date(timestamp);
+    if (Number.isFinite(reset.getTime())) return reset.toISOString();
+  }
+  return resetTime === undefined && reset_time === undefined
+    ? undefined
+    : "invalid reset";
 }
 
 function normalizeQuotaSummaryBucket(
-  groupName: string,
-  raw: unknown,
-): QuotaWindow | undefined {
-  const bucket = objectValue(raw);
-  if (!bucket) return undefined;
-  const disabled = booleanValue(bucket.disabled) ?? false;
-  if (disabled) return undefined;
-  const bucketId =
-    stringValue(bucket.bucketId) ??
-    stringValue(bucket.bucket_id) ??
-    stringValue(bucket.id);
-  if (!bucketId) return undefined;
+  group: ReturnType<typeof agyWindowGroup>,
+  bucket: Record<string, unknown>,
+  bucketId: string,
+  nowMs: number,
+): QuotaWindow {
   const windowKind = agyWindowKind(bucket);
-  const group = agyWindowGroup(groupName, bucketId);
-  const label = `${group.label} ${windowKind.label}`;
   const result: QuotaWindow = {
-    id: `${group.id}_${windowKind.id}`,
-    label,
+    id:
+      windowKind.id === "unknown"
+        ? agyUnrecognizedWindowId(group.id, bucketId)
+        : agyBoundWindowId(group.id, windowKind.id),
+    label: `${group.label} ${windowKind.label}`,
     kind: windowKind.kind,
-    resetsAt:
-      parseEpochOrIso(bucket.resetTime) ?? parseEpochOrIso(bucket.reset_time),
+    resetsAt: parseAgyReset(bucket),
     resetText: stringValue(bucket.description),
   };
   if (windowKind.windowSeconds !== undefined) {
     result.windowSeconds = windowKind.windowSeconds;
   }
-  const remaining = remainingFraction(bucket);
-  if (remaining !== undefined) {
-    const percentUsed = clampPercent((1 - clampFraction(remaining)) * 100);
-    result.percentUsed = percentUsed;
-    result.percentRemaining = percentRemaining(percentUsed);
-  }
-  if (result.percentUsed === undefined && !result.resetsAt && !result.resetText)
-    return undefined;
+  applyAgyUsage(result, remainingFraction(bucket), nowMs);
   return result;
+}
+
+/**
+ * agy fills the reset of a limit that has not started with a placeholder: the
+ * Unix epoch, or "now plus one period". Neither is a real reset. A full
+ * allowance with such a reset has not started, so it keeps its 100% and drops
+ * the date.
+ */
+function applyAgyUsage(
+  window: QuotaWindow,
+  remaining: number | undefined,
+  nowMs?: number,
+): void {
+  if (remaining === undefined || remaining < 0 || remaining > 1) return;
+  const roundedUsed = clampPercent((1 - remaining) * 100);
+  window.percentRemaining =
+    roundedUsed === 0 || roundedUsed === 100
+      ? remaining * 100
+      : 100 - roundedUsed;
+  window.percentUsed = 100 - window.percentRemaining;
+  if (remaining !== 1 || window.resetsAt === undefined) return;
+  const resetMs = agyResetTimestamp(window.resetsAt);
+  if (
+    resetMs === 0 ||
+    (nowMs !== undefined &&
+      window.windowSeconds !== undefined &&
+      Math.abs(resetMs - (nowMs + window.windowSeconds * 1000)) <=
+        PLACEHOLDER_RESET_TOLERANCE_MS)
+  ) {
+    delete window.resetsAt;
+    delete window.resetText;
+    window.notStarted = true;
+  }
 }
 
 function normalizeModelConfigWindows(raw: unknown): QuotaWindow[] {
@@ -785,20 +1062,13 @@ function normalizeModelConfigWindow(raw: unknown): QuotaWindow | undefined {
     stringValue(modelOrAlias?.alias) ??
     (label ? slugify(label) : undefined);
   if (!label || !modelId || !quotaInfo) return undefined;
-  const remaining = remainingFraction(quotaInfo);
   const result: QuotaWindow = {
     id: `model:${slugify(modelId)}`,
     label,
     kind: "model",
-    resetsAt:
-      parseEpochOrIso(quotaInfo.resetTime) ??
-      parseEpochOrIso(quotaInfo.reset_time),
+    resetsAt: parseAgyReset(quotaInfo),
   };
-  if (remaining !== undefined) {
-    const percentUsed = clampPercent((1 - clampFraction(remaining)) * 100);
-    result.percentUsed = percentUsed;
-    result.percentRemaining = percentRemaining(percentUsed);
-  }
+  applyAgyUsage(result, remainingFraction(quotaInfo));
   return result.percentUsed === undefined && !result.resetsAt
     ? undefined
     : result;
@@ -816,35 +1086,31 @@ function quotaSummaryPayload(
   );
 }
 
-function agyWindowGroup(
-  groupName: string,
-  bucketId: string,
-): { id: string; label: string; sortRank: number } {
-  const normalized = `${groupName} ${bucketId}`.toLowerCase();
-  // Argon is its own quota on paid Pro plans, so it must not share the
-  // `gemini_*` window ids or the Gemini bound.
-  if (normalized.includes("gemini") && normalized.includes("argon")) {
-    return { id: "gemini_argon", label: "Gemini Argon", sortRank: 2 };
+function agyWindowGroup(groupName: string): { id: string; label: string } {
+  switch (groupName.trim().toLowerCase()) {
+    case "gemini 4 argon":
+      return { id: "gemini_argon", label: "Gemini Argon" };
+    case "gemini models":
+    case "gemini models (flash, pro)":
+      return { id: "gemini", label: "Gemini" };
+    case "claude and gpt models":
+      return { id: "claude_gpt", label: "Claude/GPT" };
+    default:
+      return encodedAgyWindowGroup(groupName);
   }
-  if (normalized.includes("gemini")) {
-    return { id: "gemini", label: "Gemini", sortRank: 0 };
-  }
-  if (
-    normalized.includes("claude") ||
-    normalized.includes("gpt") ||
-    normalized.includes("3p")
-  ) {
-    return { id: "claude_gpt", label: "Claude/GPT", sortRank: 1 };
-  }
-  const id = slugify(groupName) || "quota";
-  return { id, label: groupName, sortRank: 2 };
+}
+
+function encodedAgyWindowGroup(name: string): { id: string; label: string } {
+  return {
+    id: `group:${encodeURIComponent(Buffer.from(name).toString())}`,
+    label: name,
+  };
 }
 
 function agyWindowKind(bucket: Record<string, unknown>): {
   id: "5h" | "weekly" | "unknown";
   label: "5-hour" | "weekly" | "quota";
   kind: QuotaWindow["kind"];
-  sortRank: number;
   windowSeconds?: number;
 } {
   const raw = [
@@ -867,7 +1133,6 @@ function agyWindowKind(bucket: Record<string, unknown>): {
       id: "5h",
       label: "5-hour",
       kind: "session",
-      sortRank: 0,
       windowSeconds: FIVE_HOURS_SECONDS,
     };
   }
@@ -880,11 +1145,10 @@ function agyWindowKind(bucket: Record<string, unknown>): {
       id: "weekly",
       label: "weekly",
       kind: "weekly",
-      sortRank: 1,
       windowSeconds: WEEK_SECONDS,
     };
   }
-  return { id: "unknown", label: "quota", kind: "unknown", sortRank: 2 };
+  return { id: "unknown", label: "quota", kind: "unknown" };
 }
 
 function remainingFraction(data: Record<string, unknown>): number | undefined {
@@ -918,8 +1182,12 @@ function compareAgyWindows(left: QuotaWindow, right: QuotaWindow): number {
 }
 
 function windowGroupRank(id: string): number {
-  if (id.startsWith("gemini_")) return 0;
-  if (id.startsWith("claude_gpt_")) return 1;
+  return groupRank(/^(gemini_argon|gemini|claude_gpt)[_:]/.exec(id)?.[1] ?? id);
+}
+
+function groupRank(id: string): number {
+  if (id === "gemini" || id === "gemini_argon") return 0;
+  if (id === "claude_gpt") return 1;
   return 2;
 }
 
@@ -1135,11 +1403,6 @@ function requestBodyForPath(path: string): Record<string, unknown> {
       locale: "en",
     },
   };
-}
-
-function clampFraction(value: number): number {
-  if (!Number.isFinite(value)) return 0;
-  return Math.min(1, Math.max(0, value));
 }
 
 function objectValue(value: unknown): Record<string, unknown> | undefined {

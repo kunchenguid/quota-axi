@@ -648,7 +648,7 @@ describe("Kimi request transport", () => {
       const rendered = renderQuotaToon(
         {
           generatedAt,
-          schemaVersion: 5,
+          schemaVersion: 7,
           providers: [withQuotaSemantics(report, generatedAt)],
         },
         "quota-axi",
@@ -709,7 +709,7 @@ describe("Kimi request transport", () => {
     const rendered = renderQuotaToon(
       {
         generatedAt,
-        schemaVersion: 5,
+        schemaVersion: 7,
         providers: [withQuotaSemantics(report, generatedAt)],
       },
       "quota-axi",
@@ -752,7 +752,7 @@ describe("Kimi request transport", () => {
     const generatedAt = new Date(NOW).toISOString();
     const response = {
       generatedAt,
-      schemaVersion: 5 as const,
+      schemaVersion: 7 as const,
       providers: [withQuotaSemantics(report, generatedAt)],
     };
     const toon = renderQuotaToon(response, "quota-axi", false);
@@ -968,7 +968,7 @@ describe("Kimi monthly subscription cycle", () => {
       expect(scope?.selection?.spendPriority).toEqual(expect.any(Number));
 
       const toon = renderQuotaToon(
-        { generatedAt, schemaVersion: 5, providers: [interpreted] },
+        { generatedAt, schemaVersion: 7, providers: [interpreted] },
         "quota-axi",
         false,
       );
@@ -1140,7 +1140,7 @@ describe("Kimi payload normalization", () => {
     const generatedAt = new Date(NOW).toISOString();
     const response = {
       generatedAt,
-      schemaVersion: 5 as const,
+      schemaVersion: 7 as const,
       providers: [withQuotaSemantics(report, generatedAt)],
     };
     const json = JSON.stringify(quotaJsonReport(response, false));
@@ -1621,7 +1621,7 @@ describe("Kimi responses carrying both shapes", () => {
       effectivePercentRemaining: 8,
     });
     const toon = renderQuotaToon(
-      { generatedAt, schemaVersion: 5, providers: [interpreted] },
+      { generatedAt, schemaVersion: 7, providers: [interpreted] },
       "quota-axi",
       true,
     );
@@ -2210,7 +2210,7 @@ describe("Kimi credential outcomes and cache policy", () => {
     const rendered = renderQuotaToon(
       {
         generatedAt: new Date(NOW).toISOString(),
-        schemaVersion: 5,
+        schemaVersion: 7,
         providers: [withQuotaSemantics(report, new Date(NOW).toISOString())],
       },
       "quota-axi",
@@ -2447,7 +2447,7 @@ describe("Kimi credential outcomes and cache policy", () => {
     const rendered = renderQuotaToon(
       {
         generatedAt: new Date(NOW).toISOString(),
-        schemaVersion: 5,
+        schemaVersion: 7,
         providers: [withQuotaSemantics(report, new Date(NOW).toISOString())],
       },
       "quota-axi",

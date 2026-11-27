@@ -287,7 +287,7 @@ describe("Codex Pi sibling account lanes", () => {
 
     const { fetchQuota } = await import("../../src/commands.js");
     const response = await fetchQuota(["codex"], OPTIONS);
-    expect(response.schemaVersion).toBe(6);
+    expect(response.schemaVersion).toBe(8);
     expect(response.providers.map((provider) => provider.accountKey)).toEqual([
       "openai-codex",
       "openai-codex-work",
@@ -2180,7 +2180,7 @@ async function expectPublishedMembership(
   const response = await fetchQuota(["codex"], OPTIONS);
   const json = quotaJsonReport(response, false);
   expect(json.schemaVersion).toBe(
-    expected.some((row) => row.accountKey) ? 6 : 5,
+    expected.some((row) => row.accountKey) ? 8 : 7,
   );
   expect(
     json.providers.map((provider) => ({

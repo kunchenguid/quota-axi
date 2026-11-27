@@ -50,7 +50,7 @@ export function annotateQuotaAdvice(
   const help = providers.flatMap(providerHelpLines);
   return {
     generatedAt: response.generatedAt,
-    schemaVersion: providers.some((provider) => provider.accountKey) ? 6 : 5,
+    schemaVersion: expanded ? 8 : 7,
     providers,
     ...(help.length > 0 ? { help } : {}),
   };

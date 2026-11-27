@@ -3,6 +3,7 @@ import {
   type ProviderPresence,
 } from "./lib/source-attempts.js";
 import { collapseHome } from "./lib/fs.js";
+import { agyResetTimestamp } from "./providers/agy-reset.js";
 import { isUsageFetchFailure } from "./providers/usage-fetch-failure.js";
 import type {
   EffectiveAvailability,
@@ -505,10 +506,7 @@ function buildLiveCard(
     lines.push(interior([], border));
     for (const window of provider.windows) {
       lines.push(
-        interior(
-          windowRow(window, generatedAtMs, provider.windows, show),
-          border,
-        ),
+        interior(windowRow(provider, window, generatedAtMs, show), border),
       );
     }
   }
@@ -556,7 +554,9 @@ function effectiveHeadline(
 
   const verdict = runwayVerdict(headline);
   const percentText =
-    effectivePct === undefined ? undefined : shownPercent(effectivePct, show);
+    effectivePct === undefined
+      ? undefined
+      : shownPercent(provider.provider, effectivePct, show);
   // The remaining view has always read as bare headroom; the flipped view
   // says so, because the same number would otherwise read the other way.
   const direction = show === "used" ? "used · " : "";
@@ -782,17 +782,25 @@ function interior(content: Line, borderStyle: StyleName): Line {
 }
 
 function windowRow(
+  provider: ProviderQuota,
   window: QuotaWindow,
   generatedAtMs: number,
-  windows: QuotaWindow[],
   show: TuiShow,
 ): Line {
   if (window.shareOf) {
-    return shareWindowRow(window, generatedAtMs, windows);
+    return shareWindowRow(window, generatedAtMs, provider.windows);
   }
-  const pct = window.percentRemaining;
-  const marker = window.pace?.timeRemainingPercent;
-  const reset = resetCountdown(window, generatedAtMs);
+  const untrusted =
+    provider.provider === "agy" &&
+    provider.state.untrustedWindowIds?.includes(window.id);
+  const pct = untrusted ? undefined : window.percentRemaining;
+  const marker = untrusted ? undefined : window.pace?.timeRemainingPercent;
+  const reset = untrusted
+    ? window.resetsAt !== undefined &&
+      Number.isFinite(agyResetTimestamp(window.resetsAt))
+      ? "passed"
+      : "bad"
+    : resetCountdown(window, generatedAtMs);
   return [
     { text: "   " },
     { text: padEndDisplay(shortWindowLabel(window), 8), style: "label" },
@@ -801,7 +809,7 @@ function windowRow(
     {
       text: (pct === undefined
         ? "?"
-        : shownPercent(pct, show, window.percentUsed)
+        : shownPercent(provider.provider, pct, show, window.percentUsed)
       ).padStart(4),
       style: pct === undefined ? "dim" : healthStyle(pct),
     },
@@ -852,10 +860,17 @@ function shareCaption(window: QuotaWindow, windows: QuotaWindow[]): string {
  * figure; an effective headline derives consumption from raw remaining.
  */
 function shownPercent(
+  provider: ProviderQuota["provider"],
   percentRemaining: number,
   show: TuiShow,
   percentUsed = 100 - percentRemaining,
 ): string {
+  if (provider === "agy") {
+    if (percentRemaining > 0 && percentRemaining <= 0.5)
+      return show === "used" ? ">99%" : "<1%";
+    if (percentRemaining >= 99.5 && percentRemaining < 100)
+      return show === "used" ? "<1%" : ">99%";
+  }
   return `${Math.round(show === "used" ? percentUsed : percentRemaining)}%`;
 }
 

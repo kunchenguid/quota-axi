@@ -7,6 +7,15 @@ import {
   ensurePrivateParent,
   readUntracedJsonFile,
 } from "./lib/fs.js";
+import {
+  AGY_MODEL_ID,
+  agyBoundWindowId,
+  agyUnrecognizedWindowId,
+} from "./providers/agy-identity.js";
+import {
+  hasCurrentAgyPercentage,
+  windowHasNotReset,
+} from "./providers/common.js";
 import { kimiReadingContextId } from "./providers/kimi-cache-context.js";
 import { commandCodeReadingContextId } from "./providers/commandcode-cache-context.js";
 import { devinReadingContextId } from "./providers/devin-cache-context.js";
@@ -21,6 +30,7 @@ import { inputsDigest, type TracedInputs } from "./lib/input-trace.js";
 import { reuseContextId } from "./lib/reuse-context.js";
 import type {
   AccountLocator,
+  AgyQuotaGroup,
   DegradedSource,
   ProviderAuthStatus,
   ProviderId,
@@ -29,7 +39,7 @@ import type {
   ProviderStatus,
   QuotaWindow,
 } from "./types.js";
-import { PROVIDER_IDS } from "./types.js";
+import { AGY_GROUPS, PROVIDER_IDS } from "./types.js";
 
 const PROVIDER_SOURCES = [
   "oauth",
@@ -384,7 +394,15 @@ export function readReusableProviders(
       now - refreshedAt < maxAgeSeconds * 1_000
     );
   });
-  if (!young || !group.every((record) => stillCurrent(record, now)))
+  if (
+    !young ||
+    !group.every(
+      (record) =>
+        hasLiveReuseEvidence(record.snapshot, now) &&
+        hasReusableFormat(record) &&
+        hasUnexpiredWindows(record, now),
+    )
+  )
     return undefined;
   const stamp = group[0].reuse as ReuseStamp;
   if (inputsDigest(stamp.inputs) !== stamp.inputsDigest) return undefined;
@@ -425,8 +443,7 @@ export function isSnapshotFile(file: string): boolean {
 /**
  * Every reading of `provider` in a snapshot file supplied for tests and
  * fixtures, in file order. `undefined` when the file names no such provider;
- * `"expired"` when a window's own reset has already passed, because a number
- * that has stopped being true is never served (#257), not even from a stub.
+ * `"expired"` when the snapshot cannot be used for a report.
  */
 export function readSnapshotProviders(
   file: string,
@@ -437,15 +454,42 @@ export function readSnapshotProviders(
     (record) => record.snapshot.provider === provider,
   );
   if (records.length === 0) return undefined;
-  if (!records.every((record) => stillCurrent(record, now))) return "expired";
+  if (
+    !records.every(
+      (record) =>
+        hasReusableFormat(record) &&
+        (provider === "agy"
+          ? Boolean(record.snapshot[AGY_GROUPS]?.length) ||
+            record.snapshot.windows.some((window) =>
+              windowHasNotReset(window, now, provider),
+            )
+          : hasUnexpiredWindows(record, now)),
+    )
+  )
+    return "expired";
   return records.map(reusedReading);
 }
 
-/** Whether no window of this reading has reached its own reported reset. */
-function stillCurrent(record: CachedProvider, now: number): boolean {
-  return record.snapshot.windows.every(
-    (window) =>
-      window.resetsAt === undefined || Date.parse(window.resetsAt) > now,
+function hasLiveReuseEvidence(provider: ProviderQuota, now: number): boolean {
+  return provider.provider === "agy"
+    ? hasCurrentAgyPercentage(provider.windows, now)
+    : provider.windows.length > 0;
+}
+
+function hasReusableFormat(record: CachedProvider): boolean {
+  const { provider, windows, [AGY_GROUPS]: groups } = record.snapshot;
+  if (provider !== "agy") return true;
+  const groupedWindowIds = new Set(
+    groups?.flatMap(({ buckets }) => buckets.map(({ windowId }) => windowId)),
+  );
+  return windows.every(
+    (window) => window.kind === "model" || groupedWindowIds.has(window.id),
+  );
+}
+
+function hasUnexpiredWindows(record: CachedProvider, now: number): boolean {
+  return record.snapshot.windows.every((window) =>
+    windowHasNotReset(window, now, record.snapshot.provider),
   );
 }
 
@@ -655,6 +699,7 @@ export function writeCachedProviders(
     (provider) =>
       provider.state.status === "fresh" &&
       provider.windows.length === 0 &&
+      !provider[AGY_GROUPS]?.length &&
       !missingRequiredContext(provider.provider),
   );
   const clearProviders = new Set(emptyReadings.map(cacheIdentity));
@@ -726,6 +771,7 @@ function reuseStampsFor(
   readingAt: string,
 ): Map<ProviderQuota, ReuseStamp> {
   const stamps = new Map<ProviderQuota, ReuseStamp>();
+  const now = Date.parse(readingAt);
   let context: string | undefined;
   for (const id of new Set(providers.map((provider) => provider.provider))) {
     if (excludeFromFreshReuse(id)) continue;
@@ -736,6 +782,7 @@ function reuseStampsFor(
       !lanes.every(
         (provider) =>
           (provider as TracedQuota)[READING_INPUTS] === inputs &&
+          hasLiveReuseEvidence(provider, now) &&
           !isCacheExcluded(provider) &&
           toCacheProvider(provider),
       )
@@ -904,7 +951,7 @@ function toCacheProvider(provider: ProviderQuota): CachedProvider | undefined {
   // only relabel an old observation.
   if (
     provider.state.status !== "fresh" ||
-    provider.windows.length === 0 ||
+    (provider.windows.length === 0 && !provider[AGY_GROUPS]?.length) ||
     provider.source === "cache"
   )
     return undefined;
@@ -919,6 +966,7 @@ function toCacheProvider(provider: ProviderQuota): CachedProvider | undefined {
       source: provider.source,
       plan: provider.plan,
       windows: provider.windows,
+      agyGroups: provider[AGY_GROUPS],
       credits: provider.credits,
       jobs: provider.jobs,
       state: {
@@ -969,6 +1017,9 @@ function serializeCachedProvider(
   ];
   return {
     ...provider.snapshot,
+    ...(provider.snapshot[AGY_GROUPS]
+      ? { agyGroups: provider.snapshot[AGY_GROUPS] }
+      : {}),
     ...(subscription ? { subscription } : {}),
     ...(provider.credentialContextId
       ? { credentialContext: provider.credentialContextId }
@@ -1058,14 +1109,28 @@ function normalizeCachedProvider(
   const state = objectValue(data.state);
   const status = literalValue(state?.status, PROVIDER_STATUSES);
   const sourcesTried = stringArrayValue(state?.sourcesTried);
-  const windows = Array.isArray(data.windows)
-    ? data.windows
-        .map(normalizeCachedWindow)
-        .filter((window): window is QuotaWindow => Boolean(window))
-        .map((window) =>
-          provider === "kimi" ? upgradeLegacyKimiShareWindow(window) : window,
-        )
+  const parsedWindows = Array.isArray(data.windows)
+    ? data.windows.map((window) => normalizeCachedWindow(window, provider))
     : [];
+  const windows = parsedWindows
+    .filter((window): window is QuotaWindow => Boolean(window))
+    .map((window) =>
+      provider === "kimi" ? upgradeLegacyKimiShareWindow(window) : window,
+    );
+  let agyGroups: AgyQuotaGroup[] | undefined;
+  if (provider === "agy") {
+    const windowKinds = new Map(windows.map(({ id, kind }) => [id, kind]));
+    if (
+      (data.windows !== undefined && !Array.isArray(data.windows)) ||
+      parsedWindows.length !== windows.length ||
+      windowKinds.size !== windows.length
+    )
+      return undefined;
+    if (data.agyGroups !== undefined) {
+      agyGroups = normalizeCachedAgyGroups(data.agyGroups, windowKinds);
+      if (!agyGroups) return undefined;
+    }
+  }
   if (
     !provider ||
     !label ||
@@ -1073,7 +1138,7 @@ function normalizeCachedProvider(
     !state ||
     !status ||
     !sourcesTried ||
-    windows.length === 0 ||
+    (windows.length === 0 && !agyGroups?.length) ||
     (provider === "codex" && hasInvalidCodexWindowIdentities(windows))
   )
     return undefined;
@@ -1092,6 +1157,7 @@ function normalizeCachedProvider(
     label,
     source,
     windows,
+    ...(agyGroups ? { [AGY_GROUPS]: agyGroups } : {}),
     state: {
       status,
       stale: booleanValue(state.stale) ?? false,
@@ -1271,7 +1337,10 @@ function readableWindowDuration(windowSeconds: number): string {
   return `${Number.isInteger(hours) ? hours : Number(hours.toFixed(2))}h`;
 }
 
-function normalizeCachedWindow(raw: unknown): QuotaWindow | undefined {
+function normalizeCachedWindow(
+  raw: unknown,
+  provider: ProviderId | undefined,
+): QuotaWindow | undefined {
   const data = objectValue(raw);
   if (!data) return undefined;
   const id = stringValue(data.id);
@@ -1292,7 +1361,144 @@ function normalizeCachedWindow(raw: unknown): QuotaWindow | undefined {
   assignNumber(result, "usedCredits", data.usedCredits);
   assignNumber(result, "remainingCredits", data.remainingCredits);
   assignString(result, "creditUnit", data.creditUnit);
+  if (provider === "agy") {
+    const { percentUsed: used, percentRemaining: remaining } = result;
+    if (
+      (data.percentUsed !== undefined &&
+        (used === undefined || used < 0 || used > 100)) ||
+      (data.percentRemaining !== undefined &&
+        (remaining === undefined || remaining < 0 || remaining > 100)) ||
+      (used !== undefined &&
+        remaining !== undefined &&
+        (Math.abs(used + remaining - 100) > Number.EPSILON * 100 ||
+          (used === 0) !== (remaining === 100) ||
+          (remaining === 0 && used !== 100)))
+    )
+      return undefined;
+    if (data.resetsAt !== undefined && result.resetsAt === undefined)
+      return undefined;
+    if (data.notStarted !== undefined) {
+      if (typeof data.notStarted !== "boolean") return undefined;
+      if (
+        data.notStarted &&
+        (result.percentRemaining !== 100 ||
+          result.percentUsed !== 0 ||
+          data.resetsAt !== undefined ||
+          data.resetText !== undefined)
+      )
+        return undefined;
+      result.notStarted = data.notStarted;
+    }
+  }
   return result;
+}
+
+function normalizeCachedAgyGroups(
+  raw: unknown,
+  windowKinds: ReadonlyMap<string, QuotaWindow["kind"]>,
+): AgyQuotaGroup[] | undefined {
+  if (!Array.isArray(raw) || raw.length === 0) return undefined;
+  const groups: AgyQuotaGroup[] = [];
+  const groupIds = new Set<string>();
+  const links = new Set<string>();
+  for (const value of raw) {
+    const group = objectValue(value);
+    const id = stringValue(group?.id);
+    const name = stringValue(group?.name);
+    const models = normalizeCachedModelList(group?.models);
+    if (
+      !id?.trim() ||
+      groupIds.has(id) ||
+      !name?.trim() ||
+      !models ||
+      !Array.isArray(group?.buckets)
+    )
+      return undefined;
+    groupIds.add(id);
+    const sessionId = agyBoundWindowId(id, "5h");
+    const weeklyId = agyBoundWindowId(id, "weekly");
+    const bucketIds = new Set<string>();
+    const buckets: AgyQuotaGroup["buckets"] = [];
+    for (const value of group.buckets) {
+      const bucket = objectValue(value);
+      const bucketId = stringValue(bucket?.id);
+      const windowId = stringValue(bucket?.windowId);
+      const unmeasuredBoundId = stringValue(bucket?.unmeasuredBoundId);
+      if (
+        !bucket ||
+        !bucketId?.trim() ||
+        bucketIds.has(bucketId) ||
+        (bucket.windowId !== undefined && !windowId) ||
+        (bucket.unmeasuredBoundId !== undefined && !unmeasuredBoundId) ||
+        (windowId && unmeasuredBoundId)
+      )
+        return undefined;
+      bucketIds.add(bucketId);
+      const link = windowId ?? unmeasuredBoundId;
+      if (link) {
+        const kind =
+          link === sessionId
+            ? "session"
+            : link === weeklyId
+              ? "weekly"
+              : windowId && link === agyUnrecognizedWindowId(id, bucketId)
+                ? "unknown"
+                : undefined;
+        const windowKind = windowKinds.get(link);
+        if (
+          !kind ||
+          links.has(link) ||
+          (windowKind && (!windowId || kind !== windowKind))
+        )
+          return undefined;
+        links.add(link);
+      }
+      buckets.push({
+        id: bucketId,
+        ...(windowId ? { windowId } : {}),
+        ...(unmeasuredBoundId ? { unmeasuredBoundId } : {}),
+      });
+    }
+    groups.push({ id, name, models, buckets });
+  }
+  return groups;
+}
+
+function normalizeCachedModelList(
+  raw: unknown,
+): AgyQuotaGroup["models"] | undefined {
+  const data = objectValue(raw);
+  if (!data) return undefined;
+  if (data.status === "unknown") {
+    return data.labels === undefined &&
+      data.ids === undefined &&
+      data.unmatchedLabels === undefined
+      ? { status: "unknown" }
+      : undefined;
+  }
+  if (data.status !== "known") return undefined;
+  const labels = stringArrayValue(data.labels);
+  const ids = stringArrayValue(data.ids);
+  const unmatchedLabels = stringArrayValue(data.unmatchedLabels);
+  if (
+    !labels?.length ||
+    labels.some((label) => !label.trim()) ||
+    (data.ids !== undefined &&
+      (!ids?.length ||
+        !ids.every((id) => AGY_MODEL_ID.test(id)) ||
+        new Set(ids).size !== ids.length)) ||
+    (data.unmatchedLabels !== undefined &&
+      (!ids ||
+        !unmatchedLabels ||
+        unmatchedLabels.some((label) => !labels.includes(label))))
+  )
+    return undefined;
+  return {
+    status: "known",
+    labels,
+    ...(ids ? { ids } : {}),
+    ...(unmatchedLabels ? { unmatchedLabels } : {}),
+  };
 }
 
 // Kimi snapshots cached before `shareOf` existed store `month_code` with only

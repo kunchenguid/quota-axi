@@ -20,7 +20,16 @@ import {
   currentUserProcessListArgs,
   type ExecFileTextOptions,
 } from "../../src/lib/process.js";
-import { readCachedProvider, writeCachedProviders } from "../../src/cache.js";
+import {
+  readCachedProvider,
+  readSnapshotProviders,
+  writeCachedProviders,
+} from "../../src/cache.js";
+import { cacheFilePath } from "../../src/lib/fs.js";
+import { quotaCommand, SNAPSHOT_ENV } from "../../src/commands.js";
+import { annotateQuotaAdvice } from "../../src/advice.js";
+import { quotaJsonReport, renderQuotaToon } from "../../src/render.js";
+import { renderQuotaTui } from "../../src/tui.js";
 import {
   agyAdapter,
   fetchQuota,
@@ -37,7 +46,7 @@ import {
 } from "../../src/providers/agy.js";
 import { providerPresence } from "../../src/lib/source-attempts.js";
 import { withQuotaSemantics } from "../../src/interpretation.js";
-import type { ProviderQuota } from "../../src/types.js";
+import { AGY_GROUPS, type ProviderQuota } from "../../src/types.js";
 
 const originalXdgCacheHome = process.env.XDG_CACHE_HOME;
 const originalPath = process.env.PATH;
@@ -52,6 +61,7 @@ beforeEach(() => {
 afterEach(async () => {
   vi.restoreAllMocks();
   vi.useRealTimers();
+  vi.unstubAllEnvs();
   await Promise.all(
     servers.splice(0).map((server) => {
       server.closeAllConnections();
@@ -69,6 +79,7 @@ afterEach(async () => {
 
 // The vendor names each bucket's window ("5h" or "weekly"), which fixes its
 // cycle length; quota-axi derives pace from that length plus resetsAt.
+const LOOPBACK_QUOTA_READ_AT = "2026-06-15T09:00:00.000Z";
 const EXPECTED_WINDOW_SECONDS = [
   ["gemini_5h", 18_000],
   ["gemini_weekly", 604_800],
@@ -235,6 +246,1238 @@ describe("Antigravity quota parsing", () => {
     ]);
   });
 
+  describe("unused limits, groups and models (real /quota output)", () => {
+    // Captured 2026-11-22T06:20:29Z. agy reported "now plus period" resets for
+    // the Gemini and Argon limits and the Unix epoch for Claude and GPT.
+    const NOW_MS = Date.parse("2026-11-22T06:20:29Z");
+    const CATALOG = [
+      "gemini-4-neon-high\tGemini 4 Neon (High)",
+      "gemini-4-neon-xhigh\tGemini 4 Neon (XHigh)",
+      "gemini-4-neon-medium\tGemini 4 Neon (Medium)",
+      "gemini-4-neon-low\tGemini 4 Neon (Low)",
+      "gemini-4-neon-preview\tGemini 4 Neon (Low)",
+      "gemini-4-neon-medium-alias-high\tGemini 4 Neon (Medium)",
+      "case-mismatch\tgemini 4 Neon",
+      "case-mismatch-low\tgemini 4 Neon (Low)",
+      "gemini-4-argon-medium\tGemini 4 Argon (Medium)",
+      "gemini-4-hydrogen-medium\tGemini 4 Hydrogen (Medium)",
+      "gemini-pro-orchestrator-neon\tOrchestrator (Neon)",
+      "gemini-pro-orchestrator-g1-pro\tOrchestrator (Argon)",
+      "gemini-3.8-flash-medium\tGemini 3.8 Flash (Medium)",
+      "claude-opus-5-5-low\tClaude Opus 5.5 (Low)",
+      "claude-sonnet-5-5-high\tClaude Sonnet 5.5 (High)",
+      "gpt-oss-120b-medium\tGPT-OSS 120B (Medium)",
+    ].join("\n");
+
+    function windowById(
+      windows: ReturnType<typeof normalizeAgyPrintUsage> & object,
+      id: string,
+    ) {
+      const found = windows.windows.find((window) => window.id === id);
+      expect(found, id).toBeDefined();
+      return found!;
+    }
+
+    it("keeps 100% and drops the placeholder reset for unused limits", () => {
+      const result = normalizeAgyPrintUsage(fixture("cli-quota-unused.json"), {
+        nowMs: NOW_MS,
+      })!;
+
+      expect(result.windows.map(({ id }) => id)).toEqual([
+        "gemini_5h",
+        "gemini_weekly",
+        "gemini_argon_weekly",
+        "claude_gpt_5h",
+        "claude_gpt_weekly",
+      ]);
+      for (const window of result.windows) {
+        expect(window.percentRemaining).toBe(100);
+        expect(window.notStarted).toBe(true);
+        expect(window.resetsAt).toBeUndefined();
+      }
+    });
+
+    it("reports not-started pace and a known scope for unused limits", () => {
+      const fetched = normalizeAgyPrintUsage(fixture("cli-quota-unused.json"), {
+        nowMs: NOW_MS,
+      })!;
+      const result = withQuotaSemantics(
+        {
+          provider: "agy",
+          label: "Antigravity",
+          source: "cli",
+          ...fetched,
+          state: { status: "fresh", stale: false, sourcesTried: ["cli"] },
+        },
+        new Date(NOW_MS).toISOString(),
+      );
+
+      expect(result.state.status).toBe("fresh");
+      expect(result.windows.map(({ pace }) => pace)).toEqual(
+        Array(5).fill({ status: "unknown", reason: "not_started" }),
+      );
+      expect(result.quotaSemantics?.status).toBe("known");
+      expect(
+        result.quotaSemantics?.effectiveAvailability.map(
+          ({ scope, status, effectivePercentRemaining }) => [
+            scope,
+            status,
+            effectivePercentRemaining,
+          ],
+        ),
+      ).toEqual([
+        ["gemini", "known", 100],
+        ["gemini_argon", "known", 100],
+        ["claude_gpt", "known", 100],
+      ]);
+    });
+
+    it("gives Argon its own scope and keeps unknown groups as their own scope", () => {
+      const raw = JSON.parse(
+        JSON.stringify(fixture("cli-quota-unused.json")),
+      ) as { command: { data: { groups: unknown[] } } };
+      raw.command.data.groups.push({
+        name: "Claude Enterprise",
+        description: "Models within this group: Claude Enterprise",
+        buckets: [
+          {
+            id: "enterprise-monthly",
+            window: "monthly",
+            remaining_fraction: 0.5,
+            reset_time: "2026-11-25T00:00:00Z",
+          },
+        ],
+      });
+      const result = normalizeAgyPrintUsage(raw, { nowMs: NOW_MS })!;
+      const enterprise = windowById(
+        result,
+        "group:Claude%20Enterprise:bucket:enterprise-monthly",
+      );
+      expect(enterprise).toMatchObject({
+        kind: "unknown",
+        percentRemaining: 50,
+        resetsAt: "2026-11-25T00:00:00.000Z",
+      });
+      expect(enterprise.windowSeconds).toBeUndefined();
+      const semantics = withQuotaSemantics(
+        {
+          provider: "agy",
+          label: "Antigravity",
+          source: "cli",
+          ...result,
+          state: { status: "fresh", stale: false, sourcesTried: ["cli"] },
+        },
+        new Date(NOW_MS).toISOString(),
+      ).quotaSemantics;
+      expect(semantics).toMatchObject({
+        status: "partial",
+        unresolvedWindowIds: [enterprise.id],
+      });
+      expect(semantics?.effectiveAvailability.at(-1)).toMatchObject({
+        scope: "group:Claude%20Enterprise",
+        status: "unknown",
+        boundedBy: [],
+        models: { status: "known", labels: ["Claude Enterprise"] },
+      });
+      expect(
+        semantics?.effectiveAvailability.map(
+          ({ scope, effectivePercentRemaining }) => [
+            scope,
+            effectivePercentRemaining,
+          ],
+        ),
+      ).toEqual([
+        ["gemini", 100],
+        ["gemini_argon", 100],
+        ["claude_gpt", 100],
+        ["group:Claude%20Enterprise", undefined],
+      ]);
+    });
+
+    it("keeps a synthetic used limit's real reset and pace", () => {
+      const raw = JSON.parse(
+        JSON.stringify(fixture("cli-quota-unused.json")),
+      ) as {
+        command: {
+          data: {
+            groups: Array<{
+              buckets: Array<{
+                id: string;
+                remaining_fraction: number;
+                reset_time: string;
+              }>;
+            }>;
+          };
+        };
+      };
+      const weekly = raw.command.data.groups[0]!.buckets[0]!;
+      weekly.remaining_fraction = 0.62;
+      weekly.reset_time = "2026-11-26T03:00:00Z";
+      const fetched = normalizeAgyPrintUsage(raw, { nowMs: NOW_MS })!;
+
+      expect(windowById(fetched, "gemini_weekly")).toMatchObject({
+        percentRemaining: 62,
+        resetsAt: "2026-11-26T03:00:00.000Z",
+      });
+      expect(windowById(fetched, "gemini_weekly").notStarted).toBeUndefined();
+      expect(windowById(fetched, "gemini_5h").notStarted).toBe(true);
+
+      const result = withQuotaSemantics(
+        {
+          provider: "agy",
+          label: "Antigravity",
+          source: "cli",
+          ...fetched,
+          state: { status: "fresh", stale: false, sourcesTried: ["cli"] },
+        },
+        new Date(NOW_MS).toISOString(),
+      );
+      expect(
+        windowById({ ...fetched, windows: result.windows }, "gemini_weekly")
+          .pace?.status,
+      ).toBe("behind");
+      expect(result.quotaSemantics?.effectiveAvailability[0]).toMatchObject({
+        scope: "gemini",
+        status: "known",
+        effectivePercentRemaining: 62,
+      });
+    });
+
+    it.each([
+      [0.999, "2026-11-29T06:19:29.000Z"],
+      [0.999, "1970-01-01T00:00:00.000Z"],
+      [0.9, "1970-01-01T00:00:00.000Z"],
+      [1, "1969-12-31T23:59:59.000Z"],
+    ])("keeps the reset for synthetic fraction %s at %s", (fraction, reset) => {
+      const raw = JSON.parse(
+        JSON.stringify(fixture("cli-quota-unused.json")),
+      ) as {
+        command: {
+          data: {
+            groups: Array<{
+              buckets: Array<{
+                remaining_fraction: number;
+                reset_time: string;
+              }>;
+            }>;
+          };
+        };
+      };
+      const weekly = raw.command.data.groups[1]!.buckets[0]!;
+      weekly.remaining_fraction = fraction;
+      weekly.reset_time = reset;
+      const result = normalizeAgyPrintUsage(raw, { nowMs: NOW_MS })!;
+      const used = windowById(result, "claude_gpt_weekly");
+      expect(used.resetsAt).toBe(reset);
+      expect(used.notStarted).toBeUndefined();
+    });
+
+    it("lists each group's models and matches them to agy model ids", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(NOW_MS);
+      const fetched = await fetchQuotaWithRuntime(
+        runtimeWith({
+          cliQuota: JSON.stringify(fixture("cli-quota-unused.json")),
+          cliModels: CATALOG,
+        }),
+      );
+      const scopes = withQuotaSemantics(fetched, new Date(NOW_MS).toISOString())
+        .quotaSemantics?.effectiveAvailability;
+      const modelsFor = (scope: string) =>
+        scopes?.find((entry) => entry.scope === scope)?.models;
+
+      expect(modelsFor("gemini")).toEqual({
+        status: "known",
+        labels: [
+          "Gemini 4 Neon",
+          "Gemini 4 Hydrogen",
+          "Orchestrator (Neon)",
+          "Gemini 3.8 Flash",
+        ],
+        ids: [
+          "gemini-4-neon-high",
+          "gemini-4-neon-xhigh",
+          "gemini-4-neon-medium",
+          "gemini-4-neon-low",
+          "gemini-4-hydrogen-medium",
+          "gemini-pro-orchestrator-neon",
+          "gemini-3.8-flash-medium",
+        ],
+      });
+      expect(modelsFor("claude_gpt")).toMatchObject({
+        status: "known",
+        ids: [
+          "claude-opus-5-5-low",
+          "claude-sonnet-5-5-high",
+          "gpt-oss-120b-medium",
+        ],
+      });
+      // Argon's description is plan advice, not a model list.
+      expect(modelsFor("gemini_argon")).toEqual({
+        status: "unknown",
+      });
+    });
+
+    it.each(["cli", "cli-rpc"] as const)(
+      "keeps fresh %s quota when the model catalog times out",
+      async (source) => {
+        vi.useFakeTimers({ toFake: ["Date"] });
+        const readAt =
+          source === "cli"
+            ? new Date(NOW_MS).toISOString()
+            : LOOPBACK_QUOTA_READ_AT;
+        vi.setSystemTime(Date.parse(readAt));
+        const onExec = vi.fn();
+        const onRequest =
+          vi.fn<(endpoint: AgyConnectionEndpoint, path: string) => void>();
+        const fetched = await fetchQuotaWithRuntime(
+          runtimeWith({
+            cliModels: Object.assign(new Error("agy models timed out"), {
+              code: "ETIMEDOUT",
+            }),
+            onExec,
+            ...(source === "cli"
+              ? { cliQuota: JSON.stringify(fixture("cli-quota-unused.json")) }
+              : {
+                  cliQuota: "{}",
+                  ps: "123 /Users/test/.local/bin/agy\n",
+                  lsof: lsofFor(123, 64440),
+                  onRequest,
+                  responses: {
+                    "https:64440:/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary":
+                      fixture("quota-summary.json"),
+                    "https:64440:/exa.language_server_pb.LanguageServerService/GetUserStatus":
+                      fixture("user-status.json"),
+                  },
+                }),
+          }),
+        );
+        expect(
+          onExec.mock.calls.filter(([, args]) => args[0] === "models"),
+        ).toHaveLength(1);
+        expect(fetched).toMatchObject({
+          source,
+          state: { status: "fresh", stale: false },
+        });
+        if (source === "cli-rpc") {
+          expect(
+            onRequest.mock.calls.map(([, path]) => path.split("/").at(-1)),
+          ).toEqual(["RetrieveUserQuotaSummary", "GetUserStatus"]);
+          expect(fetched.windows.map(({ id }) => id)).toEqual(
+            EXPECTED_WINDOW_SECONDS.map(([id]) => id),
+          );
+        }
+        const result = withQuotaSemantics(fetched, readAt);
+        expect(result.quotaSemantics?.effectiveAvailability[0]).toMatchObject({
+          scope: "gemini",
+          status: "known",
+          effectivePercentRemaining: source === "cli" ? 100 : 82,
+        });
+        expect(result.quotaSemantics?.effectiveAvailability[0]?.models).toEqual(
+          {
+            status: "known",
+            labels:
+              source === "cli"
+                ? [
+                    "Gemini 4 Neon",
+                    "Gemini 4 Hydrogen",
+                    "Orchestrator (Neon)",
+                    "Gemini 3.8 Flash",
+                  ]
+                : ["Gemini Flash", "Gemini Pro"],
+          },
+        );
+      },
+    );
+
+    it("carries the model list onto the scope", () => {
+      const fetched = normalizeAgyPrintUsage(fixture("cli-quota-unused.json"), {
+        nowMs: NOW_MS,
+      })!;
+      const scopes = withQuotaSemantics(
+        {
+          provider: "agy",
+          label: "Antigravity",
+          source: "cli",
+          ...fetched,
+          state: { status: "fresh", stale: false, sourcesTried: ["cli"] },
+        },
+        new Date(NOW_MS).toISOString(),
+      ).quotaSemantics?.effectiveAvailability;
+      expect(
+        scopes?.map(({ scope, models }) => [scope, models?.status]),
+      ).toEqual([
+        ["gemini", "known"],
+        ["gemini_argon", "unknown"],
+        ["claude_gpt", "known"],
+      ]);
+    });
+
+    it("reports unused CLI quota when the vendor names no models", async () => {
+      const cliQuota = JSON.stringify({
+        command: {
+          name: "quota",
+          data: {
+            groups: [
+              {
+                name: "Gemini Models",
+                buckets: [
+                  {
+                    id: "gemini-weekly",
+                    window: "weekly",
+                    remaining_fraction: 1,
+                    reset_time: 0,
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      });
+      const onExec = vi.fn();
+      const fetched = await fetchQuotaWithRuntime(
+        runtimeWith({ cliQuota, onExec }),
+      );
+      expect(fetched.source).toBe("cli");
+      expect(fetched.windows).toMatchObject([
+        { id: "gemini_weekly", percentRemaining: 100, notStarted: true },
+      ]);
+      const result = withQuotaSemantics(
+        fetched,
+        new Date(NOW_MS).toISOString(),
+      );
+      expect(result.quotaSemantics?.effectiveAvailability).toMatchObject([
+        {
+          scope: "gemini",
+          status: "known",
+          effectivePercentRemaining: 100,
+          models: { status: "unknown" },
+        },
+      ]);
+      expect(onExec.mock.calls.map(([, args]) => args[0])).toEqual(["-p"]);
+    });
+
+    const disabledArgonGroup = {
+      displayName: "Gemini 4 Argon",
+      description: "Models within this group: Gemini 4 Argon",
+      buckets: [
+        {
+          bucketId: "argon-weekly",
+          window: "weekly",
+          disabled: true,
+          remainingFraction: 0.5,
+        },
+      ],
+    };
+
+    it.each([
+      ["cli", false],
+      ["cli-rpc", false],
+      ["cli", true],
+      ["cli-rpc", true],
+    ] as const)(
+      "keeps a disabled Argon group in %s quota and snapshots (group only: %s)",
+      async (source, groupOnly) => {
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(NOW_MS);
+        const groups = [disabledArgonGroup];
+        if (!groupOnly)
+          groups.unshift({
+            displayName: "Gemini Models",
+            description: "General quota",
+            buckets: [
+              {
+                bucketId: "gemini-weekly",
+                window: "weekly",
+                disabled: false,
+                remainingFraction: 0.8,
+              },
+            ],
+          });
+        const fresh = await fetchQuotaWithRuntime(
+          runtimeWith({
+            cliModels: "gemini-4-argon-high\tGemini 4 Argon (High)",
+            ...(source === "cli-rpc"
+              ? {
+                  cliQuota: "{}",
+                  ps: "123 /Users/test/.local/bin/agy\n",
+                  lsof: lsofFor(123, 64440),
+                  responses: {
+                    "https:64440:/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary":
+                      { groups },
+                  },
+                }
+              : {
+                  cliQuota: JSON.stringify({
+                    command: { name: "quota", data: { groups } },
+                  }),
+                  ...(groupOnly
+                    ? {
+                        ps: "123 /Users/test/.local/bin/agy\n",
+                        lsof: lsofFor(123, 64440),
+                        responses: {
+                          "https:64440:/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary":
+                            {
+                              groups: [
+                                {
+                                  displayName: "Other Account Group",
+                                  buckets: [],
+                                },
+                              ],
+                            },
+                        },
+                      }
+                    : {}),
+                }),
+          }),
+        );
+        expect(fresh).toMatchObject({
+          source,
+          state: { status: "fresh" },
+        });
+        writeCachedProviders([fresh]);
+        expect(readCachedProvider("agy")?.[AGY_GROUPS]?.at(-1)).toEqual({
+          id: "gemini_argon",
+          name: "Gemini 4 Argon",
+          models: {
+            status: "known",
+            labels: ["Gemini 4 Argon"],
+            ids: ["gemini-4-argon-high"],
+          },
+          buckets: [{ id: "argon-weekly" }],
+        });
+        vi.stubEnv(SNAPSHOT_ENV, cacheFilePath());
+        const args = ["--provider", "agy", "--no-credential-refresh"];
+        const snapshot = JSON.parse(
+          await quotaCommand([...args, "--json", "--full"], undefined),
+        ) as ReturnType<typeof quotaJsonReport>;
+        expect(snapshot.providers[0]?.state).toMatchObject({
+          status: "fresh",
+          reused: true,
+          stale: false,
+          sourcesTried: ["snapshot"],
+        });
+        expect(snapshot.providers[0]?.state.error).toBeUndefined();
+        const generatedAt = new Date(NOW_MS).toISOString();
+        const freshReport = annotateQuotaAdvice({
+          generatedAt,
+          providers: [withQuotaSemantics(fresh, generatedAt)],
+        });
+        for (const json of [
+          quotaJsonReport(freshReport, true).providers[0],
+          snapshot.providers[0],
+        ]) {
+          expect(json?.windows.map(({ id }) => id)).toEqual(
+            groupOnly ? [] : ["gemini_weekly"],
+          );
+          if (groupOnly)
+            expect(
+              json?.quotaSemantics?.effectiveAvailability.map(
+                ({ scope }) => scope,
+              ),
+            ).toEqual(["gemini_argon"]);
+          const argon = json?.quotaSemantics?.effectiveAvailability.find(
+            ({ scope }) => scope === "gemini_argon",
+          );
+          expect(argon).toMatchObject({
+            status: "unknown",
+            boundedBy: [],
+            models: { ids: ["gemini-4-argon-high"] },
+          });
+          expect(argon?.effectivePercentRemaining).toBeUndefined();
+        }
+        for (const full of [false, true]) {
+          expect(renderQuotaToon(freshReport, "quota-axi", full)).toContain(
+            "agy,gemini_argon,gemini-4-argon-high",
+          );
+          expect(
+            await quotaCommand(full ? [...args, "--full"] : args, undefined),
+          ).toContain("agy,gemini_argon,gemini-4-argon-high");
+        }
+      },
+    );
+
+    it.each(["current", "unmeasured", "expired"] as const)(
+      "keeps 0.4%% Antigravity quota positive with a %s sibling",
+      async (sibling) => {
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(NOW_MS);
+        const generatedAt = new Date(NOW_MS).toISOString();
+        const buckets = [
+          sibling === "unmeasured"
+            ? { bucketId: "5h" }
+            : {
+                bucketId: "5h",
+                remainingFraction: 0.75,
+                resetTime: new Date(
+                  NOW_MS + (sibling === "current" ? 3_600_000 : -1_000),
+                ).toISOString(),
+              },
+          {
+            bucketId: "weekly",
+            remaining_fraction: 0.004,
+            resetTime: new Date(NOW_MS + 86_400_000).toISOString(),
+          },
+        ];
+        const fresh = await fetchQuotaWithRuntime(
+          runtimeWith({
+            cliQuota: JSON.stringify({
+              command: {
+                name: "quota",
+                data: { groups: [{ name: "Gemini Models", buckets }] },
+              },
+            }),
+          }),
+        );
+        writeCachedProviders([fresh]);
+        vi.stubEnv(SNAPSHOT_ENV, cacheFilePath());
+        const report = annotateQuotaAdvice({
+          generatedAt,
+          providers: [withQuotaSemantics(fresh, generatedAt)],
+        });
+        const args = ["--provider", "agy", "--no-credential-refresh", "--json"];
+        const snapshot = JSON.parse(
+          await quotaCommand(args, undefined),
+        ) as ReturnType<typeof quotaJsonReport>;
+        for (const saved of [
+          quotaJsonReport(report, false).providers[0],
+          snapshot.providers[0],
+        ]) {
+          expect(
+            saved?.windows.find(({ id }) => id === "gemini_weekly")
+              ?.percentRemaining,
+          ).toBe(0.4);
+          const scope = saved?.quotaSemantics?.effectiveAvailability[0];
+          expect(scope?.effectivePercentRemaining).toBe(
+            sibling === "current" ? 0.4 : undefined,
+          );
+          expect(scope?.runway?.status).not.toBe("exhausted_now");
+        }
+        for (const full of [false, true]) {
+          const toon = renderQuotaToon(report, "quota-axi", full);
+          expect(toon).not.toContain("exhausted_now");
+          if (sibling === "current") expect(toon).toContain("agy,gemini,0.4,");
+        }
+        for (const show of ["remaining", "used"] as const) {
+          const tui = renderQuotaTui(report, {
+            columns: 80,
+            colorDepth: "none",
+            show,
+          });
+          expect(tui).toContain(show === "remaining" ? "<1%" : ">99%");
+        }
+      },
+    );
+
+    it("projects exhaustion from small Antigravity usage before and after caching", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(NOW_MS);
+      const generatedAt = new Date(NOW_MS).toISOString();
+      const groups = [
+        {
+          name: "Gemini Models",
+          buckets: [
+            {
+              bucketId: "5h",
+              remainingFraction: 0.996,
+              resetTime: new Date(NOW_MS + 17_990_000).toISOString(),
+            },
+            { bucketId: "weekly", remainingFraction: 1, resetTime: 0 },
+          ],
+        },
+      ];
+      const reading = await fetchQuotaWithRuntime(
+        runtimeWith({
+          cliQuota: JSON.stringify({
+            command: { name: "quota", data: { groups } },
+          }),
+        }),
+      );
+      writeCachedProviders([reading]);
+      vi.stubEnv(SNAPSHOT_ENV, cacheFilePath());
+      const snapshot = JSON.parse(
+        await quotaCommand(
+          ["--provider", "agy", "--json", "--no-credential-refresh"],
+          undefined,
+        ),
+      ) as ReturnType<typeof quotaJsonReport>;
+      const report = annotateQuotaAdvice({
+        generatedAt,
+        providers: [withQuotaSemantics(reading, generatedAt)],
+      });
+      for (const saved of [
+        quotaJsonReport(report, false).providers[0],
+        snapshot.providers[0],
+      ]) {
+        expect(
+          saved?.windows.find(({ id }) => id === "gemini_5h")?.percentRemaining,
+        ).toBe(99.6);
+        expect(
+          saved?.quotaSemantics?.effectiveAvailability[0]?.runway,
+        ).toMatchObject({
+          status: "projected_exhaustion",
+          usableRunwaySeconds: 2_490,
+          limitingWindowId: "gemini_5h",
+        });
+      }
+      expect(renderQuotaToon(report, "quota-axi", false)).toContain(
+        "agy,gemini,99.6,",
+      );
+      for (const show of ["remaining", "used"] as const) {
+        const tui = renderQuotaTui(report, {
+          columns: 80,
+          colorDepth: "none",
+          show,
+        });
+        expect(tui).toContain(show === "remaining" ? ">99%" : "<1%");
+      }
+    });
+
+    it.each(["cli", "cli-rpc"] as const)(
+      "does not infer Argon headroom from its weekly allowance alone in %s",
+      async (source) => {
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(NOW_MS);
+        const weekly = {
+          bucketId: "weekly",
+          remainingFraction: 0.9,
+          resetTime: new Date(NOW_MS + 167 * 3_600_000).toISOString(),
+        };
+        const groups = [
+          { name: "Gemini 4 Argon", buckets: [{ bucketId: "5h" }, weekly] },
+          {
+            name: "Gemini Models",
+            buckets: [{ bucketId: "5h", disabled: true }, weekly],
+          },
+        ];
+        const reading = await fetchQuotaWithRuntime(
+          runtimeWith(
+            source === "cli"
+              ? {
+                  cliQuota: JSON.stringify({
+                    command: { name: "quota", data: { groups } },
+                  }),
+                }
+              : {
+                  cliQuota: "{}",
+                  ps: "123 /Users/test/.local/bin/agy\n",
+                  lsof: lsofFor(123, 64440),
+                  responses: {
+                    "https:64440:/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary":
+                      { groups },
+                  },
+                },
+          ),
+        );
+        expect(reading.source).toBe(source);
+        writeCachedProviders([reading]);
+        const cached = readCachedProvider("agy");
+        const snapshot = readSnapshotProviders(cacheFilePath(), "agy", NOW_MS);
+        if (!cached || !Array.isArray(snapshot) || !snapshot[0])
+          throw new Error("Expected saved quota");
+        const generatedAt = new Date(NOW_MS).toISOString();
+        for (const saved of [reading, cached, snapshot[0]]) {
+          const report = annotateQuotaAdvice({
+            generatedAt,
+            providers: [withQuotaSemantics(saved, generatedAt)],
+          });
+          const scopes = quotaJsonReport(report, false).providers[0]
+            ?.quotaSemantics?.effectiveAvailability;
+          expect(scopes).toMatchObject([
+            {
+              scope: "gemini_argon",
+              status: "unknown",
+              boundedBy: ["gemini_argon_weekly"],
+              pace: {
+                status: "ahead",
+                unknownWindowIds: ["gemini_argon_5h"],
+              },
+              selection: {
+                status: "unknown",
+                unmeasurableWindowIds: ["gemini_argon_5h"],
+              },
+            },
+            { scope: "gemini", status: "known", effectivePercentRemaining: 90 },
+          ]);
+          expect(scopes?.[0]?.effectivePercentRemaining).toBeUndefined();
+          expect(renderQuotaToon(report, "quota-axi", true)).toContain(
+            "agy,gemini_argon,gemini_argon_weekly,known,ahead,gemini_argon_weekly,none,none,gemini_argon_5h,",
+          );
+        }
+        const stale = await fetchQuotaWithRuntime(
+          runtimeWith({
+            agyPath: "agy",
+            ps: "",
+            cliQuota: Object.assign(new Error("agy timed out"), {
+              code: "ETIMEDOUT",
+            }),
+          }),
+        );
+        expect(stale.state.status).toBe("stale");
+        const ids = ["gemini_argon_weekly", "gemini_argon_5h"];
+        expect(
+          withQuotaSemantics(stale, generatedAt).quotaSemantics
+            ?.effectiveAvailability[0],
+        ).toMatchObject({
+          scope: "gemini_argon",
+          pace: { status: "unknown", unknownWindowIds: ids },
+          runway: { status: "unknown", unmeasurableWindowIds: ids },
+          selection: { status: "unknown", unmeasurableWindowIds: ids },
+        });
+      },
+    );
+
+    it.each(
+      ["CLI", "user status", "model configs", "later port"].flatMap((path) =>
+        ["disabled", "reset only", "expired", "malformed"].map(
+          (evidence) => [path, evidence] as const,
+        ),
+      ),
+    )(
+      "uses fallback quota from %s without mixing accounts (bucket: %s)",
+      async (path, evidence) => {
+        vi.useFakeTimers({ toFake: ["Date"] });
+        const readAt = "2026-06-15T09:00:00Z";
+        vi.setSystemTime(Date.parse(readAt));
+        const resetTime =
+          evidence === "expired"
+            ? readAt
+            : evidence === "malformed"
+              ? "2099-02-29T00:00:00Z"
+              : "2026-06-19T08:45:39Z";
+        const hasReset = evidence !== "disabled";
+        const measurement =
+          evidence === "expired"
+            ? { remainingFraction: 0.5 }
+            : evidence === "malformed"
+              ? { remainingFraction: 0 }
+              : {};
+        const groups = hasReset
+          ? [
+              {
+                ...disabledArgonGroup,
+                buckets: [
+                  {
+                    bucketId: "argon-weekly",
+                    window: "weekly",
+                    resetTime,
+                    ...measurement,
+                  },
+                ],
+              },
+            ]
+          : [disabledArgonGroup];
+        const rpc = "/exa.language_server_pb.LanguageServerService/";
+        const status = fixture("user-status.json") as {
+          userStatus: { cascadeModelConfigData: unknown };
+        };
+        const result = await fetchQuotaWithRuntime(
+          runtimeWith({
+            cliQuota:
+              path === "CLI"
+                ? JSON.stringify({
+                    command: { name: "quota", data: { groups } },
+                  })
+                : "{}",
+            cliModels: "gemini-4-argon-high\tGemini 4 Argon (High)",
+            ps: "123 /Users/test/.local/bin/agy\n",
+            lsof:
+              lsofFor(123, 64440) +
+              (path === "later port" ? lsofFor(123, 64441) : ""),
+            responses: {
+              [`https:64440:${rpc}RetrieveUserQuotaSummary`]: {
+                groups: path === "CLI" ? [] : groups,
+              },
+              ...(path === "model configs"
+                ? {
+                    [`https:64440:${rpc}GetUserStatus`]: {
+                      email: "other@example.invalid",
+                      userTier: { name: "Other plan" },
+                      ...(hasReset
+                        ? {
+                            clientModelConfigs: [
+                              {
+                                label: "Unmeasurable model",
+                                quotaInfo: { resetTime, ...measurement },
+                              },
+                            ],
+                          }
+                        : {}),
+                    },
+                    [`https:64440:${rpc}GetCommandModelConfigs`]:
+                      status.userStatus.cascadeModelConfigData,
+                  }
+                : {
+                    [`https:${path === "later port" ? 64441 : 64440}:${rpc}GetUserStatus`]:
+                      status,
+                  }),
+            },
+          }),
+        );
+        expect(result).toMatchObject({
+          source: "cli-rpc",
+          state: { status: "fresh" },
+        });
+        const sameEndpoint = path === "user status" || path === "model configs";
+        expect(result.windows).toMatchObject([
+          ...(sameEndpoint && hasReset
+            ? [
+                {
+                  id: "gemini_argon_weekly",
+                  resetsAt:
+                    evidence === "malformed"
+                      ? "invalid reset"
+                      : new Date(resetTime).toISOString(),
+                },
+              ]
+            : []),
+          { id: "model:model_fixture_gemini_flash", percentRemaining: 100 },
+          { id: "model:model_fixture_claude_sonnet", percentRemaining: 50 },
+        ]);
+        expect(
+          withQuotaSemantics(result, new Date().toISOString()).quotaSemantics
+            ?.effectiveAvailability,
+        ).toMatchObject(
+          sameEndpoint
+            ? [
+                {
+                  scope: "gemini_argon",
+                  status: "unknown",
+                  boundedBy: hasReset ? ["gemini_argon_weekly"] : [],
+                  models: { ids: ["gemini-4-argon-high"] },
+                },
+              ]
+            : [],
+        );
+        if (sameEndpoint && hasReset)
+          expect(result.windows[0]?.percentRemaining).toBe(
+            evidence === "expired"
+              ? 50
+              : evidence === "malformed"
+                ? 0
+                : undefined,
+          );
+        if (path === "model configs") {
+          expect(result.plan).toBeUndefined();
+          expect(result.account).toBeUndefined();
+        }
+      },
+    );
+
+    it.each(["not-a-date", "2099-02-29T00:00:00Z", "", 1e100])(
+      "keeps invalid Antigravity resets diagnostic-only (%s)",
+      async (resetTime) => {
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(NOW_MS);
+        const generatedAt = new Date(NOW_MS).toISOString();
+        const reading = await fetchQuotaWithRuntime(
+          runtimeWith({
+            cliQuota: JSON.stringify({
+              command: {
+                name: "quota",
+                data: {
+                  groups: [
+                    {
+                      name: "Gemini 4 Argon",
+                      buckets: [
+                        {
+                          bucketId: "weekly",
+                          remainingFraction: 0,
+                          reset_time: resetTime,
+                        },
+                      ],
+                    },
+                    {
+                      name: "Gemini Models",
+                      buckets: [
+                        {
+                          bucketId: "weekly",
+                          remainingFraction: 0.6,
+                          resetTime: new Date(NOW_MS + 3_600_000).toISOString(),
+                        },
+                      ],
+                    },
+                  ],
+                },
+              },
+            }),
+          }),
+        );
+        const report = annotateQuotaAdvice({
+          generatedAt,
+          providers: [withQuotaSemantics(reading, generatedAt)],
+        });
+        const argonId = "gemini_argon_weekly";
+        const summary = quotaJsonReport(report, false).providers[0];
+        expect(summary?.state).toMatchObject({
+          status: "fresh",
+          untrustedWindowIds: [argonId],
+        });
+        const argon = summary?.windows.find(({ id }) => id === argonId);
+        expect(argon?.percentRemaining).toBeUndefined();
+        expect(argon?.resetsAt).toBeUndefined();
+        expect(argon?.pace).toMatchObject({
+          status: "unknown",
+          reason: "invalid_cycle",
+        });
+        const scopes = summary?.quotaSemantics?.effectiveAvailability;
+        expect(scopes).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              scope: "gemini",
+              effectivePercentRemaining: 60,
+            }),
+            expect.objectContaining({
+              scope: "gemini_argon",
+              status: "unknown",
+              runway: { status: "unknown", unmeasurableWindowIds: [argonId] },
+            }),
+          ]),
+        );
+        const diagnostic = quotaJsonReport(
+          report,
+          true,
+        ).providers[0]?.windows.find(({ id }) => id === argonId);
+        expect(diagnostic).toMatchObject({
+          percentRemaining: 0,
+          resetsAt: "invalid reset",
+        });
+        expect(renderQuotaToon(report, "quota-axi", true)).toContain(
+          "invalid reset",
+        );
+        expect(renderQuotaToon(report, "quota-axi", false)).not.toContain(
+          "exhausted_now",
+        );
+        const tui = renderQuotaTui(report, { columns: 80, colorDepth: "none" });
+        expect(tui).toMatch(/\?\s+bad\s/);
+        expect(tui).not.toContain("passed");
+
+        writeCachedProviders(report.providers);
+        const snapshot = readSnapshotProviders(cacheFilePath(), "agy", NOW_MS);
+        expect(Array.isArray(snapshot) && snapshot[0]).toBeTruthy();
+        if (!Array.isArray(snapshot) || !snapshot[0])
+          throw new Error("Expected saved quota");
+        expect(
+          snapshot[0].windows.find(({ id }) => id === argonId),
+        ).toMatchObject({
+          resetsAt: "invalid reset",
+        });
+        expect(
+          withQuotaSemantics(snapshot[0], generatedAt).windows.map(
+            ({ id }) => id,
+          ),
+        ).toEqual(["gemini_weekly"]);
+        const stale = await fetchQuotaWithRuntime(
+          runtimeWith({
+            cliQuota: Object.assign(new Error("agy timed out"), {
+              code: "ETIMEDOUT",
+            }),
+          }),
+        );
+        expect(stale).toMatchObject({
+          state: { status: "stale" },
+          windows: [{ id: "gemini_weekly", percentRemaining: 60 }],
+        });
+        expect(stale.windows).toHaveLength(1);
+      },
+    );
+
+    it.each([false, true])(
+      "keeps both Gemini groups independent in saved reports (reversed: %s)",
+      async (reversed) => {
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(NOW_MS);
+        const generatedAt = new Date(NOW_MS).toISOString();
+        const resetTime = new Date(NOW_MS + 3_600_000).toISOString();
+        const groups = [
+          {
+            name: "Gemini Models",
+            description: "Models within this group: Gemini Neon",
+            buckets: [
+              { bucketId: "weekly", remainingFraction: 0.8, resetTime },
+            ],
+          },
+          {
+            name: "Gemini Models (Flash, Pro)",
+            description: "Models within this group: Gemini Flash",
+            buckets: [
+              { bucketId: "weekly", remainingFraction: 0.2, resetTime },
+            ],
+          },
+        ];
+        const live = await fetchQuotaWithRuntime(
+          runtimeWith({
+            cliQuota: JSON.stringify({
+              command: {
+                name: "quota",
+                data: { groups: reversed ? groups.toReversed() : groups },
+              },
+            }),
+          }),
+        );
+        writeCachedProviders([live]);
+        const snapshot = readSnapshotProviders(cacheFilePath(), "agy", NOW_MS);
+        if (!Array.isArray(snapshot) || !snapshot[0])
+          throw new Error("Expected saved Gemini groups");
+        for (const reading of [live, snapshot[0]]) {
+          const report = annotateQuotaAdvice({
+            generatedAt,
+            providers: [withQuotaSemantics(reading, generatedAt)],
+          });
+          const scopes = quotaJsonReport(report, false).providers[0]
+            ?.quotaSemantics?.effectiveAvailability;
+          expect(scopes).toHaveLength(2);
+          expect(scopes).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({
+                scope: "group:Gemini%20Models",
+                boundedBy: ["group:Gemini%20Models_weekly"],
+                effectivePercentRemaining: 80,
+                models: { status: "known", labels: ["Gemini Neon"] },
+              }),
+              expect.objectContaining({
+                scope: "group:Gemini%20Models%20(Flash%2C%20Pro)",
+                boundedBy: ["group:Gemini%20Models%20(Flash%2C%20Pro)_weekly"],
+                effectivePercentRemaining: 20,
+                models: { status: "known", labels: ["Gemini Flash"] },
+              }),
+            ]),
+          );
+        }
+      },
+    );
+
+    it("drops stale windows at report time without losing group membership", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(NOW_MS);
+      const cached = cachedAgyQuota();
+      const fresh = await fetchQuotaWithRuntime(
+        runtimeWith({
+          cliQuota: JSON.stringify(fixture("cli-quota-unused.json")),
+          cliModels: "claude-opus-5-5-low\tClaude Opus 5.5 (Low)",
+        }),
+      );
+      expect(
+        fresh.windows.filter(({ id }) => id.startsWith("gemini_argon_")),
+      ).toMatchObject([{ id: "gemini_argon_weekly" }]);
+      cached[AGY_GROUPS] = fresh[AGY_GROUPS];
+      cached.windows = fresh.windows.map((window) => ({
+        ...window,
+        percentUsed: 12,
+        percentRemaining: 88,
+        notStarted: undefined,
+        resetsAt: new Date(
+          NOW_MS +
+            (window.id === "gemini_weekly"
+              ? 3_600_000
+              : window.id === "gemini_argon_weekly"
+                ? 1_000
+                : -60_000),
+        ).toISOString(),
+      }));
+      writeCachedProviders([cached]);
+      const onExec = vi.fn();
+      const runtime = runtimeWith({
+        agyPath: "agy",
+        ps: "",
+        onExec,
+        cliQuota: Object.assign(new Error("agy timed out"), {
+          code: "ETIMEDOUT",
+        }),
+      });
+      const result = await fetchQuotaWithRuntime(runtime);
+      expect(result.state.status).toBe("stale");
+      expect(result.windows).toMatchObject([
+        { id: "gemini_weekly", percentRemaining: 88 },
+        { id: "gemini_argon_weekly", percentRemaining: 88 },
+      ]);
+      expect(onExec.mock.calls.map(([, args]) => args[0])).not.toContain(
+        "models",
+      );
+      vi.setSystemTime(NOW_MS + 2_000);
+      const generatedAt = new Date().toISOString();
+      const report = annotateQuotaAdvice({
+        generatedAt,
+        providers: [withQuotaSemantics(result, generatedAt)],
+      });
+      const json = quotaJsonReport(report, false).providers[0];
+      expect(json?.windows.map(({ id }) => id)).toEqual(["gemini_weekly"]);
+      expect(quotaJsonReport(report, true).providers[0]?.windows).toMatchObject(
+        [{ id: "gemini_weekly", percentRemaining: 88 }],
+      );
+      const scopes = json?.quotaSemantics?.effectiveAvailability;
+      expect(scopes?.[0]).toMatchObject({
+        scope: "gemini",
+        status: "unknown",
+        pace: { unknownWindowIds: ["gemini_weekly", "gemini_5h"] },
+        models: {
+          status: "known",
+          labels: [
+            "Gemini 4 Neon",
+            "Gemini 4 Hydrogen",
+            "Orchestrator (Neon)",
+            "Gemini 3.8 Flash",
+          ],
+        },
+      });
+      expect(scopes?.slice(1)).toMatchObject([
+        {
+          scope: "gemini_argon",
+          status: "unknown",
+          boundedBy: [],
+          models: { status: "unknown" },
+          pace: {
+            status: "unknown",
+            unknownWindowIds: ["gemini_argon_weekly"],
+          },
+          runway: {
+            status: "unknown",
+            unmeasurableWindowIds: ["gemini_argon_weekly"],
+          },
+          selection: {
+            status: "unknown",
+            unmeasurableWindowIds: ["gemini_argon_weekly"],
+          },
+        },
+        {
+          scope: "claude_gpt",
+          status: "unknown",
+          boundedBy: [],
+          models: {
+            status: "known",
+            ids: ["claude-opus-5-5-low"],
+            unmatchedLabels: ["Claude Sonnet 5.5", "GPT-OSS 120B"],
+          },
+        },
+      ]);
+      expect(
+        scopes?.map(
+          ({ effectivePercentRemaining }) => effectivePercentRemaining,
+        ),
+      ).toEqual([undefined, undefined, undefined]);
+      for (const full of [false, true]) {
+        const toon = renderQuotaToon(report, "quota-axi", full);
+        expect(toon).not.toContain("agy,gemini_argon_weekly,");
+        expect(toon).toContain("agy,gemini_argon,unknown");
+        expect(toon).toContain(
+          "agy,claude_gpt,claude-opus-5-5-low + Claude Sonnet 5.5 + GPT-OSS 120B",
+        );
+      }
+
+      vi.setSystemTime(NOW_MS + 3_600_000);
+      const expired = await fetchQuotaWithRuntime(runtime);
+      expect(expired.state).toMatchObject({
+        status: "unavailable",
+        stale: false,
+      });
+      expect(expired.windows).toEqual([]);
+      const expiredAt = new Date().toISOString();
+      const noStaleFallback = withQuotaSemantics(expired, expiredAt);
+      expect(noStaleFallback.quotaSemantics?.effectiveAvailability).toEqual([]);
+      expect(withQuotaSemantics(result, expiredAt)).toEqual(noStaleFallback);
+    });
+  });
+
   it("falls back to model windows from user status payloads", () => {
     const result = normalizeAgyUserStatus(fixture("user-status.json"));
 
@@ -254,6 +1497,77 @@ describe("Antigravity quota parsing", () => {
         percentRemaining: 50,
       },
     ]);
+  });
+
+  it("distinguishes a small model allowance from an exhausted model", () => {
+    const result = normalizeAgyUserStatus({
+      clientModelConfigs: [
+        { label: "Atlas", quotaInfo: { remainingFraction: 0.004 } },
+        { label: "Beacon", quotaInfo: { remainingFraction: 0 } },
+      ],
+    });
+    expect(result?.windows).toMatchObject([
+      { id: "model:atlas", percentRemaining: 0.4 },
+      { id: "model:beacon", percentRemaining: 0 },
+    ]);
+  });
+
+  it("uses the valid reset alias in grouped and model responses", () => {
+    const quota = {
+      remainingFraction: 0,
+      resetTime: "2100-02-29T12:00:00Z",
+      reset_time: "2100-03-02T08:00:00-04:00",
+    };
+    const grouped = normalizeAgyQuotaSummary({
+      groups: [
+        { name: "Gemini 4 Argon", buckets: [{ bucketId: "weekly", ...quota }] },
+      ],
+    });
+    const model = normalizeAgyUserStatus({
+      clientModelConfigs: [{ label: "Argon", quotaInfo: quota }],
+    });
+    for (const reading of [grouped, model]) {
+      expect(reading?.windows).toMatchObject([
+        { percentRemaining: 0, resetsAt: "2100-03-02T12:00:00.000Z" },
+      ]);
+    }
+  });
+
+  it("does not retain malformed model reset text", () => {
+    const reading = normalizeAgyUserStatus({
+      clientModelConfigs: [
+        {
+          label: "Argon",
+          quotaInfo: { remainingFraction: 0, resetTime: "not-a-date" },
+        },
+      ],
+    });
+    expect(reading?.windows).toMatchObject([
+      { id: "model:argon", percentRemaining: 0, resetsAt: "invalid reset" },
+    ]);
+  });
+
+  it("distinguishes exact and rounded full model resets at the epoch", () => {
+    const result = normalizeAgyUserStatus({
+      clientModelConfigs: [
+        {
+          label: "Atlas",
+          quotaInfo: { remainingFraction: 0.999, resetTime: 0 },
+        },
+        { label: "Beacon", quotaInfo: { remainingFraction: 1, resetTime: 0 } },
+      ],
+    });
+    expect(result?.windows).toMatchObject([
+      {
+        id: "model:atlas",
+        percentRemaining: 99.9,
+        resetsAt: "1970-01-01T00:00:00.000Z",
+      },
+      { id: "model:beacon", percentRemaining: 100, notStarted: true },
+    ]);
+    expect(result?.windows[0]?.percentUsed).toBeCloseTo(0.1);
+    expect(result?.windows[0]?.notStarted).toBeUndefined();
+    expect(result?.windows[1]?.resetsAt).toBeUndefined();
   });
 
   it("parses Antigravity processes and listening ports without matching prompt text", () => {
@@ -327,6 +1641,55 @@ describe("Antigravity provider", () => {
       "claude_gpt_5h",
       "claude_gpt_weekly",
     ]);
+  });
+
+  it("resolves loopback model labels after a failed CLI read", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.parse(LOOPBACK_QUOTA_READ_AT));
+    const onExec = vi.fn();
+    const fetched = await fetchQuotaWithRuntime(
+      runtimeWith({
+        cliQuota: "{}",
+        cliModels:
+          "gemini-flash-low\tGemini Flash (Low)\ngemini-flash-high\tGemini Flash (High)\ngemini-pro-low\tGemini Pro (Medium)\ncase-mismatch\tgemini Flash\ncase-mismatch-low\tgemini Flash (Low)",
+        ps: "123 /Users/test/.local/bin/agy\n",
+        lsof: lsofFor(123, 64440),
+        responses: {
+          "https:64440:/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary":
+            fixture("quota-summary.json"),
+        },
+        onExec,
+      }),
+    );
+    expect(fetched.source).toBe("cli-rpc");
+    expect(
+      onExec.mock.calls.filter(([, args]) => args[0] === "models"),
+    ).toHaveLength(1);
+    const result = withQuotaSemantics(fetched, LOOPBACK_QUOTA_READ_AT);
+    expect(
+      result.quotaSemantics?.effectiveAvailability[0]
+        ?.effectivePercentRemaining,
+    ).toBe(82);
+    expect(result.quotaSemantics?.effectiveAvailability[0]?.models).toEqual({
+      status: "known",
+      labels: ["Gemini Flash", "Gemini Pro"],
+      ids: ["gemini-flash-low", "gemini-flash-high"],
+      unmatchedLabels: ["Gemini Pro"],
+    });
+  });
+
+  it("skips the model catalog when a usable CLI quota names no models", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.parse("2026-09-11T12:00:00Z"));
+    const onExec = vi.fn();
+    const fetched = await fetchQuotaWithRuntime(
+      runtimeWith({
+        cliQuota: JSON.stringify(fixture("cli-quota.json")),
+        onExec,
+      }),
+    );
+    expect(fetched.state.status).toBe("fresh");
+    expect(onExec.mock.calls.map(([, args]) => args[0])).toEqual(["-p"]);
   });
 
   it("probes app language-server endpoints with CSRF before quota requests", async () => {
@@ -481,7 +1844,7 @@ describe("Antigravity provider", () => {
     expect(result.state.status).toBe("fresh");
   });
 
-  it("falls back to model quotas when quota summary has no usable buckets", async () => {
+  it("falls back to model quotas when the quota summary has no named groups", async () => {
     const result = await fetchQuotaWithRuntime(
       runtimeWith({
         ps: "123 /Users/test/.local/bin/agy\n",
@@ -644,30 +2007,107 @@ describe("Antigravity provider", () => {
     expect(readCachedProvider("agy")).toBeDefined();
   });
 
-  it("preserves authentication failures and retires stale cache", async () => {
-    writeCachedProviders([cachedAgyQuota()]);
-    const port = await startServer((_response) => {
-      _response.writeHead(401, { "content-type": "application/json" });
-      _response.end(JSON.stringify({ error: "secret-account@example.test" }));
-    });
+  it.each([
+    "no diagnostic",
+    "group diagnostic",
+    "model diagnostic",
+    "other listener diagnostic",
+    "CLI diagnostic",
+    "other listener measurement",
+  ] as const)(
+    "preserves definitive authentication evidence with %s",
+    async (reading) => {
+      writeCachedProviders([cachedAgyQuota()]);
+      const groups = [{ name: "Gemini Models", buckets: [] }];
+      const port = await startServer((response, request) => {
+        const grouped =
+          reading === "group diagnostic" &&
+          request.url?.endsWith("/RetrieveUserQuotaSummary");
+        const model =
+          reading === "model diagnostic" &&
+          request.url?.endsWith("/GetUserStatus");
+        response.writeHead(grouped || model ? 200 : 401, {
+          "content-type": "application/json",
+        });
+        response.end(
+          JSON.stringify(
+            grouped
+              ? { groups }
+              : model
+                ? {
+                    clientModelConfigs: [
+                      {
+                        label: "Test Model",
+                        quotaInfo: { resetTime: "2099-01-01T00:00:00Z" },
+                      },
+                    ],
+                  }
+                : { error: "secret-account@example.test" },
+          ),
+        );
+      });
+      const measured = reading === "other listener measurement";
+      const otherListener = measured || reading === "other listener diagnostic";
+      const result = await fetchQuotaWithRuntime(
+        runtimeWith({
+          ps: "123 /Users/test/.local/bin/agy\n",
+          lsof:
+            lsofFor(123, 64440) + (otherListener ? lsofFor(123, 64441) : ""),
+          ...(reading === "CLI diagnostic"
+            ? {
+                cliQuota: JSON.stringify({
+                  command: { name: "quota", data: { groups } },
+                }),
+              }
+            : {}),
+          async requestJson(endpoint, path, timeoutMs) {
+            if (endpoint.port === 64441) {
+              if (!path.endsWith("/RetrieveUserQuotaSummary")) return {};
+              return measured
+                ? {
+                    groups: [
+                      {
+                        name: "Gemini Models",
+                        buckets: [
+                          {
+                            bucketId: "weekly",
+                            remainingFraction: 0.8,
+                          },
+                        ],
+                      },
+                    ],
+                  }
+                : { groups };
+            }
+            if (endpoint.scheme === "https")
+              throw new Error("HTTPS unavailable");
+            return requestLoopbackJson(endpointAt(port), path, timeoutMs);
+          },
+        }),
+      );
 
-    const result = await fetchQuotaWithRuntime(
-      runtimeWith({
-        ps: "123 /Users/test/.local/bin/agy\n",
-        lsof: lsofFor(123, port),
-        requestJson: requestLoopbackJson,
-      }),
-    );
-
-    expect(result.state).toMatchObject({
-      status: "auth_required",
-      error: "Antigravity sign-in required",
-    });
-    expect(JSON.stringify(result)).not.toContain("secret-account");
-    expect(readCachedProvider("agy")).toBeUndefined();
-  });
+      if (otherListener || reading === "CLI diagnostic") {
+        expect(result.state.status).toBe("fresh");
+        expect(result.source).toBe(otherListener ? "cli-rpc" : "cli");
+        expect(result[AGY_GROUPS]).toMatchObject([{ id: "gemini" }]);
+        expect(result.windows).toMatchObject(
+          measured ? [{ id: "gemini_weekly", percentRemaining: 80 }] : [],
+        );
+        expect(readCachedProvider("agy")).toBeDefined();
+      } else {
+        expect(result.state).toMatchObject({
+          status: "auth_required",
+          error: "Antigravity sign-in required",
+        });
+        expect(readCachedProvider("agy")).toBeUndefined();
+      }
+      expect(JSON.stringify(result)).not.toContain("secret-account");
+    },
+  );
 
   it("prefers agy CLI /quota over loopback when both are available", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.parse("2026-09-11T12:00:00Z"));
     writeCachedProviders([cachedAgyQuota()]);
     const commands: Array<{
       command: string;
@@ -709,14 +2149,15 @@ describe("Antigravity provider", () => {
       "claude_gpt_5h",
       "claude_gpt_weekly",
     ]);
-    expect(commands.at(-1)).toMatchObject({
+    const quotaCommand = commands.find(({ args }) => args[0] === "-p");
+    expect(quotaCommand).toMatchObject({
       command: "/Users/test/.local/bin/agy",
       args: ["-p", "/quota", "--output-format", "json"],
       timeoutMs: 15_000,
     });
-    expect(
-      commands.at(-1)?.path?.split(delimiter).slice(1).join(delimiter),
-    ).toBe(process.env.PATH ?? "");
+    expect(quotaCommand?.path?.split(delimiter).slice(1).join(delimiter)).toBe(
+      process.env.PATH ?? "",
+    );
     expect(loopbackCalled).toBe(false);
   });
 
@@ -989,6 +2430,8 @@ exec node "$0-cli.js" "$@"
   });
 
   it("reads agy CLI /quota when loopback is down", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.parse("2026-09-11T12:00:00Z"));
     const commands: Array<{ command: string; args: string[] }> = [];
     const result = await fetchQuotaWithRuntime(
       runtimeWith({
@@ -1092,6 +2535,8 @@ exec node "$0-cli.js" "$@"
 
   it("keeps the Gemini 4 Argon bucket out of the Gemini bound", async () => {
     const nowIso = "2026-10-20T00:00:00.000Z";
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.parse(nowIso));
     const fetched = await fetchQuotaWithRuntime(
       runtimeWith({
         ps: "",
@@ -1107,15 +2552,17 @@ exec node "$0-cli.js" "$@"
 
     const result = withQuotaSemantics(fetched, nowIso);
 
-    expect(result.quotaSemantics).toMatchObject({
-      status: "partial",
-      unresolvedWindowIds: ["gemini_argon_weekly"],
-    });
+    expect(result.quotaSemantics?.status).toBe("known");
+    expect(result.quotaSemantics?.unresolvedWindowIds).toBeUndefined();
     expect(result.quotaSemantics?.effectiveAvailability).toMatchObject([
       {
         scope: "gemini",
         boundedBy: ["gemini_weekly"],
         effectivePercentRemaining: 99,
+      },
+      {
+        scope: "gemini_argon",
+        boundedBy: ["gemini_argon_weekly"],
       },
       {
         scope: "claude_gpt",
@@ -1125,8 +2572,10 @@ exec node "$0-cli.js" "$@"
     ]);
   });
 
-  it("marks reading stale when resetsAt is in the past", async () => {
+  it("does not mark the whole reading stale when one limit's reset has passed", async () => {
     const nowIso = "2026-09-15T12:00:00.000Z";
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.parse(nowIso));
     const pastReset = new Date(Date.parse(nowIso) - 60_000).toISOString();
     const quotaData = fixture("cli-quota.json") as {
       command: {
@@ -1148,8 +2597,12 @@ exec node "$0-cli.js" "$@"
 
     const result = withQuotaSemantics(fetched, nowIso);
 
-    expect(result.state.status).toBe("stale");
-    expect(result.state.stale).toBe(true);
+    expect(result.state.status).toBe("fresh");
+    expect(result.state.stale).toBeFalsy();
+    const scopes = result.quotaSemantics?.effectiveAvailability ?? [];
+    expect(scopes.find(({ scope }) => scope === "gemini")?.status).toBe(
+      "unknown",
+    );
   });
 });
 
@@ -1163,6 +2616,7 @@ function runtimeWith(options: {
   lsofError?: Error;
   lsofByPid?: Record<number, string | Error>;
   cliQuota?: string | Error;
+  cliModels?: string | Error;
   requestJson?: AgyProbeRuntime["requestJson"];
   responses?: Record<string, unknown>;
   onExec?: (
@@ -1197,6 +2651,10 @@ function runtimeWith(options: {
         command === "agy" ||
         (options.agyPath && command === options.agyPath)
       ) {
+        if (args[0] === "models") {
+          if (options.cliModels instanceof Error) throw options.cliModels;
+          return options.cliModels ?? "";
+        }
         if (options.agyError) throw options.agyError;
         if (options.cliQuota instanceof Error) throw options.cliQuota;
         if (typeof options.cliQuota === "string") return options.cliQuota;

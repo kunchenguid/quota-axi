@@ -80,6 +80,7 @@ export type QuotaPaceReason =
   | "invalid_cycle"
   | "future_cycle_start"
   | "expired_reset"
+  | "not_started"
   | "unsupported_period";
 
 export type QuotaPace = {
@@ -219,12 +220,43 @@ export type QuotaWindow = {
   usedCredits?: number;
   remainingCredits?: number;
   creditUnit?: string;
+  /**
+   * The vendor reported a full allowance whose reset is a placeholder (the Unix
+   * epoch, or "now plus one period"), so no cycle has begun. The window keeps
+   * its 100% and carries no `resetsAt`.
+   */
+  notStarted?: boolean;
   /** Cycle-average pace relative to generatedAt. Not cached. */
   pace?: QuotaPace;
 };
 
+/**
+ * The models a quota group covers. `labels` are the vendor's own names; `ids`
+ * are the CLI model ids matched to those labels. If no IDs match, `ids` is
+ * absent and clients can use `labels`. `unknown` means the vendor named no models.
+ */
+export type QuotaModelList =
+  | {
+      status: "known";
+      labels: string[];
+      ids?: string[];
+      unmatchedLabels?: string[];
+    }
+  | { status: "unknown" };
+
+export const AGY_GROUPS = Symbol("agyGroups");
+
+export type AgyQuotaGroup = {
+  id: string;
+  name: string;
+  models: QuotaModelList;
+  buckets: { id: string; windowId?: string; unmeasuredBoundId?: string }[];
+};
+
 export type EffectiveAvailability = {
   scope: string;
+  /** Models in this scope, when the provider names them. */
+  models?: QuotaModelList;
   status: "known" | "unknown";
   effectivePercentRemaining?: number;
   boundedBy: string[];
@@ -313,6 +345,7 @@ export type ProviderAccount = {
 
 export type ProviderQuota = {
   provider: ProviderId;
+  [AGY_GROUPS]?: AgyQuotaGroup[];
   /** Present in account-expanded reports; absent for the legacy single lane. */
   accountKey?: string;
   /**
@@ -409,7 +442,7 @@ export type ProviderQuota = {
 
 export type QuotaAxiResponse = {
   generatedAt: string;
-  schemaVersion: 5 | 6;
+  schemaVersion: 7 | 8;
   providers: ProviderQuota[];
   help?: string[];
 };

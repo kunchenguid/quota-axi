@@ -123,7 +123,7 @@ export async function quotaCommand(
 
 /**
  * Provider ids whose every lane is absent, in first-seen order. One live or
- * uncertain lane keeps the provider's rows; schema 6 folds a provider only
+ * uncertain lane keeps the provider's rows; an expanded report folds a provider only
  * when all of its lanes are absent.
  */
 function omittedAbsentProviderIds(
@@ -566,9 +566,8 @@ function reusableReadings(
 
 /**
  * A provider's readings from the supplied snapshot. It never falls through to
- * the vendor: a provider the file does not name, or one whose windows have
- * reached their reset, is reported unavailable so a fixture cannot silently
- * read live credentials.
+ * the vendor, even when a provider is missing or its saved reading cannot
+ * be used. Fixtures must not silently read live credentials.
  */
 function snapshotReadings(provider: ProviderId, file: string): ProviderQuota[] {
   let readings: ProviderQuota[] | "expired" | undefined;

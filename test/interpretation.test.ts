@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { withQuotaSemantics } from "../src/interpretation.js";
-import { renderQuotaToon } from "../src/render.js";
+import { annotateQuotaAdvice } from "../src/advice.js";
+import { quotaJsonReport, renderQuotaToon } from "../src/render.js";
+import { renderQuotaTui } from "../src/tui.js";
 import {
+  AGY_GROUPS,
   SELECTION_SCALAR_KEY,
   type ProviderQuota,
+  type QuotaModelList,
   type QuotaWindow,
 } from "../src/types.js";
 
@@ -20,6 +24,22 @@ function provider(
     source: "api",
     windows,
     state: { status: "fresh", stale: false, sourcesTried: ["api"] },
+  };
+}
+
+function agyProvider(
+  windows: QuotaWindow[],
+  groups: Record<string, string[]>,
+  models: Record<string, QuotaModelList> = {},
+): ProviderQuota {
+  return {
+    ...provider("agy", windows),
+    [AGY_GROUPS]: Object.entries(groups).map(([id, windowIds]) => ({
+      id,
+      name: id,
+      models: models[id] ?? { status: "unknown" },
+      buckets: windowIds.map((windowId) => ({ id: windowId, windowId })),
+    })),
   };
 }
 
@@ -77,6 +97,24 @@ function zaiToolWindow(): QuotaWindow {
 }
 
 describe("quota semantics", () => {
+  it("keeps the missing-cycle pace reason for an unreadable Codex reset", () => {
+    const codex = provider("codex", [
+      window("weekly", "weekly", 60, { resetsAt: "not-a-date" }),
+    ]);
+    const report = annotateQuotaAdvice({
+      generatedAt: GENERATED_AT,
+      providers: [withQuotaSemantics(codex, GENERATED_AT)],
+    });
+    for (const full of [false, true]) {
+      expect(
+        quotaJsonReport(report, full).providers[0]?.windows[0]?.pace,
+      ).toMatchObject({
+        status: "unknown",
+        reason: "missing_cycle",
+      });
+    }
+  });
+
   it("keeps every stale provider's effective availability unknown", () => {
     const cases: Array<[ProviderQuota["provider"], QuotaWindow[]]> = [
       ["claude", [window("five_hour", "session", 66)]],
@@ -653,7 +691,7 @@ describe("quota semantics", () => {
     );
     expect(
       renderQuotaToon(
-        { generatedAt: GENERATED_AT, schemaVersion: 5, providers: [result] },
+        { generatedAt: GENERATED_AT, schemaVersion: 7, providers: [result] },
         "quota-axi",
         false,
       ),
@@ -683,7 +721,7 @@ describe("quota semantics", () => {
     );
     expect(
       renderQuotaToon(
-        { generatedAt: GENERATED_AT, schemaVersion: 5, providers: [result] },
+        { generatedAt: GENERATED_AT, schemaVersion: 7, providers: [result] },
         "quota-axi",
         false,
       ),
@@ -720,7 +758,7 @@ describe("quota semantics", () => {
         "spend_control",
       ]);
       const report = renderQuotaToon(
-        { generatedAt: GENERATED_AT, schemaVersion: 5, providers: [result] },
+        { generatedAt: GENERATED_AT, schemaVersion: 7, providers: [result] },
         "quota-axi",
         false,
       );
@@ -1057,6 +1095,31 @@ describe("quota semantics", () => {
     ]);
   });
 
+  it("keeps stale Z.AI diagnostics limited to the recognized bounds", () => {
+    const zai = provider("zai", [
+      zaiSessionWindow(),
+      zaiWeeklyWindow(),
+      zaiToolWindow(),
+      window("limit:3", "unknown", 50),
+    ]);
+    zai.state = {
+      ...zai.state,
+      status: "stale",
+      stale: true,
+      untrustedWindowIds: ["limit:3"],
+    };
+    const bounds = ["five_hour", "weekly"];
+    expect(
+      withQuotaSemantics(zai, GENERATED_AT).quotaSemantics
+        ?.effectiveAvailability[0],
+    ).toMatchObject({
+      scope: "all_models",
+      pace: { status: "unknown", unknownWindowIds: bounds },
+      runway: { status: "unknown", unmeasurableWindowIds: bounds },
+      selection: { status: "unknown", unmeasurableWindowIds: bounds },
+    });
+  });
+
   it("applies Grok shared credits to product windows", () => {
     const result = withQuotaSemantics(
       provider("grok", [
@@ -1089,12 +1152,18 @@ describe("quota semantics", () => {
     });
 
     const agy = withQuotaSemantics(
-      provider("agy", [
-        window("gemini_5h", "session", 100),
-        window("gemini_weekly", "weekly", 0),
-        window("claude_gpt_5h", "session", 100),
-        window("claude_gpt_weekly", "weekly", 90),
-      ]),
+      agyProvider(
+        [
+          window("gemini_5h", "session", 100),
+          window("gemini_weekly", "weekly", 0),
+          window("claude_gpt_5h", "session", 100),
+          window("claude_gpt_weekly", "weekly", 90),
+        ],
+        {
+          gemini: ["gemini_5h", "gemini_weekly"],
+          claude_gpt: ["claude_gpt_5h", "claude_gpt_weekly"],
+        },
+      ),
       GENERATED_AT,
     );
     expect(agy.quotaSemantics).toMatchObject({
@@ -1123,24 +1192,30 @@ describe("quota semantics", () => {
         Date.parse(GENERATED_AT) + 18_000 * (1 - elapsedFraction) * 1000,
       ).toISOString();
     const agyMeasured = withQuotaSemantics(
-      provider("agy", [
-        window("gemini_5h", "session", 95, {
-          windowSeconds: 18_000,
-          resetsAt: fiveHoursResetsAt(0.5),
-        }),
-        window("gemini_weekly", "weekly", 99, {
-          windowSeconds: WEEK_SECONDS,
-          resetsAt: weeklyResetsAt(0.5),
-        }),
-        window("claude_gpt_5h", "session", 100, {
-          windowSeconds: 18_000,
-          resetsAt: fiveHoursResetsAt(0),
-        }),
-        window("claude_gpt_weekly", "weekly", 100, {
-          windowSeconds: WEEK_SECONDS,
-          resetsAt: weeklyResetsAt(0),
-        }),
-      ]),
+      agyProvider(
+        [
+          window("gemini_5h", "session", 95, {
+            windowSeconds: 18_000,
+            resetsAt: fiveHoursResetsAt(0.5),
+          }),
+          window("gemini_weekly", "weekly", 99, {
+            windowSeconds: WEEK_SECONDS,
+            resetsAt: weeklyResetsAt(0.5),
+          }),
+          window("claude_gpt_5h", "session", 100, {
+            windowSeconds: 18_000,
+            resetsAt: fiveHoursResetsAt(0),
+          }),
+          window("claude_gpt_weekly", "weekly", 100, {
+            windowSeconds: WEEK_SECONDS,
+            resetsAt: weeklyResetsAt(0),
+          }),
+        ],
+        {
+          gemini: ["gemini_5h", "gemini_weekly"],
+          claude_gpt: ["claude_gpt_5h", "claude_gpt_weekly"],
+        },
+      ),
       GENERATED_AT,
     );
     for (const scope of ["gemini", "claude_gpt"]) {
@@ -1153,7 +1228,9 @@ describe("quota semantics", () => {
     }
 
     const agyWeeklyOnly = withQuotaSemantics(
-      provider("agy", [window("gemini_weekly", "weekly", 40)]),
+      agyProvider([window("gemini_weekly", "weekly", 40)], {
+        gemini: ["gemini_weekly"],
+      }),
       GENERATED_AT,
     );
     expect(agyWeeklyOnly.quotaSemantics).toMatchObject({
@@ -1168,10 +1245,13 @@ describe("quota semantics", () => {
     });
 
     const agyUnfamiliar = withQuotaSemantics(
-      provider("agy", [
-        window("gemini_weekly", "weekly", 40),
-        window("limit:extra", "unknown", 80),
-      ]),
+      agyProvider(
+        [
+          window("gemini_weekly", "weekly", 40),
+          window("limit:extra", "unknown", 80),
+        ],
+        { gemini: ["gemini_weekly"] },
+      ),
       GENERATED_AT,
     );
     expect(agyUnfamiliar.quotaSemantics).toMatchObject({
@@ -1186,19 +1266,25 @@ describe("quota semantics", () => {
     });
 
     const agyUnknownKind = withQuotaSemantics(
-      provider("agy", [
-        window("gemini_5h", "session", 100),
-        window("gemini_weekly", "weekly", 70),
-        window("gemini_unknown", "unknown", 10),
-      ]),
+      agyProvider(
+        [
+          window("gemini_5h", "session", 100),
+          window("gemini_weekly", "weekly", 70),
+          window("gemini:bucket:monthly", "unknown", 10, {
+            resetsAt: offsetFromGeneratedAt(-60),
+          }),
+        ],
+        { gemini: ["gemini_5h", "gemini_weekly", "gemini:bucket:monthly"] },
+      ),
       GENERATED_AT,
     );
     expect(agyUnknownKind.quotaSemantics).toMatchObject({
       status: "partial",
-      unresolvedWindowIds: ["gemini_unknown"],
+      unresolvedWindowIds: ["gemini:bucket:monthly"],
       effectiveAvailability: [
         expect.objectContaining({
           scope: "gemini",
+          status: "known",
           effectivePercentRemaining: 70,
           boundedBy: ["gemini_5h", "gemini_weekly"],
         }),
@@ -1558,22 +1644,353 @@ describe("per-scope selection signal", () => {
     ).toEqual({ status: "unknown", unmeasurableWindowIds: ["seven_day"] });
   });
 
-  it("marks agy reading stale when its resetsAt is in the past relative to generatedAt", () => {
-    const agy = provider("agy", [
-      window("gemini_5h", "session", 90, {
-        windowSeconds: FIVE_HOURS_SECONDS,
-        resetsAt: new Date(Date.parse(GENERATED_AT) - 1_000).toISOString(),
-      }),
-      window("gemini_weekly", "weekly", 80, {
-        windowSeconds: WEEK_SECONDS,
-        resetsAt: after(3 * DAY_SECONDS),
-      }),
+  it.each(["absent", "reset-only", "expired"] as const)(
+    "names every Antigravity signal blocker with an %s bound",
+    (gap) => {
+      const sessionId = "gemini_argon_5h";
+      const weeklyId = "gemini_argon_weekly";
+      const weekly = window(weeklyId, "weekly", 90);
+      const session: QuotaWindow = {
+        id: sessionId,
+        label: "Argon 5-hour",
+        kind: "session",
+        ...(gap === "expired"
+          ? { percentRemaining: 80, resetsAt: GENERATED_AT }
+          : { resetsAt: offsetFromGeneratedAt(3_600) }),
+      };
+      for (const source of ["live", "reuse", "snapshot", "stale"]) {
+        const agy = agyProvider(
+          gap === "absent" ? [weekly] : [weekly, session],
+          {
+            gemini_argon: gap === "absent" ? [weeklyId] : [weeklyId, sessionId],
+          },
+        );
+        if (gap === "absent") {
+          agy[AGY_GROUPS]![0]!.buckets.push({
+            id: "5h",
+            unmeasuredBoundId: sessionId,
+          });
+        }
+        agy.state = {
+          ...agy.state,
+          reused: source === "reuse" || source === "snapshot",
+          sourcesTried: [source],
+          stale: source === "stale",
+          status: source === "stale" ? "stale" : "fresh",
+        };
+        const report = annotateQuotaAdvice({
+          generatedAt: GENERATED_AT,
+          providers: [withQuotaSemantics(agy, GENERATED_AT)],
+        });
+        const scope = quotaJsonReport(report, false).providers[0]
+          ?.quotaSemantics?.effectiveAvailability[0];
+        for (const signal of [scope?.runway, scope?.selection]) {
+          expect(signal?.status, source).toBe("unknown");
+          expect(signal?.unmeasurableWindowIds?.toSorted(), source).toEqual([
+            sessionId,
+            weeklyId,
+          ]);
+        }
+      }
+    },
+  );
+
+  it.each(["absent", "unmeasured", "reset-only", "expired", "unstarted"])(
+    "names the Antigravity runway blockers when the five-hour bound is unstarted and the weekly bound is %s",
+    (weeklyState) => {
+      const sessionId = "gemini_5h";
+      const weeklyId = "gemini_weekly";
+      const session = window(sessionId, "session", 100, { notStarted: true });
+      const weeklyByState: Record<string, QuotaWindow> = {
+        "reset-only": {
+          id: weeklyId,
+          kind: "weekly",
+          label: "Gemini weekly",
+          resetsAt: weeklyResetsAt(0.5),
+        },
+        expired: window(weeklyId, "weekly", 80, { resetsAt: GENERATED_AT }),
+        unstarted: window(weeklyId, "weekly", 100, { notStarted: true }),
+      };
+      const weekly = weeklyByState[weeklyState];
+      for (const source of ["live", "reuse", "snapshot"]) {
+        const agy = agyProvider(weekly ? [session, weekly] : [session], {
+          gemini: [sessionId],
+        });
+        agy[AGY_GROUPS]![0]!.buckets.push(
+          weeklyState === "unmeasured"
+            ? { id: "weekly", unmeasuredBoundId: weeklyId }
+            : { id: "weekly", windowId: weeklyId },
+        );
+        agy.state = {
+          ...agy.state,
+          reused: source !== "live",
+          sourcesTried: [source],
+        };
+        const [scope] = withQuotaSemantics(agy, GENERATED_AT).quotaSemantics!
+          .effectiveAvailability;
+        const unknownWeekly = {
+          status: "unknown",
+          unmeasurableWindowIds: [weeklyId],
+        };
+        expect(scope?.runway, source).toEqual(
+          weeklyState === "unstarted"
+            ? {
+                status: "unknown",
+                unmeasurableWindowIds: [sessionId, weeklyId],
+              }
+            : unknownWeekly,
+        );
+        expect(scope?.selection, source).toEqual(
+          weeklyState === "unstarted" ? { status: "unknown" } : unknownWeekly,
+        );
+      }
+    },
+  );
+
+  it.each(["absent", "reset-only", "expired"] as const)(
+    "reports exhaustion only from a current Antigravity zero with a %s sibling",
+    (sibling) => {
+      const future = offsetFromGeneratedAt(3_600);
+      const sessionId = "gemini_5h";
+      const weeklyId = "gemini_weekly";
+      for (const source of ["live", "reuse", "snapshot", "stale"]) {
+        for (const current of [true, false]) {
+          const weekly = window(weeklyId, "weekly", 0, {
+            resetsAt: current ? future : GENERATED_AT,
+          });
+          const session: QuotaWindow = {
+            id: sessionId,
+            label: "Gemini 5-hour",
+            kind: "session",
+            resetsAt: sibling === "expired" ? GENERATED_AT : future,
+          };
+          if (sibling === "expired") session.percentRemaining = 80;
+          const agy = agyProvider(
+            sibling === "absent" ? [weekly] : [weekly, session],
+            { gemini: [weeklyId] },
+          );
+          agy[AGY_GROUPS]![0]!.buckets.push(
+            sibling === "absent"
+              ? { id: "5h", unmeasuredBoundId: sessionId }
+              : { id: "5h", windowId: sessionId },
+          );
+          agy.state = {
+            ...agy.state,
+            reused: source === "reuse" || source === "snapshot",
+            sourcesTried: [source],
+            stale: source === "stale",
+            status: source === "stale" ? "stale" : "fresh",
+          };
+          const report = annotateQuotaAdvice({
+            generatedAt: GENERATED_AT,
+            providers: [withQuotaSemantics(agy, GENERATED_AT)],
+          });
+          const exhausted = current && source !== "stale";
+          for (const full of [false, true]) {
+            const scope = quotaJsonReport(report, full).providers[0]
+              ?.quotaSemantics?.effectiveAvailability[0];
+            expect(scope?.effectivePercentRemaining).toBe(
+              exhausted ? 0 : undefined,
+            );
+            expect(scope?.runway?.status).toBe(
+              exhausted ? "exhausted_now" : "unknown",
+            );
+            expect(scope?.selection).toMatchObject({
+              status: "unknown",
+              unmeasurableWindowIds: expect.arrayContaining([sessionId]),
+            });
+            const toon = renderQuotaToon(report, "quota-axi", full);
+            if (exhausted) {
+              expect(scope?.limitingWindowIds).toEqual([weeklyId]);
+              expect(toon).toContain("agy,gemini,0,unknown,exhausted_now,");
+              expect(toon).toContain(
+                `agy,gemini,0,"${GENERATED_AT}",${weeklyId}`,
+              );
+            } else {
+              expect(toon).toContain("exhaustion[0]:");
+            }
+          }
+        }
+      }
+    },
+  );
+
+  it("renders agy scope models once and separates pace from reset evidence", () => {
+    const models = {
+      status: "known" as const,
+      labels: ["Gemini 4 Neon", "Gemini 4 Hydrogen"],
+      ids: ["gemini-4-neon-medium"],
+      unmatchedLabels: ["Gemini 4 Hydrogen"],
+    };
+    const agy = agyProvider(
+      [
+        window("gemini_5h", "session", 100, {
+          windowSeconds: 18_000,
+          notStarted: true,
+        }),
+        window("gemini_weekly", "weekly", 100, {
+          windowSeconds: WEEK_SECONDS,
+          notStarted: true,
+        }),
+        window("claude_gpt_weekly", "weekly", 80),
+        window("model:fallback", "model", 50),
+      ],
+      {
+        gemini: ["gemini_5h", "gemini_weekly"],
+        claude_gpt: ["claude_gpt_weekly"],
+      },
+      {
+        gemini: models,
+        claude_gpt: { status: "known", labels: ["Claude Sonnet"] },
+      },
+    );
+    for (const stale of [false, true]) {
+      const result = withQuotaSemantics(
+        {
+          ...agy,
+          state: { ...agy.state, stale, status: stale ? "stale" : "fresh" },
+        },
+        GENERATED_AT,
+      );
+      const report = annotateQuotaAdvice({
+        generatedAt: GENERATED_AT,
+        providers: [result],
+      });
+      expect(report.schemaVersion).toBe(7);
+      const text = renderQuotaToon(report, "quota-axi", true);
+      expect(text).toContain(
+        stale
+          ? "agy,gemini_5h,gemini_5h,100,unknown,stale,"
+          : "agy,gemini_5h,gemini_5h,100,unknown,not_started,",
+      );
+      if (!stale)
+        expect(text).toContain(
+          'agy,"model:fallback","model:fallback",50,unknown,unknown,',
+        );
+      for (const full of [false, true]) {
+        const toon = renderQuotaToon(report, "quota-axi", full);
+        expect(toon).toContain("scopeModels[2]{provider,scope,models}");
+        expect(toon).toContain(
+          "agy,gemini,gemini-4-neon-medium + Gemini 4 Hydrogen",
+        );
+        expect(toon).toContain("agy,claude_gpt,Claude Sonnet");
+        expect(toon).not.toContain("Gemini 4 Neon");
+        expect(toon.match(/gemini-4-neon-medium/g)).toHaveLength(1);
+        const publicProvider = quotaJsonReport(report, full).providers[0]!;
+        for (const publicWindow of publicProvider.windows) {
+          expect(publicWindow).not.toHaveProperty("models");
+        }
+        const scope = publicProvider.quotaSemantics?.effectiveAvailability[0];
+        expect(scope?.models).toEqual(models);
+        expect(scope?.effectivePercentRemaining).toBe(stale ? undefined : 100);
+      }
+    }
+  });
+
+  it("hides passed model resets in default JSON and both TUI views", () => {
+    const result = withQuotaSemantics(
+      provider("agy", [
+        window("model:atlas", "model", 24, {
+          label: "Atlas",
+          resetsAt: offsetFromGeneratedAt(-60),
+        }),
+        window("model:beacon", "model", 86, {
+          label: "Beacon",
+          resetsAt: offsetFromGeneratedAt(60),
+        }),
+      ]),
+      GENERATED_AT,
+    );
+    expect(result.state.untrustedWindowIds).toEqual(["model:atlas"]);
+    const report = annotateQuotaAdvice({
+      generatedAt: GENERATED_AT,
+      providers: [result],
+    });
+    expect(quotaJsonReport(report, false).providers[0]?.windows).toMatchObject([
+      {
+        id: "model:atlas",
+        percentRemaining: undefined,
+        resetsAt: undefined,
+        pace: { reason: "expired_reset" },
+      },
+      { id: "model:beacon", percentRemaining: 86 },
     ]);
+    expect(
+      quotaJsonReport(report, true).providers[0]?.windows[0],
+    ).toMatchObject({
+      id: "model:atlas",
+      percentRemaining: 24,
+      resetsAt: offsetFromGeneratedAt(-60),
+    });
+    for (const show of ["remaining", "used"] as const) {
+      const output = renderQuotaTui(report, {
+        columns: 80,
+        colorDepth: "none",
+        show,
+      });
+      const atlas = output.split("\n").find((line) => line.includes("atlas"));
+      const beacon = output.split("\n").find((line) => line.includes("beacon"));
+      expect(atlas).toMatch(/\?\s+passed/);
+      expect(beacon).toContain(show === "used" ? "14%" : "86%");
+    }
+  });
+
+  it("keeps the agy scope list the same when the other scope has a passed reset", () => {
+    const result = withQuotaSemantics(
+      agyProvider(
+        [
+          window("gemini_weekly", "weekly", 80, {
+            windowSeconds: WEEK_SECONDS,
+            resetsAt: offsetFromGeneratedAt(-60),
+          }),
+          window("claude_gpt_weekly", "weekly", 90, {
+            windowSeconds: WEEK_SECONDS,
+            resetsAt: offsetFromGeneratedAt(3 * 86_400),
+          }),
+        ],
+        { gemini: ["gemini_weekly"], claude_gpt: ["claude_gpt_weekly"] },
+      ),
+      GENERATED_AT,
+    );
+    expect(
+      result.quotaSemantics?.effectiveAvailability.map(({ scope, status }) => [
+        scope,
+        status,
+      ]),
+    ).toEqual([
+      ["gemini", "unknown"],
+      ["claude_gpt", "known"],
+    ]);
+  });
+
+  it("makes only the agy scope with a passed reset unknown", () => {
+    const agy = agyProvider(
+      [
+        window("gemini_5h", "session", 90, {
+          windowSeconds: FIVE_HOURS_SECONDS,
+          resetsAt: new Date(Date.parse(GENERATED_AT) - 1_000).toISOString(),
+        }),
+        window("gemini_weekly", "weekly", 80, {
+          windowSeconds: WEEK_SECONDS,
+          resetsAt: after(3 * DAY_SECONDS),
+        }),
+      ],
+      { gemini: ["gemini_5h", "gemini_weekly"] },
+    );
 
     const result = withQuotaSemantics(agy, GENERATED_AT);
-    expect(result.state.status).toBe("stale");
-    expect(result.state.stale).toBe(true);
-    expect(result.quotaSemantics?.status).toBe("unknown");
+    expect(result.state.status).not.toBe("stale");
+    expect(result.state.stale).toBeFalsy();
+    expect(result.quotaSemantics?.effectiveAvailability).toEqual([
+      expect.objectContaining({
+        scope: "gemini",
+        status: "unknown",
+        runway: {
+          status: "unknown",
+          unmeasurableWindowIds: ["gemini_5h"],
+        },
+      }),
+    ]);
   });
 
   it("bounds Higgsfield credits at included_credits and does not invent a model lane", () => {

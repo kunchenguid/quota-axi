@@ -11,6 +11,7 @@ import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   deleteCachedProvider,
+  isSnapshotFile,
   readCachedClaudeProvider,
   readCachedCommandCodeProvider,
   readCachedCodexProvider,
@@ -20,6 +21,7 @@ import {
   readCachedProvider,
   readCachedZaiProvider,
   readReusableProviders,
+  readSnapshotProviders,
   retireCodexAccount,
   stampClaudeReadingContext,
   stampReadingInputs,
@@ -36,6 +38,7 @@ import {
 } from "../src/providers/commandcode-cache-context.js";
 import { staleFromCache } from "../src/providers/common.js";
 import { withQuotaSemantics } from "../src/interpretation.js";
+import { quotaJsonReport, renderQuotaToon } from "../src/render.js";
 import { createKimiCodeCliCredentialSource } from "../src/providers/kimi-code-cli-credential.js";
 import { createKimiAdapter } from "../src/providers/kimi.js";
 import {
@@ -48,7 +51,11 @@ import {
   stampZaiReadingContext,
   zaiCacheContextId,
 } from "../src/providers/zai-cache-context.js";
-import type { ProviderId, ProviderQuota } from "../src/types.js";
+import {
+  AGY_GROUPS,
+  type ProviderId,
+  type ProviderQuota,
+} from "../src/types.js";
 
 const originalXdgCacheHome = process.env.XDG_CACHE_HOME;
 const originalClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
@@ -324,7 +331,7 @@ describe("quota cache", () => {
       generatedAt: "2026-07-06T18:10:00Z",
       providers: [work, quota("copilot", 40)],
     });
-    expect(expanded.schemaVersion).toBe(6);
+    expect(expanded.schemaVersion).toBe(8);
     expect(expanded.providers[1]?.accountKey).toBe("default");
 
     writeCachedProviders(expanded.providers);
@@ -344,7 +351,7 @@ describe("quota cache", () => {
         )!,
       ],
     });
-    expect(later.schemaVersion).toBe(5);
+    expect(later.schemaVersion).toBe(7);
     expect(later.providers[0]?.accountKey).toBeUndefined();
   });
 
@@ -434,6 +441,555 @@ describe("quota cache", () => {
       source: "cli",
       windows: [{ percentUsed: 18 }],
     });
+  });
+
+  it.each([true, false])(
+    "reuses normalized but not legacy Antigravity groups (unstarted: %s)",
+    (notStarted) => {
+      useTempCache();
+      const now = Date.parse("2026-07-06T18:10:30Z");
+      const file = cacheFilePath();
+      const legacyWindow = {
+        id: "gemini_5h",
+        label: "Gemini 5-hour",
+        kind: "session" as const,
+        windowSeconds: 18_000,
+        percentUsed: 0,
+        percentRemaining: 100,
+        resetsAt: "2026-07-06T23:10:00Z",
+      };
+      const reading: ProviderQuota = {
+        ...quota("agy", 0),
+        source: "cli",
+        windows: [legacyWindow],
+      };
+      const inputs = tracedInputs();
+      stampReadingInputs(reading, inputs);
+      writeCachedProviders([reading], reading.state.refreshedAt);
+
+      expect(readReusableProviders("agy", 90, now)).toBeUndefined();
+      expect(readSnapshotProviders(file, "agy", now)).toBe("expired");
+      expect(readCachedProvider("agy")?.windows).toEqual([legacyWindow]);
+
+      const normalizedWindow = {
+        ...legacyWindow,
+        resetsAt: notStarted ? undefined : "2026-07-06T19:10:00Z",
+        ...(notStarted ? { notStarted: true } : {}),
+      };
+      const reset = "2026-07-06T18:10:31Z";
+      const normalized: ProviderQuota = {
+        ...reading,
+        windows: [
+          normalizedWindow,
+          {
+            id: "gemini_weekly",
+            label: "Gemini weekly",
+            kind: "weekly",
+            percentRemaining: 20,
+            resetsAt: reset,
+          },
+          {
+            id: "claude_gpt_weekly",
+            label: "Claude/GPT weekly",
+            kind: "weekly",
+            percentRemaining: 90,
+          },
+        ],
+        [AGY_GROUPS]: [
+          {
+            id: "gemini",
+            name: "Gemini Models",
+            models: { status: "unknown" },
+            buckets: [
+              { id: "gemini-5h", windowId: "gemini_5h" },
+              { id: "gemini-weekly", windowId: "gemini_weekly" },
+            ],
+          },
+          {
+            id: "claude_gpt",
+            name: "Claude and GPT Models",
+            models: { status: "known", labels: ["Claude Sonnet"] },
+            buckets: [{ id: "3p-weekly", windowId: "claude_gpt_weekly" }],
+          },
+        ],
+      };
+      stampReadingInputs(normalized, inputs);
+      writeCachedProviders([normalized], reading.state.refreshedAt);
+
+      for (const reused of [
+        readReusableProviders("agy", 90, now),
+        readSnapshotProviders(file, "agy", now),
+        readSnapshotProviders(file, "agy", Date.parse(reset)),
+      ]) {
+        expect(reused).toMatchObject([
+          {
+            state: { status: "fresh", reused: true },
+            windows: [
+              {
+                id: "gemini_5h",
+                percentRemaining: 100,
+                ...(notStarted
+                  ? { notStarted: true }
+                  : { resetsAt: "2026-07-06T19:10:00Z" }),
+              },
+              { id: "gemini_weekly", percentRemaining: 20 },
+              { id: "claude_gpt_weekly", percentRemaining: 90 },
+            ],
+          },
+        ]);
+        if (!Array.isArray(reused) || !reused[0])
+          throw new Error("Expected an Antigravity cache hit");
+        const result = withQuotaSemantics(reused[0], reset);
+        expect(result.state).toMatchObject({ reused: true, stale: false });
+        const report = annotateQuotaAdvice({
+          generatedAt: reset,
+          providers: [result],
+        });
+        for (const full of [false, true]) {
+          expect(
+            quotaJsonReport(report, full).providers[0]?.windows.map(
+              ({ id }) => id,
+            ),
+          ).toEqual(["gemini_5h", "claude_gpt_weekly"]);
+          expect(renderQuotaToon(report, "quota-axi", full)).not.toContain(
+            "agy,gemini_weekly,",
+          );
+        }
+        expect(result.quotaSemantics?.effectiveAvailability).toMatchObject([
+          {
+            scope: "gemini",
+            status: "unknown",
+            boundedBy: ["gemini_5h"],
+            pace: notStarted
+              ? {
+                  status: "unknown",
+                  unknownWindowIds: ["gemini_5h", "gemini_weekly"],
+                }
+              : {
+                  status: "behind",
+                  behindWindowIds: ["gemini_5h"],
+                  unknownWindowIds: ["gemini_weekly"],
+                },
+            runway: {
+              status: "unknown",
+              unmeasurableWindowIds: ["gemini_weekly"],
+            },
+          },
+          {
+            scope: "claude_gpt",
+            status: "known",
+            effectivePercentRemaining: 90,
+            models: { status: "known", labels: ["Claude Sonnet"] },
+          },
+        ]);
+        expect(
+          result.quotaSemantics?.effectiveAvailability[0]
+            ?.effectivePercentRemaining,
+        ).toBeUndefined();
+      }
+      expect(
+        readReusableProviders("agy", 90, Date.parse(reset)),
+      ).toBeUndefined();
+    },
+  );
+
+  it("rejects inconsistent Antigravity metadata without losing valid saved groups", () => {
+    useTempCache();
+    const file = cacheFilePath();
+    mkdirSync(dirname(file), { recursive: true });
+    const unused = {
+      id: "gemini_5h",
+      label: "Gemini 5-hour",
+      kind: "session",
+      percentUsed: 0,
+      percentRemaining: 100,
+      notStarted: true,
+    };
+    const model = {
+      id: "model:flash",
+      label: "Flash",
+      kind: "model",
+      percentRemaining: 40,
+    };
+    const session = { id: "5h", windowId: unused.id };
+    const models = {
+      status: "known",
+      labels: ["Gemini Flash", "Gemini Pro"],
+      ids: ["gemini-flash"],
+      unmatchedLabels: ["Gemini Pro"],
+    };
+    const group = {
+      id: "gemini",
+      name: "Gemini Models",
+      models,
+      buckets: [session],
+    };
+    const record = {
+      ...quota("agy", 0),
+      source: "cli",
+      windows: [unused, model],
+      agyGroups: [group],
+    };
+    function writeSnapshot(override: object) {
+      writeFileSync(
+        file,
+        JSON.stringify({
+          schemaVersion: 3,
+          providers: [{ ...record, ...override }],
+        }),
+      );
+    }
+    for (const override of [
+      {},
+      { agyGroups: undefined, windows: [model] },
+      { windows: [model] },
+      {
+        windows: [
+          { ...unused, notStarted: false, resetsAt: "2026-07-06T19:00:00Z" },
+          model,
+        ],
+      },
+    ]) {
+      writeSnapshot(override);
+      expect(isSnapshotFile(file)).toBe(true);
+      expect(readCachedProvider("agy")).toBeDefined();
+    }
+    const badWindows = [
+      ["nonboolean flag", [{ ...unused, notStarted: "true" }, model]],
+      [
+        "partly used",
+        [{ ...unused, percentUsed: 60, percentRemaining: 40 }, model],
+      ],
+      ["missing used", [{ ...unused, percentUsed: undefined }, model]],
+      ["reset date", [{ ...unused, resetsAt: "2026-07-06T19:00:00Z" }, model]],
+      ["reset text", [{ ...unused, resetText: "tomorrow" }, model]],
+      ["duplicate window", [unused, unused]],
+    ] as const;
+    const badPercentages = [
+      ["negative remaining", { percentRemaining: -10 }],
+      ["excess remaining", { percentRemaining: 110 }],
+      ["negative used", { percentUsed: -10 }],
+      ["excess used", { percentUsed: 110 }],
+      ["string remaining", { percentRemaining: "60" }],
+      ["null used", { percentUsed: null }],
+      ["inconsistent pair", { percentUsed: 0, percentRemaining: 60 }],
+    ] as const;
+    const badGroups = [
+      ["nonarray groups", {}],
+      ["duplicate group", [group, group]],
+      ["duplicate bucket", [{ ...group, buckets: [session, { id: "5h" }] }]],
+      [
+        "duplicate link",
+        [{ ...group, buckets: [session, { ...session, id: "other" }] }],
+      ],
+      [
+        "nonstring window link",
+        [{ ...group, buckets: [{ ...session, windowId: 1 }] }],
+      ],
+      [
+        "nonstring unmeasured link",
+        [{ ...group, buckets: [{ id: "weekly", unmeasuredBoundId: null }] }],
+      ],
+      [
+        "two links",
+        [
+          {
+            ...group,
+            buckets: [{ ...session, unmeasuredBoundId: "gemini_weekly" }],
+          },
+        ],
+      ],
+      [
+        "link to another group",
+        [{ ...group, buckets: [{ ...session, windowId: "gemini_argon_5h" }] }],
+      ],
+      [
+        "unmeasured link to another group",
+        [
+          {
+            ...group,
+            buckets: [
+              { id: "weekly", unmeasuredBoundId: "gemini_argon_weekly" },
+            ],
+          },
+        ],
+      ],
+      ["invalid model IDs", [{ ...group, models: { ...models, ids: [2] } }]],
+      [
+        "invalid unmatched labels",
+        [
+          {
+            ...group,
+            models: { ...models, unmatchedLabels: ["Not a listed model"] },
+          },
+        ],
+      ],
+      [
+        "unmatched labels without IDs",
+        [{ ...group, models: { ...models, ids: undefined } }],
+      ],
+    ] as const;
+    for (const [description, override] of [
+      ...badWindows.map(
+        ([description, windows]) => [description, { windows }] as const,
+      ),
+      ...badPercentages.map(
+        ([description, percentages]) =>
+          [
+            description,
+            {
+              windows: [
+                {
+                  ...unused,
+                  notStarted: undefined,
+                  percentUsed: undefined,
+                  percentRemaining: undefined,
+                  ...percentages,
+                },
+                model,
+              ],
+            },
+          ] as const,
+      ),
+      ...badGroups.map(
+        ([description, agyGroups]) => [description, { agyGroups }] as const,
+      ),
+    ]) {
+      writeSnapshot(override);
+      expect(isSnapshotFile(file), description).toBe(false);
+      expect(readCachedProvider("agy"), description).toBeUndefined();
+    }
+  });
+
+  it.each(["group-only", "group reset only", "model reset only"] as const)(
+    "keeps %s Antigravity diagnostics in snapshots but not live reuse",
+    (kind) => {
+      useTempCache();
+      const resetsAt = "2026-07-08T12:00:00Z";
+      const model = {
+        id: "model:argon",
+        label: "Argon",
+        kind: "model" as const,
+        resetsAt,
+      };
+      const weekly = {
+        id: "gemini_argon_weekly",
+        label: "Gemini Argon weekly",
+        kind: "weekly" as const,
+        resetsAt,
+      };
+      const reading: ProviderQuota = {
+        ...quota("agy", 0),
+        source: "cli-rpc",
+        windows:
+          kind === "group-only"
+            ? []
+            : [kind === "group reset only" ? weekly : model],
+        ...(kind === "model reset only"
+          ? {}
+          : {
+              [AGY_GROUPS]: [
+                {
+                  id: "gemini_argon",
+                  name: "Gemini 4 Argon",
+                  models: { status: "unknown" as const },
+                  buckets: [
+                    {
+                      id: "argon-weekly",
+                      ...(kind === "group reset only"
+                        ? { windowId: weekly.id }
+                        : {}),
+                    },
+                  ],
+                },
+              ],
+            }),
+      };
+      const inputs = tracedInputs();
+      const now = Date.parse("2026-07-06T18:10:30Z");
+      const file = cacheFilePath();
+      stampReadingInputs(reading, inputs);
+      writeCachedProviders([reading], reading.state.refreshedAt);
+      expect(readReusableProviders("agy", 90, now)).toBeUndefined();
+      expect(readSnapshotProviders(file, "agy", now)).toMatchObject([
+        { windows: reading.windows, state: { reused: true } },
+      ]);
+      const diagnostic = JSON.parse(readFileSync(file, "utf8")) as {
+        providers: Record<string, unknown>[];
+      };
+      expect(diagnostic.providers[0]).not.toHaveProperty("reuse");
+
+      const measured: ProviderQuota = {
+        ...reading,
+        windows: [{ ...model, percentRemaining: 60 }],
+      };
+      stampReadingInputs(measured, inputs);
+      writeCachedProviders([measured], reading.state.refreshedAt);
+      expect(readReusableProviders("agy", 90, now)).toMatchObject([
+        { windows: [{ percentRemaining: 60 }] },
+      ]);
+      const stamped = JSON.parse(
+        readFileSync(file, "utf8"),
+      ) as typeof diagnostic;
+      diagnostic.providers[0]!.reuse = stamped.providers[0]!.reuse;
+      writeFileSync(file, JSON.stringify(diagnostic));
+      expect(readReusableProviders("agy", 90, now)).toBeUndefined();
+    },
+  );
+
+  it.each([false, true])(
+    "expires live Antigravity reuse but keeps snapshot diagnostics (named group: %s)",
+    (grouped) => {
+      useTempCache();
+      const reset = "2026-07-06T18:10:30Z";
+      const diagnostic = {
+        id: "model:sonnet",
+        label: "Sonnet",
+        kind: "model" as const,
+        resetsAt: "2026-07-06T19:00:00Z",
+      };
+      const reading: ProviderQuota = {
+        ...quota("agy", 0),
+        source: "cli-rpc",
+        windows: [
+          {
+            id: "model:flash",
+            label: "Flash",
+            kind: "model",
+            resetsAt: reset,
+            percentRemaining: 40,
+          },
+          diagnostic,
+        ],
+        ...(grouped
+          ? {
+              [AGY_GROUPS]: [
+                {
+                  id: "gemini_argon",
+                  name: "Gemini 4 Argon",
+                  models: { status: "unknown" as const },
+                  buckets: [],
+                },
+              ],
+            }
+          : {}),
+      };
+      stampReadingInputs(reading, tracedInputs());
+      writeCachedProviders([reading], reading.state.refreshedAt);
+      const now = Date.parse(reset) - 1;
+      const live = readReusableProviders("agy", 90, now)?.[0];
+      const snapshot = readSnapshotProviders(cacheFilePath(), "agy", now);
+      if (!live || !Array.isArray(snapshot) || !snapshot[0])
+        throw new Error("Expected both reads before reset");
+      const published = withQuotaSemantics(live, reset);
+      expect(published).toMatchObject({
+        windows: [],
+        state: { status: "unavailable", error: "cache_expired" },
+      });
+      expect(published.state.reused).toBeUndefined();
+      if (grouped)
+        expect(published.quotaSemantics?.effectiveAvailability).toMatchObject([
+          { scope: "gemini_argon", status: "unknown" },
+        ]);
+      const explicit = {
+        ...snapshot[0],
+        state: { ...snapshot[0].state, sourcesTried: ["snapshot"] },
+      };
+      expect(withQuotaSemantics(explicit, reset)).toMatchObject({
+        windows: [diagnostic],
+        state: { status: "fresh", reused: true },
+      });
+    },
+  );
+
+  it("reports model-only Antigravity reuse expired when the last reset passes", () => {
+    useTempCache();
+    const firstReset = "2026-07-06T18:10:30Z";
+    const lastReset = "2026-07-06T18:10:31Z";
+    const modelOnly: ProviderQuota = {
+      ...quota("agy", 0),
+      source: "cli-rpc",
+      state: {
+        status: "fresh",
+        stale: false,
+        refreshedAt: "2026-07-06T18:10:00Z",
+        sourcesTried: ["loopback"],
+      },
+      windows: [
+        {
+          id: "model:flash",
+          label: "Flash",
+          kind: "model",
+          resetsAt: firstReset,
+          percentRemaining: 100,
+        },
+        {
+          id: "model:sonnet",
+          label: "Sonnet",
+          kind: "model",
+          resetsAt: lastReset,
+          percentRemaining: 50,
+        },
+      ],
+    };
+    stampReadingInputs(modelOnly, tracedInputs());
+    writeCachedProviders([modelOnly], modelOnly.state.refreshedAt);
+    const live = readReusableProviders(
+      "agy",
+      90,
+      Date.parse(firstReset) - 1,
+    )?.[0];
+    if (!live) throw new Error("Expected live reuse before either reset");
+    const partial = withQuotaSemantics(live, firstReset);
+    expect(partial.state).toMatchObject({ status: "fresh", reused: true });
+    expect(partial.windows).toMatchObject([
+      { id: "model:sonnet", percentRemaining: 50 },
+    ]);
+    const expiredLive = withQuotaSemantics(live, lastReset);
+    expect(expiredLive).toMatchObject({
+      source: "unavailable",
+      windows: [],
+      state: {
+        status: "unavailable",
+        stale: false,
+        error: "cache_expired",
+        sourcesTried: ["loopback"],
+      },
+    });
+    expect(expiredLive.state.reused).toBeUndefined();
+    const report = annotateQuotaAdvice({
+      generatedAt: lastReset,
+      providers: [expiredLive],
+    });
+    const toon = renderQuotaToon(report, "quota-axi", false);
+    expect(toon).toContain("agy,all,unavailable,cache_expired,");
+    expect(toon).not.toContain("agy,all,reused,");
+    const file = cacheFilePath();
+    const admitted = readSnapshotProviders(file, "agy", Date.parse(firstReset));
+    if (!Array.isArray(admitted) || !admitted[0])
+      throw new Error("Expected the Sonnet window to keep the snapshot usable");
+    const reading = {
+      ...admitted[0],
+      state: { ...admitted[0].state, sourcesTried: ["snapshot"] },
+    };
+    expect(withQuotaSemantics(reading, firstReset).windows).toMatchObject([
+      { id: "model:sonnet", percentRemaining: 50 },
+    ]);
+    const expired = withQuotaSemantics(reading, lastReset);
+    expect(expired).toMatchObject({
+      source: "unavailable",
+      windows: [],
+      state: {
+        status: "unavailable",
+        error: "snapshot_expired",
+        stale: false,
+        sourcesTried: ["snapshot"],
+      },
+    });
+    expect(expired.state.reused).toBeUndefined();
+    expect(readSnapshotProviders(file, "agy", Date.parse(lastReset))).toBe(
+      "expired",
+    );
   });
 
   it("does not serve Higgsfield through --max-age, including after a login switch", () => {

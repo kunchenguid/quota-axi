@@ -214,7 +214,7 @@ function remaining(provider: ProviderQuota): string[] {
 
 /** The native selected lane, exactly as an unconfigured run reports it. */
 function expectNativeLane(report: QuotaReport): void {
-  expect(report.schemaVersion).toBe(5);
+  expect(report.schemaVersion).toBe(7);
   expect(report.providers.map((p) => [p.accountKey, remaining(p)])).toEqual([
     [undefined, ["five_hour=70"]],
   ]);
@@ -237,7 +237,7 @@ describe.skipIf(process.platform === "win32")("claude-swap lanes", () => {
     vi.stubEnv("QUOTA_AXI_CLAUDE_PROFILES", join(home, ".claude"));
 
     const report = await quota();
-    expect(report.schemaVersion).toBe(6);
+    expect(report.schemaVersion).toBe(8);
     expect(report.providers.map(remaining)).toEqual([
       ["five_hour=91", "seven_day=7"],
       ["five_hour=63", "seven_day=59"],

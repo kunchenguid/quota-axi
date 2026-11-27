@@ -505,7 +505,7 @@ describe("verified subscription coalescing", () => {
       ),
     });
 
-    expect(response.schemaVersion).toBe(6);
+    expect(response.schemaVersion).toBe(8);
     expect(response.providers.map((provider) => provider.accountKey)).toEqual([
       "native",
       "pi-work",

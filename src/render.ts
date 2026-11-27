@@ -72,6 +72,9 @@ type ProviderBlocks = {
   quota: QuotaRow[];
   exhaustion: ExhaustionRow[];
   attention: AttentionRow[];
+  scopeModels: Array<
+    Pick<QuotaRow, "provider" | "accountKey" | "scope"> & { models: string }
+  >;
 };
 
 /**
@@ -98,7 +101,7 @@ export function renderQuotaToon(
             (provider) => !omit.has(provider.provider),
           ),
         };
-  const { quota, exhaustion, attention } = quotaBlocks(shown);
+  const { quota, exhaustion, attention, scopeModels } = quotaBlocks(shown);
   const blocks = [
     encode({
       bin: collapseHome(binPath),
@@ -111,6 +114,7 @@ export function renderQuotaToon(
     encode({ attention }),
   ];
 
+  if (scopeModels.length > 0) blocks.push(encode({ scopeModels }));
   if (full) blocks.push(...auditBlocks(response));
   blocks.push(renderHelp(quotaHelpLines(response, omit.size)));
   return blocks.filter(Boolean).join("\n");
@@ -122,13 +126,25 @@ export function renderQuotaToon(
  * TOON omission of not-set-up providers happens before this runs.
  */
 function quotaBlocks(response: QuotaAxiResponse): ProviderBlocks {
-  const blocks: ProviderBlocks = { quota: [], exhaustion: [], attention: [] };
+  const blocks: ProviderBlocks = {
+    quota: [],
+    exhaustion: [],
+    attention: [],
+    scopeModels: [],
+  };
   for (const provider of response.providers) {
     const scopes = provider.quotaSemantics?.effectiveAvailability ?? [];
     const scopeAttention: AttentionRow[] = [];
     let measured = false;
 
     for (const scope of scopes) {
+      if (scope.models) {
+        blocks.scopeModels.push({
+          ...providerColumns(provider),
+          scope: scope.scope,
+          models: modelsColumn(scope.models),
+        });
+      }
       if (scope.effectivePercentRemaining === undefined) {
         scopeAttention.push({
           ...providerColumns(provider),
@@ -484,7 +500,12 @@ function auditBlocks(response: QuotaAxiResponse): string[] {
       label: window.label,
       percentRemaining: window.percentRemaining ?? UNKNOWN,
       resetsAt: window.resetsAt ?? window.resetText ?? UNKNOWN,
-      pace: window.pace?.status ?? UNKNOWN,
+      pace:
+        provider.provider === "agy" &&
+        (window.pace?.reason === "not_started" ||
+          window.pace?.reason === "stale")
+          ? window.pace.reason
+          : (window.pace?.status ?? UNKNOWN),
       reserve: window.pace?.reservePercentPoints ?? UNKNOWN,
       burnMultiple: window.pace?.burnMultiple ?? UNKNOWN,
       timeRemainingPercent: window.pace?.timeRemainingPercent ?? UNKNOWN,
@@ -666,7 +687,13 @@ export function quotaJsonReport(
       ...provider,
       label: undefined,
       source: undefined,
-      windows: provider.windows.map(demotedWindow),
+      windows: provider.windows.map((window) =>
+        demotedWindow(
+          window,
+          provider.provider === "agy" &&
+            provider.state.untrustedWindowIds?.includes(window.id),
+        ),
+      ),
       ...(provider.quotaSemantics
         ? { quotaSemantics: demotedSemantics(provider.quotaSemantics) }
         : {}),
@@ -700,10 +727,17 @@ function markNotSetUp(
   };
 }
 
-function demotedWindow(window: QuotaWindow): QuotaWindow {
+function demotedWindow(window: QuotaWindow, untrusted?: boolean): QuotaWindow {
   return {
     ...window,
     percentUsed: window.shareOf === undefined ? undefined : window.percentUsed,
+    ...(untrusted
+      ? {
+          percentRemaining: undefined,
+          resetsAt: undefined,
+          resetText: undefined,
+        }
+      : {}),
     startsAt: undefined,
     windowSeconds: undefined,
     ...(window.pace
@@ -719,6 +753,16 @@ function demotedWindow(window: QuotaWindow): QuotaWindow {
         }
       : {}),
   };
+}
+
+function modelsColumn(
+  models: NonNullable<EffectiveAvailability["models"]>,
+): string {
+  if (models.status !== "known") return UNKNOWN;
+  const members = models.ids?.length
+    ? [...models.ids, ...(models.unmatchedLabels ?? [])]
+    : models.labels;
+  return joinIds([...new Set(members)]) ?? UNKNOWN;
 }
 
 function demotedSemantics(semantics: QuotaSemantics): QuotaSemantics {
