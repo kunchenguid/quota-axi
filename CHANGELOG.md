@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.1.70](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.69...quota-axi-v0.1.70) (2026-11-26)
+
+
+### Features
+
+* add opt-in multiple Codex home lanes ([#390](https://github.com/kunchenguid/quota-axi/issues/390)) ([053d364](https://github.com/kunchenguid/quota-axi/commit/053d364b856c2cd469882a53f3aaf27096fa23d8))
+
+
+### Bug Fixes
+
+* **claude:** report expired refreshable --profile-only sessions as soft expiry ([#396](https://github.com/kunchenguid/quota-axi/issues/396)) ([0cd435d](https://github.com/kunchenguid/quota-axi/commit/0cd435d926924fdd9303efaba4a9944801095e66))
+* **providers:** report every DeepSeek wallet instead of one masking scalar ([#280](https://github.com/kunchenguid/quota-axi/issues/280)) ([f44feb3](https://github.com/kunchenguid/quota-axi/commit/f44feb35454b2bc05b5f755d500dfa39014c592f))
+
 ## [0.1.69](https://github.com/kunchenguid/quota-axi/compare/quota-axi-v0.1.68...quota-axi-v0.1.69) (2026-10-29)
 
 
