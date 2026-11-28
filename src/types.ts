@@ -14,6 +14,7 @@ export type ProviderId =
   | "mimo"
   | "deepseek"
   | "openrouter"
+  | "venice"
   | "elevenlabs"
   | "devin"
   | "muse"
@@ -35,6 +36,7 @@ export const PROVIDER_IDS = [
   "mimo",
   "deepseek",
   "openrouter",
+  "venice",
   "elevenlabs",
   "devin",
   "muse",
@@ -344,7 +346,16 @@ export type ProviderQuota = {
   credits?: {
     remaining?: number;
     unlimited?: boolean;
-    unit?: "usd" | "cny" | "credits";
+    /** Raw Venice amounts and the derived credit total when all balances are known. */
+    venice?: {
+      scope: "account" | "key";
+      usd?: number;
+      diem?: number;
+      bundledUsd?: number;
+      earnedUsd?: number;
+      totalCredits?: number;
+    };
+    unit?: "usd" | "cny" | "diem" | "credits";
     /**
      * Every wallet a vendor reports when it reports more than one, one entry
      * per currency with its own unit. `remaining`/`unit` above mirror the
@@ -354,7 +365,7 @@ export type ProviderQuota = {
      */
     balances?: {
       remaining: number;
-      unit: "usd" | "cny" | "credits";
+      unit: "usd" | "cny" | "diem" | "credits";
     }[];
   };
   /**

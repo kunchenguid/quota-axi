@@ -1,3 +1,4 @@
+import { veniceCreditParts } from "./lib/credit-display.js";
 import { encode } from "@toon-format/toon";
 import { quotaHelpLines } from "./advice.js";
 import { accountColumns } from "./providers/accounts.js";
@@ -350,6 +351,8 @@ function providerStateRows(
 function creditBalance(provider: ProviderQuota): string | undefined {
   const credits = provider.credits;
   if (!credits) return undefined;
+  const venice = veniceCreditParts(provider);
+  if (venice) return venice.join(DETAIL_SEPARATOR);
   if (credits.unlimited) return "credits unlimited";
   const balances = credits.balances;
   if (balances && balances.length > 0) {

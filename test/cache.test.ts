@@ -70,6 +70,26 @@ afterEach(() => {
 });
 
 describe("quota cache", () => {
+  it("round trips Venice account totals", () => {
+    useTempCache();
+    const provider = quota("venice", 0);
+    provider.credits = {
+      remaining: 27.93776568,
+      unit: "usd",
+      venice: {
+        scope: "account",
+        usd: 27.93776568,
+        diem: 1.78822939,
+        bundledUsd: 1,
+        earnedUsd: 0,
+        totalCredits: 3073,
+      },
+    };
+    writeCachedProviders([provider]);
+    expect(readCachedProvider("venice")?.credits?.venice).toEqual(
+      provider.credits.venice,
+    );
+  });
   it("keeps each Z.AI reading's key identity through copies and later readings", () => {
     useTempCache();
     const firstContext = zaiCacheContextId("dummy-zai-account-a");
@@ -226,6 +246,21 @@ describe("quota cache", () => {
         { remaining: 49.27, unit: "cny" },
       ],
     });
+  });
+
+  it("retains a cached Venice DIEM wallet", () => {
+    useTempCache();
+    const credits = {
+      remaining: 0,
+      unit: "usd" as const,
+      balances: [
+        { remaining: 0, unit: "usd" as const },
+        { remaining: 25, unit: "diem" as const },
+      ],
+    };
+    writeCachedProviders([{ ...quota("copilot", 20), credits }]);
+
+    expect(readCachedProvider("copilot")?.credits).toEqual(credits);
   });
 
   it("invalidates Codex identities that do not exactly match duration", () => {

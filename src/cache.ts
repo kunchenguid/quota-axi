@@ -1313,8 +1313,35 @@ function normalizeCachedCredits(
   if (!data) return undefined;
   const remaining = numberValue(data.remaining);
   const unlimited = booleanValue(data.unlimited);
-  const unit = literalValue(data.unit, ["usd", "cny", "credits"] as const);
+  const unit = literalValue(data.unit, [
+    "usd",
+    "cny",
+    "diem",
+    "credits",
+  ] as const);
   const balances = normalizeCachedBalances(data.balances);
+  const v = objectValue(data.venice);
+  const scope = literalValue(v?.scope, ["account", "key"] as const);
+  const venice = scope
+    ? {
+        scope,
+        ...(numberValue(v?.usd) !== undefined
+          ? { usd: numberValue(v?.usd) }
+          : {}),
+        ...(numberValue(v?.diem) !== undefined
+          ? { diem: numberValue(v?.diem) }
+          : {}),
+        ...(numberValue(v?.bundledUsd) !== undefined
+          ? { bundledUsd: numberValue(v?.bundledUsd) }
+          : {}),
+        ...(numberValue(v?.earnedUsd) !== undefined
+          ? { earnedUsd: numberValue(v?.earnedUsd) }
+          : {}),
+        ...(numberValue(v?.totalCredits) !== undefined
+          ? { totalCredits: numberValue(v?.totalCredits) }
+          : {}),
+      }
+    : undefined;
   if (
     remaining === undefined &&
     unlimited === undefined &&
@@ -1327,6 +1354,7 @@ function normalizeCachedCredits(
     unlimited,
     unit,
     ...(balances ? { balances } : {}),
+    ...(venice ? { venice } : {}),
   };
 }
 
@@ -1361,7 +1389,12 @@ function normalizeCachedBalances(
     const data = objectValue(entry);
     if (!data) return [];
     const remaining = numberValue(data.remaining);
-    const unit = literalValue(data.unit, ["usd", "cny", "credits"] as const);
+    const unit = literalValue(data.unit, [
+      "usd",
+      "cny",
+      "diem",
+      "credits",
+    ] as const);
     return remaining === undefined || unit === undefined
       ? []
       : [{ remaining, unit }];

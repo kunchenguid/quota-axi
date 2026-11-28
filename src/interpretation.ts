@@ -174,6 +174,11 @@ function semanticsFor(
         provider.windows,
         "MiMo exposes local API authentication, but no first-party read-only quota endpoint is established, so model headroom remains unknown.",
       );
+    case "venice":
+      return unknownSemantics(
+        provider.windows,
+        "Venice reports separate balances and a DIEM allocation; no overall model headroom is inferred from them.",
+      );
     case "deepseek":
     case "openrouter":
       return unknownSemantics(

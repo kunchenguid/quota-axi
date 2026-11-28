@@ -1,3 +1,4 @@
+import { veniceCreditParts } from "./lib/credit-display.js";
 import {
   providerPresence,
   type ProviderPresence,
@@ -135,6 +136,7 @@ const MOCHA: Palette = {
     mimo: { rgb: [174, 214, 241], ansi16: "96", bold: true },
     deepseek: { rgb: [88, 160, 242], ansi16: "94", bold: true },
     openrouter: { rgb: [183, 148, 232], ansi16: "95", bold: true },
+    venice: { rgb: [183, 148, 232], ansi16: "95", bold: true },
     elevenlabs: { rgb: [214, 170, 255], ansi16: "95", bold: true },
     devin: { rgb: [126, 196, 224], ansi16: "96", bold: true },
     muse: { rgb: [0, 132, 255], ansi16: "94", bold: true },
@@ -184,6 +186,7 @@ const LATTE: Palette = {
     mimo: { rgb: [4, 140, 190], ansi16: "96", bold: true },
     deepseek: { rgb: [40, 110, 220], ansi16: "94", bold: true },
     openrouter: { rgb: [136, 57, 239], ansi16: "95", bold: true },
+    venice: { rgb: [136, 57, 239], ansi16: "95", bold: true },
     elevenlabs: { rgb: [190, 70, 165], ansi16: "95", bold: true },
     devin: { rgb: [20, 130, 160], ansi16: "96", bold: true },
     muse: { rgb: [90, 80, 210], ansi16: "94", bold: true },
@@ -621,12 +624,15 @@ function creditsOnlyHeadline(
   stale: boolean,
   border: CardBorder,
 ): Line[] | undefined {
-  if (provider.windows.length > 0) return undefined;
+  if (provider.windows.length > 0 && !provider.credits?.venice)
+    return undefined;
   const credits = provider.credits;
   if (!credits) return undefined;
   const balances = credits.balances;
-  const amount =
-    credits.unlimited === true
+  const venice = veniceCreditParts(provider);
+  const amount = venice
+    ? venice.join(" · ")
+    : credits.unlimited === true
       ? "unlimited"
       : balances && balances.length > 0
         ? `${balances
@@ -636,18 +642,33 @@ function creditsOnlyHeadline(
           ? undefined
           : `${credits.remaining} ${credits.unit ?? "credits"} remaining`;
   if (amount === undefined) return undefined;
-  return [
+  const text = stale ? `stale · ${amount}` : amount;
+  const width = CARD_INTERIOR - 3;
+  const hasVeniceHeadline =
+    venice && venice.length > 1 && /(?:known )?credits$/u.test(venice[0]);
+  if (!hasVeniceHeadline && displayWidth(text) <= width) {
+    return [interior([{ text: "   " }, { text, style: "dimBold" }], border)];
+  }
+  const rows: string[] = [];
+  const parts = hasVeniceHeadline ? venice.slice(1) : text.split(" · ");
+  if (hasVeniceHeadline) rows.push(stale ? `stale · ${venice[0]}` : venice[0]);
+  let row = "";
+  for (const part of parts) {
+    const combined = row ? `${row} · ${part}` : part;
+    if (displayWidth(combined) > width && row) {
+      rows.push(row);
+      row = part;
+    } else {
+      row = combined;
+    }
+  }
+  if (row) rows.push(row);
+  return rows.map((line) =>
     interior(
-      [
-        { text: "   " },
-        {
-          text: stale ? `stale · ${amount}` : amount,
-          style: "dimBold",
-        },
-      ],
+      [{ text: "   " }, { text: truncate(line, width), style: "dimBold" }],
       border,
     ),
-  ];
+  );
 }
 
 /**

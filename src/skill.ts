@@ -30,6 +30,7 @@ export const HERMES_TAGS = [
   "mimo",
   "deepseek",
   "openrouter",
+  "venice",
   "antigravity",
   "commandcode",
   "elevenlabs",

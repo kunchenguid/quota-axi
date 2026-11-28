@@ -1597,3 +1597,32 @@ describe("per-scope selection signal", () => {
     );
   });
 });
+
+describe("balance provider semantics", () => {
+  const wallet: QuotaWindow = {
+    id: "wallet",
+    label: "wallet",
+    kind: "credits",
+    remainingCredits: 5,
+  };
+
+  it("describes DeepSeek as a credit balance, never as Venice's DIEM allocation", () => {
+    const semantics = withQuotaSemantics(
+      { ...provider("deepseek", [wallet]), label: "DeepSeek" },
+      GENERATED_AT,
+    ).quotaSemantics;
+    expect(semantics?.status).toBe("unknown");
+    expect(semantics?.description).toBe(
+      "DeepSeek reports a credit balance, not a usage window. quota-axi exposes the raw balance but does not infer an effective remaining percentage.",
+    );
+  });
+
+  it("describes Venice's separate balances and DIEM allocation", () => {
+    const semantics = withQuotaSemantics(
+      provider("venice", [wallet]),
+      GENERATED_AT,
+    ).quotaSemantics;
+    expect(semantics?.status).toBe("unknown");
+    expect(semantics?.description).toContain("DIEM allocation");
+  });
+});

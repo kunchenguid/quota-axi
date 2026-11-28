@@ -23,6 +23,7 @@ metadata:
       - mimo
       - deepseek
       - openrouter
+      - venice
       - antigravity
       - commandcode
       - elevenlabs
