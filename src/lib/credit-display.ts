@@ -1,21 +1,3 @@
-import type { ProviderId } from "../types.js";
-
-/** Format Venice monetary and DIEM balances for text surfaces only. */
-export function displayCreditAmount(
-  provider: ProviderId,
-  unit: string,
-  amount: number,
-): string {
-  if (provider === "venice" && (unit === "usd" || unit === "diem")) {
-    return new Intl.NumberFormat("en-US", {
-      useGrouping: false,
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    }).format(amount);
-  }
-  return String(amount);
-}
-
 import type { ProviderQuota } from "../types.js";
 
 export function veniceCreditParts(

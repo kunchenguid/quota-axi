@@ -1,7 +1,4 @@
-import {
-  displayCreditAmount,
-  veniceCreditParts,
-} from "./lib/credit-display.js";
+import { veniceCreditParts } from "./lib/credit-display.js";
 import { encode } from "@toon-format/toon";
 import { quotaHelpLines } from "./advice.js";
 import { accountColumns } from "./providers/accounts.js";
@@ -360,14 +357,11 @@ function creditBalance(provider: ProviderQuota): string | undefined {
   const balances = credits.balances;
   if (balances && balances.length > 0) {
     return `remaining ${balances
-      .map(
-        (balance) =>
-          `${displayCreditAmount(provider.provider, balance.unit, balance.remaining)} ${balance.unit}`,
-      )
+      .map((balance) => `${balance.remaining} ${balance.unit}`)
       .join(DETAIL_SEPARATOR)}`;
   }
   if (credits.remaining === undefined) return undefined;
-  return `remaining ${displayCreditAmount(provider.provider, credits.unit ?? "credits", credits.remaining)} ${credits.unit ?? "credits"}`;
+  return `remaining ${credits.remaining} ${credits.unit ?? "credits"}`;
 }
 
 function primaryProviderRow(provider: ProviderQuota): AttentionRow | undefined {

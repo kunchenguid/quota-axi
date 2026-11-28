@@ -1,7 +1,4 @@
-import {
-  displayCreditAmount,
-  veniceCreditParts,
-} from "./lib/credit-display.js";
+import { veniceCreditParts } from "./lib/credit-display.js";
 import {
   providerPresence,
   type ProviderPresence,
@@ -639,14 +636,11 @@ function creditsOnlyHeadline(
       ? "unlimited"
       : balances && balances.length > 0
         ? `${balances
-            .map(
-              (balance) =>
-                `${displayCreditAmount(provider.provider, balance.unit, balance.remaining)} ${balance.unit}`,
-            )
+            .map((balance) => `${balance.remaining} ${balance.unit}`)
             .join(" · ")} remaining`
         : credits.remaining === undefined
           ? undefined
-          : `${displayCreditAmount(provider.provider, credits.unit ?? "credits", credits.remaining)} ${credits.unit ?? "credits"} remaining`;
+          : `${credits.remaining} ${credits.unit ?? "credits"} remaining`;
   if (amount === undefined) return undefined;
   const text = stale ? `stale · ${amount}` : amount;
   const width = CARD_INTERIOR - 3;
