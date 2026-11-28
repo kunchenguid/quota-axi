@@ -114,7 +114,7 @@ describe("Venice balance provider", () => {
       expect(line.length).toBe(49);
     }
   });
-  it("reports the complete account total from admin balances and preserves raw values in JSON", async () => {
+  it("reports the complete account total from admin balances, counting a null balance as zero", async () => {
     const raw = {
       usd: 27.93776568,
       diem: 1.78822939,
@@ -156,7 +156,6 @@ describe("Venice balance provider", () => {
       bundledUsd: 1,
       earnedUsd: 0,
       totalCredits: 3073,
-      rawAccount: raw,
     });
     for (const full of [false, true]) {
       const toon = renderQuotaToon(response, "quota-axi", full);
@@ -232,7 +231,38 @@ describe("Venice balance provider", () => {
       unit: "usd",
     });
   });
-  it("uses the optional admin allocation to calculate the DIEM percentage", async () => {
+  it("calculates the DIEM percentage from account DIEM, not the key-capped balance", async () => {
+    const fetch = vi.fn(async (url: string | URL | Request) =>
+      Response.json(
+        url === VENICE_BALANCE_URL
+          ? {
+              diemEpochAllocation: 100,
+              balances: {
+                usd: 30,
+                diem: 80,
+                bundledCredits: 1,
+                earnedCredits: 0,
+              },
+            }
+          : ratePayload,
+      ),
+    );
+    const result = await createVeniceAdapter({
+      credential,
+      adminKey: () => "synthetic-admin",
+      fetch: fetch as typeof globalThis.fetch,
+    }).fetchQuota({ refreshCredentials: false });
+    expect(result.windows[0]).toMatchObject({
+      remainingCredits: 80,
+      limitCredits: 100,
+      usedCredits: 20,
+      percentUsed: 20,
+      percentRemaining: 80,
+    });
+    expect(result.credits?.venice?.diem).toBe(80);
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+  it("omits the DIEM percentage when only the allocation is known", async () => {
     const fetch = vi.fn(async (url: string | URL | Request) =>
       Response.json(
         url === VENICE_BALANCE_URL ? { diemEpochAllocation: 100 } : ratePayload,
@@ -243,14 +273,10 @@ describe("Venice balance provider", () => {
       adminKey: () => "synthetic-admin",
       fetch: fetch as typeof globalThis.fetch,
     }).fetchQuota({ refreshCredentials: false });
-    expect(result.windows[0]).toMatchObject({
-      remainingCredits: 25,
-      limitCredits: 100,
-      usedCredits: 75,
-      percentUsed: 75,
-      percentRemaining: 25,
-    });
-    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(result.windows[0]).toMatchObject({ remainingCredits: 25 });
+    expect(result.windows[0]?.percentUsed).toBeUndefined();
+    expect(result.windows[0]?.percentRemaining).toBeUndefined();
+    expect(result.windows[0]?.limitCredits).toBeUndefined();
   });
   it("keeps inference balances when the optional admin endpoint fails", async () => {
     const fetch = vi.fn(async (url: string | URL | Request) =>

@@ -70,7 +70,7 @@ afterEach(() => {
 });
 
 describe("quota cache", () => {
-  it("round trips Venice account totals and raw null balances", () => {
+  it("round trips Venice account totals", () => {
     useTempCache();
     const provider = quota("venice", 0);
     provider.credits = {
@@ -83,12 +83,6 @@ describe("quota cache", () => {
         bundledUsd: 1,
         earnedUsd: 0,
         totalCredits: 3073,
-        rawAccount: {
-          usd: 27.93776568,
-          diem: 1.78822939,
-          bundledCredits: 1,
-          earnedCredits: null,
-        },
       },
     };
     writeCachedProviders([provider]);

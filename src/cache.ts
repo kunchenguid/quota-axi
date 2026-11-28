@@ -1322,27 +1322,9 @@ function normalizeCachedCredits(
   const balances = normalizeCachedBalances(data.balances);
   const v = objectValue(data.venice);
   const scope = literalValue(v?.scope, ["account", "key"] as const);
-  const rawAccount = objectValue(v?.rawAccount);
-  const rawKeys = ["usd", "diem", "bundledCredits", "earnedCredits"] as const;
-  const validRaw =
-    rawAccount &&
-    rawKeys.every(
-      (key) =>
-        rawAccount[key] === null || numberValue(rawAccount[key]) !== undefined,
-    );
   const venice = scope
     ? {
         scope,
-        ...(validRaw
-          ? {
-              rawAccount: {
-                usd: rawAccount.usd as number | null,
-                diem: rawAccount.diem as number | null,
-                bundledCredits: rawAccount.bundledCredits as number | null,
-                earnedCredits: rawAccount.earnedCredits as number | null,
-              },
-            }
-          : {}),
         ...(numberValue(v?.usd) !== undefined
           ? { usd: numberValue(v?.usd) }
           : {}),

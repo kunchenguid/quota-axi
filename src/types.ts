@@ -354,12 +354,6 @@ export type ProviderQuota = {
       bundledUsd?: number;
       earnedUsd?: number;
       totalCredits?: number;
-      rawAccount?: {
-        usd: number | null;
-        diem: number | null;
-        bundledCredits: number | null;
-        earnedCredits: number | null;
-      };
     };
     unit?: "usd" | "cny" | "diem" | "credits";
     /**

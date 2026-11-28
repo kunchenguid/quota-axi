@@ -136,14 +136,6 @@ async function fetchQuota(deps: Dependencies): Promise<ProviderQuota> {
       let accountBalances:
         | { usd: number; diem: number; bundledUsd: number; earnedUsd: number }
         | undefined;
-      let rawAccount:
-        | {
-            usd: number | null;
-            diem: number | null;
-            bundledCredits: number | null;
-            earnedCredits: number | null;
-          }
-        | undefined;
       let allocation: number | undefined;
       const admin = deps.adminKey();
       if (admin) {
@@ -175,19 +167,14 @@ async function fetchQuota(deps: Dependencies): Promise<ProviderQuota> {
             d !== undefined
           ) {
             accountBalances = { usd: a, diem: b, bundledUsd: c, earnedUsd: d };
-            rawAccount = {
-              usd: raw?.usd === null ? null : a,
-              diem: raw?.diem === null ? null : b,
-              bundledCredits: raw?.bundledCredits === null ? null : c,
-              earnedCredits: raw?.earnedCredits === null ? null : d,
-            };
           }
         } catch {
           /* Keep key-scoped balances when optional admin access fails. */
         }
       }
       const windows: QuotaWindow[] = [];
-      if (diem !== undefined) {
+      const windowDiem = accountBalances?.diem ?? diem;
+      if (windowDiem !== undefined) {
         const reset =
           typeof data?.nextEpochBegins === "string" &&
           Number.isFinite(Date.parse(data.nextEpochBegins))
@@ -197,15 +184,20 @@ async function fetchQuota(deps: Dependencies): Promise<ProviderQuota> {
           id: "diem",
           label: "DIEM",
           kind: "credits",
-          remainingCredits: diem,
+          remainingCredits: windowDiem,
           creditUnit: "DIEM",
           ...(reset ? { resetsAt: reset } : {}),
         };
-        if (allocation !== undefined && allocation > 0 && diem <= allocation) {
+        if (
+          accountBalances &&
+          allocation !== undefined &&
+          allocation > 0 &&
+          windowDiem <= allocation
+        ) {
           window.limitCredits = allocation;
-          window.usedCredits = allocation - diem;
-          window.percentUsed = (100 * (allocation - diem)) / allocation;
-          window.percentRemaining = (100 * diem) / allocation;
+          window.usedCredits = allocation - windowDiem;
+          window.percentUsed = (100 * (allocation - windowDiem)) / allocation;
+          window.percentRemaining = (100 * windowDiem) / allocation;
         }
         windows.push(window);
       }
@@ -219,7 +211,6 @@ async function fetchQuota(deps: Dependencies): Promise<ProviderQuota> {
         ? {
             scope: "account" as const,
             ...accountBalances,
-            rawAccount,
             totalCredits: [
               accountBalances.usd,
               accountBalances.diem,
