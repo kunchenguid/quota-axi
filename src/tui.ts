@@ -1,4 +1,8 @@
 import {
+  displayCreditAmount,
+  veniceCreditParts,
+} from "./lib/credit-display.js";
+import {
   providerPresence,
   type ProviderPresence,
 } from "./lib/source-attempts.js";
@@ -624,6 +628,7 @@ function creditsOnlyHeadline(
   border: CardBorder,
 ): Line[] | undefined {
   if (
+    !provider.credits?.venice &&
     provider.windows.some(
       (window) =>
         window.percentRemaining !== undefined ||
@@ -634,16 +639,21 @@ function creditsOnlyHeadline(
   const credits = provider.credits;
   if (!credits) return undefined;
   const balances = credits.balances;
-  const amount =
-    credits.unlimited === true
+  const venice = veniceCreditParts(provider);
+  const amount = venice
+    ? venice.join(" · ")
+    : credits.unlimited === true
       ? "unlimited"
       : balances && balances.length > 0
         ? `${balances
-            .map((balance) => `${balance.remaining} ${balance.unit}`)
+            .map(
+              (balance) =>
+                `${displayCreditAmount(provider.provider, balance.unit, balance.remaining)} ${balance.unit}`,
+            )
             .join(" · ")} remaining`
         : credits.remaining === undefined
           ? undefined
-          : `${credits.remaining} ${credits.unit ?? "credits"} remaining`;
+          : `${displayCreditAmount(provider.provider, credits.unit ?? "credits", credits.remaining)} ${credits.unit ?? "credits"} remaining`;
   if (amount === undefined) return undefined;
   const text = stale ? `stale · ${amount}` : amount;
   const width = CARD_INTERIOR - 3;

@@ -70,6 +70,32 @@ afterEach(() => {
 });
 
 describe("quota cache", () => {
+  it("round trips Venice account totals and raw null balances", () => {
+    useTempCache();
+    const provider = quota("venice", 0);
+    provider.credits = {
+      remaining: 27.93776568,
+      unit: "usd",
+      venice: {
+        scope: "account",
+        usd: 27.93776568,
+        diem: 1.78822939,
+        bundledUsd: 1,
+        earnedUsd: 0,
+        totalCredits: 3073,
+        rawAccount: {
+          usd: 27.93776568,
+          diem: 1.78822939,
+          bundledCredits: 1,
+          earnedCredits: null,
+        },
+      },
+    };
+    writeCachedProviders([provider]);
+    expect(readCachedProvider("venice")?.credits?.venice).toEqual(
+      provider.credits.venice,
+    );
+  });
   it("keeps each Z.AI reading's key identity through copies and later readings", () => {
     useTempCache();
     const firstContext = zaiCacheContextId("dummy-zai-account-a");

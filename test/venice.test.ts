@@ -9,7 +9,7 @@ import {
   VENICE_RATE_LIMITS_URL,
 } from "../src/providers/venice.js";
 import { withQuotaSemantics } from "../src/interpretation.js";
-import { renderQuotaToon } from "../src/render.js";
+import { quotaJsonReport, renderQuotaToon } from "../src/render.js";
 import { renderQuotaTui } from "../src/tui.js";
 
 const GENERATED_AT = "2030-01-01T12:00:00.000Z";
@@ -39,10 +39,11 @@ describe("Venice balance provider", () => {
     expect(result.credits).toEqual({
       remaining: 12.5,
       unit: "usd",
+      venice: { scope: "key", usd: 12.5, diem: 25, bundledUsd: 7 },
       balances: [
         { remaining: 12.5, unit: "usd" },
         { remaining: 25, unit: "diem" },
-        { remaining: 7, unit: "credits" },
+        { remaining: 700, unit: "credits" },
       ],
     });
     expect(result.windows).toEqual([
@@ -68,14 +69,16 @@ describe("Venice balance provider", () => {
       schemaVersion: 5,
       providers: [withQuotaSemantics(quota, GENERATED_AT)],
     } as const;
-    const balances = "12.5 usd · 25 diem · 7 credits";
+    const balances =
+      "4,450 known credits (earned unknown) · USD $12.50 · DIEM 25.00 · plan 700 credits";
     for (const full of [false, true]) {
       const toon = renderQuotaToon(response, "quota-axi", full);
-      expect(toon).toContain(`venice,all,credits,remaining ${balances},none`);
+      expect(toon).toContain(balances);
       expect(toon).toContain("quota[0]:");
     }
     const tui = renderQuotaTui(response, { columns: 60, timeZone: "UTC" });
-    expect(tui).toContain(`${balances} remaining`);
+    expect(tui).toContain("4,450 known credits (earned unknown)");
+    expect(tui).toContain("USD $12.50 · DIEM 25.00 · plan 700 credits");
     expect(tui).not.toMatch(/\d%/);
   });
   it("keeps fractional balances inside the TUI card and shows every wallet", async () => {
@@ -104,16 +107,130 @@ describe("Venice balance provider", () => {
       columns: 60,
       timeZone: "UTC",
     }).split("\n");
-    for (const amount of [
-      "27.93776568 usd",
-      "1.78822939 diem",
-      "123.45678912 credits",
-    ])
+    for (const amount of ["USD $27.94", "DIEM 1.79", "plan 12,346 credits"])
       expect(lines.join("\n")).toContain(amount);
     for (const line of lines.filter((line) => line.startsWith("│"))) {
       expect(line.endsWith("│")).toBe(true);
       expect(line.length).toBe(49);
     }
+  });
+  it("reports the complete account total from admin balances and preserves raw values in JSON", async () => {
+    const raw = {
+      usd: 27.93776568,
+      diem: 1.78822939,
+      bundledCredits: 1,
+      earnedCredits: null,
+    };
+    const fetch = vi.fn(async (url: string | URL | Request) =>
+      Response.json(
+        url === VENICE_BALANCE_URL
+          ? { diemEpochAllocation: 2, balances: raw }
+          : {
+              data: {
+                balances: {
+                  USD: raw.usd,
+                  DIEM: raw.diem,
+                  BUNDLED_CREDITS: raw.bundledCredits,
+                },
+              },
+            },
+      ),
+    );
+    const quota = await createVeniceAdapter({
+      credential,
+      adminKey: () => "synthetic-admin",
+      fetch: fetch as typeof globalThis.fetch,
+      now: () => Date.parse(GENERATED_AT),
+    }).fetchQuota({ refreshCredentials: false });
+    const response = {
+      generatedAt: GENERATED_AT,
+      schemaVersion: 5,
+      providers: [withQuotaSemantics(quota, GENERATED_AT)],
+    } as const;
+    expect(
+      quotaJsonReport(response, false).providers[0].credits?.venice,
+    ).toEqual({
+      scope: "account",
+      usd: raw.usd,
+      diem: raw.diem,
+      bundledUsd: 1,
+      earnedUsd: 0,
+      totalCredits: 3073,
+      rawAccount: raw,
+    });
+    for (const full of [false, true]) {
+      const toon = renderQuotaToon(response, "quota-axi", full);
+      for (const part of [
+        "3,073 Venice Credits",
+        "USD $27.94",
+        "DIEM 1.79",
+        "plan 100 credits",
+        "earned 0 credits",
+      ])
+        expect(toon).toContain(part);
+    }
+    const tui = renderQuotaTui(response, { columns: 60, timeZone: "UTC" });
+    for (const part of [
+      "3,073 Venice Credits",
+      "USD $27.94",
+      "DIEM 1.79",
+      "plan 100 credits",
+      "earned 0 credits",
+    ])
+      expect(tui).toContain(part);
+  });
+  it("does not invent a total when admin balances omit earned credits", async () => {
+    const fetch = vi.fn(async (url: string | URL | Request) =>
+      Response.json(
+        url === VENICE_BALANCE_URL
+          ? { balances: { usd: 1, diem: 2, bundledCredits: 3 } }
+          : ratePayload,
+      ),
+    );
+    const quota = await createVeniceAdapter({
+      credential,
+      adminKey: () => "synthetic-admin",
+      fetch: fetch as typeof globalThis.fetch,
+    }).fetchQuota({ refreshCredentials: false });
+    expect(quota.credits?.venice).toEqual({
+      scope: "key",
+      usd: 12.5,
+      diem: 25,
+      bundledUsd: 7,
+    });
+  });
+  it("does not combine account earned credits with key-capped balances", async () => {
+    const fetch = vi.fn(async (url: string | URL | Request) =>
+      Response.json(
+        url === VENICE_BALANCE_URL
+          ? {
+              balances: {
+                usd: 30,
+                diem: 2,
+                bundledCredits: 1,
+                earnedCredits: 4,
+              },
+            }
+          : ratePayload,
+      ),
+    );
+    const quota = await createVeniceAdapter({
+      credential,
+      adminKey: () => "synthetic-admin",
+      fetch: fetch as typeof globalThis.fetch,
+    }).fetchQuota({ refreshCredentials: false });
+    expect(quota.credits?.venice).toMatchObject({
+      scope: "account",
+      usd: 30,
+      diem: 2,
+      bundledUsd: 1,
+      earnedUsd: 4,
+      totalCredits: 3700,
+    });
+    expect(quota.credits?.balances?.[0]).toEqual({
+      remaining: 12.5,
+      unit: "usd",
+    });
   });
   it("uses the optional admin allocation to calculate the DIEM percentage", async () => {
     const fetch = vi.fn(async (url: string | URL | Request) =>

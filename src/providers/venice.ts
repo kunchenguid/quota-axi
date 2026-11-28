@@ -133,6 +133,59 @@ async function fetchQuota(deps: Dependencies): Promise<ProviderQuota> {
       const bundled = amount(balances.BUNDLED_CREDITS);
       if (diem === undefined && usd === undefined && bundled === undefined)
         throw new Error("invalid_balances");
+      let accountBalances:
+        | { usd: number; diem: number; bundledUsd: number; earnedUsd: number }
+        | undefined;
+      let rawAccount:
+        | {
+            usd: number | null;
+            diem: number | null;
+            bundledCredits: number | null;
+            earnedCredits: number | null;
+          }
+        | undefined;
+      let allocation: number | undefined;
+      const admin = deps.adminKey();
+      if (admin) {
+        try {
+          const billing = object(
+            await requestKeyEndpoint(
+              VENICE_BALANCE_URL,
+              admin,
+              deps.fetch,
+              deps.deadlineMs,
+            ),
+          );
+          allocation = amount(billing?.diemEpochAllocation);
+          const raw = object(billing?.balances);
+          const read = (key: string) =>
+            raw && Object.hasOwn(raw, key)
+              ? raw[key] === null
+                ? 0
+                : amount(raw[key])
+              : undefined;
+          const a = read("usd"),
+            b = read("diem"),
+            c = read("bundledCredits"),
+            d = read("earnedCredits");
+          if (
+            a !== undefined &&
+            b !== undefined &&
+            c !== undefined &&
+            d !== undefined
+          ) {
+            accountBalances = { usd: a, diem: b, bundledUsd: c, earnedUsd: d };
+            rawAccount = {
+              usd: raw?.usd === null ? null : a,
+              diem: raw?.diem === null ? null : b,
+              bundledCredits: raw?.bundledCredits === null ? null : c,
+              earnedCredits: raw?.earnedCredits === null ? null : d,
+            };
+          }
+        } catch {
+          /* Keep key-scoped balances when optional admin access fails. */
+        }
+      }
       const windows: QuotaWindow[] = [];
       if (diem !== undefined) {
         const reset =
@@ -148,31 +201,11 @@ async function fetchQuota(deps: Dependencies): Promise<ProviderQuota> {
           creditUnit: "DIEM",
           ...(reset ? { resetsAt: reset } : {}),
         };
-        const admin = deps.adminKey();
-        if (admin) {
-          try {
-            const billing = object(
-              await requestKeyEndpoint(
-                VENICE_BALANCE_URL,
-                admin,
-                deps.fetch,
-                deps.deadlineMs,
-              ),
-            );
-            const allocation = amount(billing?.diemEpochAllocation);
-            if (
-              allocation !== undefined &&
-              allocation > 0 &&
-              diem <= allocation
-            ) {
-              window.limitCredits = allocation;
-              window.usedCredits = allocation - diem;
-              window.percentUsed = (100 * (allocation - diem)) / allocation;
-              window.percentRemaining = (100 * diem) / allocation;
-            }
-          } catch {
-            /* Inference-key balances remain useful if optional admin access fails. */
-          }
+        if (allocation !== undefined && allocation > 0 && diem <= allocation) {
+          window.limitCredits = allocation;
+          window.usedCredits = allocation - diem;
+          window.percentUsed = (100 * (allocation - diem)) / allocation;
+          window.percentRemaining = (100 * diem) / allocation;
         }
         windows.push(window);
       }
@@ -181,7 +214,25 @@ async function fetchQuota(deps: Dependencies): Promise<ProviderQuota> {
       if (usd !== undefined) wallets.push({ remaining: usd, unit: "usd" });
       if (diem !== undefined) wallets.push({ remaining: diem, unit: "diem" });
       if (bundled !== undefined)
-        wallets.push({ remaining: bundled, unit: "credits" });
+        wallets.push({ remaining: bundled * 100, unit: "credits" });
+      const venice = accountBalances
+        ? {
+            scope: "account" as const,
+            ...accountBalances,
+            rawAccount,
+            totalCredits: [
+              accountBalances.usd,
+              accountBalances.diem,
+              accountBalances.bundledUsd,
+              accountBalances.earnedUsd,
+            ].reduce((sum, value) => sum + Math.round(value * 100), 0),
+          }
+        : {
+            scope: "key" as const,
+            ...(usd !== undefined ? { usd } : {}),
+            ...(diem !== undefined ? { diem } : {}),
+            ...(bundled !== undefined ? { bundledUsd: bundled } : {}),
+          };
       const funded =
         wallets.find((wallet) => wallet.remaining > 0) ?? wallets[0];
       attempts.push({ source: resolution.source, status: "success" });
@@ -194,6 +245,7 @@ async function fetchQuota(deps: Dependencies): Promise<ProviderQuota> {
           ? {
               credits: {
                 ...funded,
+                venice,
                 ...(wallets.length > 1 ? { balances: wallets } : {}),
               },
             }

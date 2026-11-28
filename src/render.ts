@@ -1,3 +1,7 @@
+import {
+  displayCreditAmount,
+  veniceCreditParts,
+} from "./lib/credit-display.js";
 import { encode } from "@toon-format/toon";
 import { quotaHelpLines } from "./advice.js";
 import { accountColumns } from "./providers/accounts.js";
@@ -350,15 +354,20 @@ function providerStateRows(
 function creditBalance(provider: ProviderQuota): string | undefined {
   const credits = provider.credits;
   if (!credits) return undefined;
+  const venice = veniceCreditParts(provider);
+  if (venice) return venice.join(DETAIL_SEPARATOR);
   if (credits.unlimited) return "credits unlimited";
   const balances = credits.balances;
   if (balances && balances.length > 0) {
     return `remaining ${balances
-      .map((balance) => `${balance.remaining} ${balance.unit}`)
+      .map(
+        (balance) =>
+          `${displayCreditAmount(provider.provider, balance.unit, balance.remaining)} ${balance.unit}`,
+      )
       .join(DETAIL_SEPARATOR)}`;
   }
   if (credits.remaining === undefined) return undefined;
-  return `remaining ${credits.remaining} ${credits.unit ?? "credits"}`;
+  return `remaining ${displayCreditAmount(provider.provider, credits.unit ?? "credits", credits.remaining)} ${credits.unit ?? "credits"}`;
 }
 
 function primaryProviderRow(provider: ProviderQuota): AttentionRow | undefined {

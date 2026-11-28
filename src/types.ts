@@ -346,6 +346,21 @@ export type ProviderQuota = {
   credits?: {
     remaining?: number;
     unlimited?: boolean;
+    /** Raw Venice amounts and the derived credit total when all balances are known. */
+    venice?: {
+      scope: "account" | "key";
+      usd?: number;
+      diem?: number;
+      bundledUsd?: number;
+      earnedUsd?: number;
+      totalCredits?: number;
+      rawAccount?: {
+        usd: number | null;
+        diem: number | null;
+        bundledCredits: number | null;
+        earnedCredits: number | null;
+      };
+    };
     unit?: "usd" | "cny" | "diem" | "credits";
     /**
      * Every wallet a vendor reports when it reports more than one, one entry
