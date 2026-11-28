@@ -650,11 +650,14 @@ function creditsOnlyHeadline(
   if (amount === undefined) return undefined;
   const text = stale ? `stale · ${amount}` : amount;
   const width = CARD_INTERIOR - 3;
-  if (displayWidth(text) <= width) {
+  const hasVeniceHeadline =
+    venice && venice.length > 1 && /(?:known )?credits$/u.test(venice[0]);
+  if (!hasVeniceHeadline && displayWidth(text) <= width) {
     return [interior([{ text: "   " }, { text, style: "dimBold" }], border)];
   }
-  const parts = text.split(" · ");
   const rows: string[] = [];
+  const parts = hasVeniceHeadline ? venice.slice(1) : text.split(" · ");
+  if (hasVeniceHeadline) rows.push(stale ? `stale · ${venice[0]}` : venice[0]);
   let row = "";
   for (const part of parts) {
     const combined = row ? `${row} · ${part}` : part;

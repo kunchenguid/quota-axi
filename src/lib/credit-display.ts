@@ -27,26 +27,22 @@ export function veniceCreditParts(
     new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(n);
   const parts: string[] = [];
   if (v.totalCredits !== undefined)
-    parts.push(`${integer(v.totalCredits)} Venice Credits spendable now`);
+    parts.push(`${integer(v.totalCredits)} credits`);
   else if (
     v.usd !== undefined &&
     v.diem !== undefined &&
     v.bundledUsd !== undefined
   )
     parts.push(
-      `${integer([v.usd, v.diem, v.bundledUsd].reduce((sum, n) => sum + Math.round(n * 100), 0))} known credits (earned unknown)`,
+      `${integer([v.usd, v.diem, v.bundledUsd].reduce((sum, n) => sum + Math.round(n * 100), 0))} known credits`,
     );
   if (v.diem !== undefined)
-    parts.push(
-      `DIEM ${displayCreditAmount("venice", "diem", v.diem)} left today`,
-    );
-  if (v.earnedUsd !== undefined)
-    parts.push(`earned ${integer(Math.round(v.earnedUsd * 100))} credits`);
+    parts.push(`DIEM ${integer(Math.round(v.diem * 100))} today`);
+  if (v.earnedUsd !== undefined && v.earnedUsd > 0)
+    parts.push(`earned ${integer(Math.round(v.earnedUsd * 100))}`);
   if (v.bundledUsd !== undefined)
-    parts.push(
-      `plan ${integer(Math.round(v.bundledUsd * 100))} credits this month`,
-    );
+    parts.push(`plan ${integer(Math.round(v.bundledUsd * 100))} this month`);
   if (v.usd !== undefined)
-    parts.push(`USD $${displayCreditAmount("venice", "usd", v.usd)}`);
+    parts.push(`banked ${integer(Math.round(v.usd * 100))}`);
   return parts;
 }
