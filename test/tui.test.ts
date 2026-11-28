@@ -866,6 +866,36 @@ describe("cards for providers with no combinable bound", () => {
     expect(findLine(lines, "0 usd · 49.27 cny remaining")).toBeDefined();
   });
 
+  it("keeps a non-Venice balance out of the headline when a percentage-less window exists", () => {
+    const devin = withQuotaSemantics(
+      {
+        provider: "devin",
+        label: "Devin",
+        source: "api",
+        windows: [{ kind: "weekly", label: "weekly" }],
+        credits: { remaining: 12.5, unit: "usd" },
+        state: {
+          status: "fresh",
+          stale: false,
+          refreshedAt: GENERATED_AT,
+          authStatus: "usable",
+          sourcesTried: ["env:DEVIN_API_KEY"],
+        },
+      },
+      GENERATED_AT,
+    );
+    const lines = renderQuotaTui(
+      {
+        generatedAt: GENERATED_AT,
+        schemaVersion: 5,
+        providers: [devin],
+      },
+      { timeZone: "America/Los_Angeles" },
+    ).split("\n");
+
+    expect(lines.join("\n")).not.toContain("12.5 usd remaining");
+  });
+
   it("renders Cursor's jointly bounded card with its effective bar", () => {
     const cursor = withQuotaSemantics(
       {
