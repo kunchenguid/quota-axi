@@ -70,7 +70,7 @@ describe("Venice balance provider", () => {
       providers: [withQuotaSemantics(quota, GENERATED_AT)],
     } as const;
     const balances =
-      "4,450 known credits (earned unknown) · USD $12.50 · DIEM 25.00 · plan 700 credits";
+      "4,450 known credits (earned unknown) · DIEM 25.00 left today · plan 700 credits this month · USD $12.50";
     for (const full of [false, true]) {
       const toon = renderQuotaToon(response, "quota-axi", full);
       expect(toon).toContain(balances);
@@ -78,7 +78,9 @@ describe("Venice balance provider", () => {
     }
     const tui = renderQuotaTui(response, { columns: 60, timeZone: "UTC" });
     expect(tui).toContain("4,450 known credits (earned unknown)");
-    expect(tui).toContain("USD $12.50 · DIEM 25.00 · plan 700 credits");
+    expect(tui).toContain("DIEM 25.00 left today");
+    expect(tui).toContain("plan 700 credits this month");
+    expect(tui).toContain("USD $12.50");
     expect(tui).not.toMatch(/\d%/);
   });
   it("keeps fractional balances inside the TUI card and shows every wallet", async () => {
@@ -107,7 +109,11 @@ describe("Venice balance provider", () => {
       columns: 60,
       timeZone: "UTC",
     }).split("\n");
-    for (const amount of ["USD $27.94", "DIEM 1.79", "plan 12,346 credits"])
+    for (const amount of [
+      "USD $27.94",
+      "DIEM 1.79 left today",
+      "plan 12,346 credits",
+    ])
       expect(lines.join("\n")).toContain(amount);
     for (const line of lines.filter((line) => line.startsWith("│"))) {
       expect(line.endsWith("│")).toBe(true);
@@ -157,23 +163,44 @@ describe("Venice balance provider", () => {
       earnedUsd: 0,
       totalCredits: 3073,
     });
+    expect(
+      quotaJsonReport(response, false).providers[0].credits?.balances,
+    ).toEqual([
+      { remaining: raw.usd, unit: "usd" },
+      { remaining: raw.diem, unit: "diem" },
+      { remaining: 100, unit: "credits" },
+    ]);
+    const displayOrder = [
+      "DIEM 1.79 left today",
+      "earned 0 credits",
+      "plan 100 credits this month",
+      "USD $27.94",
+    ];
     for (const full of [false, true]) {
       const toon = renderQuotaToon(response, "quota-axi", full);
+      expect(displayOrder.map((part) => toon.indexOf(part))).toEqual(
+        [...displayOrder.map((part) => toon.indexOf(part))].sort(
+          (a, b) => a - b,
+        ),
+      );
       for (const part of [
-        "3,073 Venice Credits",
+        "3,073 Venice Credits spendable now",
         "USD $27.94",
-        "DIEM 1.79",
-        "plan 100 credits",
+        "DIEM 1.79 left today",
+        "plan 100 credits this month",
         "earned 0 credits",
       ])
         expect(toon).toContain(part);
     }
     const tui = renderQuotaTui(response, { columns: 60, timeZone: "UTC" });
+    expect(displayOrder.map((part) => tui.indexOf(part))).toEqual(
+      [...displayOrder.map((part) => tui.indexOf(part))].sort((a, b) => a - b),
+    );
     for (const part of [
-      "3,073 Venice Credits",
+      "3,073 Venice Credits spendable now",
       "USD $27.94",
-      "DIEM 1.79",
-      "plan 100 credits",
+      "DIEM 1.79 left today",
+      "plan 100 credits this month",
       "earned 0 credits",
     ])
       expect(tui).toContain(part);
