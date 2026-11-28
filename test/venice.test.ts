@@ -198,7 +198,7 @@ describe("Venice balance provider", () => {
       bundledUsd: 7,
     });
   });
-  it("does not combine account earned credits with key-capped balances", async () => {
+  it("uses account balances for the total and every wallet", async () => {
     const fetch = vi.fn(async (url: string | URL | Request) =>
       Response.json(
         url === VENICE_BALANCE_URL
@@ -226,10 +226,12 @@ describe("Venice balance provider", () => {
       earnedUsd: 4,
       totalCredits: 3700,
     });
-    expect(quota.credits?.balances?.[0]).toEqual({
-      remaining: 12.5,
-      unit: "usd",
-    });
+    expect(quota.credits?.remaining).toBe(30);
+    expect(quota.credits?.balances).toEqual([
+      { remaining: 30, unit: "usd" },
+      { remaining: 2, unit: "diem" },
+      { remaining: 100, unit: "credits" },
+    ]);
   });
   it("calculates the DIEM percentage from account DIEM, not the key-capped balance", async () => {
     const fetch = vi.fn(async (url: string | URL | Request) =>
@@ -260,6 +262,10 @@ describe("Venice balance provider", () => {
       percentRemaining: 80,
     });
     expect(result.credits?.venice?.diem).toBe(80);
+    expect(result.credits?.balances).toContainEqual({
+      remaining: 80,
+      unit: "diem",
+    });
     expect(fetch).toHaveBeenCalledTimes(2);
   });
   it("omits the DIEM percentage when only the allocation is known", async () => {
@@ -277,6 +283,21 @@ describe("Venice balance provider", () => {
     expect(result.windows[0]?.percentUsed).toBeUndefined();
     expect(result.windows[0]?.percentRemaining).toBeUndefined();
     expect(result.windows[0]?.limitCredits).toBeUndefined();
+  });
+  it("stores bundled credits as whole Venice Credits", async () => {
+    const result = await createVeniceAdapter({
+      credential,
+      adminKey: () => undefined,
+      fetch: vi.fn(async () =>
+        Response.json({
+          data: { balances: { USD: 0, DIEM: 0, BUNDLED_CREDITS: 0.29 } },
+        }),
+      ),
+    }).fetchQuota({ refreshCredentials: false });
+    expect(result.credits?.balances).toContainEqual({
+      remaining: 29,
+      unit: "credits",
+    });
   });
   it("keeps inference balances when the optional admin endpoint fails", async () => {
     const fetch = vi.fn(async (url: string | URL | Request) =>

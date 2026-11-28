@@ -173,7 +173,8 @@ async function fetchQuota(deps: Dependencies): Promise<ProviderQuota> {
         }
       }
       const windows: QuotaWindow[] = [];
-      const windowDiem = accountBalances?.diem ?? diem;
+      const shown = accountBalances ?? { usd, diem, bundledUsd: bundled };
+      const windowDiem = shown.diem;
       if (windowDiem !== undefined) {
         const reset =
           typeof data?.nextEpochBegins === "string" &&
@@ -203,10 +204,15 @@ async function fetchQuota(deps: Dependencies): Promise<ProviderQuota> {
       }
       const wallets: { remaining: number; unit: "usd" | "diem" | "credits" }[] =
         [];
-      if (usd !== undefined) wallets.push({ remaining: usd, unit: "usd" });
-      if (diem !== undefined) wallets.push({ remaining: diem, unit: "diem" });
-      if (bundled !== undefined)
-        wallets.push({ remaining: bundled * 100, unit: "credits" });
+      if (shown.usd !== undefined)
+        wallets.push({ remaining: shown.usd, unit: "usd" });
+      if (shown.diem !== undefined)
+        wallets.push({ remaining: shown.diem, unit: "diem" });
+      if (shown.bundledUsd !== undefined)
+        wallets.push({
+          remaining: Math.round(shown.bundledUsd * 100),
+          unit: "credits",
+        });
       const venice = accountBalances
         ? {
             scope: "account" as const,
