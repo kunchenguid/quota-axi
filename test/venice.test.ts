@@ -70,7 +70,7 @@ describe("Venice balance provider", () => {
       providers: [withQuotaSemantics(quota, GENERATED_AT)],
     } as const;
     const balances =
-      "4,450 known credits · DIEM 2,500 today · plan 700 this month · banked 1,250";
+      "4,450 credits · DIEM 2,500 today · plan 700 this month · banked 1,250";
     for (const full of [false, true]) {
       const toon = renderQuotaToon(response, "quota-axi", full);
       expect(toon).toContain(balances);
@@ -79,7 +79,7 @@ describe("Venice balance provider", () => {
       expect(toon).not.toContain("USD $");
     }
     const tui = renderQuotaTui(response, { columns: 60, timeZone: "UTC" });
-    expect(tui).toContain("4,450 known credits");
+    expect(tui).toContain("4,450 credits");
     expect(tui).toContain("DIEM 2,500 today");
     expect(tui).toContain("plan 700 this month");
     expect(tui).toContain("banked 1,250");

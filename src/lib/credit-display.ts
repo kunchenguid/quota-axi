@@ -16,7 +16,7 @@ export function veniceCreditParts(
     v.bundledUsd !== undefined
   )
     parts.push(
-      `${integer([v.usd, v.diem, v.bundledUsd].reduce((sum, n) => sum + Math.round(n * 100), 0))} known credits`,
+      `${integer([v.usd, v.diem, v.bundledUsd].reduce((sum, n) => sum + Math.round(n * 100), 0))} credits`,
     );
   if (v.diem !== undefined)
     parts.push(`DIEM ${integer(Math.round(v.diem * 100))} today`);
