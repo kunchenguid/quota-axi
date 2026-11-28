@@ -230,8 +230,39 @@ describe("Venice balance provider", () => {
     expect(quota.credits?.balances).toEqual([
       { remaining: 30, unit: "usd" },
       { remaining: 2, unit: "diem" },
-      { remaining: 100, unit: "credits" },
+      { remaining: 500, unit: "credits" },
     ]);
+  });
+  it("reports earned-only account credits in the shared balance", async () => {
+    const fetch = vi.fn(async (url: string | URL | Request) =>
+      Response.json(
+        url === VENICE_BALANCE_URL
+          ? {
+              balances: {
+                usd: 0,
+                diem: 0,
+                bundledCredits: 0,
+                earnedCredits: 2.5,
+              },
+            }
+          : ratePayload,
+      ),
+    );
+    const quota = await createVeniceAdapter({
+      credential,
+      adminKey: () => "synthetic-admin",
+      fetch: fetch as typeof globalThis.fetch,
+    }).fetchQuota({ refreshCredentials: false });
+    expect(quota.credits?.remaining).toBe(250);
+    expect(quota.credits?.unit).toBe("credits");
+    expect(quota.credits?.balances).toContainEqual({
+      remaining: 250,
+      unit: "credits",
+    });
+    expect(quota.credits?.venice).toMatchObject({
+      earnedUsd: 2.5,
+      totalCredits: 250,
+    });
   });
   it("calculates the DIEM percentage from account DIEM, not the key-capped balance", async () => {
     const fetch = vi.fn(async (url: string | URL | Request) =>

@@ -173,7 +173,12 @@ async function fetchQuota(deps: Dependencies): Promise<ProviderQuota> {
         }
       }
       const windows: QuotaWindow[] = [];
-      const shown = accountBalances ?? { usd, diem, bundledUsd: bundled };
+      const shown = accountBalances ?? {
+        usd,
+        diem,
+        bundledUsd: bundled,
+        earnedUsd: undefined,
+      };
       const windowDiem = shown.diem;
       if (windowDiem !== undefined) {
         const reset =
@@ -210,7 +215,9 @@ async function fetchQuota(deps: Dependencies): Promise<ProviderQuota> {
         wallets.push({ remaining: shown.diem, unit: "diem" });
       if (shown.bundledUsd !== undefined)
         wallets.push({
-          remaining: Math.round(shown.bundledUsd * 100),
+          remaining:
+            Math.round(shown.bundledUsd * 100) +
+            Math.round((shown.earnedUsd ?? 0) * 100),
           unit: "credits",
         });
       const venice = accountBalances
